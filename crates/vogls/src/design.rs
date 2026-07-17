@@ -17,9 +17,6 @@ use crate::elaborated_design::SignalHandle;
 use crate::symbol::{NetSignal, NetSymbol, NetValue, Symbol};
 
 pub enum DesignBackend {
-    Interpretted {
-        simulation: vogls_sim::Simulation,
-    },
     Bytecode {
         design: vogls_sim::bytecode::Design,
     },
@@ -43,7 +40,6 @@ pub struct Design {
 
 #[derive(Clone)]
 pub enum DesignState {
-    Interpretted(vogls_sim::SimulationState),
     Bytecode(vogls_sim::bytecode::State),
     #[cfg(feature = "native")]
     Compiled(vogls_codegen_c::runtime::CDesignState),
@@ -52,7 +48,6 @@ pub enum DesignState {
 impl DesignState {
     pub fn runtime_mut(&mut self) -> &mut RuntimeState {
         match self {
-            DesignState::Interpretted(s) => &mut s.runtime,
             DesignState::Bytecode(s) => &mut s.runtime,
             #[cfg(feature = "native")]
             DesignState::Compiled(s) => &mut s.runtime,
@@ -60,7 +55,6 @@ impl DesignState {
     }
     pub fn runtime(&self) -> &RuntimeState {
         match self {
-            DesignState::Interpretted(s) => &s.runtime,
             DesignState::Bytecode(s) => &s.runtime,
             #[cfg(feature = "native")]
             DesignState::Compiled(s) => &s.runtime,
@@ -68,7 +62,6 @@ impl DesignState {
     }
     pub fn plugins_mut(&mut self) -> &mut [RuntimePluginState] {
         match self {
-            DesignState::Interpretted(s) => &mut s.plugins,
             DesignState::Bytecode(s) => &mut s.plugins,
             #[cfg(feature = "native")]
             DesignState::Compiled(s) => &mut s.plugins,
@@ -76,7 +69,6 @@ impl DesignState {
     }
     pub fn plugins(&self) -> &[RuntimePluginState] {
         match self {
-            DesignState::Interpretted(s) => &s.plugins,
             DesignState::Bytecode(s) => &s.plugins,
             #[cfg(feature = "native")]
             DesignState::Compiled(s) => &s.plugins,
@@ -91,12 +83,6 @@ impl Design {
         time: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
         match (&mut self.backend, &mut self.initial_state) {
-            (
-                DesignBackend::Interpretted { simulation },
-                DesignState::Interpretted(initial_state),
-            ) => simulation
-                .run(initial_state, io, time)
-                .map_err(|_| "execution failed.".into()),
             #[cfg(feature = "tailcall")]
             (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => design
                 .execute_inner_tailcall(state, &mut io.stdout, &mut io.stderr)
@@ -139,16 +125,37 @@ impl Design {
         time: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
         match (&self.backend, state) {
-            (DesignBackend::Interpretted { simulation }, DesignState::Interpretted(state)) => {
-                simulation
-                    .run(state, io, time)
-                    .map_err(|_| "execution failed.".into())
+            #[cfg(feature = "tailcall")]
+            (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => design
+                .execute_inner_tailcall(state, &mut io.stdout, &mut io.stderr)
+                .map_err(|_| "execution failed.".into()),
+            #[cfg(not(feature = "tailcall"))]
+            (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
+                state.schedule.set_max_time(time);
+                if design.itrace {
+                    design.execute_with_tracer(
+                        &mut vogls_sim::bytecode::InstructionTracer::new_stderr(),
+                        state,
+                        &mut io.stdout,
+                        &mut io.stderr,
+                    )
+                } else if design.stats {
+                    design.execute_with_tracer(
+                        &mut vogls_sim::bytecode::ICountTracer::default(),
+                        state,
+                        &mut io.stdout,
+                        &mut io.stderr,
+                    )
+                } else {
+                    design.execute(state, &mut io.stdout, &mut io.stderr)
+                }
+                .map_err(|_| "execution failed.".into())
             }
             #[cfg(feature = "native")]
             (DesignBackend::Compiled { design }, DesignState::Compiled(state)) => design
                 .run(state, io, time)
                 .map_err(|_| "execution failed.".into()),
-            _ => unreachable!(),
+            _ => panic!(),
         }
     }
 
@@ -195,8 +202,9 @@ impl Design {
             state.runtime_mut().heap.store_bits(heap_ref, mode, bits);
 
             match (&self.backend, state) {
-                (DesignBackend::Interpretted { simulation }, DesignState::Interpretted(state)) => {
-                    simulation.poke_signal(state, signal.key)
+                #[cfg(feature = "native")]
+                (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
+                    design.poke_signal(state, signal.key)
                 }
                 #[cfg(feature = "native")]
                 (DesignBackend::Compiled { design }, DesignState::Compiled(state)) => {

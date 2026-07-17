@@ -25,7 +25,7 @@ use vogls_bits::BitsDataRef;
 use vogls_codegen::{HeapOffset, HeapRef};
 
 use vogls_ir::{Bits, LogicMode, VSIZE_64, VectorSize};
-use vogls_runtime::RuntimeState;
+use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_utils::{IndexSet, NonMaxU32};
 
@@ -1269,6 +1269,10 @@ impl Design {
         }
 
         Ok(())
+    }
+
+    pub fn poke_signal(&self, state: &mut State, key: RtSignalKey) {
+        todo!()
     }
 }
 

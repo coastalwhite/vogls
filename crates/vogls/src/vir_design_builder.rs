@@ -44,7 +44,6 @@ impl<'a> VirDesignBuilder<'a> {
             debug_symbols: false,
             output_source: None,
             print_vm_map: false,
-            new_bytecode: false,
         })
     }
 }

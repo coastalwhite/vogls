@@ -31,12 +31,10 @@ struct Args {
     tv: bool,
     #[arg(short = 'F')]
     fv: bool,
-    #[arg(short = 'I')]
-    interpretted: bool,
+    #[arg(short = 'B')]
+    bytecode: bool,
     #[arg(short = 'C')]
     compiled: bool,
-    #[arg(long)]
-    new_bytecode: bool,
     #[arg(long)]
     opt_rounds: Option<u8>,
 
@@ -59,7 +57,6 @@ impl io::Write for Io {
 
 #[derive(Debug, Clone, Copy)]
 enum Backend {
-    Interpretter,
     Compile,
     Bytecode,
 }
@@ -256,18 +253,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         _ => &[LogicMode::TwoValue, LogicMode::FourValue],
     };
     let mut backends = Vec::new();
-    if !args.interpretted && !args.compiled && !args.new_bytecode {
-        backends.extend([Backend::Interpretter, Backend::Compile]);
-    } else {
-        if args.interpretted {
-            backends.push(Backend::Interpretter);
-        }
-        if args.compiled {
-            backends.push(Backend::Compile);
-        }
-        if args.new_bytecode {
-            backends.push(Backend::Bytecode);
-        }
+    if args.bytecode {
+        backends.push(Backend::Bytecode);
+    }
+    if args.compiled {
+        backends.push(Backend::Compile);
     }
 
     let mut num_tests = 0;
@@ -362,13 +352,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
             configurations
                 .into_par_iter()
                 .filter_map(|t| {
-                    match run_test(
-                        &t.path,
-                        &t.information,
-                        t.logic_mode,
-                        t.backend,
-                        t.opt,
-                    ) {
+                    match run_test(&t.path, &t.information, t.logic_mode, t.backend, t.opt) {
                         Ok(PassKind::Skip) => {
                             io::stdout().write_all(&[b'S']).unwrap();
                             io::stdout().flush().unwrap();
@@ -444,7 +428,6 @@ fn report_fails(o: &mut io::Stdout, fails: Vec<Fail>, num_tests: usize) -> io::R
                 LogicMode::FourValue => "fvl",
             };
             let backend = match backend {
-                Backend::Interpretter => "interpret",
                 Backend::Compile => "compile",
                 Backend::Bytecode => "bytecode",
             };
@@ -696,11 +679,7 @@ fn run_test(
 
             let mut design = match backend {
                 Backend::Compile => design.compile(),
-                Backend::Bytecode => {
-                    design.new_bytecode = true;
-                    design.to_bytecode()
-                }
-                Backend::Interpretter => design.to_bytecode(),
+                Backend::Bytecode => design.to_bytecode(),
             }
             .map_err(|_| {
                 FailureInfo::CompileFailure("failed to convert to execution format".into())

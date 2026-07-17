@@ -20,7 +20,6 @@ use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_sim::bytecode::lower::{LowerBytecodeOptions, lower_process_to_bytecode};
 use vogls_sim::bytecode::{BytecodeEncoder, BytecodeListeners, Schedule};
-use vogls_sim::{Event, Regions, Simulation, VmProcess, VmProcessKey, lower_process_to_vm};
 #[cfg(feature = "native")]
 use vogls_utils::TimerStack;
 use vogls_utils::{TableKey as _, VgHashMap};
@@ -50,7 +49,6 @@ pub struct LoweredDesign {
     pub debug_symbols: bool,
     pub output_source: Option<PathBuf>,
     pub print_vm_map: bool,
-    pub new_bytecode: bool,
 }
 
 impl Clone for Box<dyn VoglsPlugin> {
@@ -217,156 +215,84 @@ impl LoweredDesign {
             lupdt_indexes,
             plugins,
         } = self.prepare_codegen();
-        let mut processes = Vec::<VmProcess>::default();
-        let mut regions = Regions::new(NUM_REGIONS as usize);
 
-        if self.new_bytecode {
-            let mut stack_tracker = StackTracker::default();
-            let mut bytecode = BytecodeEncoder::default();
-            let mut schedule = Schedule::new(NUM_REGIONS);
-            let watch_map = WatchMap::new(&self.gl.bbs);
-            let mut listeners = BytecodeListeners::new(watch_map.num_watches());
-            let mut num_stack_words = 0;
-            let options = LowerBytecodeOptions {
-                emit: self.emit_vm,
-                has_plugins: !plugins.is_empty(),
-            };
+        let mut stack_tracker = StackTracker::default();
+        let mut bytecode = BytecodeEncoder::default();
+        let mut schedule = Schedule::new(NUM_REGIONS);
+        let watch_map = WatchMap::new(&self.gl.bbs);
+        let mut listeners = BytecodeListeners::new(watch_map.num_watches());
+        let mut num_stack_words = 0;
+        let options = LowerBytecodeOptions {
+            emit: self.emit_vm,
+            has_plugins: !plugins.is_empty(),
+        };
 
-            for process in self.gl.processes.keys() {
-                lower_process_to_bytecode(
-                    process,
-                    &self.gl,
-                    &mut stack_tracker,
-                    &mut heap_builder,
-                    &mut num_stack_words,
-                    &watch_map,
-                    &mut schedule,
-                    &mut listeners,
-                    &signal_to_heap,
-                    &rt_signal_map,
-                    &lupdt_indexes,
-                    &mut bytecode,
-                    &options,
-                );
-            }
-
-            let stack_offset = heap_builder.claim_words(num_stack_words) as u64;
-            let mut heap = heap_builder.finish();
-            let mut lupdt_updated = vec![false; lupdt_indexes.len()];
-
-            for (key, signal) in &self.gl.signals {
-                if let Some(initialize) = &signal.initialize {
-                    let rt_key = rt_signal_map[&key];
-                    assert_eq!(initialize.size(), signal.size);
-                    heap.store_bits(signal_to_heap[rt_key.as_usize()], signal.mode, initialize);
-                    let is_unchanged = match signal.mode {
-                        LogicMode::TwoValue => initialize.count_zeros() == initialize.size().get(),
-                        LogicMode::FourValue => {
-                            initialize.count_unknown() == initialize.size().get()
-                        }
-                    };
-                    if !is_unchanged && let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
-                        lupdt_updated[*lupdt_idx as usize] = true;
-                    }
-                }
-            }
-            let runtime = RuntimeState::new(&self.gl, heap, &lupdt_updated);
-            let state = vogls_sim::bytecode::State {
-                runtime,
-                plugins,
-                schedule,
-                listeners,
-            };
-            let design = vogls_sim::bytecode::Design {
-                bytecode: bytecode.data,
-                intrinsics: bytecode
-                    .intrinsics
-                    .take_keys()
-                    .into_iter()
-                    .map(|v| v.0)
-                    .collect(),
-                stack_offset,
-                itrace: self.itrace,
-                stats: self.stats,
-            };
-
-            Ok(Design {
-                gl: self.gl,
-                ident_table: self.ident_table,
-                elab_table: self.table,
-                backend: DesignBackend::Bytecode { design },
-                rt_signal_map,
-                signal_to_heap,
-                signal_mode,
-                initial_state: DesignState::Bytecode(state),
-            })
-        } else {
-            let listeners = SlotMap::default();
-            let watches = vec![Vec::new(); self.gl.signals.len()];
-
-            for process in self.gl.processes.keys() {
-                let vm_process = lower_process_to_vm(
-                    process,
-                    &self.gl,
-                    &mut heap_builder,
-                    &signal_to_heap,
-                    &mut rt_signal_map,
-                );
-                let vm_process_key = VmProcessKey(processes.len() as u64);
-                processes.push(vm_process);
-                regions.active.push(Event {
-                    process: vm_process_key,
-                    ip: 0,
-                });
-            }
-
-            if self.emit_vm {
-                for process in &processes {
-                    print!("{}", &process);
-                }
-            }
-            let mut heap = heap_builder.finish();
-            let mut lupdt_updated = vec![false; lupdt_indexes.len()];
-
-            for (key, signal) in &self.gl.signals {
-                if let Some(initialize) = &signal.initialize {
-                    let rt_key = rt_signal_map[&key];
-                    assert_eq!(initialize.size(), signal.size);
-                    heap.store_bits(signal_to_heap[rt_key.as_usize()], signal.mode, initialize);
-                    let is_unchanged = match signal.mode {
-                        LogicMode::TwoValue => initialize.count_zeros() == initialize.size().get(),
-                        LogicMode::FourValue => {
-                            initialize.count_unknown() == initialize.size().get()
-                        }
-                    };
-                    if !is_unchanged && let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
-                        lupdt_updated[*lupdt_idx as usize] = true;
-                    }
-                }
-            }
-
-            let mut simulation = Simulation::new(
-                processes,
-                signal_to_heap.clone(),
-                signal_mode.clone(),
-                lupdt_indexes,
+        for process in self.gl.processes.keys() {
+            lower_process_to_bytecode(
+                process,
+                &self.gl,
+                &mut stack_tracker,
+                &mut heap_builder,
+                &mut num_stack_words,
+                &watch_map,
+                &mut schedule,
+                &mut listeners,
+                &signal_to_heap,
+                &rt_signal_map,
+                &lupdt_indexes,
+                &mut bytecode,
+                &options,
             );
-            simulation.itrace = self.itrace;
-            let mut initial_state =
-                simulation.new_state(&self.gl, regions, listeners, watches, heap, &lupdt_updated);
-            initial_state.plugins = plugins;
-
-            Ok(Design {
-                gl: self.gl,
-                ident_table: self.ident_table,
-                elab_table: self.table,
-                backend: DesignBackend::Interpretted { simulation },
-                rt_signal_map,
-                signal_mode,
-                signal_to_heap,
-                initial_state: DesignState::Interpretted(initial_state),
-            })
         }
+
+        let stack_offset = heap_builder.claim_words(num_stack_words) as u64;
+        let mut heap = heap_builder.finish();
+        let mut lupdt_updated = vec![false; lupdt_indexes.len()];
+
+        for (key, signal) in &self.gl.signals {
+            if let Some(initialize) = &signal.initialize {
+                let rt_key = rt_signal_map[&key];
+                assert_eq!(initialize.size(), signal.size);
+                heap.store_bits(signal_to_heap[rt_key.as_usize()], signal.mode, initialize);
+                let is_unchanged = match signal.mode {
+                    LogicMode::TwoValue => initialize.count_zeros() == initialize.size().get(),
+                    LogicMode::FourValue => initialize.count_unknown() == initialize.size().get(),
+                };
+                if !is_unchanged && let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
+                    lupdt_updated[*lupdt_idx as usize] = true;
+                }
+            }
+        }
+        let runtime = RuntimeState::new(&self.gl, heap, &lupdt_updated);
+        let state = vogls_sim::bytecode::State {
+            runtime,
+            plugins,
+            schedule,
+            listeners,
+        };
+        let design = vogls_sim::bytecode::Design {
+            bytecode: bytecode.data,
+            intrinsics: bytecode
+                .intrinsics
+                .take_keys()
+                .into_iter()
+                .map(|v| v.0)
+                .collect(),
+            stack_offset,
+            itrace: self.itrace,
+            stats: self.stats,
+        };
+
+        Ok(Design {
+            gl: self.gl,
+            ident_table: self.ident_table,
+            elab_table: self.table,
+            backend: DesignBackend::Bytecode { design },
+            rt_signal_map,
+            signal_to_heap,
+            signal_mode,
+            initial_state: DesignState::Bytecode(state),
+        })
     }
 
     fn has_vcd(&self) -> bool {
