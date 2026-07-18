@@ -622,13 +622,7 @@ impl BytecodeEncoder {
 
     pub fn wait_region(&mut self, region: u8, offset: i64) {
         let offset = SignedImmediate::new(offset).unwrap();
-        self.data.push(
-            RescheduleRegion {
-                region: region,
-                offset,
-            }
-            .encode(),
-        );
+        self.data.push(RescheduleRegion { region, offset }.encode());
     }
 
     pub fn next_event(&mut self) {

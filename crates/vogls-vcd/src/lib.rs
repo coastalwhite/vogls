@@ -213,7 +213,7 @@ impl VcdScopeItem {
                     msb_lsb,
                 } = k;
                 let size = msb_lsb.map_or(SCALAR_VSIZE, |(msb, lsb)| {
-                    VectorSize::new((msb.abs_diff(lsb) + 1) as u32).unwrap()
+                    VectorSize::new(msb.abs_diff(lsb) + 1).unwrap()
                 });
                 use vogls_utils::TableKey;
                 let idx = variable.get();

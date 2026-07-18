@@ -67,7 +67,7 @@ pub fn take_base(s: &[u8], i: &mut usize) -> Option<Base> {
     }
 }
 
-pub fn take_size<'a>(s: &'a str) -> Result<(&'a str, VectorSize), ()> {
+pub fn take_size(s: &str) -> Result<(&str, VectorSize), ()> {
     let mut chars = s.char_indices();
 
     let (_, fst) = chars.next().unwrap();
@@ -98,12 +98,12 @@ pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, Bit
     let size = match size {
         Some(size) => size,
         None => {
-            let num_digits = s.bytes().filter(|b| matches!(b, b'0'..=b'9')).count();
+            let num_digits = s.bytes().filter(|b| b.is_ascii_digit()).count();
             let num_digits = u32::try_from(num_digits).map_err(|_| BitsParseError)?;
             if num_digits == 0 {
                 return Err(BitsParseError);
             }
-            match s.bytes().filter(|b| matches!(b, b'1'..=b'9')).next() {
+            match s.bytes().find(|b| matches!(b, b'1'..=b'9')) {
                 None => NonZeroU32::MIN,
                 Some(fst_digit) => {
                     let fst_digit = fst_digit - b'0';

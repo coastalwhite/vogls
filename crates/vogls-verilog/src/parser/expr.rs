@@ -299,7 +299,9 @@ impl<'a> Consumable<'a> for Expr<'a> {
                             deepen!(StackItem::Replication(expr, Vec::new(), Vec::new()), 0, loc);
                         }
                         t => {
-                            diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                            if let Some(d) = diagnostics {
+                                d.unexpected_token(tkw.offset, t);
+                            }
                             return Err(());
                         }
                     },
@@ -315,7 +317,9 @@ impl<'a> Consumable<'a> for Expr<'a> {
                                 deepen!(StackItem::Concatenation(exprs, trs), 0, loc);
                             }
                             t => {
-                                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                                if let Some(d) = diagnostics {
+                                    d.unexpected_token(tkw.offset, t);
+                                }
                                 return Err(());
                             }
                         }
@@ -339,7 +343,9 @@ impl<'a> Consumable<'a> for Expr<'a> {
                                 deepen!(StackItem::Replication(constant_expr, exprs, trs), 0, loc);
                             }
                             t => {
-                                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                                if let Some(d) = diagnostics {
+                                    d.unexpected_token(tkw.offset, t);
+                                }
                                 return Err(());
                             }
                         }
@@ -399,7 +405,9 @@ impl<'a> Consumable<'a> for Expr<'a> {
                                 );
                             }
                             t => {
-                                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
+                                if let Some(d) = diagnostics {
+                                    d.unexpected_token(tkw.offset - 1, t);
+                                }
                                 return Err(());
                             }
                         }
@@ -430,7 +438,9 @@ impl<'a> Consumable<'a> for Expr<'a> {
                                 deepen!(StackItem::SystemFnCall(ident, params, trs), 0, location)
                             }
                             t => {
-                                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
+                                if let Some(d) = diagnostics {
+                                    d.unexpected_token(tkw.offset - 1, t);
+                                }
                                 return Err(());
                             }
                         }
@@ -447,7 +457,9 @@ impl<'a> Consumable<'a> for Expr<'a> {
                                 deepen!(StackItem::FnCall(ident, params, trs), 0, location)
                             }
                             t => {
-                                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
+                                if let Some(d) = diagnostics {
+                                    d.unexpected_token(tkw.offset - 1, t);
+                                }
                                 return Err(());
                             }
                         }

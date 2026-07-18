@@ -314,7 +314,7 @@ impl BytecodeInstruction for Intrinsic {
                 let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
                     .downcast_mut::<vogls_vcd::RtVcdOutput>()
                     .unwrap();
-                _ = vcd.paused = true;
+                vcd.paused = true;
             }
             O::VcdResume => {
                 let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)

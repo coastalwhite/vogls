@@ -71,7 +71,7 @@ pub fn report(tokenized: &Tokenized, location: TokenRange, out: &mut String) -> 
     );
 
     // @Performance: Cache lines per file.
-    let lines = lines_with_offset(&content);
+    let lines = lines_with_offset(content);
     let start_line = match lines.binary_search_by_key(&location.start(), |(offset, _)| *offset) {
         Ok(v) => v,
         Err(v) => v - 1,
@@ -184,6 +184,6 @@ pub fn display_with_tab_width(mut s: &str, f: &mut String, tab_width: usize) -> 
         }
         s = &s[i + 1..];
     }
-    f.write_str(&s)?;
+    f.write_str(s)?;
     Ok(())
 }

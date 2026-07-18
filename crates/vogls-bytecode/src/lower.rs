@@ -289,23 +289,23 @@ pub fn lower_process_to_bytecode(
         imm -= 1;
         bytecode.data[offset] = match kind {
             JumpKind::Jump => {
-                let imm = SignedImmediate::new(imm.into()).unwrap();
+                let imm = SignedImmediate::new(imm).unwrap();
                 Jump(imm).encode()
             }
             JumpKind::BranchTrue(rcond) => {
-                let imm = SignedImmediate::new(imm.into()).unwrap();
+                let imm = SignedImmediate::new(imm).unwrap();
                 BranchTrue { rcond, imm }.encode()
             }
             JumpKind::BranchFalse(rcond) => {
-                let imm = SignedImmediate::new(imm.into()).unwrap();
+                let imm = SignedImmediate::new(imm).unwrap();
                 BranchFalse { rcond, imm }.encode()
             }
             JumpKind::Wait(rtime) => {
-                let offset = SignedImmediate::new(imm.into()).unwrap();
+                let offset = SignedImmediate::new(imm).unwrap();
                 RescheduleWait { rtime, offset }.encode()
             }
             JumpKind::WaitRegion(region) => {
-                let offset = SignedImmediate::new(imm.into()).unwrap();
+                let offset = SignedImmediate::new(imm).unwrap();
                 RescheduleRegion { region, offset }.encode()
             }
             JumpKind::Listen(index) => {
@@ -1461,7 +1461,7 @@ fn lower_instruction(
                 (O::CaseEquality, _, _, M::FourValue, _, Some(src_size)) => {
                     match SignedImmediate::new_from_bits(imm) {
                         None => {
-                            bce.load_bits_into_register(T4, M::FourValue, &imm);
+                            bce.load_bits_into_register(T4, M::FourValue, imm);
                             bce.fv_ceq(rd, rs, T4);
                         }
                         Some(imm) => bce.fv_ceqi(rd, rs, imm, src_size),
@@ -1489,7 +1489,7 @@ fn lower_instruction(
                 (O::BitwiseCaseEquality, _, _, M::FourValue, _, Some(src_size)) => {
                     match SignedImmediate::new_from_bits(imm) {
                         None => {
-                            bce.load_bits_into_register(T4, M::FourValue, &imm);
+                            bce.load_bits_into_register(T4, M::FourValue, imm);
                             bce.fv_bitwise_ceq(rd, rs, T4, src_size);
                         }
                         Some(imm) => bce.fv_bitwise_ceqi(rd, rs, imm, src_size),
@@ -1910,7 +1910,7 @@ fn lower_instruction(
                     io_signals,
                     op.as_ref(),
                 )));
-            let intrinsic_id = match intrinsic_id.try_into().ok().and_then(|v| NonMaxU16::new(v)) {
+            let intrinsic_id = match intrinsic_id.try_into().ok().and_then(NonMaxU16::new) {
                 None => {
                     bce.load_u64(T4, intrinsic_id as u64);
                     None

@@ -786,7 +786,7 @@ impl Schedule {
 
         'fill_active: {
             for region in &mut self.regions {
-                if region.len() > 0 {
+                if !region.is_empty() {
                     std::mem::swap(&mut self.active, region);
                     break 'fill_active;
                 }
@@ -1073,7 +1073,7 @@ impl Tracer for InstructionTracer {
             DisplayWith(
                 i,
                 code,
-                &regs,
+                regs,
                 pc,
                 state,
                 schedule,
@@ -1100,7 +1100,7 @@ impl Tracer for InstructionTracer {
             DisplayWith(
                 i,
                 code,
-                &regs,
+                regs,
                 pc,
                 state,
                 schedule,

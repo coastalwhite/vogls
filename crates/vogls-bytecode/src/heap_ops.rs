@@ -302,13 +302,9 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             O::FvCopyZ => fv_bin_u64_cell_bitwise_op(dst, src1, src2, |lspc, lval, rspc, rval| {
                 copy_z(lspc, lval, rspc, rval)
             }),
-            O::FvBitwiseCeq => fv_bin_u64_cell_bitwise_op_output_tv(
-                dst,
-                src1,
-                src2,
-                |lspc, lval, rspc, rval| bitwise_ceq(lspc, lval, rspc, rval),
-                size,
-            ),
+            O::FvBitwiseCeq => {
+                fv_bin_u64_cell_bitwise_op_output_tv(dst, src1, src2, bitwise_ceq, size)
+            }
         }
     }
 }

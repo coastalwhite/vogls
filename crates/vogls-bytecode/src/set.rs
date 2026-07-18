@@ -247,7 +247,7 @@ fn set_unaligned(heap: &mut [u64], offset: u64, value: u64, size: SixBitSize) ->
         return prev != value;
     }
 
-    assert!(heap.len() > 0 && word < heap.len() - 1);
+    assert!(!heap.is_empty() && word < heap.len() - 1);
     let prev = mask & ((heap[word] >> boff) | (heap[word + 1] << (64 - boff)));
     heap[word] &= !(mask << boff);
     heap[word] |= value << boff;

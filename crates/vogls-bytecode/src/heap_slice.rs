@@ -107,7 +107,7 @@ pub fn execute<const SRC_FV: bool, const FILL_WITH_X: bool, const OFFSET_IS_FV: 
             break 'fst heap[word] >> boff;
         }
 
-        assert!(heap.len() > 0 && word < heap.len() - 1);
+        assert!(!heap.is_empty() && word < heap.len() - 1);
         let w1 = heap[word];
         let w2 = heap[word + 1];
         (w1 >> boff) | (w2 << (64 - boff))
@@ -147,7 +147,7 @@ pub fn execute<const SRC_FV: bool, const FILL_WITH_X: bool, const OFFSET_IS_FV: 
             break 'val heap[word] >> boff;
         }
 
-        assert!(heap.len() > 0 && word < heap.len() - 1);
+        assert!(!heap.is_empty() && word < heap.len() - 1);
         let w1 = heap[word];
         let w2 = heap[word + 1];
         (w1 >> boff) | (w2 << (64 - boff))

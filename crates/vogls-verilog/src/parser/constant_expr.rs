@@ -27,7 +27,7 @@ impl<'a> Consumable<'a> for ConstantMinTypMaxExpression<'a> {
         if tkw.next_if_equals(T::Colon) {
             let typ = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
             tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
-            let max = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+            let max = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics)?;
             Ok(Self::MinTypMax { min, typ, max })
         } else {
             Ok(Self::Single(min))
@@ -58,7 +58,7 @@ impl<'a> Consumable<'a> for ConstantRangeExpression<'a> {
             let width = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
             Ok(Self::BaseMinus { base: msb, width })
         } else if tkw.next_if_equals(T::Colon) {
-            let lsb = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+            let lsb = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics)?;
             Ok(Self::MsbLsb { msb, lsb })
         } else {
             Ok(Self::Single(msb))
