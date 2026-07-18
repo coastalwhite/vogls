@@ -348,7 +348,7 @@ pub fn eval_constant_range<'a>(
     let lsb = lsb.as_i64().unwrap();
     let width = u32::try_from(msb.abs_diff(lsb)).ok();
     let width = width.and_then(|w| w.checked_add(1));
-    let width = width.and_then(|w| VectorSize::new(w));
+    let width = width.and_then(VectorSize::new);
     let Some(width) = width else {
         let tr = arenas.get_span(range.msb) | arenas.get_span(range.lsb);
         diagnostics.net_width_overflow(tr);

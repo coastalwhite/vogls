@@ -409,7 +409,7 @@ impl Delay {
             ConstantMinTypMaxExpression::Single(delay) => {
                 let delay = eval_constant_expr(
                     &mctx.gl,
-                    &ctx.arenas,
+                    ctx.arenas,
                     &ctx.table,
                     scope,
                     &mut mctx.diagnostics,
@@ -433,7 +433,7 @@ impl Delay {
             ConstantMinTypMaxExpression::MinTypMax { min, typ, max } => {
                 let min = eval_constant_expr(
                     &mctx.gl,
-                    &ctx.arenas,
+                    ctx.arenas,
                     &ctx.table,
                     scope,
                     &mut mctx.diagnostics,
@@ -444,7 +444,7 @@ impl Delay {
                 .unwrap();
                 let typ = eval_constant_expr(
                     &mctx.gl,
-                    &ctx.arenas,
+                    ctx.arenas,
                     &ctx.table,
                     scope,
                     &mut mctx.diagnostics,
@@ -455,7 +455,7 @@ impl Delay {
                 .unwrap();
                 let max = eval_constant_expr(
                     &mctx.gl,
-                    &ctx.arenas,
+                    ctx.arenas,
                     &ctx.table,
                     scope,
                     &mut mctx.diagnostics,
@@ -561,7 +561,7 @@ pub fn lower_specify<'a>(
                 let input_sid = try_resolve_hident(
                     scope,
                     &ctx.table,
-                    &ctx.arenas,
+                    ctx.arenas,
                     input.ident,
                     &mut mctx.diagnostics,
                 )?;
@@ -576,7 +576,7 @@ pub fn lower_specify<'a>(
                 let output_sid = try_resolve_hident(
                     scope,
                     &ctx.table,
-                    &ctx.arenas,
+                    ctx.arenas,
                     output.ident,
                     &mut mctx.diagnostics,
                 )?;

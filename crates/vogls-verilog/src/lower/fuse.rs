@@ -31,7 +31,7 @@ pub fn try_lower_fuse_driver_expr<'a>(
                 .push(Driver::Constant(sized.value.clone()));
             Ok(true)
         }
-        _ => return Ok(false),
+        _ => Ok(false),
     }
 }
 
@@ -45,14 +45,14 @@ pub fn try_lower_fuse_driver_ident<'a>(
     range_expr: Option<BitSlice<'_>>,
 ) -> Result<bool, ()> {
     let symbol_id =
-        try_resolve_hident(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)?;
+        try_resolve_hident(scope, &ctx.table, ctx.arenas, ident, &mut mctx.diagnostics)?;
     let net = match &ctx.table[symbol_id].content {
         VSymbol::Parameter(_) => return Ok(false),
         VSymbol::Net(n) => n,
 
         _ => {
             mctx.diagnostics.not_yet_implemented(
-                hident_span(&ctx.arenas, ident),
+                hident_span(ctx.arenas, ident),
                 "cannot assign net to this.",
             );
             return Err(());
@@ -115,7 +115,7 @@ pub fn try_fuse_assign<'a>(
     let to_net = try_resolve_net(
         scope,
         &ctx.table,
-        &ctx.arenas,
+        ctx.arenas,
         lvalue.ident,
         &mut mctx.diagnostics,
     )?;

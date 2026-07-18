@@ -307,6 +307,7 @@ impl FuseGraphOptimizer {
         );
     }
 
+    #[expect(clippy::type_complexity)]
     pub fn finalize(
         self,
         gl: &mut GlobalContext,
@@ -335,12 +336,14 @@ impl FuseGraphOptimizer {
                                             offset + slice.lsb(),
                                             slice.width(),
                                         );
-                                        builder
+                                        if let Some(d) = builder
                                             .instrs
                                             .last_mut()
                                             .unwrap()
                                             .get_destination_variable_mut()
-                                            .map(|d| *d = *dst);
+                                        {
+                                            *d = *dst;
+                                        }
                                     }
                                 },
                                 FuseTarget::Constant(value) => {
@@ -366,12 +369,14 @@ impl FuseGraphOptimizer {
                                             Bits::new_u32(slice.lsb()),
                                         );
                                         builder.probe_slice(gl, *to, offset, slice.width());
-                                        builder
+                                        if let Some(d) = builder
                                             .instrs
                                             .last_mut()
                                             .unwrap()
                                             .get_destination_variable_mut()
-                                            .map(|d| *d = *dst);
+                                        {
+                                            *d = *dst;
+                                        }
                                     }
                                 },
                                 FuseTarget::Constant(value) => {
@@ -381,12 +386,14 @@ impl FuseGraphOptimizer {
                                         *offset,
                                         gl.vars.size(*dst),
                                     );
-                                    builder
+                                    if let Some(d) = builder
                                         .instrs
                                         .last_mut()
                                         .unwrap()
                                         .get_destination_variable_mut()
-                                        .map(|d| *d = *dst);
+                                    {
+                                        *d = *dst;
+                                    }
                                 }
                             }
                             continue;
@@ -479,7 +486,7 @@ impl FuseGraphOptimizer {
                                     FuseTarget::Signal(to, _) => match module.signal_map.entry(*to)
                                     {
                                         Entry::Occupied(mut e) => {
-                                            e.get_mut().extend(items.into_iter())
+                                            e.get_mut().extend(items)
                                         }
                                         Entry::Vacant(e) => _ = e.insert(items),
                                     },
@@ -851,7 +858,7 @@ impl FuseGraph {
                         }
 
                         let lsize = lb.size();
-                        let bits = Bits::concatenate(&rb, &lb);
+                        let bits = Bits::concatenate(rb, lb);
                         nodes[rn].size = bits.size();
                         nodes[rn].content = NodeContent::Constant(bits);
 
@@ -921,7 +928,7 @@ impl FuseGraph {
                         let edge = &edges[e];
                         debug_assert_eq!(edge.drivee, n);
 
-                        is_independent_from_next = nodes[n].fanin.get(i + 1).map_or(true, |&e| {
+                        is_independent_from_next = nodes[n].fanin.get(i + 1).is_none_or(|&e| {
                             !edge.drivee_slice.overlaps(edges[e].drivee_slice)
                         });
 
@@ -956,22 +963,21 @@ impl FuseGraph {
                         // 4. Add drive map entry.
                         // 5. Copy Drv from driver.
 
-                        drive_map.insert(driver_signal, (s, Some(edge.drivee_slice.clone())));
+                        drive_map.insert(driver_signal, (s, Some(edge.drivee_slice)));
                         let mut occupied = match drive_inv {
                             Entry::Vacant(entry) => entry.insert_entry(Vec::new()),
                             Entry::Occupied(entry) => entry,
                         };
                         occupied
                             .get_mut()
-                            .push((driver_signal, edge.drivee_slice.clone()));
+                            .push((driver_signal, edge.drivee_slice));
                         drive_inv = Entry::Occupied(occupied);
 
                         let driver_fanin = std::mem::take(&mut nodes[edge.driver].fanin);
-                        nodes[n].fanin.extend(driver_fanin.into_iter().map(|ek| {
+                        nodes[n].fanin.extend(driver_fanin.into_iter().inspect(|&ek| {
                             edges[ek].drivee = n;
                             edges[ek].drivee_slice =
                                 drivee_slice.subslice(edges[ek].drivee_slice).unwrap();
-                            ek
                         }));
 
                         let edge = &mut edges[e];

@@ -133,11 +133,6 @@ pub fn slice_with(
                     f,
                     "(({d_elem_ty})(({s} & 0x{src_mask:x}) >> {o}) & 0x{mask:x}) |",
                 )?;
-            } else {
-                write!(
-                    f,
-                    "(({d_elem_ty})(({s} & 0x{src_mask:x}) >> {o}) & 0x{mask:x}) |",
-                )?;
             }
             // val
             write!(

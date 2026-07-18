@@ -334,6 +334,7 @@ pub struct StateBuilder {
     pub read_mems: Vec<(HeapRef, ReadMem)>,
 }
 
+#[expect(clippy::too_many_arguments)]
 pub fn lower_process(
     f: &mut impl io::Write,
     process_key: ProcessKey,
@@ -492,10 +493,10 @@ pub fn lower_process(
                         let dst_t = temp_map[dst];
                         use UnaryOp as O;
                         match op {
-                            O::Neg => unary::cgc_negate(&mut buffer, dst_t.into(), t)?,
-                            O::ReduceOr => unary::cgc_reduce_or(&mut buffer, dst_t.into(), t)?,
-                            O::ReduceAnd => unary::cgc_reduce_and(&mut buffer, dst_t.into(), t)?,
-                            O::ReduceXor => unary::cgc_reduce_xor(&mut buffer, dst_t.into(), t)?,
+                            O::Neg => unary::cgc_negate(&mut buffer, dst_t, t)?,
+                            O::ReduceOr => unary::cgc_reduce_or(&mut buffer, dst_t, t)?,
+                            O::ReduceAnd => unary::cgc_reduce_and(&mut buffer, dst_t, t)?,
+                            O::ReduceXor => unary::cgc_reduce_xor(&mut buffer, dst_t, t)?,
                             O::LeadingZeros => todo!(),
                             O::TvToFv => unary::cgc_tv_to_fv(&mut buffer, dst_t, t)?,
                             O::FvToTv => unary::cgc_fv_to_tv(&mut buffer, dst_t, t)?,
@@ -506,7 +507,7 @@ pub fn lower_process(
                         let dst_t: CExpr = temp_map[dst].into();
                         use ResizeOp as O;
                         match op {
-                            O::Truncate => resize::cgc_truncate(&mut buffer, dst_t, t.into())?,
+                            O::Truncate => resize::cgc_truncate(&mut buffer, dst_t, t)?,
                             O::ZeroExtend => resize::cgc_zero_extend(&mut buffer, dst_t, t)?,
                             O::SignExtend => resize::cgc_sign_extend(&mut buffer, dst_t, t)?,
                         }
@@ -528,51 +529,33 @@ pub fn lower_process(
 
                         use BinaryImmOp as O;
                         match op {
-                            O::And => binary::cgc_bin_and(&mut buffer, dst_t, src_t.into(), imm)?,
-                            O::Or => binary::cgc_bin_or(&mut buffer, dst_t, src_t.into(), imm)?,
-                            O::Xor => binary::cgc_bin_xor(&mut buffer, dst_t, src_t.into(), imm)?,
-                            O::Add => binary::cgc_bin_add(&mut buffer, dst_t, src_t.into(), imm)?,
-                            O::Sub => binary::cgc_bin_sub(&mut buffer, dst_t, src_t.into(), imm)?,
-                            O::Power => binary::cgc_bin_pow(&mut buffer, dst_t, src_t.into(), imm)?,
-                            O::Multiply => {
-                                binary::cgc_bin_mul(&mut buffer, dst_t, src_t.into(), imm)?
-                            }
-                            O::Divide => {
-                                binary::cgc_bin_div(&mut buffer, dst_t, src_t.into(), imm)?
-                            }
-                            O::Modulus => {
-                                binary::cgc_bin_mod(&mut buffer, dst_t, src_t.into(), imm)?
-                            }
-                            O::RevSub => {
-                                binary::cgc_bin_sub(&mut buffer, dst_t, imm, src_t.into())?
-                            }
-                            O::RevPower => {
-                                binary::cgc_bin_pow(&mut buffer, dst_t, imm, src_t.into())?
-                            }
-                            O::RevDivideX => {
-                                binary::cgc_bin_div(&mut buffer, dst_t, imm, src_t.into())?
-                            }
+                            O::And => binary::cgc_bin_and(&mut buffer, dst_t, src_t, imm)?,
+                            O::Or => binary::cgc_bin_or(&mut buffer, dst_t, src_t, imm)?,
+                            O::Xor => binary::cgc_bin_xor(&mut buffer, dst_t, src_t, imm)?,
+                            O::Add => binary::cgc_bin_add(&mut buffer, dst_t, src_t, imm)?,
+                            O::Sub => binary::cgc_bin_sub(&mut buffer, dst_t, src_t, imm)?,
+                            O::Power => binary::cgc_bin_pow(&mut buffer, dst_t, src_t, imm)?,
+                            O::Multiply => binary::cgc_bin_mul(&mut buffer, dst_t, src_t, imm)?,
+                            O::Divide => binary::cgc_bin_div(&mut buffer, dst_t, src_t, imm)?,
+                            O::Modulus => binary::cgc_bin_mod(&mut buffer, dst_t, src_t, imm)?,
+                            O::RevSub => binary::cgc_bin_sub(&mut buffer, dst_t, imm, src_t)?,
+                            O::RevPower => binary::cgc_bin_pow(&mut buffer, dst_t, imm, src_t)?,
+                            O::RevDivideX => binary::cgc_bin_div(&mut buffer, dst_t, imm, src_t)?,
                             O::RevDivide0 => todo!(),
-                            O::RevModulusX => {
-                                binary::cgc_bin_mod(&mut buffer, dst_t, imm, src_t.into())?
-                            }
+                            O::RevModulusX => binary::cgc_bin_mod(&mut buffer, dst_t, imm, src_t)?,
                             O::RevModulus0 => todo!(),
                             O::UnsignedLessEqual => {
-                                binary::cgc_bin_ule(&mut buffer, dst_t.ident, src_t.into(), imm)?
+                                binary::cgc_bin_ule(&mut buffer, dst_t.ident, src_t, imm)?
                             }
                             O::UnsignedGreaterEqual => {
-                                binary::cgc_bin_ule(&mut buffer, dst_t.ident, imm, src_t.into())?
+                                binary::cgc_bin_ule(&mut buffer, dst_t.ident, imm, src_t)?
                             }
-                            O::ConcatRight => {
-                                binary::cgc_concat(&mut buffer, dst_t, src_t.into(), imm)?
-                            }
-                            O::ConcatLeft => {
-                                binary::cgc_concat(&mut buffer, dst_t, imm, src_t.into())?
-                            }
-                            O::Min => binary::cgc_bin_min(&mut buffer, dst_t, src_t.into(), imm)?,
-                            O::Max => binary::cgc_bin_max(&mut buffer, dst_t, src_t.into(), imm)?,
+                            O::ConcatRight => binary::cgc_concat(&mut buffer, dst_t, src_t, imm)?,
+                            O::ConcatLeft => binary::cgc_concat(&mut buffer, dst_t, imm, src_t)?,
+                            O::Min => binary::cgc_bin_min(&mut buffer, dst_t, src_t, imm)?,
+                            O::Max => binary::cgc_bin_max(&mut buffer, dst_t, src_t, imm)?,
                             O::CaseEquality => {
-                                binary::cgc_case_eq(&mut buffer, dst_t.ident, src_t.into(), imm)?
+                                binary::cgc_case_eq(&mut buffer, dst_t.ident, src_t, imm)?
                             }
                             O::BitwiseCaseEquality => todo!(),
                         }
@@ -582,7 +565,7 @@ pub fn lower_process(
                         let imm =
                             CExpr::Bits(&Bits::from_u64(INTEGER_VSIZE, *offset as u64), dst.mode());
                         let dst_t = temp_map[dst];
-                        slice::slice_with(&mut buffer, dst_t, src_t.into(), imm, false)?;
+                        slice::slice_with(&mut buffer, dst_t, src_t, imm, false)?;
                     }
                     I::ShiftImm(dst, op, src, offset) => {
                         let src_t: CExpr = temp_map[src].into();
@@ -592,14 +575,12 @@ pub fn lower_process(
                         let dst_t = temp_map[dst];
                         use ShiftImmOp as O;
                         match op {
-                            O::LogicalShiftLeft => {
-                                binary::cgc_lsl(&mut buffer, dst_t, src_t.into(), imm)?
-                            }
+                            O::LogicalShiftLeft => binary::cgc_lsl(&mut buffer, dst_t, src_t, imm)?,
                             O::LogicalShiftRight => {
-                                binary::cgc_lsr(&mut buffer, dst_t, src_t.into(), imm)?
+                                binary::cgc_lsr(&mut buffer, dst_t, src_t, imm)?
                             }
                             O::ArithmeticShiftRight => {
-                                binary::cgc_asr(&mut buffer, dst_t, src_t.into(), imm)?
+                                binary::cgc_asr(&mut buffer, dst_t, src_t, imm)?
                             }
                         }
                     }
@@ -615,7 +596,7 @@ pub fn lower_process(
                         let lhs_t: CExpr = temp_map[lhs].into();
                         let rhs_t: CExpr = temp_map[rhs].into();
                         let dst_t = temp_map[dst];
-                        slice::slice(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?;
+                        slice::slice(&mut buffer, dst_t, lhs_t, rhs_t)?;
                     }
                     I::Binary(dst, op, lhs, rhs) => {
                         let lhs_t: CExpr = temp_map[lhs].into();
@@ -624,94 +605,44 @@ pub fn lower_process(
 
                         use vogls_ir::BinaryOp as O;
                         match op {
-                            O::And => {
-                                binary::cgc_bin_and(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
-                            O::Or => {
-                                binary::cgc_bin_or(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
-                            O::Xor => {
-                                binary::cgc_bin_xor(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
-                            O::AndNot => binary::cgc_bin_andnot(
-                                &mut buffer,
-                                dst_t,
-                                lhs_t.into(),
-                                rhs_t.into(),
-                            )?,
-                            O::OrNot => binary::cgc_bin_ornot(
-                                &mut buffer,
-                                dst_t,
-                                lhs_t.into(),
-                                rhs_t.into(),
-                            )?,
-                            O::Xnor => binary::cgc_bin_xnor(
-                                &mut buffer,
-                                dst_t,
-                                lhs_t.into(),
-                                rhs_t.into(),
-                            )?,
-                            O::Add => {
-                                binary::cgc_bin_add(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
-                            O::Sub => {
-                                binary::cgc_bin_sub(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
-                            O::Power => {
-                                binary::cgc_bin_pow(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
-                            O::Multiply => {
-                                binary::cgc_bin_mul(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
-                            O::DivideX => {
-                                binary::cgc_bin_div(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
+                            O::And => binary::cgc_bin_and(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::Or => binary::cgc_bin_or(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::Xor => binary::cgc_bin_xor(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::AndNot => binary::cgc_bin_andnot(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::OrNot => binary::cgc_bin_ornot(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::Xnor => binary::cgc_bin_xnor(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::Add => binary::cgc_bin_add(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::Sub => binary::cgc_bin_sub(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::Power => binary::cgc_bin_pow(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::Multiply => binary::cgc_bin_mul(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::DivideX => binary::cgc_bin_div(&mut buffer, dst_t, lhs_t, rhs_t)?,
                             O::Divide0 => todo!(),
-                            O::ModulusX => {
-                                binary::cgc_bin_mod(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
+                            O::ModulusX => binary::cgc_bin_mod(&mut buffer, dst_t, lhs_t, rhs_t)?,
                             O::Modulus0 => todo!(),
-                            O::UnsignedLessEqual => binary::cgc_bin_ule(
-                                &mut buffer,
-                                dst_t.ident,
-                                lhs_t.into(),
-                                rhs_t.into(),
-                            )?,
+                            O::UnsignedLessEqual => {
+                                binary::cgc_bin_ule(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
+                            }
 
                             O::LogicalShiftLeft => {
-                                binary::cgc_lsl(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                                binary::cgc_lsl(&mut buffer, dst_t, lhs_t, rhs_t)?
                             }
                             O::LogicalShiftRight => {
-                                binary::cgc_lsr(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                                binary::cgc_lsr(&mut buffer, dst_t, lhs_t, rhs_t)?
                             }
                             O::ArithmeticShiftRight => {
-                                binary::cgc_asr(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                                binary::cgc_asr(&mut buffer, dst_t, lhs_t, rhs_t)?
                             }
-                            O::Concat => {
-                                binary::cgc_concat(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
-                            O::CopyX => {
-                                binary::cgc_copy_x(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
-                            }
+                            O::Concat => binary::cgc_concat(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::CopyX => binary::cgc_copy_x(&mut buffer, dst_t, lhs_t, rhs_t)?,
                             O::CopyZ => binary::cgc_copy_y(&mut buffer, dst_t, lhs_t, rhs_t)?,
-                            O::Min => {
-                                binary::cgc_bin_min(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            O::Min => binary::cgc_bin_min(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::Max => binary::cgc_bin_max(&mut buffer, dst_t, lhs_t, rhs_t)?,
+                            O::CaseEquality => {
+                                binary::cgc_case_eq(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
                             }
-                            O::Max => {
-                                binary::cgc_bin_max(&mut buffer, dst_t, lhs_t.into(), rhs_t.into())?
+                            O::Posedge => {
+                                binary::cgc_posedge(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
                             }
-                            O::CaseEquality => binary::cgc_case_eq(
-                                &mut buffer,
-                                dst_t.ident,
-                                lhs_t.into(),
-                                rhs_t.into(),
-                            )?,
-                            O::Posedge => binary::cgc_posedge(
-                                &mut buffer,
-                                dst_t.ident,
-                                lhs_t.into(),
-                                rhs_t.into(),
-                            )?,
                             O::Negedge => {
                                 binary::cgc_negedge(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
                             }
@@ -735,7 +666,7 @@ pub fn lower_process(
                             lower_dyn_format_str(
                                 &mut buffer,
                                 &mut state_builder.dyn_fmt_strs,
-                                &dyn_format_string,
+                                dyn_format_string,
                                 args,
                             )?;
                         }
@@ -758,7 +689,7 @@ pub fn lower_process(
                             lower_dyn_format_str(
                                 &mut buffer,
                                 &mut state_builder.dyn_fmt_strs,
-                                &dyn_format_string,
+                                dyn_format_string,
                                 args,
                             )?;
                             writeln!(
@@ -1199,6 +1130,7 @@ pub fn lower_signal_drive_header(
     )
 }
 
+#[expect(clippy::too_many_arguments)]
 pub fn lower_signal_drive_fn(
     f: &mut impl io::Write,
     gl: &GlobalContext,

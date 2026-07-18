@@ -65,7 +65,7 @@ pub fn lower_system_task_enable<'a>(
 
             let l_ty = get_expr_type(
                 &mctx.gl,
-                &ctx.arenas,
+                ctx.arenas,
                 &ctx.table,
                 scope,
                 &mut mctx.diagnostics,
@@ -73,7 +73,7 @@ pub fn lower_system_task_enable<'a>(
             )?;
             let r_ty = get_expr_type(
                 &mctx.gl,
-                &ctx.arenas,
+                ctx.arenas,
                 &ctx.table,
                 scope,
                 &mut mctx.diagnostics,
@@ -163,7 +163,7 @@ pub fn lower_system_task_enable<'a>(
                     let sid = try_resolve_hident(
                         scope,
                         &ctx.table,
-                        &ctx.arenas,
+                        ctx.arenas,
                         *ident,
                         &mut mctx.diagnostics,
                     )?;
@@ -203,16 +203,11 @@ pub fn lower_system_task_enable<'a>(
                 );
                 return Err(());
             }
-            let net = try_resolve_net(
-                scope,
-                &ctx.table,
-                &ctx.arenas,
-                *ident,
-                &mut mctx.diagnostics,
-            )?;
+            let net =
+                try_resolve_net(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
             if net.dims.len() != 1 {
                 mctx.diagnostics.not_yet_implemented(
-                    hident_span(&ctx.arenas, *ident),
+                    hident_span(ctx.arenas, *ident),
                     "only single arrays are supported as memory at the moment",
                 );
                 return Err(());
@@ -265,6 +260,7 @@ pub fn lower_system_task_enable<'a>(
     Ok(builder)
 }
 
+#[expect(clippy::type_complexity)]
 pub fn lower_write_arguments<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,

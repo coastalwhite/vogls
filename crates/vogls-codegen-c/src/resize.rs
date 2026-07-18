@@ -26,7 +26,7 @@ pub fn cgc_truncate(f: &mut impl io::Write, dst: CExpr, src: CExpr<'_>) -> io::R
         return cgc_copy(f, dst, src);
     }
 
-    let msbs_mask = if dst.ty().size.get() % 64 == 0 {
+    let msbs_mask = if !dst.ty().size.get().is_multiple_of(64) {
         u64::MAX
     } else {
         (1u64 << (dst.ty().size.get() % 64)) - 1
@@ -79,7 +79,7 @@ pub fn cgc_truncate(f: &mut impl io::Write, dst: CExpr, src: CExpr<'_>) -> io::R
             let dst_num_words = dst_arr_size / 2;
             let src_num_words = src_arr_size / 2;
 
-            let num_copy_words = if dst.ty().size.get() % 64 == 0 {
+            let num_copy_words = if !dst.ty().size.get().is_multiple_of(64) {
                 dst_num_words
             } else {
                 dst_num_words - 1
@@ -94,7 +94,7 @@ pub fn cgc_truncate(f: &mut impl io::Write, dst: CExpr, src: CExpr<'_>) -> io::R
                     "{INDENT}memcpy({d}+{dst_num_words}, {s}+{src_num_words}, {num_copy_words}*sizeof(uint64_t));"
                 )?;
             }
-            if dst.ty().size.get() % 64 != 0 {
+            if !dst.ty().size.get().is_multiple_of(64) {
                 let spc_i = dst_num_words - 1;
                 let dst_val_i = dst_arr_size - 1;
                 let src_val_i = src_num_words + spc_i;
@@ -117,7 +117,7 @@ pub fn cgc_zero_extend(f: &mut impl io::Write, dst: CExpr<'_>, src: CExpr<'_>) -
     assert!(dst.ty().size >= src.ty().size);
 
     if dst.ty().size == src.ty().size {
-        return cgc_copy(f, dst, src.into());
+        return cgc_copy(f, dst, src);
     }
 
     let (d, s) = (dst, src);
@@ -174,7 +174,7 @@ pub fn cgc_zero_extend(f: &mut impl io::Write, dst: CExpr<'_>, src: CExpr<'_>) -
                     f,
                     "{INDENT}for (int i = 1; i < {num_words}; ++i) {{ {d}[i] = ~0; {d}[{num_words}+i] = 0; }}"
                 )?;
-                if dst.ty().size.get() % 64 != 0 {
+                if !dst.ty().size.get().is_multiple_of(64) {
                     let last_spc_i = num_words - 1;
                     let mask = mask(dst.ty().size.get() % 64);
                     writeln!(f, "{INDENT}{d}[{last_spc_i}] = 0x{mask:x};")?;
@@ -192,7 +192,7 @@ pub fn cgc_zero_extend(f: &mut impl io::Write, dst: CExpr<'_>, src: CExpr<'_>) -
                 f,
                 "{INDENT}memcpy({d}+{dst_num_words}, {s}+{src_num_words}, {src_num_words}*sizeof(uint64_t));"
             )?;
-            if src.ty().size.get() % 64 != 0 {
+            if !src.ty().size.get().is_multiple_of(64) {
                 let ext_mask = mask((dst.ty().size.get() - src.ty().size.get()).min(63))
                     << (src.ty().size.get() % 64);
                 writeln!(f, "{INDENT}{d}[{src_num_words} - 1] |= 0x{ext_mask:x};")?;
@@ -204,7 +204,7 @@ pub fn cgc_zero_extend(f: &mut impl io::Write, dst: CExpr<'_>, src: CExpr<'_>) -
                     f,
                     "{INDENT}memset({d}+{src_num_words}, 0xFF, {diff_num_words}*sizeof(uint64_t));"
                 )?;
-                if dst.ty().size.get() % 64 != 0 {
+                if !dst.ty().size.get().is_multiple_of(64) {
                     let last_spc_i = dst_num_words - 1;
                     let mask = mask(dst.ty().size.get() % 64);
                     writeln!(f, "{INDENT}{d}[{last_spc_i}] = 0x{mask:x};")?;
@@ -227,7 +227,7 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Re
     assert!(dst.ty().size >= src.ty().size);
 
     if dst.ty().size == src.ty().size {
-        return cgc_copy(f, dst, src.into());
+        return cgc_copy(f, dst, src);
     }
 
     let (d, s) = (dst, src);
@@ -259,7 +259,7 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Re
                 f,
                 "{INDENT}{INDENT}memset({d}+1, sign_mask, {dst_arr_size_m_1}*sizeof(uint64_t));"
             )?;
-            if dst.ty().size.get() % 64 != 0 {
+            if !dst.ty().size.get().is_multiple_of(64) {
                 let mask = mask(dst.ty().size.get() % 64);
                 writeln!(
                     f,
@@ -269,7 +269,7 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Re
             writeln!(f, "{INDENT}}}")?;
         }
         (LogicMode::TwoValue, Some(dst_arr_size), Some(src_arr_size)) => {
-            let num_items_main_loop = if src.ty().size.get() % 64 == 0 {
+            let num_items_main_loop = if !src.ty().size.get().is_multiple_of(64) {
                 src_arr_size
             } else {
                 src_arr_size - 1
@@ -281,7 +281,7 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Re
                 )?;
             }
             let last_src_i = src_arr_size - 1;
-            if src.ty().size.get() % 64 != 0 {
+            if !src.ty().size.get().is_multiple_of(64) {
                 writeln!(
                     f,
                     "{INDENT}{d}[{last_src_i}] = (({unsigned_elem_ty})((({signed_elem_ty})(({unsigned_elem_ty}){s}[{last_src_i}] << {shift})) >> {shift}));",
@@ -299,7 +299,7 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Re
                     "{INDENT}memset({d}+{src_arr_size}, !(({s}[{last_src_i}] >> {shift}) & 1) - 1, {diff_arr_size}*sizeof(uint64_t));"
                 )?;
             }
-            if dst.ty().size.get() % 64 != 0 {
+            if !dst.ty().size.get().is_multiple_of(64) {
                 let last_dst_i = dst_arr_size - 1;
                 let mask = mask(dst.ty().size.get() % 64);
                 writeln!(f, "{INDENT}{d}[{last_dst_i}] &= 0x{mask:x};")?;
@@ -368,7 +368,7 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Re
                 writeln!(f, "{INDENT}}}")?;
             }
 
-            if dst.ty().size.get() % 64 != 0 {
+            if !dst.ty().size.get().is_multiple_of(64) {
                 let last_i = dst_arr_size - 1;
                 let mask = mask(dst.ty().size.get() % 64);
                 writeln!(f, "{INDENT}{d}[{num_words_m_1}] &= 0x{mask:x};")?;
@@ -379,7 +379,7 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Re
             let dst_num_words = dst_arr_size / 2;
             let src_num_words = src_arr_size / 2;
 
-            let num_items_main_loop = if src.ty().size.get() % 64 == 0 {
+            let num_items_main_loop = if !src.ty().size.get().is_multiple_of(64) {
                 src_num_words
             } else {
                 src_num_words - 1
@@ -396,7 +396,7 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Re
             }
             let src_num_words_m_1 = src_num_words - 1;
             let src_arr_size_m_1 = src_arr_size - 1;
-            if src.ty().size.get() % 64 != 0 {
+            if !src.ty().size.get().is_multiple_of(64) {
                 let sum_num_words_m_1 = dst_num_words + src_num_words_m_1;
                 writeln!(
                     f,
@@ -427,7 +427,7 @@ pub fn cgc_sign_extend(f: &mut impl io::Write, dst: CExpr, src: CExpr) -> io::Re
                     "{INDENT}memset({d}+{sum_num_words}, !(({s}[{src_arr_size_m_1}] >> {shift}) & 1) - 1, {diff_num_words}*sizeof(uint64_t));"
                 )?;
             }
-            if dst.ty().size.get() % 64 != 0 {
+            if !dst.ty().size.get().is_multiple_of(64) {
                 let dst_num_words_m_1 = dst_num_words - 1;
                 let dst_arr_size_m_1 = dst_arr_size - 1;
                 let mask = mask(dst.ty().size.get() % 64);

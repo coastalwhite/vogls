@@ -25,10 +25,7 @@ pub struct AstIdRange<'a, T> {
 
 impl<'a, T> Clone for AstId<'a, T> {
     fn clone(&self) -> Self {
-        Self {
-            node: self.node,
-            loc: self.loc,
-        }
+        *self
     }
 }
 impl<'a, T> Copy for AstId<'a, T> {}
@@ -50,10 +47,7 @@ impl<'a, T> Default for AstIdRange<'a, T> {
 }
 impl<'a, T> Clone for AstIdRange<'a, T> {
     fn clone(&self) -> Self {
-        Self {
-            node: self.node,
-            loc: self.loc,
-        }
+        *self
     }
 }
 impl<'a, T> Copy for AstIdRange<'a, T> {}

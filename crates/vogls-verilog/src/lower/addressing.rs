@@ -230,7 +230,7 @@ impl<'a, 'b> AddressingContext for AddressingConstantExprWidthContext<'a, 'b> {
             self.arenas,
             self.table,
             self.scope,
-            &mut self.diagnostics,
+            self.diagnostics,
             operand,
             None,
         )?;
@@ -248,9 +248,7 @@ impl<'a, 'b> AddressingContext for AddressingConstantExprWidthContext<'a, 'b> {
         Ok(())
     }
     #[inline(always)]
-    fn or_overflow(&mut self, _lhs: Self::Bool, _rhs: Self::Bool) -> Self::Bool {
-        ()
-    }
+    fn or_overflow(&mut self, _lhs: Self::Bool, _rhs: Self::Bool) -> Self::Bool {}
     #[inline(always)]
     fn var_from_i64(&mut self, _v: i64) -> Result<Self::Var, Self::Error> {
         Ok(())
@@ -333,7 +331,7 @@ impl<'a, 'b> AddressingContext for LValueAddressingContext<'a, 'b> {
     fn eval_constant(&mut self, operand: Self::ConstantExpr) -> Result<i64, Self::Error> {
         let value = eval_constant_expr(
             &self.mctx.gl,
-            &self.ctx.arenas,
+            self.ctx.arenas,
             &self.ctx.table,
             self.scope,
             &mut self.mctx.diagnostics,
@@ -477,11 +475,11 @@ impl<'a, 'b> AddressingContext for ConstantAddressingContext<'a, 'b> {
 
     fn eval_constant(&mut self, operand: Self::ConstantExpr) -> Result<i64, Self::Error> {
         let value = eval_constant_expr(
-            &self.gl,
-            &self.arenas,
-            &self.table,
+            self.gl,
+            self.arenas,
+            self.table,
             self.scope,
-            &mut self.diagnostics,
+            self.diagnostics,
             operand,
             None,
         )?;
@@ -493,11 +491,11 @@ impl<'a, 'b> AddressingContext for ConstantAddressingContext<'a, 'b> {
 
     fn eval_var(&mut self, operand: Self::Expr) -> Result<Self::Var, Self::Error> {
         let value = eval_constant_expr(
-            &self.gl,
-            &self.arenas,
-            &self.table,
+            self.gl,
+            self.arenas,
+            self.table,
             self.scope,
-            &mut self.diagnostics,
+            self.diagnostics,
             operand,
             None,
         )?;

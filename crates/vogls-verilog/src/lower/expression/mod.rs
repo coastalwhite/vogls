@@ -128,7 +128,7 @@ pub fn lower_expr<'a>(
                     let (Ok(l_ty), Ok(r_ty)) = (
                         get_expr_type(
                             &mctx.gl,
-                            &ctx.arenas,
+                            ctx.arenas,
                             &ctx.table,
                             scope,
                             &mut mctx.diagnostics,
@@ -136,7 +136,7 @@ pub fn lower_expr<'a>(
                         ),
                         get_expr_type(
                             &mctx.gl,
-                            &ctx.arenas,
+                            ctx.arenas,
                             &ctx.table,
                             scope,
                             &mut mctx.diagnostics,
@@ -282,7 +282,7 @@ pub fn lower_expr<'a>(
                 let end_stack_size = result_stack.len() - exprs.len();
                 let Ok(repeat_n) = eval_constant_expr(
                     &mctx.gl,
-                    &ctx.arenas,
+                    ctx.arenas,
                     &ctx.table,
                     scope,
                     &mut mctx.diagnostics,
@@ -357,7 +357,7 @@ pub fn lower_expr<'a>(
                     let (Ok(l_ty), Ok(r_ty)) = (
                         get_expr_type(
                             &mctx.gl,
-                            &ctx.arenas,
+                            ctx.arenas,
                             &ctx.table,
                             scope,
                             &mut mctx.diagnostics,
@@ -365,7 +365,7 @@ pub fn lower_expr<'a>(
                         ),
                         get_expr_type(
                             &mctx.gl,
-                            &ctx.arenas,
+                            ctx.arenas,
                             &ctx.table,
                             scope,
                             &mut mctx.diagnostics,
@@ -457,7 +457,7 @@ pub fn lower_expr<'a>(
                 let Ok(symbol_key) = try_resolve_hident(
                     scope,
                     &ctx.table,
-                    &ctx.arenas,
+                    ctx.arenas,
                     ast_ident,
                     &mut mctx.diagnostics,
                 ) else {
@@ -494,7 +494,7 @@ pub fn lower_expr<'a>(
                         continue 'dispatch_loop;
                     }
                     VSymbol::Net(s) => (
-                        s.ty.clone(),
+                        s.ty,
                         &s.dims[..],
                         s.transform,
                         s.net.probe(mctx.gl(), builder),
@@ -545,7 +545,7 @@ pub fn lower_expr<'a>(
                     ) -> Result<i64, Self::Error> {
                         let result = eval_constant_expr(
                             &self.mctx.gl,
-                            &self.ctx.arenas,
+                            self.ctx.arenas,
                             &self.ctx.table,
                             self.scope,
                             &mut self.mctx.diagnostics,
@@ -711,7 +711,7 @@ pub fn lower_expr<'a>(
                     let Ok(fn_symbol) = try_resolve_hident(
                         scope,
                         &ctx.table,
-                        &ctx.arenas,
+                        ctx.arenas,
                         ident,
                         &mut mctx.diagnostics,
                     ) else {
@@ -721,7 +721,7 @@ pub fn lower_expr<'a>(
                     };
                     let VSymbol::Function(fn_symbol) = &ctx.table[fn_symbol].content else {
                         mctx.diagnostics.not_yet_implemented(
-                            hident_span(&ctx.arenas, ident),
+                            hident_span(ctx.arenas, ident),
                             "not calling a function",
                         );
                         error = true;
@@ -786,7 +786,7 @@ pub fn lower_expr<'a>(
 
                 let num_args = exprs.map_or(0, |e| e.len());
                 let result = system_function_call::lower_system_function_call(
-                    &ctx.arenas,
+                    ctx.arenas,
                     mctx,
                     builder,
                     expr,
@@ -845,7 +845,7 @@ pub fn lower_expr<'a>(
 }
 
 // i op j, where op is: + - * / % & | ^ ^~ ~^
-pub fn coerce_bin_arithmetic<'a>(
+pub fn coerce_bin_arithmetic(
     gl: &mut GlobalContext,
     builder: &mut BasicBlockBuilder,
     l: VariableKey,
@@ -867,7 +867,7 @@ pub fn coerce_bin_arithmetic<'a>(
     (l, ty, r, ty)
 }
 
-pub fn coerce_to_max_size_ty<'a>(l_ty: VType, r_ty: VType) -> VType {
+pub fn coerce_to_max_size_ty(l_ty: VType, r_ty: VType) -> VType {
     // max(L(i),L(j))
 
     if l_ty == r_ty {
@@ -889,7 +889,7 @@ pub fn coerce_to_max_size_ty<'a>(l_ty: VType, r_ty: VType) -> VType {
 macro_rules! impl_bin_arithmetic {
     ($($f:ident => $builder_f:ident),+ $(,)?) => {
         $(
-        fn $f<'a>(
+        fn $f(
             gl: &mut GlobalContext,
             builder: &mut BasicBlockBuilder,
             l: VariableKey,
@@ -914,7 +914,7 @@ macro_rules! impl_bin_arithmetic {
 macro_rules! impl_bin_eq_ineq {
     ($($f:ident => $builder_f:ident),+ $(,)?) => {
         $(
-        fn $f<'a>(
+        fn $f(
             gl: &mut GlobalContext,
             builder: &mut BasicBlockBuilder,
             l: VariableKey,
@@ -936,7 +936,7 @@ macro_rules! impl_bin_eq_ineq {
     };
     ($($f:ident => ($signed_f:ident, $unsigned_f:ident)),+ $(,)?) => {
         $(
-        fn $f<'a>(
+        fn $f(
             gl: &mut GlobalContext,
             builder: &mut BasicBlockBuilder,
             l: VariableKey,
@@ -965,7 +965,7 @@ macro_rules! impl_bin_eq_ineq {
 macro_rules! impl_shift {
     ($($f:ident => $builder_f:ident),+ $(,)?) => {
         $(
-        fn $f<'a>(
+        fn $f(
             gl: &mut GlobalContext,
             builder: &mut BasicBlockBuilder,
             l: VariableKey,
@@ -1014,7 +1014,7 @@ impl_shift! {
     bin_logical_shift_right => logical_shift_right,
 }
 
-fn bin_arithmetic_shift_right<'a>(
+fn bin_arithmetic_shift_right(
     gl: &mut GlobalContext,
     builder: &mut BasicBlockBuilder,
     l: VariableKey,
@@ -1159,7 +1159,7 @@ pub fn get_used_ident_signals<'a>(
     ident: impl Into<HIdent<'a>>,
 ) -> Result<(), ()> {
     let Ok(symbol_key) =
-        try_resolve_hident(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)
+        try_resolve_hident(scope, &ctx.table, ctx.arenas, ident, &mut mctx.diagnostics)
     else {
         return Err(());
     };

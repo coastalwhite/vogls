@@ -191,8 +191,8 @@ pub fn eval_constant_expr<'a>(
 
                 let end_length = result_stack.len()
                     - exprs.len()
-                    - range_expression.is_some().then_some(2).unwrap_or(0);
-                let Ok(value) = try_resolve_constant(scope, &table, arenas, ast_ident, diagnostics)
+                    - if range_expression.is_some() { 2 } else { 0 };
+                let Ok(value) = try_resolve_constant(scope, table, arenas, ast_ident, diagnostics)
                 else {
                     result_stack.truncate(end_length);
                     result_stack.push(None);
@@ -464,7 +464,7 @@ pub fn eval_constant_expr<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
 
-                    let Ok(fn_sid) = try_resolve_hident(scope, &table, arenas, ident, diagnostics)
+                    let Ok(fn_sid) = try_resolve_hident(scope, table, arenas, ident, diagnostics)
                     else {
                         result_stack.push(None);
                         error = true;
@@ -494,7 +494,7 @@ pub fn eval_constant_expr<'a>(
 
                 let return_stack_length = result_stack.len() - arguments.len();
 
-                let Ok(fn_sid) = try_resolve_hident(scope, &table, arenas, ident, diagnostics)
+                let Ok(fn_sid) = try_resolve_hident(scope, table, arenas, ident, diagnostics)
                 else {
                     result_stack.truncate(return_stack_length);
                     result_stack.push(None);
@@ -581,7 +581,7 @@ pub fn eval_constant_expr<'a>(
                     constant_expr,
                     exprs,
                 } = &id;
-                assert!(exprs.len() > 0);
+                assert!(!exprs.is_empty());
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);

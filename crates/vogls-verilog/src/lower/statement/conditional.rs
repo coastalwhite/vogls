@@ -111,8 +111,7 @@ pub fn lower_case_statement<'a>(
                     CaseStatementVariant::CaseX => {
                         // @Performance: This should probably be one instruction
                         let x = builder.copy_x(mctx.gl(), expr_var, v);
-                        let x = builder.copy_z(mctx.gl(), x, v);
-                        x
+                        builder.copy_z(mctx.gl(), x, v)
                     }
                     CaseStatementVariant::CaseZ => builder.copy_z(mctx.gl(), expr_var, v),
                 };
@@ -131,8 +130,7 @@ pub fn lower_case_statement<'a>(
                         CaseStatementVariant::CaseX => {
                             // @Performance: This should probably be one instruction
                             let x = builder.copy_x(mctx.gl(), expr_var, v);
-                            let x = builder.copy_z(mctx.gl(), x, v);
-                            x
+                            builder.copy_z(mctx.gl(), x, v)
                         }
                         CaseStatementVariant::CaseZ => builder.copy_z(mctx.gl(), expr_var, v),
                     };

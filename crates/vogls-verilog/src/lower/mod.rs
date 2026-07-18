@@ -286,85 +286,66 @@ pub fn try_resolve_net_with_sid<'a, 's>(
     Ok((sid, n))
 }
 
-pub fn strict_resolve_module<'a>(
-    scope: SymbolId,
-    table: &'a VSymbolTable,
-    ident: IdentId,
-) -> &'a ModuleSymbol {
-    let sid = resolve_symbol_id(scope, table, ident).unwrap();
-    let VSymbol::Module(n) = &table[sid].content else {
-        panic!()
-    };
-    n
-}
-
-pub fn unwrap_get_fn_mut<'a>(table: &'a mut VSymbolTable, sid: SymbolId) -> &'a mut FunctionSymbol {
+pub fn unwrap_get_fn_mut(table: &mut VSymbolTable, sid: SymbolId) -> &mut FunctionSymbol {
     let VSymbol::Function(n) = &mut table[sid].content else {
         panic!()
     };
     n
 }
-pub fn unwrap_get_task_mut<'a>(table: &'a mut VSymbolTable, sid: SymbolId) -> &'a mut TaskSymbol {
+pub fn unwrap_get_task_mut(table: &mut VSymbolTable, sid: SymbolId) -> &mut TaskSymbol {
     let VSymbol::Task(n) = &mut table[sid].content else {
         panic!()
     };
     n
 }
 
-pub fn unwrap_get_net<'a>(table: &'a VSymbolTable, sid: SymbolId) -> &'a NetSymbol {
+pub fn unwrap_get_net(table: &VSymbolTable, sid: SymbolId) -> &NetSymbol {
     let VSymbol::Net(n) = &table[sid].content else {
         panic!()
     };
     n
 }
-pub fn unwrap_get_net_mut<'a>(table: &'a mut VSymbolTable, sid: SymbolId) -> &'a mut NetSymbol {
+pub fn unwrap_get_net_mut(table: &mut VSymbolTable, sid: SymbolId) -> &mut NetSymbol {
     let VSymbol::Net(n) = &mut table[sid].content else {
         panic!()
     };
     n
 }
 
-pub fn unwrap_resolve_net<'a>(
-    scope: SymbolId,
-    table: &'a VSymbolTable,
-    ident: IdentId,
-) -> &'a NetSymbol {
+pub fn unwrap_resolve_net(scope: SymbolId, table: &VSymbolTable, ident: IdentId) -> &NetSymbol {
     let sid = resolve_symbol_id(scope, table, ident).unwrap();
     unwrap_get_net(table, sid)
 }
-pub fn unwrap_resolve_net_mut<'a>(
+pub fn unwrap_resolve_net_mut(
     scope: SymbolId,
-    table: &'a mut VSymbolTable,
+    table: &mut VSymbolTable,
     ident: IdentId,
-) -> &'a mut NetSymbol {
+) -> &mut NetSymbol {
     let sid = resolve_symbol_id(scope, table, ident).unwrap();
     unwrap_get_net_mut(table, sid)
 }
 
-pub fn unwrap_get_module<'a>(table: &'a VSymbolTable, sid: SymbolId) -> &'a ModuleSymbol {
+pub fn unwrap_get_module(table: &VSymbolTable, sid: SymbolId) -> &ModuleSymbol {
     let VSymbol::Module(n) = &table[sid].content else {
         panic!()
     };
     n
 }
-pub fn unwrap_get_module_mut<'a>(
-    table: &'a mut VSymbolTable,
-    sid: SymbolId,
-) -> &'a mut ModuleSymbol {
+pub fn unwrap_get_module_mut(table: &mut VSymbolTable, sid: SymbolId) -> &mut ModuleSymbol {
     let VSymbol::Module(n) = &mut table[sid].content else {
         panic!()
     };
     n
 }
 
-pub fn unwrap_get_param_mut<'a>(table: &'a mut VSymbolTable, sid: SymbolId) -> &'a mut VValue {
+pub fn unwrap_get_param_mut(table: &mut VSymbolTable, sid: SymbolId) -> &mut VValue {
     let VSymbol::Parameter(n) = &mut table[sid].content else {
         panic!()
     };
     n
 }
 
-fn hident_span<'a>(arenas: &AstArenas, ident: HIdent<'a>) -> TokenRange {
+fn hident_span(arenas: &AstArenas, ident: HIdent) -> TokenRange {
     let lst = arenas.get_item_span(ident.ident);
     match ident.components.first() {
         None => lst,
@@ -559,13 +540,8 @@ fn assign_port_output<'a>(
     let output = unwrap_get_net(&ctx.table, output_net);
 
     if let Expr::Ident(ident, exprs, range) = &*expr {
-        let to_signal = try_resolve_net(
-            scope,
-            &ctx.table,
-            &ctx.arenas,
-            *ident,
-            &mut mctx.diagnostics,
-        )?;
+        let to_signal =
+            try_resolve_net(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
         let driver = output.net.probe_signal();
         let drivee = to_signal.net.blocking_drive_signal();
 
@@ -621,7 +597,7 @@ fn assign_port_output<'a>(
                 for e in exprs.iter().rev() {
                     let e_ty = get_expr_type(
                         &mctx.gl,
-                        &ctx.arenas,
+                        ctx.arenas,
                         &ctx.table,
                         scope,
                         &mut mctx.diagnostics,
@@ -637,7 +613,7 @@ fn assign_port_output<'a>(
                 let symbol_key = try_resolve_hident(
                     scope,
                     &ctx.table,
-                    &ctx.arenas,
+                    ctx.arenas,
                     *ast_ident,
                     &mut mctx.diagnostics,
                 )?;
@@ -743,7 +719,7 @@ fn assign_task_output<'a>(
                 let symbol_key = try_resolve_hident(
                     scope,
                     &ctx.table,
-                    &ctx.arenas,
+                    ctx.arenas,
                     *ast_ident,
                     &mut mctx.diagnostics,
                 )?;
@@ -817,9 +793,9 @@ fn assign_task_output<'a>(
     Ok(())
 }
 
-fn msb_lsb_to_width<'a>(
+fn msb_lsb_to_width(
     gl: &GlobalContext,
-    arenas: &'a AstArenas,
+    arenas: &AstArenas,
     table: &VSymbolTable,
     scope: SymbolId,
     diagnostics: &mut Diagnostics,
@@ -839,7 +815,7 @@ fn msb_lsb_to_width<'a>(
     };
     let width = u32::try_from(msb.abs_diff(lsb)).ok();
     let width = width.and_then(|w| w.checked_add(1));
-    let width = width.and_then(|w| VectorSize::new(w));
+    let width = width.and_then(VectorSize::new);
     let Some(width) = width else {
         let tr = arenas.get_span(ast_msb) | arenas.get_span(ast_lsb);
         diagnostics.net_width_overflow(tr);
@@ -1056,8 +1032,8 @@ pub fn instantiate_stmts_nba_signals<'a>(
                 for vlvalue in nba.variable_lvalue.0 {
                     let (sid, net) = try_resolve_net_with_sid(
                         scope,
-                        &mut ctx.table,
-                        &ctx.arenas,
+                        &ctx.table,
+                        ctx.arenas,
                         vlvalue.ident,
                         diagnostics,
                     )?;

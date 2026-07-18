@@ -133,11 +133,11 @@ impl<'a, 'b> ElaborationState<'a, 'b> {
 /// This allows for symbols to be defined and used out-of-order in the AST, but still resolve
 /// correctly. This also makes sure that functions can be used during the evaluation of constant
 /// expressions.
-pub fn elaborate<'a, 'b>(
+pub fn elaborate<'a>(
     gl: &mut GlobalContext,
     ctx: &mut LowerContext<'a, '_>,
     top_level: AstId<'a, Module<'a>>,
-    module_lut: &'b VgHashMap<IdentId, AstId<'a, Module<'a>>>,
+    module_lut: &VgHashMap<IdentId, AstId<'a, Module<'a>>>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let dummy_signal = gl.signals.insert(vogls_ir::Signal {
@@ -158,7 +158,7 @@ pub fn elaborate<'a, 'b>(
         dummy_signal,
         dispatch_stack: Vec::new(),
         stmt_dispatch_stack: Vec::new(),
-        module_lut: &module_lut,
+        module_lut,
     };
 
     assert!(ctx.table.is_empty());
@@ -270,7 +270,7 @@ pub fn elaborate<'a, 'b>(
                     let lvl_symbol = &st.lvl_symbols[*sid];
                     if finalize_symbol(
                         gl,
-                        &lvl_symbol,
+                        lvl_symbol,
                         *sid,
                         scope,
                         ctx,
@@ -325,7 +325,7 @@ fn extend_opt_generate_block_sids<'a, 'b>(
             symbol,
         ),
         Some(ident) => try_table_insert(
-            &ctx.arenas,
+            ctx.arenas,
             &mut ctx.table,
             scope,
             ident,
@@ -351,7 +351,7 @@ fn extend_generate_if_sids<'a, 'b>(
 ) -> Result<(), ()> {
     let condition = eval_constant_expr(
         gl,
-        &ctx.arenas,
+        ctx.arenas,
         &ctx.table,
         scope,
         diagnostics,
@@ -433,7 +433,7 @@ fn extend_generate_loop_sids<'a, 'b>(
     let genvar_sid = try_resolve_hident(
         scope,
         &ctx.table,
-        &ctx.arenas,
+        ctx.arenas,
         *initialization_ident,
         diagnostics,
     )?;
@@ -447,7 +447,7 @@ fn extend_generate_loop_sids<'a, 'b>(
 
     let mut value = eval_constant_expr(
         gl,
-        &ctx.arenas,
+        ctx.arenas,
         &ctx.table,
         scope,
         diagnostics,
@@ -462,7 +462,7 @@ fn extend_generate_loop_sids<'a, 'b>(
 
     let loop_sid = match block_ident_ast {
         Some(block_ident) => try_table_insert(
-            &ctx.arenas,
+            ctx.arenas,
             &mut ctx.table,
             scope,
             block_ident,
@@ -498,7 +498,7 @@ fn extend_generate_loop_sids<'a, 'b>(
 
         let c = eval_constant_expr(
             gl,
-            &ctx.arenas,
+            ctx.arenas,
             &ctx.table,
             iter_sid,
             diagnostics,
@@ -520,7 +520,7 @@ fn extend_generate_loop_sids<'a, 'b>(
         // @CONTEXTWIDTH
         value = eval_constant_expr(
             gl,
-            &ctx.arenas,
+            ctx.arenas,
             &ctx.table,
             iter_sid,
             diagnostics,
@@ -541,15 +541,7 @@ fn extend_generate_case_sids<'a, 'b>(
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     let CaseGenerateConstruct { value, items } = &*id;
-    let value = eval_constant_expr(
-        gl,
-        &ctx.arenas,
-        &ctx.table,
-        scope,
-        diagnostics,
-        *value,
-        None,
-    )?;
+    let value = eval_constant_expr(gl, ctx.arenas, &ctx.table, scope, diagnostics, *value, None)?;
 
     for item in items.iter() {
         let CaseGenerateItem { pattern, block } = &*item;
@@ -560,7 +552,7 @@ fn extend_generate_case_sids<'a, 'b>(
                 for expr in exprs.iter() {
                     let expr_value = eval_constant_expr(
                         gl,
-                        &ctx.arenas,
+                        ctx.arenas,
                         &ctx.table,
                         scope,
                         diagnostics,
@@ -606,7 +598,7 @@ fn extend_param_decl_idents_into_scope<'a, 'b>(
     for assignment in assignments.iter() {
         let ParamAssignment { param, constant } = &*assignment;
         let Ok(sid) = try_table_insert(
-            &ctx.arenas,
+            ctx.arenas,
             &mut ctx.table,
             scope,
             *param,
@@ -686,7 +678,7 @@ fn elaborate_module<'a, 'b>(
                         };
                         let symbol = VSymbol::Net(symbol);
                         let Ok(sid) = try_table_insert(
-                            &ctx.arenas,
+                            ctx.arenas,
                             &mut ctx.table,
                             scope,
                             *identifier,
@@ -725,7 +717,7 @@ fn elaborate_module<'a, 'b>(
                     };
                     let symbol = VSymbol::Net(symbol);
                     let Ok(sid) = try_table_insert(
-                        &ctx.arenas,
+                        ctx.arenas,
                         &mut ctx.table,
                         scope,
                         ident,
@@ -767,7 +759,7 @@ fn elaborate_module<'a, 'b>(
 
                 for ident in identifiers.iter() {
                     let Some(sid) = ctx.table.resolve(scope, ident.0) else {
-                        diagnostics.var_not_found(&ctx.arenas, ctx.arenas.to_item(ident));
+                        diagnostics.var_not_found(ctx.arenas, ctx.arenas.to_item(ident));
                         error = true;
                         continue;
                     };
@@ -892,7 +884,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                             let symbol = VSymbol::Net(symbol);
 
                             let Ok(sid) = try_table_insert(
-                                &ctx.arenas,
+                                ctx.arenas,
                                 &mut ctx.table,
                                 scope,
                                 *ident,
@@ -937,7 +929,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                             let symbol = VSymbol::Net(symbol);
 
                             let Ok(sid) = try_table_insert(
-                                &ctx.arenas,
+                                ctx.arenas,
                                 &mut ctx.table,
                                 scope,
                                 *ident,
@@ -985,7 +977,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                 let IntegerDeclaration { variable_types } = &**id;
                 extend_variable_type_sids(
                     *variable_types,
-                    |var_type| InLevelSymbol::Integer(var_type),
+                    InLevelSymbol::Integer,
                     scope,
                     ctx,
                     st,
@@ -997,7 +989,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                 let mut error = false;
                 for ident in identifiers.iter() {
                     error |= try_table_insert(
-                        &ctx.arenas,
+                        ctx.arenas,
                         &mut ctx.table,
                         scope,
                         ctx.arenas.to_item(ident),
@@ -1023,7 +1015,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                     lowered: None,
                 };
                 let Ok(sid) = try_table_insert(
-                    &ctx.arenas,
+                    ctx.arenas,
                     &mut ctx.table,
                     scope,
                     *ident,
@@ -1071,7 +1063,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                     lowered: None,
                 };
                 let Ok(sid) = try_table_insert(
-                    &ctx.arenas,
+                    ctx.arenas,
                     &mut ctx.table,
                     scope,
                     id.ident,
@@ -1127,7 +1119,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
             } = &*id;
 
             let Some(module) = st.module_lut.get(&module_identifier.item.0) else {
-                diagnostics.module_not_found(&ctx.arenas, *module_identifier);
+                diagnostics.module_not_found(ctx.arenas, *module_identifier);
                 return Err(());
             };
 
@@ -1144,7 +1136,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                     time_scale: ctx.time_scale,
                 };
                 let Ok(sid) = try_table_insert(
-                    &ctx.arenas,
+                    ctx.arenas,
                     &mut ctx.table,
                     scope,
                     module_instance.name_of_module_instance,
@@ -1296,7 +1288,7 @@ fn extend_block_item_decl_sid<'a, 'b>(
         ),
         BlockItemDeclaration::Integer(var_types) => extend_variable_type_sids(
             *var_types,
-            |var_type| InLevelSymbol::Integer(var_type),
+            InLevelSymbol::Integer,
             scope,
             ctx,
             st,
@@ -1360,7 +1352,7 @@ fn extend_variable_type_sids<'a, 'b>(
         let symbol = VSymbol::Net(symbol);
 
         let Ok(sid) = try_table_insert(
-            &ctx.arenas,
+            ctx.arenas,
             &mut ctx.table,
             scope,
             var_type.identifier,
@@ -1785,7 +1777,7 @@ pub fn finalize_symbol<'a>(
                     Some(ast_range) => {
                         let (msb, lsb, width) = super::eval_constant_range(
                             gl,
-                            &ctx.arenas,
+                            ctx.arenas,
                             scope,
                             &ctx.table,
                             diagnostics,
@@ -1813,7 +1805,7 @@ pub fn finalize_symbol<'a>(
                 match &*constant_expr {
                     ConstantMinTypMaxExpression::Single(id) => eval_constant_expr(
                         gl,
-                        &ctx.arenas,
+                        ctx.arenas,
                         &ctx.table,
                         scope,
                         diagnostics,
@@ -1860,7 +1852,7 @@ pub fn finalize_symbol<'a>(
                 VariableTypeVariant::Dimensions(dimensions) => (
                     super::dims_to_array_elab(
                         gl,
-                        &ctx.arenas,
+                        ctx.arenas,
                         parent,
                         &ctx.table,
                         diagnostics,
@@ -1873,7 +1865,7 @@ pub fn finalize_symbol<'a>(
                     Some(
                         eval_constant_expr(
                             gl,
-                            &ctx.arenas,
+                            ctx.arenas,
                             &ctx.table,
                             scope,
                             diagnostics,
@@ -1888,7 +1880,7 @@ pub fn finalize_symbol<'a>(
             net.net = super::new_net(
                 gl,
                 ctx.logic_mode,
-                &ctx.arenas,
+                ctx.arenas,
                 &ty,
                 &dims,
                 *identifier,
@@ -1928,7 +1920,7 @@ pub fn finalize_symbol<'a>(
                 None => Vec::new(),
                 Some(dims) => super::dims_to_array_elab(
                     gl,
-                    &ctx.arenas,
+                    ctx.arenas,
                     parent,
                     &ctx.table,
                     diagnostics,
@@ -1936,7 +1928,7 @@ pub fn finalize_symbol<'a>(
                 )?,
             };
             let net = unwrap_get_net_mut(&mut ctx.table, sid);
-            net.net = super::new_net(gl, ctx.logic_mode, &ctx.arenas, &ty, &dims, *ident, None);
+            net.net = super::new_net(gl, ctx.logic_mode, ctx.arenas, &ty, &dims, *ident, None);
             net.dims = dims;
             net.transform = transform;
             net.ty = ty;
@@ -1952,7 +1944,7 @@ pub fn finalize_symbol<'a>(
                 VariableTypeVariant::Dimensions(dimensions) => (
                     super::dims_to_array_elab(
                         gl,
-                        &ctx.arenas,
+                        ctx.arenas,
                         parent,
                         &ctx.table,
                         diagnostics,
@@ -1965,7 +1957,7 @@ pub fn finalize_symbol<'a>(
                     Some(
                         eval_constant_expr(
                             gl,
-                            &ctx.arenas,
+                            ctx.arenas,
                             &ctx.table,
                             scope,
                             diagnostics,
@@ -1980,7 +1972,7 @@ pub fn finalize_symbol<'a>(
             net.net = super::new_net(
                 gl,
                 ctx.logic_mode,
-                &ctx.arenas,
+                ctx.arenas,
                 &ty,
                 &dims,
                 *identifier,
@@ -1991,9 +1983,9 @@ pub fn finalize_symbol<'a>(
         }
         InLevelSymbol::Port(PortInLevelSymbol { decl, ident }) => {
             let (ty, transform, _, _) =
-                port_declaration_to_info(gl, &ctx.arenas, *decl, scope, &ctx.table, diagnostics)?;
+                port_declaration_to_info(gl, ctx.arenas, *decl, scope, &ctx.table, diagnostics)?;
             let net = unwrap_get_net_mut(&mut ctx.table, sid);
-            net.net = super::new_net(gl, ctx.logic_mode, &ctx.arenas, &ty, &[], *ident, None);
+            net.net = super::new_net(gl, ctx.logic_mode, ctx.arenas, &ty, &[], *ident, None);
             net.transform = transform;
             net.ty = ty;
         }
@@ -2028,7 +2020,7 @@ pub fn finalize_symbol<'a>(
                         for id in ids.iter() {
                             let value = eval_constant_expr(
                                 gl,
-                                &ctx.arenas,
+                                ctx.arenas,
                                 &ctx.table,
                                 scope,
                                 diagnostics,
@@ -2064,7 +2056,7 @@ pub fn finalize_symbol<'a>(
                             };
                             let value = eval_constant_expr(
                                 gl,
-                                &ctx.arenas,
+                                ctx.arenas,
                                 &ctx.table,
                                 scope,
                                 diagnostics,
@@ -2106,7 +2098,7 @@ fn extend_block_sids<'a, 'b>(
         } = &*block;
 
         let named_block_scope = try_table_insert(
-            &ctx.arenas,
+            ctx.arenas,
             &mut ctx.table,
             scope,
             *block_identifier,

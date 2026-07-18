@@ -263,13 +263,13 @@ impl<'a> BitSlice<'a> {
 impl<'a> AstId<'a, Expr<'a>> {
     pub fn into_constant(self) -> AstId<'a, ConstantExpr<'a>> {
         AstId {
-            node: unsafe { std::mem::transmute(self.node) },
+            node: unsafe { std::mem::transmute::<&Expr<'a>, &ConstantExpr<'a>>(self.node) },
             loc: self.loc,
         }
     }
     pub fn into_module_path_expr(self) -> AstId<'a, ModulePathExpr<'a>> {
         AstId {
-            node: unsafe { std::mem::transmute(self.node) },
+            node: unsafe { std::mem::transmute::<&Expr<'a>, &ModulePathExpr<'a>>(self.node) },
             loc: self.loc,
         }
     }
@@ -277,7 +277,7 @@ impl<'a> AstId<'a, Expr<'a>> {
 impl<'a> AstId<'a, ConstantExpr<'a>> {
     pub fn into_expr(self) -> AstId<'a, Expr<'a>> {
         AstId {
-            node: unsafe { std::mem::transmute(self.node) },
+            node: unsafe { std::mem::transmute::<&ConstantExpr<'a>, &Expr<'a>>(self.node) },
             loc: self.loc,
         }
     }
@@ -285,7 +285,7 @@ impl<'a> AstId<'a, ConstantExpr<'a>> {
 impl<'a> AstId<'a, ModulePathExpr<'a>> {
     pub fn into_expr(self) -> AstId<'a, Expr<'a>> {
         AstId {
-            node: unsafe { std::mem::transmute(self.node) },
+            node: unsafe { std::mem::transmute::<&ModulePathExpr<'a>, &Expr<'a>>(self.node) },
             loc: self.loc,
         }
     }

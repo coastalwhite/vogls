@@ -225,7 +225,6 @@ impl<'a> Consumable<'a> for Expr<'a> {
                                     .errors
                                     .push((span, ParseErrorReason::UnexpectedToken(t)));
                             }
-                            ()
                         })?;
                         deepen!(StackItem::Unary(op), r_bp, span);
                     }

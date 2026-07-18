@@ -15,8 +15,8 @@ use crate::parser::AstArenas;
 
 use super::get_expr_type;
 
-pub fn lower_system_function_call<'a>(
-    arenas: &'a AstArenas,
+pub fn lower_system_function_call(
+    arenas: &AstArenas,
     mctx: &mut MutLowerContext,
     builder: &mut BasicBlockBuilder,
     expr: AstId<Expr>,
@@ -177,8 +177,8 @@ pub fn lower_system_function_call<'a>(
     }
 }
 
-pub fn get_system_function_call_output_ty<'a>(
-    arenas: &'a AstArenas,
+pub fn get_system_function_call_output_ty(
+    arenas: &AstArenas,
     diagnostics: &mut Diagnostics,
     expr: AstId<Expr>,
     ident: AstItem<SystemTaskIdentifier>,
@@ -276,7 +276,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
 
             let ty = get_expr_type(
                 &mctx.gl,
-                &ctx.arenas,
+                ctx.arenas,
                 &ctx.table,
                 scope,
                 &mut mctx.diagnostics,
@@ -322,7 +322,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
             let net_symbol = try_resolve_net(
                 scope,
                 &ctx.table,
-                &ctx.arenas,
+                ctx.arenas,
                 *arg_ident,
                 &mut mctx.diagnostics,
             )?;
@@ -461,8 +461,8 @@ pub fn lower_unevaluated_system_function_call_ty<'a>(
     }
 }
 
-pub fn eval_constant<'a>(
-    arenas: &'a AstArenas,
+pub fn eval_constant(
+    arenas: &AstArenas,
     diagnostics: &mut Diagnostics,
     expr: AstId<Expr>,
     ident: AstItem<SystemTaskIdentifier>,
@@ -510,7 +510,7 @@ pub fn eval_constant<'a>(
             let v = arguments[0].as_ref().ok_or(())?;
             let clog2 = v.clog2();
             Ok(VValue::SignedNet(
-                Bits::new_u32(clog2.into()).truncate_or_zero_extend(INTEGER_VSIZE),
+                Bits::new_u32(clog2).truncate_or_zero_extend(INTEGER_VSIZE),
             ))
         }
 

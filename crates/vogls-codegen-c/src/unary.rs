@@ -9,7 +9,7 @@ pub fn cgc_negate(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Result<(
     assert_eq!(dst.ty.size, src.ty().size);
 
     let size = dst.ty.size;
-    let msbs_mask = if size.get() % 64 == 0 {
+    let msbs_mask = if !size.get().is_multiple_of(64) {
         u64::MAX
     } else {
         (1u64 << (dst.ty.size.get() % 64)) - 1
@@ -93,7 +93,7 @@ pub fn cgc_reduce_or(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resul
             let num_words_m_1 = num_words - 1;
             writeln!(f, "{INDENT}{{")?;
             writeln!(f, "{INDENT}{INDENT}uint8_t z0 = 0, z1 = 1;")?;
-            let num_words_loop = if src.ty().size.get() % 64 == 0 {
+            let num_words_loop = if !src.ty().size.get().is_multiple_of(64) {
                 num_words
             } else {
                 num_words - 1
@@ -104,7 +104,7 @@ pub fn cgc_reduce_or(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resul
                     "{INDENT}{INDENT}for (int i = 0; i < {num_words_loop}; ++i) {{ z0 |= ({s}[i] & {s}[{num_words}+i]) != 0; z1 &= ~{s}[i] == 0; }}"
                 )?;
             }
-            if src.ty().size.get() % 64 != 0 {
+            if !src.ty().size.get().is_multiple_of(64) {
                 let last_i = arr_size - 1;
                 let mask = mask(src.ty().size.get() % 64);
                 writeln!(
@@ -136,7 +136,7 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resu
             writeln!(f, "{INDENT}{d} = (uint8_t)({s} == 0x{msbs_mask:x});")?
         }
         (LogicMode::TwoValue, Some(arr_size)) => {
-            let msbs_mask = if src.ty().size.get() % 64 == 0 {
+            let msbs_mask = if !src.ty().size.get().is_multiple_of(64) {
                 u64::MAX
             } else {
                 mask(src.ty().size.get() % 64)
@@ -181,7 +181,7 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resu
             writeln!(f, "{INDENT}{{")?;
             writeln!(f, "{INDENT}{INDENT}uint8_t redandspc = 1, z0 = 1, z1 = 0;")?;
 
-            let num_words_loop = if src.ty().size.get() % 64 == 0 {
+            let num_words_loop = if !src.ty().size.get().is_multiple_of(64) {
                 num_words
             } else {
                 num_words - 1
@@ -192,7 +192,7 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resu
                     "{INDENT}{INDENT}for (int i = 0; i < {num_words_loop}; ++i) {{ redandspc &= ~{s}[i] == 0; z0 &= ~{s}[{num_words}+i] == 0; z1 |= ({s}[i] & ~{s}[{num_words}+i]) != 0; }}"
                 )?;
             }
-            if src.ty().size.get() % 64 != 0 {
+            if !src.ty().size.get().is_multiple_of(64) {
                 let mask = mask(src.ty().size.get() % 64);
                 let last_i = arr_size - 1;
                 writeln!(
@@ -258,7 +258,7 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resu
             writeln!(f, "{INDENT}{{")?;
             writeln!(f, "{INDENT}{INDENT}uint8_t z0, z1 = 1;")?;
             writeln!(f, "{INDENT}{INDENT}uint32_t cnt = 0;")?;
-            let num_words_loop = if src.ty().size.get() % 64 == 0 {
+            let num_words_loop = if !src.ty().size.get().is_multiple_of(64) {
                 num_words
             } else {
                 num_words - 1
@@ -269,7 +269,7 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resu
                     "{INDENT}{INDENT}for (int i = 0; i < {num_words_loop}; ++i) {{ cnt += popcount64({s}[{num_words}+i]); z1 &= ~{s}[i] == 0; }}"
                 )?;
             }
-            if src.ty().size.get() % 64 != 0 {
+            if !src.ty().size.get().is_multiple_of(64) {
                 let last_i = arr_size - 1;
                 let mask = mask(src.ty().size.get() % 64);
                 writeln!(f, "{INDENT}{INDENT}cnt += popcount64({s}[{last_i}]);")?;
@@ -294,7 +294,7 @@ pub fn cgc_tv_to_fv(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Re
     assert_eq!(src.ty().mode, LogicMode::TwoValue);
 
     let d = dst.ident;
-    let msbw_mask = if size.get() % 64 == 0 {
+    let msbw_mask = if !size.get().is_multiple_of(64) {
         u64::MAX
     } else {
         mask(size.get() % 64)
@@ -315,7 +315,7 @@ pub fn cgc_tv_to_fv(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Re
             )?;
         }
         (Some(_), Some(arr_size)) => {
-            let main_loop_size = if size.get() % 64 == 0 {
+            let main_loop_size = if size.get().is_multiple_of(64) {
                 arr_size
             } else {
                 arr_size - 1
@@ -330,7 +330,7 @@ pub fn cgc_tv_to_fv(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Re
                     "{INDENT}memcpy({d}+{arr_size}, {src}, {main_loop_size}*sizeof(uint64_t));"
                 )?;
             }
-            if size.get() % 64 != 0 {
+            if !size.get().is_multiple_of(64) {
                 let last_i = 2 * arr_size - 1;
                 writeln!(f, "{INDENT}{d}[{main_loop_size}] = 0x{msbw_mask:x};")?;
                 writeln!(f, "{INDENT}{d}[{last_i}] = {src}[{main_loop_size}];")?;
@@ -348,7 +348,7 @@ pub fn cgc_fv_to_tv(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Re
     assert_eq!(src.ty().mode, LogicMode::FourValue);
 
     let d = dst.ident;
-    let msbw_mask = if size.get() % 64 == 0 {
+    let msbw_mask = if !size.get().is_multiple_of(64) {
         u64::MAX
     } else {
         mask(size.get() % 64)

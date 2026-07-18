@@ -102,7 +102,7 @@ pub fn drive(
         super::load(f, dst_ref.offset, v)?;
         v
     };
-    super::slice::slice_with(f, current, s1.into(), offset.into(), false)?;
+    super::slice::slice_with(f, current, s1.into(), offset, false)?;
     let c = current.ident;
     match src.ty().array_size() {
         None => write!(f, "{INDENT}if ({s} != {c}")?,

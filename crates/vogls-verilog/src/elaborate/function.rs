@@ -41,12 +41,12 @@ pub fn elaborate_fn<'a>(
         }
         FunctionRangeOrType::Unsigned(Some(range)) => {
             let (transform, size) =
-                evaluate_net_msb_lsb(gl, &ctx.arenas, *range, parent, &ctx.table, diagnostics)?;
+                evaluate_net_msb_lsb(gl, ctx.arenas, *range, parent, &ctx.table, diagnostics)?;
             (transform, VType::UnsignedNet(size))
         }
         FunctionRangeOrType::Signed(Some(range)) => {
             let (transform, size) =
-                evaluate_net_msb_lsb(gl, &ctx.arenas, *range, parent, &ctx.table, diagnostics)?;
+                evaluate_net_msb_lsb(gl, ctx.arenas, *range, parent, &ctx.table, diagnostics)?;
             (transform, VType::SignedNet(size))
         }
         FunctionRangeOrType::Integer => {
@@ -64,7 +64,7 @@ pub fn elaborate_fn<'a>(
     let net = super::new_net(
         gl,
         ctx.logic_mode,
-        &ctx.arenas,
+        ctx.arenas,
         &output_ty,
         &[],
         *ident,
@@ -87,7 +87,7 @@ pub fn elaborate_fn<'a>(
         )
         .is_err()
     {
-        diagnostics.duplicate_definition(&ctx.arenas, *ident);
+        diagnostics.duplicate_definition(ctx.arenas, *ident);
         return Err(());
     }
 
@@ -109,7 +109,7 @@ pub fn elaborate_fn<'a>(
                         // @TODO: Better error
                         Some(range) => evaluate_net_msb_lsb(
                             gl,
-                            &ctx.arenas,
+                            ctx.arenas,
                             *range,
                             symbol,
                             &ctx.table,
@@ -123,7 +123,7 @@ pub fn elaborate_fn<'a>(
             };
             let ident = ctx.arenas.to_item(ident);
             let origin = ctx.arenas.get_item_span(ident);
-            let net = super::new_net(gl, ctx.logic_mode, &ctx.arenas, &ty, &[], ident, None);
+            let net = super::new_net(gl, ctx.logic_mode, ctx.arenas, &ty, &[], ident, None);
             let signal = net.ba;
             if ctx
                 .table
@@ -141,7 +141,7 @@ pub fn elaborate_fn<'a>(
                 )
                 .is_err()
             {
-                diagnostics.duplicate_definition(&ctx.arenas, ident);
+                diagnostics.duplicate_definition(ctx.arenas, ident);
                 return Err(());
             }
             inputs.push((signal, ty));
@@ -197,7 +197,7 @@ pub fn elaborate_task<'a>(
                         // @TODO: Better error
                         Some(range) => evaluate_net_msb_lsb(
                             gl,
-                            &ctx.arenas,
+                            ctx.arenas,
                             range,
                             parent,
                             &ctx.table,
@@ -211,7 +211,7 @@ pub fn elaborate_task<'a>(
             };
             let ident = ctx.arenas.to_item(ident);
             let origin = ctx.arenas.get_item_span(ident);
-            let net = super::new_net(gl, ctx.logic_mode, &ctx.arenas, &ty, &[], ident, None);
+            let net = super::new_net(gl, ctx.logic_mode, ctx.arenas, &ty, &[], ident, None);
             let signal = net.ba;
             if ctx
                 .table
@@ -229,7 +229,7 @@ pub fn elaborate_task<'a>(
                 )
                 .is_err()
             {
-                diagnostics.duplicate_definition(&ctx.arenas, ident);
+                diagnostics.duplicate_definition(ctx.arenas, ident);
                 return Err(());
             }
             io.push((signal, direction, ty));

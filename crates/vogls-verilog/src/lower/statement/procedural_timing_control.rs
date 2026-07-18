@@ -54,7 +54,7 @@ pub fn lower<'a>(
                                 let value = try_resolve_constant(
                                     scope,
                                     &ctx.table,
-                                    &ctx.arenas,
+                                    ctx.arenas,
                                     ident,
                                     &mut mctx.diagnostics,
                                 )?;
@@ -131,7 +131,7 @@ pub fn lower<'a>(
                     let net = try_resolve_net(
                         scope,
                         &ctx.table,
-                        &ctx.arenas,
+                        ctx.arenas,
                         *ast_ident,
                         &mut mctx.diagnostics,
                     )?;

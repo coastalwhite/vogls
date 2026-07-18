@@ -177,6 +177,6 @@ fn display_with_tab_width(
         }
         s = &s[i + 1..];
     }
-    f.write_str(&s)?;
+    f.write_str(s)?;
     Ok(())
 }

@@ -119,7 +119,7 @@ pub fn get_expr_type<'a>(
                         break;
                     };
                     // @TODO: Overflow check.
-                    size = size + ty.force_net_width().get();
+                    size += ty.force_net_width().get();
                 }
                 if child_error {
                     result_stack.push(None);
@@ -384,7 +384,7 @@ pub fn get_expr_type<'a>(
             }
             Expr::String(string_ref) => {
                 let s = arenas.get_ident(string_ref.0);
-                let s = s.as_bytes().len() + 1;
+                let s = s.len() + 1;
                 result_stack.push(Some(VType::String(s as u32)));
             }
         }

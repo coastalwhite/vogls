@@ -1,6 +1,7 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, LogicMode, ProcessBuilder, ProcessKind, SignalFlags, SignalKey, VectorSize, SCALAR_VSIZE
+    BasicBlockBuilder, LogicMode, ProcessBuilder, ProcessKind, SCALAR_VSIZE, SignalFlags,
+    SignalKey, VectorSize,
 };
 use vogls_utils::OrderedSet;
 
@@ -148,7 +149,7 @@ pub fn statements_to_process<'a>(
                     Some(blk) => try_resolve_hident(
                         scope,
                         &ctx.table,
-                        &ctx.arenas,
+                        ctx.arenas,
                         blk.block_identifier,
                         &mut mctx.diagnostics,
                     )?,
@@ -164,7 +165,7 @@ pub fn statements_to_process<'a>(
                     Some(blk) => try_resolve_hident(
                         scope,
                         &ctx.table,
-                        &ctx.arenas,
+                        ctx.arenas,
                         blk.block_identifier,
                         &mut mctx.diagnostics,
                     )?,
@@ -421,7 +422,7 @@ pub fn get_used_signals<'a>(
                 Some(blk) => try_resolve_hident(
                     scope,
                     &ctx.table,
-                    &ctx.arenas,
+                    ctx.arenas,
                     blk.block_identifier,
                     &mut mctx.diagnostics,
                 )?,
@@ -437,7 +438,7 @@ pub fn get_used_signals<'a>(
                 Some(blk) => try_resolve_hident(
                     scope,
                     &ctx.table,
-                    &ctx.arenas,
+                    ctx.arenas,
                     blk.block_identifier,
                     &mut mctx.diagnostics,
                 )?,

@@ -47,8 +47,8 @@ pub fn lower<'a>(
                     let (_, _, width) = match net_declaration.range {
                         None => (0, 0, SCALAR_VSIZE),
                         Some(range) => evaluate_range(
-                            &mut mctx.gl,
-                            &ctx.arenas,
+                            &mctx.gl,
+                            ctx.arenas,
                             &ctx.table,
                             scope,
                             &mut mctx.diagnostics,
@@ -67,7 +67,7 @@ pub fn lower<'a>(
                                 let net = try_resolve_net(
                                     scope,
                                     &ctx.table,
-                                    &ctx.arenas,
+                                    ctx.arenas,
                                     *ast_ident,
                                     &mut mctx.diagnostics,
                                 )?;
@@ -331,7 +331,7 @@ pub fn lower<'a>(
             } = &*id;
 
             let Some(udp) = ctx.udps.get(&identifier.item.0) else {
-                mctx.diagnostics.udp_not_found(&ctx.arenas, *identifier);
+                mctx.diagnostics.udp_not_found(ctx.arenas, *identifier);
                 return Err(());
             };
 
@@ -415,7 +415,7 @@ pub fn lower<'a>(
 
                             let Some((port_idx, port_ty)) = port else {
                                 mctx.diagnostics.port_not_found(
-                                    &ctx.arenas,
+                                    ctx.arenas,
                                     unwrap_get_module(&ctx.table, instance_sid),
                                     ast_port_identifier,
                                 );
@@ -441,7 +441,7 @@ pub fn lower<'a>(
 
                             if std::mem::replace(&mut signals_assigned[port_idx], true) {
                                 mctx.diagnostics
-                                    .duplicate_definition(&ctx.arenas, ast_port_identifier);
+                                    .duplicate_definition(ctx.arenas, ast_port_identifier);
                                 error = true;
                                 continue;
                             }
@@ -541,7 +541,6 @@ pub fn lower_variable_type<'a>(
             for dim in &dims {
                 size = size.checked_mul(*dim).ok_or_else(|| {
                     diagnostics.net_width_overflow(arenas.get_span(variable_type));
-                    ()
                 })?;
             }
             let Some(size) = VectorSize::new(size) else {

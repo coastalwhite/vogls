@@ -39,9 +39,9 @@ impl Diagnostics {
         ));
     }
 
-    pub fn port_not_found<'a>(
+    pub fn port_not_found(
         &mut self,
-        arenas: &'a AstArenas,
+        arenas: &AstArenas,
         _io: &ModuleSymbol,
         ident: AstItem<Identifier>,
     ) {

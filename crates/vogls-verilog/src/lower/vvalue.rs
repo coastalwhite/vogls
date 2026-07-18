@@ -282,6 +282,7 @@ macro_rules! impl_arithmetic {
     ($(($f:ident, $op:tt),)+) => {
         impl VValue {
         $(
+        #[allow(clippy::should_implement_trait)]
         pub fn $f(lhs: VValue, rhs: VValue) -> VValue {
             use VValue as V;
             let (mut lhs, rhs) = Self::coerce_max_size(lhs, rhs);

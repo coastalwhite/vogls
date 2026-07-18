@@ -145,10 +145,10 @@ impl<T> From<Vec<T>> for VecT<T> {
     }
 }
 
-impl<T: std::fmt::Debug> Into<Vec<T>> for VecT<T> {
-    fn into(self) -> Vec<T> {
-        let v = unsafe { Vec::from_raw_parts(self.ptr, self.length, self.capacity) };
-        std::mem::forget(self);
+impl<T: std::fmt::Debug> From<VecT<T>> for Vec<T> {
+    fn from(value: VecT<T>) -> Vec<T> {
+        let v = unsafe { Vec::from_raw_parts(value.ptr, value.length, value.capacity) };
+        std::mem::forget(value);
         v
     }
 }
@@ -348,6 +348,7 @@ impl CDesign {
         }
     }
 
+    #[expect(clippy::result_unit_err)]
     pub fn run(
         &self,
         state: &mut CDesignState,
@@ -363,7 +364,7 @@ impl CDesign {
             fmt,
             fmt_strs: self.dyn_fmt_strs.as_ptr(),
             plugins: state.plugins.as_mut_ptr(),
-            plugin_poke_signal: plugin_poke_signal,
+            plugin_poke_signal,
             heap_len: state.runtime.heap.0.len(),
             readmems: self.read_mems.as_ptr(),
             readmem: read_mem,

@@ -50,3 +50,9 @@ debug = true
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(vm_profile)'] }
+
+[workspace.lints.clippy]
+result_unit_err = "allow"
+collapsible_if = "allow"
+too_many_arguments = "allow"
+needless_range_loop = "allow"

@@ -20,10 +20,10 @@ pub fn lower_function_call<'a>(
     arguments: &[Option<(VariableKey, VType)>],
 ) -> Result<(VariableKey, VType), ()> {
     let fn_symbol =
-        try_resolve_hident(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)?;
+        try_resolve_hident(scope, &ctx.table, ctx.arenas, ident, &mut mctx.diagnostics)?;
     let VSymbol::Function(fn_symbol) = &ctx.table[fn_symbol].content else {
         mctx.diagnostics
-            .not_yet_implemented(hident_span(&ctx.arenas, ident), "not calling a function");
+            .not_yet_implemented(hident_span(ctx.arenas, ident), "not calling a function");
         return Err(());
     };
 
@@ -96,7 +96,7 @@ pub fn lower_function_call<'a>(
     }
 
     let output_var = builder.probe(gl, fn_symbol.output);
-    Ok((output_var, fn_symbol.output_ty.clone()))
+    Ok((output_var, fn_symbol.output_ty))
 }
 
 pub fn lower_task_enable<'a>(
@@ -108,7 +108,7 @@ pub fn lower_task_enable<'a>(
     arguments: AstIdRange<Expr>,
 ) -> Result<BasicBlockBuilder, ()> {
     let fn_symbol =
-        try_resolve_hident(scope, &ctx.table, &ctx.arenas, ident, &mut mctx.diagnostics)?;
+        try_resolve_hident(scope, &ctx.table, ctx.arenas, ident, &mut mctx.diagnostics)?;
     let VSymbol::Task(task_symbol) = &ctx.table[fn_symbol].content else {
         mctx.diagnostics
             .not_yet_implemented(ctx.arenas.get_item_span(ident), "not enabling a task");
