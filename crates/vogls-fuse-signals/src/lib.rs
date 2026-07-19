@@ -238,7 +238,7 @@ impl FuseGraph {
                     I::Intrinsic(_, i, _) => match i.as_ref() {
                         IntrinsicOp::Time
                         | IntrinsicOp::Finish
-                        | IntrinsicOp::Random
+                        | IntrinsicOp::Random(_)
                         | IntrinsicOp::Display(..)
                         | IntrinsicOp::Assert(..)
                         | IntrinsicOp::VcdOpenFile(..)

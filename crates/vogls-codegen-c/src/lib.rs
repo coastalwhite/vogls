@@ -656,7 +656,7 @@ pub fn lower_process(
                         vogls_ir::IntrinsicOp::Finish => {
                             writeln!(buffer, "{INDENT}return 1;")?;
                         }
-                        vogls_ir::IntrinsicOp::Random => todo!(),
+                        vogls_ir::IntrinsicOp::Random(..) => todo!(),
                         vogls_ir::IntrinsicOp::Display(dyn_format_string) => {
                             // @Performance: scratchpad this.
                             let args = items

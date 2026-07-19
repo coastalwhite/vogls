@@ -6,9 +6,9 @@ use crate::token_range::TokenRange;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
     BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, LogicMode, Process,
-    ProcessKey, ProcessKind, ResizeOp, ResizeOpSimplification, SCALAR_VSIZE, SignalFlags,
-    SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp, UnaryOpSimplification, VSIZE_32,
-    VSIZE_64, VariableKey, VectorSize,
+    ProcessKey, ProcessKind, RandomKind, ResizeOp, ResizeOpSimplification, SCALAR_VSIZE,
+    SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp, UnaryOpSimplification,
+    VSIZE_32, VSIZE_64, VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -1098,12 +1098,25 @@ impl BasicBlockBuilder {
         ));
         dst
     }
-    pub fn random(&mut self, gl: &mut GlobalContext) -> VariableKey {
-        let dst = gl.vars.insert(LogicMode::TwoValue, VSIZE_32);
+    pub fn random(
+        &mut self,
+        gl: &mut GlobalContext,
+        kind: RandomKind,
+        seed: VariableKey,
+        args: &[VariableKey],
+    ) -> VariableKey {
+        let mode = if seed.mode().is_two_value() && args.iter().all(|v| v.mode().is_two_value()) {
+            LogicMode::TwoValue
+        } else {
+            LogicMode::FourValue
+        };
+        let dst = gl.vars.insert(mode, VSIZE_64);
         self.instrs.push(Instruction::Intrinsic(
             dst,
-            Box::new(IntrinsicOp::Random),
-            Default::default(),
+            Box::new(IntrinsicOp::Random(kind)),
+            std::iter::once(seed)
+                .chain(args.iter().copied())
+                .collect::<Box<[VariableKey]>>(),
         ));
         dst
     }

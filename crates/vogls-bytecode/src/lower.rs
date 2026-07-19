@@ -1905,7 +1905,6 @@ fn lower_instruction(
                 .intrinsics
                 .insert_index(IntrinsicOpEqWrap(convert_intrinsic(
                     gl,
-                    *dst,
                     signals,
                     io_signals,
                     op.as_ref(),
@@ -2526,7 +2525,6 @@ fn store_back(
 
 fn convert_intrinsic(
     gl: &GlobalContext,
-    dst: VariableKey,
     signals: &[HeapRef],
     io_signals: &VgHashMap<SignalKey, RtSignalKey>,
     op: &IntrinsicOp,
@@ -2536,7 +2534,7 @@ fn convert_intrinsic(
     match op {
         O::Time => VO::Time,
         O::Finish => VO::Finish,
-        O::Random => VO::Random(gl.vars.size(dst), dst.mode()),
+        O::Random(kind) => VO::Random(*kind),
         O::Display(f) => VO::Display(f.clone()),
         O::Assert(f) => VO::Assert(f.clone()),
         O::VcdOpenFile(f) => VO::VcdOpenFile(f.clone()),

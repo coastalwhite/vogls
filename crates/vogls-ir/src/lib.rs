@@ -323,11 +323,23 @@ pub const VSIZE_64: VectorSize = NonZeroU32::new(64).unwrap();
 pub const INTEGER_VSIZE: VectorSize = VSIZE_32;
 pub const TIME_VSIZE: VectorSize = VSIZE_64;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RandomKind {
+    Uniform,
+    Normal,
+    Exponential,
+    Poisson,
+    ChiSquare,
+    T,
+    Erlang,
+}
+
 #[derive(Debug, Clone)]
 pub enum IntrinsicOp {
     Time,
     Finish,
-    Random,
+    /// Random returns a 64-bit number containing (new_seed, result) packed as two 32-bit numbers.
+    Random(RandomKind),
     Display(Box<DynFormatString>),
     Assert(Box<DynFormatString>),
     VcdOpenFile(String),

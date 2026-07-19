@@ -5,7 +5,9 @@ use vogls_bits::format::BitsFormatOptions;
 use vogls_codegen::HeapOffset;
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::vcd::VcdVariableKey;
-use vogls_ir::{Bits, LogicMode, Mode, SCALAR_VSIZE, SignalSlice, VSIZE_32, VSIZE_64, VectorSize};
+use vogls_ir::{
+    Bits, LogicMode, Mode, RandomKind, SCALAR_VSIZE, SignalSlice, VSIZE_32, VSIZE_64, VectorSize,
+};
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_utils::{NonMaxU16, SecondaryTable};
 use vogls_vcd::VcdScopeItem;
@@ -41,7 +43,7 @@ pub struct ReadMem {
 pub enum IntrinsicOp {
     Time,
     Finish,
-    Random(VectorSize, LogicMode),
+    Random(RandomKind),
     Display(Box<DynFormatString>),
     Assert(Box<DynFormatString>),
     VcdOpenFile(String),
@@ -177,7 +179,107 @@ impl BytecodeInstruction for Intrinsic {
                 *pc = u64::MAX;
                 cldctx.stdout.write_all(b"[FINISH]\n").unwrap();
             }
-            O::Random(..) => todo!(),
+            O::Random(kind) => {
+                let mut has_fv = false;
+                let mut stack_arg = 0;
+                let mut stack_offset = 0;
+                macro_rules! get_long {
+                    () => {{
+                        let (size, mode) = cldctx.stack_args[stack_arg];
+                        #[allow(unused_assignments)]
+                        {
+                            stack_arg += 1;
+                        }
+                        assert_eq!(size, VSIZE_32);
+                        match mode {
+                            LogicMode::TwoValue => {
+                                let value = cldctx.stack[stack_offset] as u32 as i32;
+                                #[allow(unused_assignments)]
+                                {
+                                    stack_offset += 1;
+                                }
+                                value
+                            }
+                            LogicMode::FourValue => {
+                                has_fv = true;
+                                let spc = cldctx.stack[stack_offset];
+                                let val = cldctx.stack[stack_offset + 1];
+                                #[allow(unused_assignments)]
+                                {
+                                    stack_offset += 2;
+                                }
+                                if spc != u32::MAX as u64 {
+                                    cldctx.stack_args.clear();
+                                    cldctx.stack.clear();
+                                    let (spc, val) = rd.to_spc_and_val();
+                                    regs[spc] = 0;
+                                    regs[val] = 0;
+                                    return;
+                                }
+                                val as u32 as i32
+                            }
+                        }
+                    }};
+                }
+
+                let mut seed = get_long!();
+                let mut warning = None;
+                let result = match kind {
+                    RandomKind::Uniform => {
+                        let start = get_long!();
+                        let end = get_long!();
+                        vogls_runtime::random::rtl_dist_uniform(&mut seed, start, end)
+                    }
+                    RandomKind::Normal => {
+                        let mean = get_long!();
+                        let deviation = get_long!();
+                        vogls_runtime::random::rtl_dist_normal(&mut seed, mean, deviation)
+                    }
+                    RandomKind::Exponential => {
+                        let mean = get_long!();
+                        vogls_runtime::random::rtl_dist_exponential(&mut seed, mean, &mut warning)
+                    }
+                    RandomKind::Poisson => {
+                        let mean = get_long!();
+                        vogls_runtime::random::rtl_dist_poisson(&mut seed, mean, &mut warning)
+                    }
+                    RandomKind::ChiSquare => {
+                        let dof = get_long!();
+                        vogls_runtime::random::rtl_dist_chi_square(&mut seed, dof, &mut warning)
+                    }
+                    RandomKind::T => {
+                        let dof = get_long!();
+                        vogls_runtime::random::rtl_dist_t(&mut seed, dof, &mut warning)
+                    }
+                    RandomKind::Erlang => {
+                        let k_stage = get_long!();
+                        let mean = get_long!();
+                        vogls_runtime::random::rtl_dist_erlang(
+                            &mut seed,
+                            k_stage,
+                            mean,
+                            &mut warning,
+                        )
+                    }
+                };
+
+                if let Some(warning) = warning {
+                    cldctx.stderr.write_all(b"WARNING: ").unwrap();
+                    cldctx
+                        .stderr
+                        .write_all(warning.as_str().as_bytes())
+                        .unwrap();
+                }
+
+                let result = (u64::from(seed.cast_unsigned()) << 32) | u64::from(result.cast_unsigned());
+                if has_fv {
+                    let (spc, val) = rd.to_spc_and_val();
+                    regs[spc] = u32::MAX as u64;
+                    regs[val] = result;
+                } else {
+                    regs[rd] = result;
+                }
+            }
             O::Display(f) => {
                 let mut stack_offset = 0;
                 f.write_to(

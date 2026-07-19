@@ -1,14 +1,17 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
+use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    BasicBlockBuilder, Bits, INTEGER_VSIZE, IntrinsicOp, SCALAR_VSIZE, TIME_VSIZE, VSIZE_32,
-    VariableKey, VectorSize,
+    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, IntrinsicOp, LogicMode, RandomKind,
+    SCALAR_VSIZE, Signal, SignalFlags, SignalKey, TIME_VSIZE, VSIZE_32, VariableKey, VectorSize,
 };
 
 use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskIdentifier;
 use crate::ast::{AstId, AstIdRange, AstItem};
-use crate::lower::expression::{coerce_to_max_size_ty, sign_or_zero_extend, truncate_or_extend};
+use crate::lower::expression::{
+    coerce_to_max_size_ty, lower_expr, sign_or_zero_extend, truncate_or_extend,
+};
 use crate::lower::vvalue::VValue;
 use crate::lower::{Diagnostics, LowerContext, MutLowerContext, VType, try_resolve_net};
 use crate::parser::AstArenas;
@@ -52,10 +55,6 @@ pub fn lower_system_function_call(
         "time" => {
             ensure_num_args_equal!(0);
             Ok((builder.time(mctx.gl()), VType::UnsignedNet(TIME_VSIZE)))
-        }
-        "random" => {
-            ensure_num_args_equal!(0);
-            Ok((builder.random(mctx.gl()), VType::UnsignedNet(VSIZE_32)))
         }
         "clog2" => {
             ensure_num_args_equal!(1);
@@ -212,10 +211,6 @@ pub fn get_system_function_call_output_ty(
             ensure_num_args_equal!(0);
             Ok(VType::UnsignedNet(TIME_VSIZE))
         }
-        "random" => {
-            ensure_num_args_equal!(0);
-            Ok(VType::UnsignedNet(VSIZE_32))
-        }
         "clog2" => Ok(VType::UnsignedNet(VSIZE_32)),
 
         // VoGLS specific system function calls
@@ -284,6 +279,99 @@ pub fn lower_unevaluated_system_function_call<'a>(
             )?;
             let variable = builder.constant_u32(mctx.gl(), ty.force_net_width().get());
             Ok(Some((variable, VType::net(INTEGER_VSIZE, false))))
+        }
+
+        "random" => {
+            if arguments.is_some_and(|a| a.len() > 1) {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_item_span(ident),
+                    "random expects at most one identifier",
+                );
+                return Err(());
+            }
+
+            let (prb_signal, drv_signal, signal_ty) = get_prob_dist_fn_seed(
+                &mut mctx.gl,
+                ctx,
+                scope,
+                &mut mctx.diagnostics,
+                ident,
+                arguments,
+            )?;
+
+            let seed = builder.probe(mctx.gl(), prb_signal);
+            let seed = truncate_or_extend(mctx.gl(), builder, seed, signal_ty, VSIZE_32);
+            let min = builder.constant_u32(mctx.gl(), i32::MIN.cast_unsigned());
+            let max = builder.constant_u32(mctx.gl(), i32::MAX.cast_unsigned());
+            let packed = builder.random(mctx.gl(), RandomKind::Uniform, seed, &[min, max]);
+            let new_seed = builder.slice_constant(mctx.gl(), packed, 32, VSIZE_32);
+            let result = builder.truncate(mctx.gl(), packed, VSIZE_32);
+            let new_seed_trunc = truncate_or_extend(
+                mctx.gl(),
+                builder,
+                new_seed,
+                VType::UnsignedNet(VSIZE_32),
+                signal_ty.force_net_width(),
+            );
+            builder.drive(mctx.gl(), drv_signal, new_seed_trunc);
+            Ok(Some((result, VType::UnsignedNet(VSIZE_32))))
+        }
+        system_fn @ ("dist_uniform" | "dist_normal" | "dist_exponential" | "dist_poisson"
+        | "dist_chi_square" | "dist_t" | "dist_erlang") => {
+            let kind = match system_fn {
+                "dist_uniform" => RandomKind::Uniform,
+                "dist_normal" => RandomKind::Normal,
+                "dist_exponential" => RandomKind::Exponential,
+                "dist_poisson" => RandomKind::Poisson,
+
+                "dist_chi_square" => RandomKind::ChiSquare,
+                "dist_t" => RandomKind::T,
+                "dist_erlang" => RandomKind::Erlang,
+                _ => unreachable!(),
+            };
+
+            let num_args = match kind {
+                RandomKind::Uniform | RandomKind::Normal | RandomKind::Erlang => 2,
+                RandomKind::Exponential
+                | RandomKind::Poisson
+                | RandomKind::ChiSquare
+                | RandomKind::T => 1,
+            };
+
+            let Some(arguments) = arguments.filter(|v| v.len() == num_args + 1) else {
+                mctx.diagnostics.invalid_num_arguments(
+                    ctx.arenas.get_item_span(ident),
+                    format!("{system_fn} requires 3 arguments"),
+                );
+                return Err(());
+            };
+
+            let (prb_signal, drv_signal, signal_ty) = get_prob_dist_fn_seed_signals(
+                ctx,
+                scope,
+                &mut mctx.diagnostics,
+                ident,
+                arguments.get(0),
+            )?;
+
+            let seed = builder.probe(mctx.gl(), prb_signal);
+            let seed = truncate_or_extend(mctx.gl(), builder, seed, signal_ty, VSIZE_32);
+            let mut args = Vec::with_capacity(num_args);
+            for arg in arguments.iter().skip(1) {
+                args.push(lower_expr(ctx, mctx, scope, builder, arg, Some(VSIZE_32))?.0);
+            }
+            let packed = builder.random(mctx.gl(), RandomKind::Uniform, seed, &args);
+            let new_seed = builder.slice_constant(mctx.gl(), packed, 32, VSIZE_32);
+            let result = builder.truncate(mctx.gl(), packed, VSIZE_32);
+            let new_seed_trunc = truncate_or_extend(
+                mctx.gl(),
+                builder,
+                new_seed,
+                VType::UnsignedNet(VSIZE_32),
+                signal_ty.force_net_width(),
+            );
+            builder.drive(mctx.gl(), drv_signal, new_seed_trunc);
+            Ok(Some((result, VType::UnsignedNet(VSIZE_32))))
         }
 
         "vogls_lupdt" => {
@@ -430,6 +518,8 @@ pub fn lower_unevaluated_system_function_call_ty<'a>(
             ensure_num_args_equal!(1);
             Ok(Some(VType::UnsignedNet(INTEGER_VSIZE)))
         }
+        "random" | "dist_uniform" | "dist_normal" | "dist_exponential" | "dist_poisson"
+        | "dist_chi_square" | "dist_t" | "dist_erlang" => Ok(Some(VType::UnsignedNet(VSIZE_32))),
         "vogls_lupdt" => {
             ensure_num_args_equal!(1);
             Ok(Some(VType::UnsignedNet(TIME_VSIZE)))
@@ -527,4 +617,61 @@ pub fn eval_constant(
             Err(())
         }
     }
+}
+
+fn get_prob_dist_fn_seed<'a, 'b>(
+    gl: &mut GlobalContext,
+    ctx: &LowerContext<'a, 'b>,
+    scope: SymbolId,
+    diagnostics: &mut Diagnostics,
+    ident: AstItem<SystemTaskIdentifier>,
+    arguments: Option<AstIdRange<'a, Expr<'a>>>,
+) -> Result<(SignalKey, SignalKey, VType), ()> {
+    match arguments {
+        Some(exprs) if exprs.len() == 1 => {
+            get_prob_dist_fn_seed_signals(ctx, scope, diagnostics, ident, exprs.get(0))
+        }
+        _ => {
+            let signal = gl.signals.insert(Signal {
+                name: "__VOGLS_RANDOM_SEED".to_string(),
+                size: VSIZE_32,
+                initialize: Some(Bits::new_zeroed(VSIZE_32)),
+                mode: LogicMode::TwoValue,
+                flags: SignalFlags::EMPTY,
+                origin: TokenRange::default(),
+            });
+            Ok((signal, signal, VType::UnsignedNet(VSIZE_32)))
+        }
+    }
+}
+
+fn get_prob_dist_fn_seed_signals<'a, 'b>(
+    ctx: &LowerContext<'a, 'b>,
+    scope: SymbolId,
+    diagnostics: &mut Diagnostics,
+    ident: AstItem<SystemTaskIdentifier>,
+    expr: AstId<'a, Expr<'a>>,
+) -> Result<(SignalKey, SignalKey, VType), ()> {
+    let Expr::Ident(arg_ident, array_exprs, bitslice) = &*expr else {
+        diagnostics.not_yet_implemented(
+            ctx.arenas.get_item_span(ident),
+            "random expects an identifier",
+        );
+        return Err(());
+    };
+
+    if !array_exprs.is_empty() || bitslice.is_some() {
+        diagnostics.not_yet_implemented(
+            ctx.arenas.get_item_span(ident),
+            "random expects an identifier",
+        );
+        return Err(());
+    }
+
+    let net_symbol = try_resolve_net(scope, &ctx.table, ctx.arenas, *arg_ident, diagnostics)?;
+    Ok((
+        net_symbol.net.probe_signal(),
+        net_symbol.net.blocking_drive_signal(),
+        net_symbol.ty,
+    ))
 }

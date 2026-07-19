@@ -4,8 +4,8 @@ use std::fmt::{Display, Write};
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, IntrinsicOp, LogicMode, Process, ResizeOp, ShiftImmOp, Signal, Time, UnaryOp,
-    VariableKey,
+    Instruction, IntrinsicOp, LogicMode, Process, RandomKind, ResizeOp, ShiftImmOp, Signal, Time,
+    UnaryOp, VariableKey,
 };
 
 const INDENT: &str = "  ";
@@ -306,7 +306,15 @@ impl IntrinsicOp {
         match self {
             Self::Finish => "finish",
             Self::Time => "time",
-            Self::Random => "random",
+            Self::Random(kind) => match kind {
+                RandomKind::Uniform => "dist_uniform",
+                RandomKind::Normal => "dist_normal",
+                RandomKind::Exponential => "dist_exponential",
+                RandomKind::Poisson => "dist_poisson",
+                RandomKind::ChiSquare => "dist_chi_square",
+                RandomKind::T => "dist_t",
+                RandomKind::Erlang => "dist_erlang",
+            },
             Self::Display(_) => "vogls.display",
             Self::Assert(_) => "vogls.assert",
             Self::VcdOpenFile(_) => "vcd.open_file",
@@ -463,7 +471,7 @@ impl ContextFormat for Instruction {
                 match op.as_ref() {
                     IntrinsicOp::Time => {}
                     IntrinsicOp::Finish => {}
-                    IntrinsicOp::Random => {}
+                    IntrinsicOp::Random(_) => {}
                     IntrinsicOp::Display(s) => {
                         s.display_format().fmt(f)?;
                         if !args.is_empty() {

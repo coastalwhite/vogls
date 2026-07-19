@@ -17,6 +17,7 @@ pub enum LowerErrorReason {
     PortNotDefined(IdentId),
     NotYetImplemented(&'static str),
     OutputExprNotAllowed,
+    InvalidNumArguments(String),
     DuplicateDefinition(IdentId),
     ModuleNotFound(IdentId),
     UdpNotFound(IdentId),
@@ -63,6 +64,13 @@ impl Diagnostics {
     pub fn not_yet_implemented(&mut self, tr: TokenRange, reason: &'static str) {
         self.errors
             .push((tr, LowerErrorReason::NotYetImplemented(reason), Vec::new()));
+    }
+    pub fn invalid_num_arguments(&mut self, tr: TokenRange, reason: impl Into<String>) {
+        self.errors.push((
+            tr,
+            LowerErrorReason::InvalidNumArguments(reason.into()),
+            Vec::new(),
+        ));
     }
 
     pub fn warn_not_yet_implemented(&mut self, tr: TokenRange, reason: &'static str) {

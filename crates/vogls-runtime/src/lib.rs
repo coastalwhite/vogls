@@ -6,6 +6,7 @@ use vogls_utils::{TableKey, new_table_key};
 
 pub mod plugins;
 pub mod readmem;
+pub mod random;
 
 new_table_key! { pub struct RtSignalKey; }
 

@@ -852,10 +852,7 @@ impl std::hash::Hash for IntrinsicOpEqWrap {
         std::mem::discriminant(&self.0);
         match &self.0 {
             IntrinsicOp::Time | IntrinsicOp::Finish => {}
-            IntrinsicOp::Random(size, mode) => {
-                size.hash(state);
-                mode.hash(state);
-            }
+            IntrinsicOp::Random(r) => r.hash(state),
             IntrinsicOp::Display(f) | IntrinsicOp::Assert(f) => f.hash(state),
             IntrinsicOp::VcdOpenFile(_) | IntrinsicOp::VcdAppendModule(_) => {}
             IntrinsicOp::VcdPause | IntrinsicOp::VcdResume | IntrinsicOp::ReadMem(_) => {}
@@ -869,9 +866,7 @@ impl PartialEq for IntrinsicOpEqWrap {
         }
         match (&self.0, &other.0) {
             (IntrinsicOp::Time | IntrinsicOp::Finish, _) => true,
-            (IntrinsicOp::Random(lsize, lmode), IntrinsicOp::Random(rsize, rmode)) => {
-                lsize == rsize && lmode == rmode
-            }
+            (IntrinsicOp::Random(l), IntrinsicOp::Random(r)) => l == r,
             (
                 IntrinsicOp::Display(f) | IntrinsicOp::Assert(f),
                 IntrinsicOp::Display(fo) | IntrinsicOp::Assert(fo),
