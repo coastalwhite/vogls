@@ -540,7 +540,13 @@ fn constant_propagate_instruction(
                         _ => {}
                     }
                 }
-                (Some(Some(t)), _) if t.size() == SCALAR_VSIZE => {
+                (Some(Some(t)), _) if t.size() == SCALAR_VSIZE
+                    
+                    // @TODO: This limitation can be lifted by emitting some conversion
+                    // instructions.
+                    && cond.mode().is_two_value() && falsy.mode().is_two_value()
+
+                    => {
                     use FvLogicValue as L;
                     match t.select_value(0) {
                         // select %c, 0, %f  ->   andnot %f, %c
@@ -556,7 +562,11 @@ fn constant_propagate_instruction(
                         _ => {}
                     }
                 }
-                (_, Some(Some(f))) if f.size() == SCALAR_VSIZE => {
+                (_, Some(Some(f))) if f.size() == SCALAR_VSIZE 
+                    // @TODO: This limitation can be lifted by emitting some conversion
+                    // instructions.
+                    && cond.mode().is_two_value() && truthy.mode().is_two_value()
+                    => {
                     use FvLogicValue as L;
                     match f.select_value(0) {
                         // select %c, %t, 0  ->   and %t, %c
