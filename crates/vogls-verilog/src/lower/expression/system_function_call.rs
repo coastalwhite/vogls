@@ -55,7 +55,7 @@ pub fn lower_system_function_call(
         }
         "random" => {
             ensure_num_args_equal!(0);
-            Ok((builder.random(mctx.gl()), VType::UnsignedNet(TIME_VSIZE)))
+            Ok((builder.random(mctx.gl()), VType::UnsignedNet(VSIZE_32)))
         }
         "clog2" => {
             ensure_num_args_equal!(1);
@@ -214,7 +214,7 @@ pub fn get_system_function_call_output_ty(
         }
         "random" => {
             ensure_num_args_equal!(0);
-            Ok(VType::UnsignedNet(TIME_VSIZE))
+            Ok(VType::UnsignedNet(VSIZE_32))
         }
         "clog2" => Ok(VType::UnsignedNet(VSIZE_32)),
 

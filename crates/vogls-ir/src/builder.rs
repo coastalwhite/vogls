@@ -1099,7 +1099,7 @@ impl BasicBlockBuilder {
         dst
     }
     pub fn random(&mut self, gl: &mut GlobalContext) -> VariableKey {
-        let dst = gl.vars.insert(LogicMode::TwoValue, INTEGER_VSIZE);
+        let dst = gl.vars.insert(LogicMode::TwoValue, VSIZE_32);
         self.instrs.push(Instruction::Intrinsic(
             dst,
             Box::new(IntrinsicOp::Random),
