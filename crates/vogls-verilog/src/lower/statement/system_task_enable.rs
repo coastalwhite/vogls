@@ -109,7 +109,8 @@ pub fn lower_system_task_enable<'a>(
                         DynFormatArgument {
                             padding: Padding::NoPadding,
                             base: Base::Decimal,
-                            prefix: true,
+                            signed: false,
+                            prefix: false,
                         },
                     ),
                     (27, DynFormatArgument::default()),
@@ -365,24 +366,35 @@ pub fn lower_write_arguments<'a>(
                     DynFormatArgument {
                         padding,
                         base,
+                        signed: false,
                         prefix: false,
                     },
                 ));
             }
             format_string_content.push_str(&str_literal[at..]);
         } else {
-            let (var, _) = lower_expr(ctx, mctx, scope, builder, expr, None)?;
+            let (var, var_ty) = lower_expr(ctx, mctx, scope, builder, expr, None)?;
             if required_arguments_left == 0 {
                 format_string_arguments.push((
                     format_string_content.len(),
                     DynFormatArgument {
                         padding: Padding::default(),
-                        base: Base::default(),
+                        base: Base::Decimal,
+                        signed: var_ty.is_signed(),
                         prefix: false,
                     },
                 ));
             } else {
                 required_arguments_left -= 1;
+                let Some((_, dyn_fmt)) = format_string_arguments.get_mut(format_string_args.len())
+                else {
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(system_task_enable),
+                        "extra arguments",
+                    );
+                    return Err(());
+                };
+                dyn_fmt.signed = var_ty.is_signed();
             }
             format_string_args.push(var);
         }

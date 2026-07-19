@@ -349,6 +349,7 @@ impl<'a> fmt::Display for VcdValueDisplay<'a> {
                 base: BitsFormatBase::Binary,
                 separator: None,
                 align: Some(Alignment::Right),
+                signed: false,
                 fill: '0',
                 width: vogls_bits::format::BitsFormatWidth::Expand
             })

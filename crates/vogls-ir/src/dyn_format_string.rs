@@ -32,6 +32,7 @@ pub enum Base {
 pub struct DynFormatArgument {
     pub padding: Padding,
     pub base: Base,
+    pub signed: bool,
     pub prefix: bool,
 }
 
@@ -40,6 +41,7 @@ impl Default for DynFormatArgument {
         Self {
             padding: Default::default(),
             base: Default::default(),
+            signed: false,
             prefix: true,
         }
     }
@@ -65,7 +67,14 @@ impl DynFormatString {
         for ((arg_at, arg_fmt), arg_bits) in self.arguments.iter().zip(arguments) {
             f.write_all(self.content[at..*arg_at].as_bytes())?;
             at = *arg_at;
-            format_bits(f, &arg_bits, arg_fmt.padding, arg_fmt.base, arg_fmt.prefix)?;
+            format_bits(
+                f,
+                &arg_bits,
+                arg_fmt.padding,
+                arg_fmt.base,
+                arg_fmt.signed,
+                arg_fmt.prefix,
+            )?;
         }
 
         f.write_all(self.content[at..].as_bytes())
@@ -84,6 +93,7 @@ pub fn format_bits(
     bits: &Bits,
     padding: Padding,
     base: Base,
+    signed: bool,
     prefix: bool,
 ) -> io::Result<()> {
     let base = match base {
@@ -103,6 +113,7 @@ pub fn format_bits(
         base,
         prefix,
         separator: None,
+        signed,
         ..Default::default()
     };
 

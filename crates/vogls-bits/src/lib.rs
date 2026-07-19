@@ -1771,6 +1771,7 @@ impl fmt::Display for Bits {
                 separator: Some('_'),
                 align: None,
                 fill: '0',
+                signed: false,
                 width: format::BitsFormatWidth::Expand
             })
         )

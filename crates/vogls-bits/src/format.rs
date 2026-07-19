@@ -24,6 +24,7 @@ pub struct BitsFormatOptions {
     pub prefix: bool,
     pub base: BitsFormatBase,
     pub separator: Option<char>,
+    pub signed: bool,
     pub align: Option<Alignment>,
     pub fill: char,
     pub width: BitsFormatWidth,
@@ -35,6 +36,7 @@ impl Default for BitsFormatOptions {
             prefix: false,
             base: BitsFormatBase::LowerHex,
             separator: Some('_'),
+            signed: false,
             align: None,
             fill: ' ',
             width: BitsFormatWidth::Shrink,
@@ -219,7 +221,7 @@ fn fmt_bits(bits: &Bits, f: &mut impl fmt::Write, options: &BitsFormatOptions) -
         B::Octal => fmt_bits_octal(bits, f, options.separator),
         B::LowerHex => fmt_bits_hex(bits, f, options.separator, false),
         B::UpperHex => fmt_bits_hex(bits, f, options.separator, true),
-        B::Decimal => fmt_bits_decimal(bits, f, options.separator),
+        B::Decimal => fmt_bits_decimal(bits, f, options.signed, options.separator),
     }?;
 
     for _ in 0..num_right_fill {
@@ -536,7 +538,12 @@ fn fmt_bits_hex(
 
     Ok(())
 }
-fn fmt_bits_decimal(bits: &Bits, f: &mut impl fmt::Write, _separator: Option<char>) -> fmt::Result {
+fn fmt_bits_decimal(
+    bits: &Bits,
+    f: &mut impl fmt::Write,
+    signed: bool,
+    _separator: Option<char>,
+) -> fmt::Result {
     if bits.contains_special() {
         // @FIXME: This should print 'X' and 'Z' if not all digits are special.
         if bits.contains_unknown() {
@@ -547,12 +554,22 @@ fn fmt_bits_decimal(bits: &Bits, f: &mut impl fmt::Write, _separator: Option<cha
         return Ok(());
     }
 
-    let data_ref = bits.as_data_ref();
-    let (val, _) = data_ref.to_u64_slices();
-
-    if val.len() > 1 {
-        todo!()
+    if bits.size() > const { VectorSize::new(64).unwrap() } {
+        todo!();
     }
 
-    write!(f, "{}", val[0])
+    if signed {
+        let v = bits
+            .sign_extend(const { VectorSize::new(64).unwrap() })
+            .extract_exact_u64()
+            .unwrap()
+            .cast_signed();
+        write!(f, "{v}")
+    } else {
+        let v = bits
+            .zero_extend(const { VectorSize::new(64).unwrap() })
+            .extract_exact_u64()
+            .unwrap();
+        write!(f, "{v}")
+    }
 }

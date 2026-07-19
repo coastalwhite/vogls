@@ -2,8 +2,8 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, IntrinsicOp, LogicMode, RandomKind,
-    SCALAR_VSIZE, Signal, SignalFlags, SignalKey, TIME_VSIZE, VSIZE_32, VariableKey, VectorSize,
+    BasicBlockBuilder, Bits, INTEGER_VSIZE, IntrinsicOp, LogicMode, RandomKind, SCALAR_VSIZE,
+    Signal, SignalFlags, SignalKey, TIME_VSIZE, VSIZE_32, VariableKey, VectorSize,
 };
 
 use crate::ast::expr::Expr;
@@ -290,14 +290,8 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 return Err(());
             }
 
-            let (prb_signal, drv_signal, signal_ty) = get_prob_dist_fn_seed(
-                &mut mctx.gl,
-                ctx,
-                scope,
-                &mut mctx.diagnostics,
-                ident,
-                arguments,
-            )?;
+            let (prb_signal, drv_signal, signal_ty) =
+                get_prob_dist_fn_seed(ctx, mctx, scope, ident, arguments)?;
 
             let seed = builder.probe(mctx.gl(), prb_signal);
             let seed = truncate_or_extend(mctx.gl(), builder, seed, signal_ty, VSIZE_32);
@@ -346,13 +340,8 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 return Err(());
             };
 
-            let (prb_signal, drv_signal, signal_ty) = get_prob_dist_fn_seed_signals(
-                ctx,
-                scope,
-                &mut mctx.diagnostics,
-                ident,
-                arguments.get(0),
-            )?;
+            let (prb_signal, drv_signal, signal_ty) =
+                get_prob_dist_fn_seed_signals(ctx, mctx, scope, ident, arguments.get(0))?;
 
             let seed = builder.probe(mctx.gl(), prb_signal);
             let seed = truncate_or_extend(mctx.gl(), builder, seed, signal_ty, VSIZE_32);
@@ -619,41 +608,42 @@ pub fn eval_constant(
     }
 }
 
-fn get_prob_dist_fn_seed<'a, 'b>(
-    gl: &mut GlobalContext,
-    ctx: &LowerContext<'a, 'b>,
+fn get_prob_dist_fn_seed<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
     scope: SymbolId,
-    diagnostics: &mut Diagnostics,
     ident: AstItem<SystemTaskIdentifier>,
     arguments: Option<AstIdRange<'a, Expr<'a>>>,
 ) -> Result<(SignalKey, SignalKey, VType), ()> {
     match arguments {
         Some(exprs) if exprs.len() == 1 => {
-            get_prob_dist_fn_seed_signals(ctx, scope, diagnostics, ident, exprs.get(0))
+            get_prob_dist_fn_seed_signals(ctx, mctx, scope, ident, exprs.get(0))
         }
         _ => {
-            let signal = gl.signals.insert(Signal {
-                name: "__VOGLS_RANDOM_SEED".to_string(),
-                size: VSIZE_32,
-                initialize: Some(Bits::new_zeroed(VSIZE_32)),
-                mode: LogicMode::TwoValue,
-                flags: SignalFlags::EMPTY,
-                origin: TokenRange::default(),
+            let signal = mctx.gl.global_seed.get_or_insert_with(|| {
+                mctx.gl.signals.insert(Signal {
+                    name: "__VOGLS_RANDOM_SEED".to_string(),
+                    size: VSIZE_32,
+                    initialize: Some(Bits::new_zeroed(VSIZE_32)),
+                    mode: LogicMode::TwoValue,
+                    flags: SignalFlags::EMPTY,
+                    origin: TokenRange::default(),
+                })
             });
-            Ok((signal, signal, VType::UnsignedNet(VSIZE_32)))
+            Ok((*signal, *signal, VType::SignedNet(VSIZE_32)))
         }
     }
 }
 
 fn get_prob_dist_fn_seed_signals<'a, 'b>(
     ctx: &LowerContext<'a, 'b>,
+    mctx: &mut MutLowerContext,
     scope: SymbolId,
-    diagnostics: &mut Diagnostics,
     ident: AstItem<SystemTaskIdentifier>,
     expr: AstId<'a, Expr<'a>>,
 ) -> Result<(SignalKey, SignalKey, VType), ()> {
     let Expr::Ident(arg_ident, array_exprs, bitslice) = &*expr else {
-        diagnostics.not_yet_implemented(
+        mctx.diagnostics.not_yet_implemented(
             ctx.arenas.get_item_span(ident),
             "random expects an identifier",
         );
@@ -661,14 +651,20 @@ fn get_prob_dist_fn_seed_signals<'a, 'b>(
     };
 
     if !array_exprs.is_empty() || bitslice.is_some() {
-        diagnostics.not_yet_implemented(
+        mctx.diagnostics.not_yet_implemented(
             ctx.arenas.get_item_span(ident),
             "random expects an identifier",
         );
         return Err(());
     }
 
-    let net_symbol = try_resolve_net(scope, &ctx.table, ctx.arenas, *arg_ident, diagnostics)?;
+    let net_symbol = try_resolve_net(
+        scope,
+        &ctx.table,
+        ctx.arenas,
+        *arg_ident,
+        &mut mctx.diagnostics,
+    )?;
     Ok((
         net_symbol.net.probe_signal(),
         net_symbol.net.blocking_drive_signal(),
