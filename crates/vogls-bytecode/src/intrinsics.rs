@@ -264,17 +264,15 @@ impl BytecodeInstruction for Intrinsic {
                 };
 
                 if let Some(warning) = warning {
-                    cldctx.stderr.write_all(b"WARNING: ").unwrap();
-                    cldctx
-                        .stderr
-                        .write_all(warning.as_str().as_bytes())
-                        .unwrap();
+                    use std::io::Write;
+                    writeln!(&mut cldctx.stderr, "WARNING: {}", warning.as_str()).unwrap();
                 }
 
-                let result = (u64::from(seed.cast_unsigned()) << 32) | u64::from(result.cast_unsigned());
+                let result =
+                    (u64::from(seed.cast_unsigned()) << 32) | u64::from(result.cast_unsigned());
                 if has_fv {
                     let (spc, val) = rd.to_spc_and_val();
-                    regs[spc] = u32::MAX as u64;
+                    regs[spc] = u64::MAX;
                     regs[val] = result;
                 } else {
                     regs[rd] = result;

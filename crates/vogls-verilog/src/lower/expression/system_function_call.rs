@@ -314,7 +314,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 signal_ty.force_net_width(),
             );
             builder.drive(mctx.gl(), drv_signal, new_seed_trunc);
-            Ok(Some((result, VType::UnsignedNet(VSIZE_32))))
+            Ok(Some((result, VType::SignedNet(VSIZE_32))))
         }
         system_fn @ ("dist_uniform" | "dist_normal" | "dist_exponential" | "dist_poisson"
         | "dist_chi_square" | "dist_t" | "dist_erlang") => {
@@ -360,7 +360,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
             for arg in arguments.iter().skip(1) {
                 args.push(lower_expr(ctx, mctx, scope, builder, arg, Some(VSIZE_32))?.0);
             }
-            let packed = builder.random(mctx.gl(), RandomKind::Uniform, seed, &args);
+            let packed = builder.random(mctx.gl(), kind, seed, &args);
             let new_seed = builder.slice_constant(mctx.gl(), packed, 32, VSIZE_32);
             let result = builder.truncate(mctx.gl(), packed, VSIZE_32);
             let new_seed_trunc = truncate_or_extend(
@@ -371,7 +371,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 signal_ty.force_net_width(),
             );
             builder.drive(mctx.gl(), drv_signal, new_seed_trunc);
-            Ok(Some((result, VType::UnsignedNet(VSIZE_32))))
+            Ok(Some((result, VType::SignedNet(VSIZE_32))))
         }
 
         "vogls_lupdt" => {
@@ -519,7 +519,7 @@ pub fn lower_unevaluated_system_function_call_ty<'a>(
             Ok(Some(VType::UnsignedNet(INTEGER_VSIZE)))
         }
         "random" | "dist_uniform" | "dist_normal" | "dist_exponential" | "dist_poisson"
-        | "dist_chi_square" | "dist_t" | "dist_erlang" => Ok(Some(VType::UnsignedNet(VSIZE_32))),
+        | "dist_chi_square" | "dist_t" | "dist_erlang" => Ok(Some(VType::SignedNet(VSIZE_32))),
         "vogls_lupdt" => {
             ensure_num_args_equal!(1);
             Ok(Some(VType::UnsignedNet(TIME_VSIZE)))
