@@ -131,7 +131,19 @@ pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, Bit
         }
         Ok(Bits::from_u64(size, value))
     } else {
-        todo!()
+        // @Performance: There is probably a better way to do this.
+        let mut value = Bits::new_zeroed(size);
+        let f10 = Bits::new_u64(10).zero_extend(size);
+        for b in s.bytes() {
+            if b == b'_' {
+                continue;
+            }
+
+            let v = b - b'0';
+            value = Bits::multiply(&value, &f10);
+            value = Bits::add(&value, &Bits::new_u64(v.into()).zero_extend(size));
+        }
+        Ok(value)
     }
 }
 
