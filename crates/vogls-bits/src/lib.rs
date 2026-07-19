@@ -1703,6 +1703,18 @@ impl Bits {
         }
         self
     }
+
+    pub fn clog2(&self) -> Option<u32> {
+        if self.contains_special() {
+            return None;
+        }
+
+        Some(
+            self.size().get()
+                - self.leading_zeroes()
+                - if self.count_ones() == 1 { 1 } else { 0 },
+        )
+    }
 }
 
 macro_rules! impl_shift {

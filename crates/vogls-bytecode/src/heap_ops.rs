@@ -11,6 +11,7 @@ use vogls_bits::comparison::{bitwise_ceq, fv_l_unsigned_leq, tv_gtu64_unsigned_l
 use vogls_bits::concat::{fv_l_concat, tv_l_concat};
 use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::format::BitsFormatOptions;
+use vogls_bits::leading_trailing::{fv_leading_zeros, tv_leading_zeros};
 use vogls_bits::negate::{fv_cell_negate, tv_cell_negate};
 use vogls_bits::reduce::{
     fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor, tv_reduce_and, tv_reduce_or, tv_reduce_xor,
@@ -1416,11 +1417,13 @@ impl BytecodeInstruction for HeapUnary {
             UnaryOp::TvReduceOr => "tv.heap_reduce_or",
             UnaryOp::TvReduceAnd => "tv.heap_reduce_and",
             UnaryOp::TvReduceXor => "tv.heap_reduce_xor",
+            UnaryOp::TvLeadingZeros => "tv.heap_leading_zeros",
             UnaryOp::FvNeg => "fv.heap_neg",
             UnaryOp::FvCopy => "fv.heap_copy",
             UnaryOp::FvReduceOr => "fv.heap_reduce_or",
             UnaryOp::FvReduceAnd => "fv.heap_reduce_and",
             UnaryOp::FvReduceXor => "fv.heap_reduce_xor",
+            UnaryOp::FvLeadingZeros => "fv.heap_leading_zeros",
         };
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs}")
@@ -1475,6 +1478,12 @@ impl BytecodeInstruction for HeapUnary {
                     state.heap.get_u64_slice(regs.get_as_addr(rs), num_words),
                 ));
             }
+            O::TvLeadingZeros => {
+                regs[rd] = u64::from(tv_leading_zeros(
+                    state.heap.get_u64_slice(regs.get_as_addr(rs), num_words),
+                    size,
+                ));
+            }
             O::FvNeg => {
                 let [dst, src] = state.heap.get_u64_cell_slices([
                     (regs.get_as_addr(rd), num_words),
@@ -1515,6 +1524,23 @@ impl BytecodeInstruction for HeapUnary {
                 );
                 regs[spc] = u64::from(value.spc());
                 regs[val] = u64::from(value.val());
+            }
+            O::FvLeadingZeros => {
+                let (spc, val) = rd.to_spc_and_val();
+                let result = fv_leading_zeros(
+                    state.heap.get_u64_slice(regs.get_as_addr(rs), num_words),
+                    size,
+                );
+                match result {
+                    Some(value) => {
+                        regs[spc] = u32::MAX.into();
+                        regs[val] = value.into();
+                    },
+                    None => {
+                        regs[spc] = 0;
+                        regs[val] = 0;
+                    },
+                }
             }
         }
     }
@@ -1678,11 +1704,13 @@ pub enum UnaryOp {
     TvReduceOr,
     TvReduceAnd,
     TvReduceXor,
+    TvLeadingZeros,
     FvNeg,
     FvCopy,
     FvReduceOr,
     FvReduceAnd,
     FvReduceXor,
+    FvLeadingZeros,
 }
 
 impl UnaryOp {
@@ -1692,12 +1720,14 @@ impl UnaryOp {
             | Self::TvCopy
             | Self::TvReduceOr
             | Self::TvReduceAnd
-            | Self::TvReduceXor => false,
+            | Self::TvReduceXor
+            | Self::TvLeadingZeros => false,
             Self::FvNeg
             | Self::FvCopy
             | Self::FvReduceOr
             | Self::FvReduceAnd
-            | Self::FvReduceXor => true,
+            | Self::FvReduceXor
+            | Self::FvLeadingZeros => true,
         }
     }
 
@@ -1708,11 +1738,13 @@ impl UnaryOp {
             2 => Self::TvReduceOr,
             3 => Self::TvReduceAnd,
             4 => Self::TvReduceXor,
-            5 => Self::FvNeg,
-            6 => Self::FvCopy,
-            7 => Self::FvReduceOr,
-            8 => Self::FvReduceAnd,
-            _ => Self::FvReduceXor,
+            5 => Self::TvLeadingZeros,
+            6 => Self::FvNeg,
+            7 => Self::FvCopy,
+            8 => Self::FvReduceOr,
+            9 => Self::FvReduceAnd,
+            10 => Self::FvReduceXor,
+            _ => Self::FvLeadingZeros,
         }
     }
 }
@@ -2026,6 +2058,9 @@ impl BytecodeEncoder {
     pub fn heap_tv_reduce_xor(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
         self.heap_unary(rd, rs, UnaryOp::TvReduceXor, size);
     }
+    pub fn heap_tv_leading_zeros(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
+        self.heap_unary(rd, rs, UnaryOp::TvLeadingZeros, size);
+    }
     pub fn heap_fv_neg(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
         self.heap_unary(rd, rs, UnaryOp::FvNeg, size);
     }
@@ -2040,6 +2075,9 @@ impl BytecodeEncoder {
     }
     pub fn heap_fv_reduce_xor(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
         self.heap_unary(rd, rs, UnaryOp::FvReduceXor, size);
+    }
+    pub fn heap_fv_leading_zeros(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
+        self.heap_unary(rd, rs, UnaryOp::FvLeadingZeros, size);
     }
 
     pub fn heap_fill(&mut self, rd: Reg, fv: bool, spc: bool, val: bool, size: InlineNBitSize<17>) {

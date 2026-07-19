@@ -255,10 +255,10 @@ impl VValue {
         }
     }
 
-    pub fn clog2(&self) -> u32 {
+    pub fn clog2(&self) -> Option<u32> {
         match self {
-            Self::SignedNet(bits) => bits.size().get() - bits.leading_zeroes(),
-            Self::UnsignedNet(bits) => bits.size().get() - bits.leading_zeroes(),
+            Self::SignedNet(bits) => bits.clog2(),
+            Self::UnsignedNet(bits) => bits.clog2(),
             Self::String(_) => todo!(),
         }
     }

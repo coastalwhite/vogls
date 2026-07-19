@@ -7,7 +7,7 @@ use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskEnable;
 use crate::elaborate::{VSymbol, determine_module_context};
 use crate::lower::expression::{get_expr_type, lower_expr};
-use crate::lower::{LowerContext, MutLowerContext, try_resolve_hident, try_resolve_module};
+use crate::lower::{LowerContext, MutLowerContext, try_resolve_hident};
 use crate::lower::{expression, hident_span, try_resolve_net};
 
 pub fn lower_system_task_enable<'a>(

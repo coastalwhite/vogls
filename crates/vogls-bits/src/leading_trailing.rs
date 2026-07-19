@@ -1,3 +1,4 @@
+use crate::arithmetic::fv_contains_special;
 use crate::VectorSize;
 
 pub fn tv_leading_zeros(src: &[u64], size: VectorSize) -> u32 {
@@ -43,6 +44,13 @@ pub fn tv_leading_ones(src: &[u64], size: VectorSize) -> u32 {
         }
     }
     size.get()
+}
+
+pub fn fv_leading_zeros(src: &[u64], size: VectorSize) -> Option<u32> {
+    if fv_contains_special(src, size) {
+        return None;
+    }
+    Some(tv_leading_zeros(&src[src.len() / 2..], size))
 }
 
 #[cfg(test)]

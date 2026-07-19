@@ -23,10 +23,12 @@ pub struct SbsBitwiseRUType {
 }
 
 pub struct TvCountOnes(pub BitwiseRUType);
+pub struct TvLeadingZeros(pub SbsBitwiseRUType);
 pub struct FvNot(pub BitwiseRUType);
 pub struct FvReduceAnd(pub SbsBitwiseRUType);
 pub struct FvReduceOr(pub SbsBitwiseRUType);
 pub struct FvReduceXor(pub SbsBitwiseRUType);
+pub struct FvLeadingZeros(pub SbsBitwiseRUType);
 
 impl BitwiseRUType {
     #[inline(always)]
@@ -123,6 +125,25 @@ impl BytecodeInstruction for TvCountOnes {
     }
 }
 
+impl BytecodeInstruction for TvLeadingZeros {
+    impl_sbs_bitwise!(TvLeadingZeros, "tv.leading_zeros");
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRUType { rd, rs, size } = self.0;
+        regs[rd] = u64::from(regs[rs].leading_zeros()).wrapping_sub(64 - size as u64);
+    }
+}
+
 impl BytecodeInstruction for FvNot {
     impl_bitwise!(FvNot, "fv.not");
 
@@ -207,6 +228,35 @@ impl BytecodeInstruction for FvReduceXor {
     }
 }
 
+impl BytecodeInstruction for FvLeadingZeros {
+    impl_sbs_bitwise!(FvLeadingZeros, "fv.leading_zeros");
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let SbsBitwiseRUType { rd, rs, size } = self.0;
+        let (rdspc, rdval) = rd.to_spc_and_val();
+        let (rsspc, rsval) = rs.to_spc_and_val();
+
+        if regs[rsspc] != size.mask(u64::MAX) {
+            regs[rdspc] = 0;
+            regs[rdval] = 0;
+            return;
+        }
+
+        regs[rdspc] = u32::MAX.into();
+        regs[rdval] = u64::from(regs[rsval].leading_zeros()).wrapping_sub(64 - size as u64);
+    }
+}
+
 macro_rules! impl_bytecode_methods {
     ($(($name:ident, $op:ident))*) => {
         impl BytecodeEncoder {
@@ -232,7 +282,9 @@ impl_bytecode_methods! {
 }
 
 impl_bytecode_sbs_methods! {
+    (leading_zeros, TvLeadingZeros)
     (fv_reduce_and, FvReduceAnd)
     (fv_reduce_or, FvReduceOr)
     (fv_reduce_xor, FvReduceXor)
+    (fv_leading_zeros, FvLeadingZeros)
 }

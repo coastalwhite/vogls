@@ -59,12 +59,32 @@ pub fn lower_system_function_call(
         "clog2" => {
             ensure_num_args_equal!(1);
             let (e, e_ty) = arguments[0].ok_or(())?;
-            let lz = builder.count_leading_zeros(mctx.gl(), e);
+            let size = e_ty.force_net_width();
+
+            // @Performance. Maybe this should get a special instruction
+            let e_m_1 = builder.minus_constant(
+                mctx.gl(),
+                e,
+                Bits::new_u32(1).truncate_or_zero_extend(size),
+            );
+            let lz = builder.count_leading_zeros(mctx.gl(), e_m_1);
             let clog2 = builder.revminus_constant(
                 mctx.gl(),
                 lz,
                 Bits::new_u32(e_ty.force_net_width().get()),
             );
+            let is_zero = builder.case_equals_constant(mctx.gl(), e, Bits::new_zeroed(size));
+            let contains_spc = builder.reduce_xor(mctx.gl(), e);
+            let contains_spc = builder.case_equals_constant(
+                mctx.gl(),
+                contains_spc,
+                Bits::new_unknown(SCALAR_VSIZE),
+            );
+            let zero = builder.constant_u32(mctx.gl(), 0);
+            let clog2 = builder.select(mctx.gl(), is_zero, zero, clog2);
+            let x = builder.constant(mctx.gl(), Bits::new_unknown(VSIZE_32));
+            let clog2 = builder.select(mctx.gl(), contains_spc, x, clog2);
+
             Ok((clog2, VType::UnsignedNet(VSIZE_32)))
         }
 
@@ -587,10 +607,11 @@ pub fn eval_constant(
         "clog2" => {
             ensure_num_args_equal!(1);
             let v = arguments[0].as_ref().ok_or(())?;
-            let clog2 = v.clog2();
-            Ok(VValue::SignedNet(
-                Bits::new_u32(clog2).truncate_or_zero_extend(INTEGER_VSIZE),
-            ))
+            let clog2 = match v.clog2() {
+                None => Bits::new_unknown(VSIZE_32),
+                Some(value) => Bits::new_u32(value),
+            };
+            Ok(VValue::SignedNet(clog2))
         }
 
         // VoGLS specific system function calls
