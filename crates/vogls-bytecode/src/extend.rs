@@ -25,9 +25,9 @@ pub struct HeapHeapTruncate {
     rd: Reg,
     rs: Reg,
 
-    src_size: Reg,
+    dst_size: InlineNBitSize<11>,
     fv: bool,
-    dst_size: InlineNBitSize<13>,
+    src_size: Reg,
 }
 
 pub struct HeapHeapExtend {
@@ -178,9 +178,9 @@ impl BytecodeInstruction for HeapHeapTruncate {
         Self {
             rd: Reg::new_masked(v >> 8),
             rs: Reg::new_masked(v >> 12),
-            src_size: Reg::new_masked(v >> 16),
-            fv: (v >> 20) & 1 != 0,
-            dst_size: InlineNBitSize::new_masked(v >> 21),
+            dst_size: InlineNBitSize::new_masked(v >> 16),
+            fv: (v >> 27) & 1 != 0,
+            src_size: Reg::new_masked(v >> 28),
         }
     }
 
@@ -190,8 +190,8 @@ impl BytecodeInstruction for HeapHeapTruncate {
                 | ((self.rd as u32) << 8)
                 | ((self.rs as u32) << 12)
                 | (self.dst_size.encode() << 16)
-                | ((self.fv as u32) << 20)
-                | ((self.src_size as u32) << 21),
+                | ((self.fv as u32) << 27)
+                | ((self.src_size as u32) << 28),
         )
     }
 
@@ -587,7 +587,7 @@ impl BytecodeEncoder {
         &mut self,
         rd: Reg,
         rs: Reg,
-        dst_size: InlineNBitSize<13>,
+        dst_size: InlineNBitSize<11>,
         src_size: Reg,
     ) {
         self.data.push(
@@ -605,7 +605,7 @@ impl BytecodeEncoder {
         &mut self,
         rd: Reg,
         rs: Reg,
-        dst_size: InlineNBitSize<13>,
+        dst_size: InlineNBitSize<11>,
         src_size: Reg,
     ) {
         self.data.push(
