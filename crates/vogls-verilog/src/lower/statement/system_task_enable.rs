@@ -5,9 +5,9 @@ use vogls_ir::{BasicBlockBuilder, IntrinsicOp, ReadMem, VariableKey};
 use crate::ast::AstId;
 use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskEnable;
-use crate::elaborate::VSymbol;
+use crate::elaborate::{VSymbol, determine_module_context};
 use crate::lower::expression::{get_expr_type, lower_expr};
-use crate::lower::{LowerContext, MutLowerContext, try_resolve_hident};
+use crate::lower::{LowerContext, MutLowerContext, try_resolve_hident, try_resolve_module};
 use crate::lower::{expression, hident_span, try_resolve_net};
 
 pub fn lower_system_task_enable<'a>(
@@ -127,6 +127,64 @@ pub fn lower_system_task_enable<'a>(
             );
         }
         "finish" => _ = builder.intrinsic(mctx.gl(), IntrinsicOp::Finish, Default::default()),
+
+        "printtimescale" => {
+            if expressions.len() > 1 {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(system_task_enable),
+                    "only one identifier is allowed",
+                );
+                return Err(());
+            }
+
+            let (sid, module) = match expressions.first() {
+                Some(expr) => {
+                    let Expr::Ident(ident, exprs, range_expr) = &*expr else {
+                        mctx.diagnostics.not_yet_implemented(
+                            ctx.arenas.get_span(system_task_enable),
+                            "invalid identifier",
+                        );
+                        return Err(());
+                    };
+                    if !exprs.is_empty() || range_expr.is_some() {
+                        mctx.diagnostics.not_yet_implemented(
+                            ctx.arenas.get_span(system_task_enable),
+                            "array elements and ranges not supported yet",
+                        );
+                        return Err(());
+                    }
+
+                    let sid = try_resolve_hident(
+                        scope,
+                        &ctx.table,
+                        ctx.arenas,
+                        *ident,
+                        &mut mctx.diagnostics,
+                    )?;
+
+                    let VSymbol::Module(n) = &ctx.table[sid].content else {
+                        mctx.diagnostics.not_yet_implemented(
+                            hident_span(&ctx.arenas, *ident),
+                            "symbol is not a module",
+                        );
+                        return Err(());
+                    };
+
+                    (sid, n)
+                }
+                None => determine_module_context(scope, &ctx.table),
+            };
+
+            let name = &ctx.arenas.ident_table[ctx.table[sid].name()];
+            let fmt = DynFormatString::from_string(format!(
+                "Time scale of ({name}) is {}{} / {}{}\n",
+                module.time_scale.time_unit_size.as_str(),
+                module.time_scale.time_unit_unit.as_str(),
+                module.time_scale.time_precision_size.as_str(),
+                module.time_scale.time_precision_unit.as_str(),
+            ));
+            builder.intrinsic(mctx.gl(), IntrinsicOp::Display(Box::new(fmt)), [].into());
+        }
 
         "dumpfile" => {
             assert!(expressions.len() <= 1);

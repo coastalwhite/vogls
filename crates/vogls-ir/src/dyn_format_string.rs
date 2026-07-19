@@ -57,6 +57,10 @@ impl DynFormatString {
         Self { content, arguments }
     }
 
+    pub fn from_string(s: String) -> Self {
+        Self::new(s.into(), [].into())
+    }
+
     pub fn write_to(
         &self,
         f: &mut impl io::Write,

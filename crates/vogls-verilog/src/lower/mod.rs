@@ -240,6 +240,22 @@ pub fn try_resolve_hident<'a>(
     })
 }
 
+pub fn try_resolve_module<'a, 's>(
+    scope: SymbolId,
+    table: &'s VSymbolTable,
+    arenas: &AstArenas,
+    ident: impl Into<HIdent<'a>>,
+    diagnostics: &mut Diagnostics,
+) -> Result<&'s ModuleSymbol, ()> {
+    let ident = ident.into();
+    let sid = try_resolve_hident(scope, table, arenas, ident, diagnostics)?;
+    let VSymbol::Module(n) = &table[sid].content else {
+        diagnostics.not_yet_implemented(hident_span(arenas, ident), "symbol is not a module");
+        return Err(());
+    };
+    Ok(n)
+}
+
 pub fn try_resolve_net<'a, 's>(
     scope: SymbolId,
     table: &'s VSymbolTable,

@@ -731,7 +731,7 @@ impl Tokenized {
                             // Preprocessor directives that need to be passed to the parser.
                             "celldefine" | "endcelldefine" => todo!(),
                             "default_nettype" => {}
-                            "resetall" => todo!(),
+                            "resetall" => {},
                             "line" => todo!(),
                             "timescale" => {}
                             "unconnected_drive" | "nounconnected_drive" => todo!(),

@@ -61,7 +61,7 @@ pub fn lower<'a>(
                                 value.as_integer().unwrap() as u64
                             }
                         };
-                        let delay = delay * ctx.time_scale.time_unit;
+                        let delay = delay * ctx.time_scale.time_unit_as_fs();
                         builder = builder.wait(mctx.gl(), Time(delay));
                     }
                 }
@@ -79,7 +79,7 @@ pub fn lower<'a>(
                     let delay = builder.multiply_constant(
                         mctx.gl(),
                         delay,
-                        Bits::from_u64(TIME_VSIZE, ctx.time_scale.time_unit),
+                        Bits::from_u64(TIME_VSIZE, ctx.time_scale.time_unit_as_fs()),
                     );
                     builder = builder.variable_wait(mctx.gl(), delay);
                 }

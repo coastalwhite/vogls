@@ -128,16 +128,23 @@ pub enum TimeSize {
     N100,
 }
 impl TimeSize {
-    fn into_u64(self) -> u64 {
+    pub fn into_u64(self) -> u64 {
         match self {
             TimeSize::N1 => 1,
             TimeSize::N10 => 10,
             TimeSize::N100 => 100,
         }
     }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TimeSize::N1 => "1",
+            TimeSize::N10 => "10",
+            TimeSize::N100 => "100",
+        }
+    }
 }
 impl TimeUnit {
-    fn convert_from_fs(self, fs: u64) -> u64 {
+    pub fn convert_from_fs(self, fs: u64) -> u64 {
         match self {
             TimeUnit::Seconds => fs * 10u64.pow(15),
             TimeUnit::Milliseconds => fs * 10u64.pow(12),
@@ -145,6 +152,16 @@ impl TimeUnit {
             TimeUnit::Nanoseconds => fs * 10u64.pow(6),
             TimeUnit::Picoseconds => fs * 10u64.pow(3),
             TimeUnit::Femtoseconds => fs,
+        }
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TimeUnit::Seconds => "s",
+            TimeUnit::Milliseconds => "ms",
+            TimeUnit::Microseconds => "us",
+            TimeUnit::Nanoseconds => "ns",
+            TimeUnit::Picoseconds => "ps",
+            TimeUnit::Femtoseconds => "fs",
         }
     }
 }
@@ -284,8 +301,10 @@ pub fn parse_file<'a>(
                 module.default_nettype = ctx.default_nettype;
                 let (tu, tu_unit, tp, tp_unit) = ctx.timescale;
                 module.time_scale = TimeScale {
-                    time_unit: tu_unit.convert_from_fs(tu.into_u64()),
-                    time_precision: tp_unit.convert_from_fs(tp.into_u64()),
+                    time_unit_size: tu,
+                    time_unit_unit: tu_unit,
+                    time_precision_size: tp,
+                    time_precision_unit: tp_unit,
                 };
                 descriptions.push(Description::Module(utils::push(arenas, ast, module, tr)));
                 trs.push(tr);
@@ -399,6 +418,10 @@ pub fn parse_file<'a>(
                         tkw.offset += 1;
                         ctx.default_nettype = nettype;
                     }
+                    "resetall" => {
+                        tkw.offset += 1;
+                        *ctx = ParseContext::new();
+                    },
                     _ => {
                         if let Some(diagnostics) = diagnostics.as_deref_mut() {
                             diagnostics.incomplete(tkw.offset, "directive not-yet supported");
