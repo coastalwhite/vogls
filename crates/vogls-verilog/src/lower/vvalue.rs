@@ -103,7 +103,21 @@ impl VValue {
         }
     }
 
-    pub fn logical_equal(self, rhs: VValue) -> bool {
+    pub fn logical_equal(self, rhs: VValue) -> FvLogicValue {
+        use VValue as V;
+        let (slf, rhs) = Self::coerce_max_size(self, rhs);
+        match (slf, rhs) {
+            (V::SignedNet(l) | V::UnsignedNet(l), V::SignedNet(r) | V::UnsignedNet(r)) => {
+                l.logical_equal(&r)
+            }
+            (V::String(_), _) | (_, V::String(_)) => todo!(),
+        }
+    }
+    pub fn logical_not_equal(self, rhs: VValue) -> FvLogicValue {
+        !self.logical_equal(rhs)
+    }
+
+    pub fn case_equal(self, rhs: VValue) -> bool {
         use VValue as V;
         let (slf, rhs) = Self::coerce_max_size(self, rhs);
         match (slf, rhs) {
@@ -111,8 +125,8 @@ impl VValue {
             (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
-    pub fn logical_not_equal(self, rhs: VValue) -> bool {
-        !self.logical_equal(rhs)
+    pub fn case_not_equal(self, rhs: VValue) -> bool {
+        !self.case_equal(rhs)
     }
 
     pub fn logical_shift_left(lhs: VValue, rhs: VValue) -> VValue {
@@ -145,12 +159,36 @@ impl VValue {
         }
         lhs
     }
+    pub fn arithmetic_shift_right(lhs: VValue, rhs: VValue) -> VValue {
+        use VValue as V;
+        let (mut lhs, rhs) = Self::coerce_max_size(lhs, rhs);
+        match (&mut lhs, &rhs) {
+            (V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
+                let r = r.truncate(VectorSize::new(32).unwrap());
+                *lb = match r.extract_exact_u32() {
+                    None => Bits::new_unknown(lb.size()),
+                    Some(r) => Bits::arithmetic_shift_right(lb, r),
+                };
+            }
+            _ => return Self::logical_shift_right(lhs, rhs),
+        }
+        lhs
+    }
 
     pub fn bitwise_invert(self) -> VValue {
         use VValue as V;
         match self {
             V::SignedNet(v) => V::SignedNet(v.bitwise_negate()),
             V::UnsignedNet(v) => V::UnsignedNet(v.bitwise_negate()),
+            V::String(_) => todo!(),
+        }
+    }
+
+    pub fn sign_invert(self) -> VValue {
+        use VValue as V;
+        match self {
+            V::SignedNet(v) => V::SignedNet(v.sign_invert()),
+            V::UnsignedNet(v) => V::UnsignedNet(v.sign_invert()),
             V::String(_) => todo!(),
         }
     }

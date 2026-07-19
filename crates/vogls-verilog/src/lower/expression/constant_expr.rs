@@ -66,22 +66,14 @@ pub fn eval_constant_expr<'a>(
                 let result = match op {
                     O::LogicalNegation => VValue::scalar_from_bool(!child.to_logical()),
                     O::BitwiseNegation => child.bitwise_invert(),
-                    O::ReductionAnd
-                    | O::ReductionOr
-                    | O::ReductionNand
-                    | O::ReductionNor
-                    | O::ReductionXor
-                    | O::ReductionXnor
-                    | O::SignPlus
-                    | O::SignMinus => {
-                        result_stack.push(None);
-                        diagnostics.not_yet_implemented(
-                            arenas.get_span(item.expr),
-                            "constant expression of this kind not yet implemented",
-                        );
-                        error = true;
-                        continue;
-                    }
+                    O::ReductionAnd => VValue::from(child.into_bits().reduce_and()),
+                    O::ReductionOr => VValue::from(child.into_bits().reduce_or()),
+                    O::ReductionNand => VValue::from(child.into_bits().reduce_nand()),
+                    O::ReductionNor => VValue::from(child.into_bits().reduce_nor()),
+                    O::ReductionXor => VValue::from(child.into_bits().reduce_xor()),
+                    O::ReductionXnor => VValue::from(child.into_bits().reduce_xnor()),
+                    O::SignPlus => child,
+                    O::SignMinus => child.sign_invert(),
                 };
                 result_stack.push(Some(result));
             }
@@ -143,8 +135,9 @@ pub fn eval_constant_expr<'a>(
                     O::Modulus => VValue::remainder(lhs, rhs),
                     O::BinaryPlus => VValue::add(lhs, rhs),
                     O::BinaryMinus => VValue::sub(lhs, rhs),
-                    O::ShiftLeft => VValue::logical_shift_left(lhs, rhs),
+                    O::ArithmeticLeftShift | O::ShiftLeft => VValue::logical_shift_left(lhs, rhs),
                     O::ShiftRight => VValue::logical_shift_right(lhs, rhs),
+                    O::ArithmeticRightShift => VValue::arithmetic_shift_right(lhs, rhs),
                     O::BitwiseAnd => VValue::bitwise_and(lhs, rhs),
                     O::BitwiseXor => VValue::bitwise_xor(lhs, rhs),
                     O::BitwiseXnor => VValue::bitwise_xnor(lhs, rhs),
@@ -155,20 +148,10 @@ pub fn eval_constant_expr<'a>(
                     O::GreaterThanEqual => VValue::from(VValue::greater_than_equal(lhs, rhs)),
                     O::LogicalAnd => VValue::scalar_from_bool(VValue::logical_and(lhs, rhs)),
                     O::LogicalOr => VValue::scalar_from_bool(VValue::logical_or(lhs, rhs)),
-                    O::LogicalEquality => VValue::scalar_from_bool(lhs.logical_equal(rhs)),
-                    O::LogicalInequality => VValue::scalar_from_bool(lhs.logical_not_equal(rhs)),
-                    O::ArithmeticLeftShift
-                    | O::ArithmeticRightShift
-                    | O::CaseEquality
-                    | O::CaseInequality => {
-                        result_stack.push(None);
-                        diagnostics.not_yet_implemented(
-                            arenas.get_span(item.expr),
-                            "constant expression of this kind not yet implemented",
-                        );
-                        error = true;
-                        continue;
-                    }
+                    O::LogicalEquality => VValue::from(lhs.logical_equal(rhs)),
+                    O::LogicalInequality => VValue::from(lhs.logical_not_equal(rhs)),
+                    O::CaseEquality => VValue::scalar_from_bool(lhs.case_equal(rhs)),
+                    O::CaseInequality => VValue::scalar_from_bool(lhs.case_not_equal(rhs)),
                 };
                 result_stack.push(Some(result));
             }
@@ -406,10 +389,10 @@ pub fn eval_constant_expr<'a>(
 
                 let (truthy, falsy) = VValue::coerce_max_size(truthy, falsy);
 
-                if condition.logical_equal(VValue::UnsignedNet(Bits::from(false))) {
-                    result_stack.push(Some(falsy));
-                } else {
+                if condition.case_equal(VValue::UnsignedNet(Bits::from(true))) {
                     result_stack.push(Some(truthy));
+                } else {
+                    result_stack.push(Some(falsy));
                 }
             }
             Expr::Concatenation(exprs) => {

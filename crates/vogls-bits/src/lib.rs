@@ -828,6 +828,15 @@ impl Bits {
             BitsDataRef::SeparateFv(slice) => reduce::fv_l_reduce_xor(slice, self.size()),
         }
     }
+    pub fn reduce_nor(&self) -> FvLogicValue {
+        !self.reduce_or()
+    }
+    pub fn reduce_nand(&self) -> FvLogicValue {
+        !self.reduce_and()
+    }
+    pub fn reduce_xnor(&self) -> FvLogicValue {
+        !self.reduce_xor()
+    }
 
     pub fn bitwise_negate(&self) -> Self {
         match self.as_data_ref() {
@@ -1714,6 +1723,14 @@ impl Bits {
                 - self.leading_zeroes()
                 - if self.count_ones() == 1 { 1 } else { 0 },
         )
+    }
+
+    pub fn logical_equal(&self, other: &Bits) -> FvLogicValue {
+        Self::bitwise_xnor(self, &other).reduce_and()
+    }
+
+    pub fn sign_invert(&self) -> Bits {
+        Self::subtract(&Self::new_zeroed(self.size()), self)
     }
 }
 

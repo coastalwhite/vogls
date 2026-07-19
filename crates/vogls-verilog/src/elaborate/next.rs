@@ -560,7 +560,7 @@ fn extend_generate_case_sids<'a, 'b>(
                         Some(value.ty().force_net_width()),
                     )?;
                     let expr_value = expr_value.truncate_or_extend(value.ty().force_net_width());
-                    if value.clone().logical_equal(expr_value) {
+                    if value.clone().case_equal(expr_value) {
                         is_selected = true;
                     }
                 }
