@@ -39,7 +39,14 @@ pub fn lower<'a>(
         builder.update_branch_falsy(mctx.gl(), branch_ref, builder.key());
 
         let else_if_branch = &*else_if_branch;
-        let (condition, _) = lower_expr(ctx, mctx, scope, &mut builder, else_if_branch.condition, None)?;
+        let (condition, _) = lower_expr(
+            ctx,
+            mctx,
+            scope,
+            &mut builder,
+            else_if_branch.condition,
+            None,
+        )?;
         let condition = builder.reduce_or(mctx.gl(), condition);
 
         (branch_ref, if_true_builder) = builder.branch(mctx.gl(), condition);

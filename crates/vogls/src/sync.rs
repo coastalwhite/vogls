@@ -34,9 +34,7 @@ impl ParsedDesign {
         top_level_module: Option<String>,
     ) -> Result<ElaboratedDesign, ()> {
         let Self { arena, design } = self;
-        let design = design
-            .elaborate(mode, top_level_module)
-            .map_err(|_| ())?;
+        let design = design.elaborate(mode, top_level_module).map_err(|_| ())?;
         let design = ElaboratedDesign { arena, design };
         Ok(design)
     }

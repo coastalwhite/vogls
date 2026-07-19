@@ -1,15 +1,15 @@
 pub use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
+pub use vogls_ir::optimize::{OptFlags, Optimizations};
 pub use vogls_ir::{Bits, LogicMode, SignalKey, VectorSize};
-pub use vogls_ir::optimize::{Optimizations, OptFlags};
 pub use vogls_runtime::{RtSignalKey, SimulationIo};
 pub use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
 
 pub use vogls_bits as bits;
+pub use vogls_bytecode as sim;
 pub use vogls_codegen as codegen;
 pub use vogls_frontend as frontend;
 pub use vogls_ir as ir;
 pub use vogls_runtime as runtime;
-pub use vogls_bytecode as sim;
 pub use vogls_utils as utils;
 
 pub mod design;

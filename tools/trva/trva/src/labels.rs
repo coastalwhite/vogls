@@ -7,7 +7,6 @@ use foldhash::fast::RandomState;
 #[cfg(not(feature = "foldhash"))]
 use std::hash::RandomState;
 
-
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
 
@@ -17,7 +16,7 @@ use hashbrown::hash_table::Entry;
 /// look-up in a [`LabelMap`].
 ///
 /// The [`LabelTable`] keeps track of which labels have been seen and allows recovering the
-/// original string from a [`LabelId`]. 
+/// original string from a [`LabelId`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LabelId(NonZeroU64);
 

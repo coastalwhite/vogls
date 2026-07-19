@@ -51,10 +51,8 @@ pub fn try_lower_fuse_driver_ident<'a>(
         VSymbol::Net(n) => n,
 
         _ => {
-            mctx.diagnostics.not_yet_implemented(
-                hident_span(ctx.arenas, ident),
-                "cannot assign net to this.",
-            );
+            mctx.diagnostics
+                .not_yet_implemented(hident_span(ctx.arenas, ident), "cannot assign net to this.");
             return Err(());
         }
     };

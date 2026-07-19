@@ -12,7 +12,7 @@ use crate::array::{Array, DslLazyArray, LazyArrayKey};
 use crate::buffer::Buffer;
 use crate::compute::{
     ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs, ComputeResult,
-    Key
+    Key,
 };
 use crate::design::{LazyDesign, LazyDesignKey, PlanDesign, SignalRef, Time};
 use crate::dsl::{DslNode, DslPtr};
@@ -318,7 +318,7 @@ impl PlanNode for LazyRun {
                 Some(Err(_)) => return Err(ComputeError::FailedToResolveNumTraces),
                 None => {}
                 Some(Ok(n)) if n != 1 => break,
-                Some(Ok(_)) => {},
+                Some(Ok(_)) => {}
             }
 
             if matches!(step, LazyStep::TraceStart | LazyStep::TraceStop) {

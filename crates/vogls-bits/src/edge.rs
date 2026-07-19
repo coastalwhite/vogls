@@ -34,8 +34,8 @@ pub const fn tv_negedge(before: bool, after: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use FvLogicValue::*;
     use FvLogicValue as L;
+    use FvLogicValue::*;
 
     #[rustfmt::skip]
     const TEST_VECTORS: [(L, L, bool, bool); 16] = [

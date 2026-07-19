@@ -4,12 +4,12 @@ use core::fmt;
 use std::collections::VecDeque;
 
 use slotmap::SlotMap;
+use vogls_bits::Bits;
+use vogls_bits::arithmetic::FvLogicValue;
 use vogls_ir::{
     BasicBlock, BasicBlockKey, Instruction, LogicMode, VSIZE_32, VSIZE_64, VariableKey,
     VariableMap, VectorSize,
 };
-use vogls_bits::arithmetic::FvLogicValue;
-use vogls_bits::Bits;
 use vogls_utils::{Bitset, IndexSet, VgHashMap};
 
 use crate::{HeapAlignment, HeapBuilder};
@@ -98,7 +98,15 @@ impl StackTracker {
     }
 
     fn clear(&mut self) {
-        let Self { b1, b2, b4, b8, b16, b32, b64 } = self;
+        let Self {
+            b1,
+            b2,
+            b4,
+            b8,
+            b16,
+            b32,
+            b64,
+        } = self;
         b1.set_all_zero();
         b2.set_all_zero();
         b4.set_all_zero();
@@ -223,14 +231,13 @@ pub fn linear_scan_register_allocation(
 
         for i in bbs[bb].instrs.iter().rev() {
             // @Performance: Never put constants smaller than 64-bits on the stack.
-            if let Instruction::Constant(dst, value) = i
-            {
-                if 
-                 value.size() > VSIZE_64 {
-                let offset = heap_builder.claim_constant(dst.mode(), value.clone_lowering_mode());
-                assignment.insert(*dst, Slot::Heap(offset.offset.bit_offset as u64));
+            if let Instruction::Constant(dst, value) = i {
+                if value.size() > VSIZE_64 {
+                    let offset =
+                        heap_builder.claim_constant(dst.mode(), value.clone_lowering_mode());
+                    assignment.insert(*dst, Slot::Heap(offset.offset.bit_offset as u64));
                 } else if let Some(simple_bits) = SimpleBits::from_bits(value) {
-                assignment.insert(*dst, Slot::Constant(simple_bits));
+                    assignment.insert(*dst, Slot::Constant(simple_bits));
                 }
             }
             if let Some(dst) = i.get_destination_variable() {
@@ -320,10 +327,10 @@ pub fn linear_scan_register_allocation(
         for (i, instr) in bbs[bb].instrs.iter().enumerate().rev() {
             let inum = block_from + i as u64 * 2;
             if let Some(dst) = instr.get_destination_variable()
- 
-                // Don't insert intervals for large constants.
-                && !assignment.contains_key(&dst) {
 
+                // Don't insert intervals for large constants.
+                && !assignment.contains_key(&dst)
+            {
                 let size = var_map.size(dst);
                 let interval = intervals
                     .entry(dst)
@@ -471,7 +478,8 @@ pub fn linear_scan_register_allocation(
             // @Performance. Better spilling policy.
             let (spill_var, spill_interval) = intervals[*spill_i];
             if spill_var.mode() == var.mode() && spill_interval.end > interval.end {
-                let bitset = stack_tracker.get_bitset_for_size(spill_interval.size, spill_interval.mode);
+                let bitset =
+                    stack_tracker.get_bitset_for_size(spill_interval.size, spill_interval.mode);
                 let num_bitset_slots = num_bitset_slots(spill_interval.size, spill_interval.mode);
                 let offset = match bitset.find_n_contiguous_zeros(num_bitset_slots) {
                     Ok(offset) => offset,
@@ -483,7 +491,10 @@ pub fn linear_scan_register_allocation(
                 };
                 bitset.set_slice_constant(offset as usize, num_bitset_slots, true);
                 let offset = offset.try_into().expect("Too large");
-                let slot = Slot::Stack(HeapAlignment::new(spill_interval.size, spill_interval.mode), offset);
+                let slot = Slot::Stack(
+                    HeapAlignment::new(spill_interval.size, spill_interval.mode),
+                    offset,
+                );
                 let slot = assignment.insert(spill_var, slot).unwrap();
                 assignment.insert(*var, slot);
                 active.pop_back();

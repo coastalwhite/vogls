@@ -94,13 +94,8 @@ pub fn variable_lvalue_flat_ty<'a>(
         range_expression,
     } = &*ast_lvalue;
 
-    let symbol_key = try_resolve_hident(
-        scope,
-        &ctx.table,
-        ctx.arenas,
-        *ident,
-        &mut mctx.diagnostics,
-    )?;
+    let symbol_key =
+        try_resolve_hident(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
 
     let exprs = *exprs;
     let (ty, array_dims, transform) = match &ctx.table[symbol_key].content {
@@ -154,13 +149,8 @@ pub fn assign_variable_lvalue_flat<'a>(
         range_expression,
     } = &*ast_lvalue;
 
-    let symbol_key = try_resolve_hident(
-        scope,
-        &ctx.table,
-        ctx.arenas,
-        *ident,
-        &mut mctx.diagnostics,
-    )?;
+    let symbol_key =
+        try_resolve_hident(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
 
     let (ty, array_dims, transform) = match &ctx.table[symbol_key].content {
         VSymbol::Parameter(v) => (v.ty(), &[] as &[NonZeroU32], VectorTransform::default()),
@@ -294,13 +284,8 @@ pub fn net_lvalue_flat_ty<'a>(
         constant_range_expression,
     } = &*ast_lvalue;
 
-    let symbol_key = try_resolve_hident(
-        scope,
-        &ctx.table,
-        ctx.arenas,
-        *ident,
-        &mut mctx.diagnostics,
-    )?;
+    let symbol_key =
+        try_resolve_hident(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
 
     let (ty, dims, transform) = match &ctx.table[symbol_key].content {
         VSymbol::Parameter(v) => (v.ty(), &[] as &[NonZeroU32], VectorTransform::default()),
@@ -361,13 +346,7 @@ fn assign_net_lvalue_flat<'a>(
         constant_range_expression,
     } = &*lvalue;
 
-    let s = try_resolve_net(
-        scope,
-        &ctx.table,
-        ctx.arenas,
-        *ident,
-        &mut mctx.diagnostics,
-    )?;
+    let s = try_resolve_net(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
 
     let mut actx = ConstantAddressingContext {
         gl: &mctx.gl,

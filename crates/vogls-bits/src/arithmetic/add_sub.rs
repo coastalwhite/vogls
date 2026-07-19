@@ -1,6 +1,6 @@
-use crate::util::last_word_mask;
 use crate::VectorSize;
 use crate::arithmetic::{fv_contains_special, fv_set_no_special};
+use crate::util::last_word_mask;
 
 pub fn tv_addition_subtraction(
     dst: &mut [u64],

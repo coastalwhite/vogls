@@ -485,9 +485,7 @@ impl FuseGraphOptimizer {
                                 match tgt {
                                     FuseTarget::Signal(to, _) => match module.signal_map.entry(*to)
                                     {
-                                        Entry::Occupied(mut e) => {
-                                            e.get_mut().extend(items)
-                                        }
+                                        Entry::Occupied(mut e) => e.get_mut().extend(items),
                                         Entry::Vacant(e) => _ = e.insert(items),
                                     },
                                     FuseTarget::Constant(_) => {}
@@ -928,9 +926,10 @@ impl FuseGraph {
                         let edge = &edges[e];
                         debug_assert_eq!(edge.drivee, n);
 
-                        is_independent_from_next = nodes[n].fanin.get(i + 1).is_none_or(|&e| {
-                            !edge.drivee_slice.overlaps(edges[e].drivee_slice)
-                        });
+                        is_independent_from_next = nodes[n]
+                            .fanin
+                            .get(i + 1)
+                            .is_none_or(|&e| !edge.drivee_slice.overlaps(edges[e].drivee_slice));
 
                         let is_independent = is_independent_from_prev && is_independent_from_next;
                         is_independent_from_prev = is_independent_from_next;
@@ -968,17 +967,17 @@ impl FuseGraph {
                             Entry::Vacant(entry) => entry.insert_entry(Vec::new()),
                             Entry::Occupied(entry) => entry,
                         };
-                        occupied
-                            .get_mut()
-                            .push((driver_signal, edge.drivee_slice));
+                        occupied.get_mut().push((driver_signal, edge.drivee_slice));
                         drive_inv = Entry::Occupied(occupied);
 
                         let driver_fanin = std::mem::take(&mut nodes[edge.driver].fanin);
-                        nodes[n].fanin.extend(driver_fanin.into_iter().inspect(|&ek| {
-                            edges[ek].drivee = n;
-                            edges[ek].drivee_slice =
-                                drivee_slice.subslice(edges[ek].drivee_slice).unwrap();
-                        }));
+                        nodes[n]
+                            .fanin
+                            .extend(driver_fanin.into_iter().inspect(|&ek| {
+                                edges[ek].drivee = n;
+                                edges[ek].drivee_slice =
+                                    drivee_slice.subslice(edges[ek].drivee_slice).unwrap();
+                            }));
 
                         let edge = &mut edges[e];
 

@@ -62,7 +62,10 @@ pub enum TokenizeErrorReason {
 }
 
 impl Tokenized {
-    pub fn tokenize(content: Arc<str>, path: Option<Arc<Path>>) -> Result<Self, Box<TokenizeError>> {
+    pub fn tokenize(
+        content: Arc<str>,
+        path: Option<Arc<Path>>,
+    ) -> Result<Self, Box<TokenizeError>> {
         Self::tokenize_with_macros(content, path, &mut HashMap::new())
     }
 

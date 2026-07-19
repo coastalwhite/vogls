@@ -141,7 +141,10 @@ fn parse_positions(source: &str) -> SectionPositions {
 }
 
 fn parse_hex(s: &str) -> Result<u32, ()> {
-    let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    let hex = s
+        .strip_prefix("0x")
+        .or_else(|| s.strip_prefix("0X"))
+        .unwrap_or(s);
     u32::from_str_radix(hex, 16).map_err(|_| ())
 }
 

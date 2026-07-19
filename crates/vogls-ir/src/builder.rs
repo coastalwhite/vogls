@@ -962,10 +962,7 @@ impl BasicBlockBuilder {
     }
 
     pub fn continue_from(instrs: Vec<Instruction>, bb: BasicBlockKey) -> BasicBlockBuilder {
-        BasicBlockBuilder {
-            key: bb,
-            instrs,
-        }
+        BasicBlockBuilder { key: bb, instrs }
     }
 
     pub fn push_raw_instruction(&mut self, instruction: Instruction) {

@@ -200,9 +200,7 @@ impl RunVector {
 }
 
 fn gather_strided<T: Copy>(slice: &[T], height: usize, stride: usize, offset: usize) -> Buffer<T> {
-    (0..height)
-        .map(|y| slice[offset + y * stride])
-        .collect()
+    (0..height).map(|y| slice[offset + y * stride]).collect()
 }
 fn gather_offsets<T: Copy>(slice: &[T], offsets: &[u64], offset: usize) -> Buffer<T> {
     offsets

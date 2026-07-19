@@ -112,8 +112,8 @@ impl DataType {
     pub fn format(&self) -> &'static std::ffi::CStr {
         match self {
             Self::Float => c"d",
-            Self::Int   => c"q",
-            Self::UInt  => c"Q",
+            Self::Int => c"q",
+            Self::UInt => c"Q",
             Self::Bits(_) => todo!(),
         }
     }

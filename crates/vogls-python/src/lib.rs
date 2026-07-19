@@ -92,7 +92,7 @@ mod vogls {
             }
         }
     }
-    impl From<LogicMode> for ::vogls::LogicMode{
+    impl From<LogicMode> for ::vogls::LogicMode {
         fn from(value: LogicMode) -> vogls::LogicMode {
             match value {
                 LogicMode::TwoValue => vogls::LogicMode::TwoValue,
@@ -406,7 +406,11 @@ mod vogls {
     impl PyLazyDesign {
         #[new]
         #[pyo3(signature = (paths, top_level_module = None, defines = Vec::new()))]
-        fn new(paths: Vec<PathBuf>, top_level_module: Option<String>, defines: Vec<String>) -> Self {
+        fn new(
+            paths: Vec<PathBuf>,
+            top_level_module: Option<String>,
+            defines: Vec<String>,
+        ) -> Self {
             Self(Arc::new(vogls_plan::design::LazyDesign {
                 sources: paths,
                 top_level_module,
@@ -716,7 +720,10 @@ mod vogls {
         }
 
         pub fn get(&self, at: usize) -> PyResult<PyLazyValue> {
-            Ok(PyLazyValue(build_array_agg(ArrayGet(at), [self.0.clone()])?))
+            Ok(PyLazyValue(build_array_agg(
+                ArrayGet(at),
+                [self.0.clone()],
+            )?))
         }
     }
     #[pymethods]
@@ -783,10 +790,7 @@ mod vogls {
         }
 
         #[staticmethod]
-        pub fn pearson_corr(
-            lhs: Bound<PyLazyArray>,
-            rhs: Bound<PyLazyArray>,
-        ) -> PyResult<Self> {
+        pub fn pearson_corr(lhs: Bound<PyLazyArray>, rhs: Bound<PyLazyArray>) -> PyResult<Self> {
             Ok(PyLazyValue(build_array_agg(
                 PearsonCorrelation,
                 [lhs.get().0.clone(), rhs.get().0.clone()],

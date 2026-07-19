@@ -917,7 +917,9 @@ fn decode_compressed(bits: u16) -> Option<InstructionVariant> {
         (0b000, _, 0b01, _, _) => Some(InstructionVariant::CAddi),
         (0b001, _, 0b01, _, _) => Some(InstructionVariant::CJal),
         (0b010, _, 0b01, _, _) => Some(InstructionVariant::CLi),
-        (0b011, _, 0b01, _, _) if CAddi16Sp::matches(bits.into()) => Some(InstructionVariant::CAddi16Sp),
+        (0b011, _, 0b01, _, _) if CAddi16Sp::matches(bits.into()) => {
+            Some(InstructionVariant::CAddi16Sp)
+        }
         (0b011, _, 0b01, _, _) => Some(InstructionVariant::CLui),
         (0b100, _, 0b01, 0b00, _) => Some(InstructionVariant::CSrli),
         (0b100, _, 0b01, 0b01, _) => Some(InstructionVariant::CSrai),
@@ -934,7 +936,9 @@ fn decode_compressed(bits: u16) -> Option<InstructionVariant> {
         (0b011, _, 0b10, _, _) => Some(InstructionVariant::CFlwSp),
         (0b100, 0, 0b10, _, _) if CJr::matches(bits.into()) => Some(InstructionVariant::CJr),
         (0b100, 0, 0b10, _, _) => Some(InstructionVariant::CMv),
-        (0b100, 1, 0b10, _, _) if CEBreak::matches(bits.into()) => Some(InstructionVariant::CEBreak),
+        (0b100, 1, 0b10, _, _) if CEBreak::matches(bits.into()) => {
+            Some(InstructionVariant::CEBreak)
+        }
         (0b100, 1, 0b10, _, _) if CJalr::matches(bits.into()) => Some(InstructionVariant::CJalr),
         (0b100, 1, 0b10, _, _) => Some(InstructionVariant::CAdd),
         (0b110, _, 0b10, _, _) => Some(InstructionVariant::CSwSp),

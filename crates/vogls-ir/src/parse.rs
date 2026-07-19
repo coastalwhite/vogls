@@ -1121,12 +1121,10 @@ fn parse_imm(c: &mut Cursor) -> Result<Bits, Box<ParseError>> {
                 })
             })
         }
-        _ => {
-            Err(Box::new(ParseError {
-                at: c.offset,
-                error: "invalid base".to_string(),
-            }))
-        }
+        _ => Err(Box::new(ParseError {
+            at: c.offset,
+            error: "invalid base".to_string(),
+        })),
     }
 }
 

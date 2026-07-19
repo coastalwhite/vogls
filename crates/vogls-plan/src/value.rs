@@ -46,7 +46,7 @@ impl Value {
                     acc = Bits::concatenate(&acc, v);
                 }
                 Array::Bits(acc, v.size())
-            },
+            }
         }
     }
 

@@ -19,8 +19,6 @@ macro_rules! impl_dyn_eq_hash {
     };
 }
 
-#[cfg(feature = "python")]
-pub mod numpy;
 pub mod agg;
 pub mod array;
 pub mod buffer;
@@ -31,8 +29,10 @@ pub mod entropy;
 pub mod expand;
 pub mod map;
 pub mod mutual_information;
-pub mod pearson_corr;
+#[cfg(feature = "python")]
+pub mod numpy;
 pub mod output;
+pub mod pearson_corr;
 pub mod plan;
 pub mod random;
 pub mod run;

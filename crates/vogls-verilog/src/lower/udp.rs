@@ -1,7 +1,7 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessKind, SCALAR_VSIZE,
-    SignalFlags, VariableKey, ProcessBuilder
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessBuilder, ProcessKind,
+    SCALAR_VSIZE, SignalFlags, VariableKey,
 };
 use vogls_utils::OrderedSet;
 
@@ -63,7 +63,8 @@ pub fn lower_udp<'a>(
         body,
     } = &*id;
 
-    let (process, mut builder) = ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, ctx.arenas.get_span(id));
+    let (process, mut builder) =
+        ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, ctx.arenas.get_span(id));
     let entry_bb = builder.key();
 
     let mut ins = OrderedSet::new();

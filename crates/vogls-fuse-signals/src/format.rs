@@ -135,10 +135,7 @@ impl<'a> fmt::Display for FuseGraphSubgraphDot<'a> {
 }
 
 impl FuseGraph {
-    pub fn display_dot<'a>(
-        &'a self,
-        signals: &'a SlotMap<SignalKey, Signal>,
-    ) -> FuseGraphDot<'a> {
+    pub fn display_dot<'a>(&'a self, signals: &'a SlotMap<SignalKey, Signal>) -> FuseGraphDot<'a> {
         FuseGraphDot {
             graph: self,
             signals,

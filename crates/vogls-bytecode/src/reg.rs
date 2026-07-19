@@ -2,7 +2,7 @@ use std::fmt::{self, Write};
 use std::ops::{Index, IndexMut};
 
 use vogls_codegen::HeapOffset;
-use vogls_ir::{VectorSize, SCALAR_VSIZE};
+use vogls_ir::{SCALAR_VSIZE, VectorSize};
 
 /// The register bank used by the bytecode interpreter for temporary results.
 pub struct Regs {
@@ -13,7 +13,11 @@ pub struct Regs {
 impl Regs {
     #[inline(always)]
     pub fn new(stack_offset: u64) -> Self {
-        Self { value: [0u64; 16], size: SCALAR_VSIZE, stack_offset }
+        Self {
+            value: [0u64; 16],
+            size: SCALAR_VSIZE,
+            stack_offset,
+        }
     }
     #[inline(always)]
     pub fn get_as_addr(&self, reg: Reg) -> HeapOffset {

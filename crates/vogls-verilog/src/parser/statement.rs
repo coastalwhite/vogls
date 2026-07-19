@@ -763,8 +763,7 @@ impl<'a> Consumable<'a> for DelayControl<'a> {
             tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
             Ok(Self::MinTypMax(mintypmax))
         } else {
-            let delay_value =
-                parse::<DelayValue>(tkw, sc, arenas, ast, diagnostics)?;
+            let delay_value = parse::<DelayValue>(tkw, sc, arenas, ast, diagnostics)?;
             Ok(Self::DelayValue(delay_value))
         }
     }
@@ -1220,8 +1219,7 @@ impl<'a> Consumable<'a> for CaseItem<'a> {
         let loc = arenas.spans.len();
         arenas.spans.push(token_range);
         let pattern = AstItem { item: pattern, loc };
-        let statement_or_null =
-            parse::<StatementOrNull>(tkw, sc, arenas, ast, diagnostics)?;
+        let statement_or_null = parse::<StatementOrNull>(tkw, sc, arenas, ast, diagnostics)?;
 
         Ok(Self {
             pattern,
@@ -1369,8 +1367,7 @@ impl<'a> Consumable<'a> for ProceduralTimingControlStatement<'a> {
 
         let procedural_timing_control =
             parse::<ProceduralTimingControl>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        let statement_or_null =
-            parse::<StatementOrNull>(tkw, sc, arenas, ast, diagnostics)?;
+        let statement_or_null = parse::<StatementOrNull>(tkw, sc, arenas, ast, diagnostics)?;
 
         Ok(Self {
             procedural_timing_control,

@@ -116,10 +116,7 @@ impl BytecodeInstruction for BranchTrue {
     }
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            rcond: cond,
-            imm,
-        } = self;
+        let Self { rcond: cond, imm } = self;
         write_padded_mnemonic(f, "branch.true")?;
         write!(f, "{cond}, {imm}")?;
         Ok(())
@@ -136,10 +133,7 @@ impl BytecodeInstruction for BranchTrue {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self {
-            rcond: cond,
-            imm,
-        } = self;
+        let Self { rcond: cond, imm } = self;
         let next_pc = pc.wrapping_add_signed(i64::from(imm.0));
         if regs[cond] != 0 {
             *pc = next_pc;
@@ -165,10 +159,7 @@ impl BytecodeInstruction for BranchFalse {
     }
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            rcond: cond,
-            imm,
-        } = self;
+        let Self { rcond: cond, imm } = self;
         write_padded_mnemonic(f, "branch.false")?;
         write!(f, "{cond}, {imm}")?;
         Ok(())
@@ -185,10 +176,7 @@ impl BytecodeInstruction for BranchFalse {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let Self {
-            rcond: cond,
-            imm,
-        } = self;
+        let Self { rcond: cond, imm } = self;
         let next_pc = pc.wrapping_add_signed(i64::from(imm.0));
         if regs[cond] == 0 {
             *pc = next_pc;
