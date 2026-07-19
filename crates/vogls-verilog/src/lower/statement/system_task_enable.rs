@@ -345,6 +345,7 @@ pub fn lower_write_arguments<'a>(
 
                 if remaining.starts_with('%') {
                     format_string_content.push('%');
+                    at += 1;
                     continue;
                 }
 
