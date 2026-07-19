@@ -451,7 +451,7 @@ pub fn poisson(seed: &mut Long, mean: Long) -> Long {
     let mut q = uniform(seed, 0, 1);
     while p < q {
         n += 1;
-        q = uniform(seed, 0, 1) * q;
+        q *= uniform(seed, 0, 1);
     }
     n
 }
@@ -484,7 +484,7 @@ pub fn chi_square(seed: &mut Long, deg_of_free: Long) -> f64 {
         x = 0.0;
     }
     for _ in (2..=deg_of_free).step_by(2) {
-        x = x + 2.0 * exponential(seed, 1);
+        x += 2.0 * exponential(seed, 1);
     }
     x
 }
@@ -529,7 +529,7 @@ long * seed, k, mean;
 pub fn erlangian(seed: &mut Long, k: Long, mean: Long) -> f64 {
     let mut x = 1.0;
     for _ in 1..=k {
-        x = x * uniform(seed, 0, 1);
+        x *= uniform(seed, 0, 1);
     }
     let a = mean as f64;
     let b = k as f64;

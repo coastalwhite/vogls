@@ -1042,12 +1042,10 @@ pub fn sign_or_zero_extend(
         src
     } else if from_width > to {
         builder.truncate(gl, src, to)
+    } else if from.is_signed() {
+        builder.sign_extend(gl, src, to)
     } else {
-        if from.is_signed() {
-            builder.sign_extend(gl, src, to)
-        } else {
-            builder.zero_extend(gl, src, to)
-        }
+        builder.zero_extend(gl, src, to)
     }
 }
 
@@ -1063,12 +1061,10 @@ pub fn truncate_or_extend(
         src
     } else if from_width > to {
         builder.truncate(gl, src, to)
+    } else if from.is_signed() {
+        builder.sign_extend(gl, src, to)
     } else {
-        if from.is_signed() {
-            builder.sign_extend(gl, src, to)
-        } else {
-            builder.zero_extend(gl, src, to)
-        }
+        builder.zero_extend(gl, src, to)
     }
 }
 
