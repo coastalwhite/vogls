@@ -8,14 +8,14 @@ use vogls_ir::{
     BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, LogicMode,
     ProcessKey, SCALAR_VSIZE, Signal, SignalFlags, SignalKey, VariableKey, VectorSize,
 };
-use vogls_utils::{Table, VgHashMap, new_table_key};
+use vogls_utils::{Entry, IndexMap, Table, VgHashMap, new_table_key};
 
 use crate::ast::module::{
     Dimension, FunctionDeclaration, ModuleOrGenerateItem, PortDeclaration, Range, TaskDeclaration,
     TimeScale,
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
-use crate::lower::{Diagnostics, VType, VValue, eval_constant_expr};
+use crate::lower::{Diagnostics, VType, VValue, create_nba_process, eval_constant_expr};
 use crate::parser::AstArenas;
 
 pub mod function;
@@ -123,11 +123,18 @@ impl Net {
     pub fn drive_non_blocking(
         &self,
         gl: &mut GlobalContext,
+        nbas: &mut IndexMap<SignalKey, (ProcessKey, SignalKey, Option<SignalKey>)>,
         bbb: &mut BasicBlockBuilder,
         src: VariableKey,
         partial: Option<VariableKey>,
     ) {
-        let (value, mask) = self.non_blocking_drive_signal();
+        let blocking_signal = self.blocking_drive_signal();
+        let (_, value, mask) = match nbas.entry(blocking_signal) {
+            Entry::Vacant(entry) => *entry
+                .insert(create_nba_process(gl, blocking_signal, true))
+                .get(),
+            Entry::Occupied(mut entry) => *entry.get(),
+        };
         bbb.drive_opt_partial(gl, value, src, partial);
         if let Some(mask) = mask {
             let size = gl.vars.size(src);

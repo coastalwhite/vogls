@@ -175,7 +175,7 @@ impl<K, V> IntoIterator for IndexMap<K, V> {
 }
 
 pub enum Entry<'a, K, V> {
-    Occuppied(OccupiedEntry<'a, K, V>),
+    Occupied(OccupiedEntry<'a, K, V>),
     Vacant(VacantEntry<'a, K, V>),
 }
 
@@ -211,7 +211,7 @@ impl<'a, K, V: Default> Entry<'a, K, V> {
     pub fn or_default(self) -> &'a mut V {
         let entry = match self {
             Self::Vacant(e) => e.insert(V::default()),
-            Self::Occuppied(e) => e,
+            Self::Occupied(e) => e,
         };
         entry.values.get_mut(entry.entry.get().get()).unwrap()
     }
@@ -299,7 +299,7 @@ impl<K: Eq + hash::Hash> IndexSet<K> {
 impl<K: Eq + hash::Hash, V> IndexMap<K, V> {
     pub fn insert(&mut self, key: K, value: V) -> Result<usize, usize> {
         match self.entry(key) {
-            Entry::Occuppied(entry) => {
+            Entry::Occupied(entry) => {
                 let idx = entry.index();
                 self.values[idx] = value;
                 Err(idx)
@@ -313,7 +313,7 @@ impl<K: Eq + hash::Hash, V> IndexMap<K, V> {
 
     pub fn get_or_insert_with(&mut self, key: K, mut f: impl FnMut() -> V) -> &mut V {
         let idx = match self.entry(key) {
-            Entry::Occuppied(entry) => entry.index(),
+            Entry::Occupied(entry) => entry.index(),
             Entry::Vacant(entry) => entry.insert(f()).index(),
         };
         &mut self.values[idx]
@@ -354,7 +354,7 @@ impl<K: Eq + hash::Hash, V> IndexMap<K, V> {
         );
 
         match entry {
-            hashbrown::hash_table::Entry::Occupied(entry) => Entry::Occuppied(OccupiedEntry {
+            hashbrown::hash_table::Entry::Occupied(entry) => Entry::Occupied(OccupiedEntry {
                 entry,
                 _keys: &mut self.keys,
                 values: &mut self.values,

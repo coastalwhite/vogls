@@ -200,7 +200,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         expression::truncate_or_extend(mctx.gl(), builder, variable, variable_ty, output_width);
     if nba {
         net.net
-            .drive_non_blocking(mctx.gl(), builder, variable, partial);
+            .drive_non_blocking(&mut mctx.gl, &mut mctx.nbas, builder, variable, partial);
     } else {
         net.net
             .drive_blocking(mctx.gl(), builder, variable, partial);

@@ -4,7 +4,7 @@ use hashbrown::HashSet;
 use vogls_frontend::diagnostic::Diagnostic;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_ir::{GlobalContext, LogicMode};
-use vogls_utils::VgHashMap;
+use vogls_utils::{IndexMap, VgHashMap};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{
     CaseGenerateConstruct, CaseGenerateItem, Description, GenerateBlock, IfGenerateConstruct,
@@ -12,7 +12,7 @@ use vogls_verilog::ast::module::{
     NonPortModuleItem, TimeScale,
 };
 use vogls_verilog::elaborate::{SymbolAstRefs, VSymbolTable};
-use vogls_verilog::lower::{Diagnostics, LowerContext, MutLowerContext};
+use vogls_verilog::lower::{Diagnostics, LowerContext};
 use vogls_verilog::parser::{Ast, AstArenas, Diagnostics as ParseDiagnostics};
 use vogls_verilog::tokenizer::Tokenized;
 
@@ -184,23 +184,18 @@ impl<'a> ParsedDesign<'a> {
             tokenized: &self.token_buffer,
             time_scale: TimeScale::default(),
         };
-        let mut mctx = MutLowerContext {
-            gl: GlobalContext::default(),
-            diagnostics: Diagnostics::default(),
-            connections: Vec::new(),
-            fuse_scratch: Vec::new(),
-            has_vcd: false,
-        };
+        let mut gl = GlobalContext::default();
+        let mut diagnostics = Diagnostics::default();
         let Ok(()) = vogls_verilog::elaborate::next::elaborate(
-            &mut mctx.gl,
+            &mut gl,
             &mut ctx,
             top_level_module,
             &module_lut,
-            &mut mctx.diagnostics,
+            &mut diagnostics,
         ) else {
             return Err(Box::new(ElaborationError {
                 design: self,
-                kind: ElaborationErrorKind::Diagnostics(mctx.diagnostics),
+                kind: ElaborationErrorKind::Diagnostics(diagnostics),
             }));
         };
 
@@ -228,7 +223,8 @@ impl<'a> ParsedDesign<'a> {
             table,
             table_ast_refs,
             udps,
-            gl: mctx.gl,
+            gl,
+            nbas: IndexMap::default(),
 
             unoptimized_fgs: None,
             optimized_fgs: None,

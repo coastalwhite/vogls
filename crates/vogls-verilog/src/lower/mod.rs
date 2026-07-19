@@ -31,6 +31,7 @@ pub struct LowerContext<'a, 'b> {
 
 pub struct MutLowerContext {
     pub gl: GlobalContext,
+    pub nbas: IndexMap<SignalKey, (ProcessKey, SignalKey, Option<SignalKey>)>,
     pub diagnostics: Diagnostics,
     pub connections: Vec<vogls_fuse_signals::InputEdge>,
     pub fuse_scratch: Vec<vogls_fuse_signals::Driver>,
@@ -1041,7 +1042,7 @@ pub fn instantiate_stmts_nba_signals<'a>(
                         !vlvalue.exprs.is_empty() && vlvalue.range_expression.is_some();
 
                     match nba_signals.entry(sid) {
-                        vogls_utils::Entry::Occuppied(mut entry) => entry.get().1 |= needs_mask,
+                        vogls_utils::Entry::Occupied(mut entry) => entry.get().1 |= needs_mask,
                         vogls_utils::Entry::Vacant(entry) => {
                             _ = entry.insert((net.net.blocking_drive_signal(), needs_mask))
                         }

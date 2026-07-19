@@ -5,15 +5,13 @@ use std::sync::{Arc, Mutex};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId, SymbolTable};
 use vogls_fuse_signals::{FuseGraph, FuseGraphOptimizer, FuseTarget};
-use vogls_ir::{GlobalContext, LogicMode, SignalFlags};
+use vogls_ir::{GlobalContext, LogicMode, ProcessKey, SignalFlags, SignalKey};
 use vogls_utils::{IndexMap, NonMaxU32, VgHashMap};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, NonPortModuleItem, TimeScale};
 use vogls_verilog::ast::udp::UdpDeclaration;
 use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable, determine_module_context};
-use vogls_verilog::lower::{
-    Diagnostics, LowerContext, MutLowerContext, create_nba_process, lower_module_to_ir,
-};
+use vogls_verilog::lower::{Diagnostics, LowerContext, MutLowerContext, lower_module_to_ir};
 use vogls_verilog::parser::{Ast, AstArenas, report};
 use vogls_verilog::tokenizer::Tokenized;
 
@@ -34,6 +32,7 @@ pub struct ElaboratedDesign<'a> {
     pub(crate) table_ast_refs: SymbolAstRefs<'a>,
     pub(crate) udps: VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
     pub(crate) gl: GlobalContext,
+    pub(crate) nbas: IndexMap<SignalKey, (ProcessKey, SignalKey, Option<SignalKey>)>,
 
     pub(crate) unoptimized_fgs: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>>,
     pub(crate) optimized_fgs: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>>,
@@ -216,6 +215,7 @@ impl<'a> ElaboratedDesign<'a> {
         };
         let mut mctx = MutLowerContext {
             gl: std::mem::take(&mut self.gl),
+            nbas: std::mem::take(&mut self.nbas),
             diagnostics: Diagnostics::default(),
             connections: Vec::new(),
             fuse_scratch: Vec::new(),
@@ -227,6 +227,7 @@ impl<'a> ElaboratedDesign<'a> {
         self.table_ast_refs = ctx.table_ast_refs;
         self.udps = ctx.udps;
         self.gl = mctx.gl;
+        self.nbas = mctx.nbas;
         result
     }
 
@@ -310,6 +311,7 @@ impl<'a> ElaboratedDesign<'a> {
             table_ast_refs,
             udps,
             gl,
+            nbas,
 
             logic_mode,
 
@@ -332,6 +334,7 @@ impl<'a> ElaboratedDesign<'a> {
         };
         let mut mctx = MutLowerContext {
             gl,
+            nbas,
             diagnostics: Diagnostics::default(),
             connections: Vec::new(),
             fuse_scratch: Vec::new(),
@@ -340,23 +343,22 @@ impl<'a> ElaboratedDesign<'a> {
 
         // @TODO: Iterate over the modules instead.
         let mut error = false;
-        let mut nba_signals = IndexMap::new();
         for key in ctx.table.symbol_id_iter() {
             match &ctx.table[key].content {
-                VSymbol::Module(i) => {
-                    let module = module_lut[&i.module];
-                    ctx.time_scale = module.time_scale;
-
-                    error |= vogls_verilog::lower::instantiate_nba_signals(
-                        &mut mctx.gl,
-                        &mut ctx,
-                        key,
-                        module,
-                        &mut mctx.diagnostics,
-                        &mut nba_signals,
-                    )
-                    .is_err();
-                }
+                // VSymbol::Module(i) => {
+                //     let module = module_lut[&i.module];
+                //     ctx.time_scale = module.time_scale;
+                //
+                //     error |= vogls_verilog::lower::instantiate_nba_signals(
+                //         &mut mctx.gl,
+                //         &mut ctx,
+                //         key,
+                //         module,
+                //         &mut mctx.diagnostics,
+                //         &mut nba_signals,
+                //     )
+                //     .is_err();
+                // }
                 VSymbol::Function(i) => {
                     let fn_decl = ctx.table_ast_refs.fns[i.ast_id];
                     error |= vogls_verilog::lower::module_or_generate_item::function::lower(
@@ -376,13 +378,13 @@ impl<'a> ElaboratedDesign<'a> {
                 _ => {}
             }
         }
-        for (sid, (signal, needs_mask)) in nba_signals.into_iter() {
-            let (process, nba, mask) = create_nba_process(mctx.gl(), signal, needs_mask);
-            let VSymbol::Net(net) = &mut ctx.table[sid].content else {
-                unreachable!();
-            };
-            net.net.nba = Some((process, nba, mask));
-        }
+        // for (sid, (signal, needs_mask)) in nba_signals.into_iter() {
+        //     let (process, nba, mask) = create_nba_process(mctx.gl(), signal, needs_mask);
+        //     let VSymbol::Net(net) = &mut ctx.table[sid].content else {
+        //         unreachable!();
+        //     };
+        //     net.net.nba = Some((process, nba, mask));
+        // }
 
         if error {
             let LowerContext {
@@ -405,6 +407,7 @@ impl<'a> ElaboratedDesign<'a> {
                     table_ast_refs,
                     udps,
                     gl: mctx.gl,
+                    nbas: mctx.nbas,
 
                     unoptimized_fgs,
                     optimized_fgs,
@@ -445,6 +448,7 @@ impl<'a> ElaboratedDesign<'a> {
                     table_ast_refs,
                     udps,
                     gl: mctx.gl,
+                    nbas: mctx.nbas,
 
                     unoptimized_fgs,
                     optimized_fgs,

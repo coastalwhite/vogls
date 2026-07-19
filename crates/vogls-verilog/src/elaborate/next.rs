@@ -1996,6 +1996,7 @@ pub fn finalize_symbol<'a>(
             super::function::elaborate_fn(gl, sid, ctx, diagnostics)?;
             let mut mctx = MutLowerContext {
                 gl: std::mem::take(gl),
+                nbas: IndexMap::default(),
                 diagnostics: std::mem::take(diagnostics),
                 connections: Vec::new(),
                 fuse_scratch: Vec::new(),
