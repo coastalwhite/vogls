@@ -54,6 +54,7 @@ unsafe impl<T: Sync + Send> Sync for SharedStorage<T> {}
 
 // Allows us to transmute between types while also keeping the original
 // stats and drop method of the Vec around.
+#[expect(unused)]
 struct VecVTable {
     size: usize,
     align: usize,
@@ -153,6 +154,10 @@ impl<T> SharedStorage<T> {
         }
     }
 
+    /// # Safety
+    ///
+    /// Slice given by `std::slice::from_raw_parts(ptr, length)` should be valid until the owner is
+    /// dropped. This function assumes a shared reference of this data.
     pub unsafe fn from_foreign(
         ptr: *mut T,
         length: usize,
@@ -171,6 +176,9 @@ impl<T> SharedStorage<T> {
         }
     }
 
+    /// # Safety
+    ///
+    /// Slice's lifetime should be valid for the time it used.
     pub unsafe fn from_slice_unchecked(slice: &[T]) -> Self {
         #[expect(clippy::manual_slice_size_calculation)]
         let length_in_bytes = slice.len() * size_of::<T>();

@@ -232,10 +232,9 @@ impl<'a> Consumable<'a> for Expr<'a> {
             };
 
             loop {
-                #[allow(clippy::never_loop)]
-                loop {
+                'inner: {
                     let Some(peeked) = tkw.get(tkw.offset) else {
-                        break;
+                        break 'inner;
                     };
 
                     // Ternary operator ( ... ? ... : ... )
@@ -243,7 +242,7 @@ impl<'a> Consumable<'a> for Expr<'a> {
                         let (l_bp, r_bp) = (2, 1);
 
                         if l_bp < min_bp {
-                            break;
+                            break 'inner;
                         }
 
                         tkw.offset += 1;
@@ -253,11 +252,11 @@ impl<'a> Consumable<'a> for Expr<'a> {
                     }
 
                     let Some((l_bp, r_bp, op)) = token_to_binary_op(*peeked.kind) else {
-                        break;
+                        break 'inner;
                     };
 
                     if l_bp < min_bp {
-                        break;
+                        break 'inner;
                     }
 
                     tkw.offset += 1;

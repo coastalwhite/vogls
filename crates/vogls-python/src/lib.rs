@@ -11,7 +11,7 @@ mod vogls {
     use pyo3::types::PyDict;
     use pyo3::{FromPyObject, IntoPyObjectExt, PyAny, PyResult, prelude::*};
     use vogls::utils::{IndexMap, VgHashSet};
-    use vogls::{BitsFormatOptions, DesignState, SimulationIo, VectorSize};
+    use vogls::{BitsFormatOptions, SimulationIo, VectorSize};
 
     use vogls_plan::agg::{build_array_agg, build_run_vector_agg};
     use vogls_plan::array::{Array, ArrayGet, DslLazyArray, LazyArray};
@@ -92,11 +92,11 @@ mod vogls {
             }
         }
     }
-    impl Into<::vogls::LogicMode> for LogicMode {
-        fn into(self) -> vogls::LogicMode {
-            match self {
-                Self::TwoValue => vogls::LogicMode::TwoValue,
-                Self::FourValue => vogls::LogicMode::FourValue,
+    impl From<LogicMode> for ::vogls::LogicMode{
+        fn from(value: LogicMode) -> vogls::LogicMode {
+            match value {
+                LogicMode::TwoValue => vogls::LogicMode::TwoValue,
+                LogicMode::FourValue => vogls::LogicMode::FourValue,
             }
         }
     }
@@ -198,12 +198,6 @@ mod vogls {
                 })
                 .map_err(|_| PyValueError::new_err("failed to compile"))
         }
-    }
-
-    #[pyo3::pyclass(frozen)]
-    pub struct TraceRef {
-        snapshot: Snapshot,
-        plugin_idx: usize,
     }
 
     #[pymethods]
@@ -312,68 +306,6 @@ mod vogls {
                 inner: self.state.inner.clone(),
             })
         }
-
-        // fn signals_resolve(&self, name: Vec<String>) -> PyResult<SignalRef> {
-        //     let mut sid = self.inner.elab_table.roots()[0];
-        //     for n in &name {
-        //         let Some(ident) = self.inner.ident_table.get(n) else {
-        //             return Err(PyException::new_err("signal not found"));
-        //         };
-        //         let Some(ssid) = self.inner.elab_table.resolve(sid, ident) else {
-        //             return Err(PyException::new_err("signal not found"));
-        //         };
-        //         sid = ssid;
-        //     }
-        //     let Symbol::Net(net_symbol) = &self.inner.elab_table[sid].content else {
-        //         return Err(PyException::new_err("not a signal"));
-        //     };
-        //     let (signal, _slice) = match &net_symbol.net {
-        //         NetValue::Signal(s) => s.blocking_drive_signal(),
-        //         NetValue::Constant(_) => todo!(),
-        //     };
-        //     Ok(SignalRef {
-        //         inner: self.inner.get_rt_signal(signal),
-        //     })
-        // }
-        //
-        // fn signals_set(
-        //     &self,
-        //     py: Python<'_>,
-        //     snapshot: Py<Snapshot>,
-        //     signal: Py<SignalRef>,
-        //     value: Py<Bits>,
-        // ) -> PyResult<()> {
-        //     let snapshot = snapshot.borrow(py);
-        //     let mut snapshot = snapshot.inner.lock().unwrap();
-        //     self.inner
-        //         .set_signal(&mut snapshot, signal.get().inner, &value.get().inner);
-        //     Ok(())
-        // }
-        //
-        // fn signals_get(
-        //     &self,
-        //     py: Python<'_>,
-        //     snapshot: Py<Snapshot>,
-        //     signal: Py<SignalRef>,
-        // ) -> PyResult<Bits> {
-        //     let snapshot = snapshot.borrow(py);
-        //     let snapshot = snapshot.inner.lock().unwrap();
-        //     let bits = self.inner.get_signal(&snapshot, signal.get().inner);
-        //     Ok(Bits { inner: bits })
-        // }
-        //
-        // pub fn trace(&self, py: Python<'_>, snapshot: Py<Snapshot>) -> TraceRef {
-        //     let snapshot = snapshot.borrow(py);
-        //     let design = &self.inner;
-        //     let mut state = snapshot.inner.lock().unwrap();
-        //     state.plugins_mut()[0] = Box::new(TracePlugin::new(design));
-        //     TraceRef {
-        //         snapshot: Snapshot {
-        //             inner: snapshot.inner.clone(),
-        //         },
-        //         plugin_idx: 0,
-        //     }
-        // }
     }
 
     #[pymethods]
@@ -449,45 +381,6 @@ mod vogls {
         #[getter]
         pub fn size(&self) -> VectorSize {
             self.inner.size()
-        }
-    }
-
-    #[pymethods]
-    impl TraceRef {
-        pub fn print(&self) {
-            let state = self.snapshot.inner.lock().unwrap();
-            let plugin = match &*state {
-                DesignState::Interpretted(s) => &s.plugins[0],
-                DesignState::Compiled(s) => &s.plugins[0],
-                DesignState::Bytecode(s) => &s.plugins[0],
-            };
-            let trace = (plugin.as_ref() as &dyn std::any::Any)
-                .downcast_ref::<vogls_trace::TracePlugin>()
-                .unwrap();
-
-            for i in 0..trace.time_offsets.len() - 1 {
-                println!(
-                    "[T={}] {} events",
-                    trace.time_offsets[i].0,
-                    trace.time_offsets[i + 1].1 - trace.time_offsets[i].1
-                );
-            }
-        }
-
-        pub fn extract(&self) -> Trace {
-            let mut state = self.snapshot.inner.lock().unwrap();
-            let plugins = match &mut *state {
-                DesignState::Interpretted(s) => &mut s.plugins,
-                DesignState::Compiled(s) => &mut s.plugins,
-                DesignState::Bytecode(s) => &mut s.plugins,
-            };
-            let trace = plugins.remove(self.plugin_idx);
-            let trace = trace as Box<dyn std::any::Any>;
-            let trace = trace.downcast::<vogls_trace::TracePlugin>().unwrap();
-            Trace(vogls_trace::Trace {
-                trace: trace.trace,
-                time_offsets: trace.time_offsets,
-            })
         }
     }
 
@@ -587,7 +480,7 @@ mod vogls {
         let result = vogls_plan::compute::compute::<Lazy>(lazy_key, &mut graph, &ctx)?;
         Ok(result)
     }
-    fn lazy_dot_string<Dsl: DslNode, Lazy: ComputeNode + GraphItem>(dsl: &Dsl) -> PyResult<String> {
+    fn lazy_dot_string<Dsl: DslNode>(dsl: &Dsl) -> PyResult<String> {
         let (lazy_key, graph) = vogls_plan::dsl::convert(dsl)?;
         let result = display_dot(&[lazy_key], &graph).to_string();
         Ok(result)
@@ -699,7 +592,7 @@ mod vogls {
             lazy_compute::<_, LazyPlan>(&self.0).map(PyPlan)
         }
         pub fn to_dot_graph(&self) -> PyResult<String> {
-            lazy_dot_string::<_, LazyPlan>(&self.0)
+            lazy_dot_string::<_>(&self.0)
         }
 
         #[staticmethod]
@@ -747,7 +640,7 @@ mod vogls {
             lazy_compute::<_, LazyArray>(&self.0).map(PyArray)
         }
         pub fn to_dot_graph(&self) -> PyResult<String> {
-            lazy_dot_string::<_, LazyArray>(&self.0)
+            lazy_dot_string::<_>(&self.0)
         }
 
         pub fn window_sum(
@@ -771,7 +664,7 @@ mod vogls {
         pub fn ttest(lhs: Bound<PyLazyRunVector>, rhs: Bound<PyLazyRunVector>) -> PyResult<Self> {
             Ok(PyLazyArray(build_run_vector_agg(
                 TTest,
-                [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
+                [lhs.get().0.clone(), rhs.get().0.clone()],
             )?))
         }
         #[staticmethod]
@@ -781,7 +674,7 @@ mod vogls {
         ) -> PyResult<Self> {
             Ok(PyLazyArray(build_run_vector_agg(
                 MutualInformation,
-                [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
+                [lhs.get().0.clone(), rhs.get().0.clone()],
             )?))
         }
 
@@ -792,7 +685,7 @@ mod vogls {
         ) -> PyResult<Self> {
             Ok(PyLazyArray(build_run_vector_agg(
                 PearsonCorrelation,
-                [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
+                [lhs.get().0.clone(), rhs.get().0.clone()],
             )?))
         }
 
@@ -822,7 +715,7 @@ mod vogls {
             )
         }
 
-        pub fn get<'py>(&self, at: usize) -> PyResult<PyLazyValue> {
+        pub fn get(&self, at: usize) -> PyResult<PyLazyValue> {
             Ok(PyLazyValue(build_array_agg(ArrayGet(at), [self.0.clone()])?))
         }
     }
@@ -868,14 +761,14 @@ mod vogls {
             lazy_compute::<_, LazyValue>(&self.0).map(PyValue)
         }
         pub fn to_dot_graph(&self) -> PyResult<String> {
-            lazy_dot_string::<_, LazyValue>(&self.0)
+            lazy_dot_string::<_>(&self.0)
         }
 
         #[staticmethod]
         pub fn ttest(lhs: Bound<PyLazyArray>, rhs: Bound<PyLazyArray>) -> PyResult<Self> {
             Ok(PyLazyValue(build_array_agg(
                 TTest,
-                [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
+                [lhs.get().0.clone(), rhs.get().0.clone()],
             )?))
         }
         #[staticmethod]
@@ -885,7 +778,7 @@ mod vogls {
         ) -> PyResult<Self> {
             Ok(PyLazyValue(build_array_agg(
                 MutualInformation,
-                [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
+                [lhs.get().0.clone(), rhs.get().0.clone()],
             )?))
         }
 
@@ -896,7 +789,7 @@ mod vogls {
         ) -> PyResult<Self> {
             Ok(PyLazyValue(build_array_agg(
                 PearsonCorrelation,
-                [lhs.get().0.clone().into(), rhs.get().0.clone().into()],
+                [lhs.get().0.clone(), rhs.get().0.clone()],
             )?))
         }
     }
@@ -954,7 +847,7 @@ mod vogls {
             lazy_compute::<_, LazyRunVector>(&self.0).map(PyRunVector)
         }
         pub fn to_dot_graph(&self) -> PyResult<String> {
-            lazy_dot_string::<_, LazyRunVector>(&self.0)
+            lazy_dot_string::<_>(&self.0)
         }
 
         pub fn window_sum(

@@ -317,11 +317,8 @@ impl PlanNode for LazyRun {
             match step.num_traces(inputs) {
                 Some(Err(_)) => return Err(ComputeError::FailedToResolveNumTraces),
                 None => {}
-                Some(Ok(n)) => {
-                    if n != 1 {
-                        break;
-                    }
-                }
+                Some(Ok(n)) if n != 1 => break,
+                Some(Ok(_)) => {},
             }
 
             if matches!(step, LazyStep::TraceStart | LazyStep::TraceStop) {
@@ -329,9 +326,9 @@ impl PlanNode for LazyRun {
             }
 
             step.compute(
-                &design,
+                design,
                 &mut state,
-                &inputs,
+                inputs,
                 &mut None,
                 &mut outputs,
                 &mut Vec::new(),
@@ -351,9 +348,9 @@ impl PlanNode for LazyRun {
 
                     for step in &self.steps[prelude_steps..] {
                         step.compute(
-                            &design,
+                            design,
                             &mut state,
-                            &inputs,
+                            inputs,
                             &mut trace_ref,
                             &mut outputs,
                             &mut traces,
@@ -483,7 +480,7 @@ fn collapse_outputs<'a>(f: &dyn Fn(usize) -> &'a Output, length: usize) -> Outpu
                         plan.components.at(ki).0.clone(),
                         collapse_outputs(
                             &|i| match f(i) {
-                                Output::Plan(p) => &p.components.at(ki).1,
+                                Output::Plan(p) => p.components.at(ki).1,
                                 _ => unreachable!(),
                             },
                             length,

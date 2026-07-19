@@ -43,7 +43,7 @@ impl DslArrayNode for RandomBits {
         &'a self,
         _converted: &'a VgHashMap<DslPtr, Key>,
     ) -> std::sync::Arc<dyn ArrayNode> {
-        Arc::new(self.clone())
+        Arc::new(*self)
     }
 
     fn extend_inputs<'a>(&'a self, _f: &mut Vec<&'a dyn DslNode>) {}

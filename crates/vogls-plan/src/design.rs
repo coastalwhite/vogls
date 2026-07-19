@@ -121,7 +121,7 @@ impl ComputeNode for LazyDesign {
                 .add_source(path)
                 .map_err(|_| ComputeError::Tokenization)?;
         }
-        let parsed = builder.parse(&mut arena).map_err(|err| {
+        let parsed = builder.parse(&arena).map_err(|err| {
             println!("{err}");
             ComputeError::Parsing
         })?;

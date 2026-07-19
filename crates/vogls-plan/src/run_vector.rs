@@ -75,7 +75,7 @@ impl RunOffsets {
 
     pub fn iter<'a>(
         &'a self,
-    ) -> impl Iterator<Item = (u64, u64)> + ExactSizeIterator + DoubleEndedIterator + 'a {
+    ) -> impl ExactSizeIterator<Item = (u64, u64)> + DoubleEndedIterator + 'a {
         (0..self.num_runs()).map(move |i| match self {
             RunOffsets::Scalar(_) => (i as u64, 1),
             RunOffsets::Constant(width, _) => (i as u64 * *width, *width),
@@ -168,18 +168,18 @@ impl RunVector {
             (_, O::Scalar(_)) => self.data.clone(),
 
             (A::Floats(b), O::Constant(stride, _)) => {
-                A::Floats(gather_strided(&b, height, *stride as usize, x))
+                A::Floats(gather_strided(b, height, *stride as usize, x))
             }
             (A::Ints(b), O::Constant(stride, _)) => {
-                A::Ints(gather_strided(&b, height, *stride as usize, x))
+                A::Ints(gather_strided(b, height, *stride as usize, x))
             }
             (A::UInts(b), O::Constant(stride, _)) => {
-                A::UInts(gather_strided(&b, height, *stride as usize, x))
+                A::UInts(gather_strided(b, height, *stride as usize, x))
             }
 
-            (A::Floats(b), O::Offsets(offsets)) => A::Floats(gather_offsets(&b, &offsets, x)),
-            (A::Ints(b), O::Offsets(offsets)) => A::Ints(gather_offsets(&b, &offsets, x)),
-            (A::UInts(b), O::Offsets(offsets)) => A::UInts(gather_offsets(&b, &offsets, x)),
+            (A::Floats(b), O::Offsets(offsets)) => A::Floats(gather_offsets(b, offsets, x)),
+            (A::Ints(b), O::Offsets(offsets)) => A::Ints(gather_offsets(b, offsets, x)),
+            (A::UInts(b), O::Offsets(offsets)) => A::UInts(gather_offsets(b, offsets, x)),
 
             (A::Bits(..), _) => todo!(),
         }
@@ -201,7 +201,7 @@ impl RunVector {
 
 fn gather_strided<T: Copy>(slice: &[T], height: usize, stride: usize, offset: usize) -> Buffer<T> {
     (0..height)
-        .map(|y| slice[offset + y * stride as usize])
+        .map(|y| slice[offset + y * stride])
         .collect()
 }
 fn gather_offsets<T: Copy>(slice: &[T], offsets: &[u64], offset: usize) -> Buffer<T> {

@@ -72,7 +72,7 @@ impl<'a> fmt::Display for ElaborationError<'a> {
                     out.clear();
                     let span = self.design.arenas.get_item_span(m.module_identifier);
                     report(&self.design.token_buffer, span, &mut out)?;
-                    eprintln!("{out}");
+                    writeln!(f, "{out}")?;
                 }
                 Ok(())
             }
@@ -255,32 +255,29 @@ impl<'a> ElaboratedDesign<'a> {
             let mut outs = Vec::new();
 
             for key in ctx.table.symbol_id_iter() {
-                match &ctx.table[key].content {
-                    VSymbol::Module(i) => {
-                        let module = module_lut[&i.module];
-                        ctx.time_scale = module.time_scale;
-                        if i.contains_specify {
-                            for item in module.module_items.iter() {
-                                let ModuleItem::NonPortModuleItem(id) = &*item else {
-                                    continue;
-                                };
-                                let NonPortModuleItem::SpecifyBlock(specify_block) = **id else {
-                                    continue;
-                                };
+                if let VSymbol::Module(i) = &ctx.table[key].content {
+                    let module = module_lut[&i.module];
+                    ctx.time_scale = module.time_scale;
+                    if i.contains_specify {
+                        for item in module.module_items.iter() {
+                            let ModuleItem::NonPortModuleItem(id) = &*item else {
+                                continue;
+                            };
+                            let NonPortModuleItem::SpecifyBlock(specify_block) = **id else {
+                                continue;
+                            };
 
-                                error |= vogls_verilog::lower::specify::lower_specify(
-                                    ctx,
-                                    mctx,
-                                    key,
-                                    specify_block.items,
-                                    &mut outs_lut,
-                                    &mut outs,
-                                )
-                                .is_err();
-                            }
+                            error |= vogls_verilog::lower::specify::lower_specify(
+                                ctx,
+                                mctx,
+                                key,
+                                specify_block.items,
+                                &mut outs_lut,
+                                &mut outs,
+                            )
+                            .is_err();
                         }
                     }
-                    _ => {}
                 }
             }
 
@@ -302,7 +299,7 @@ impl<'a> ElaboratedDesign<'a> {
     pub fn lower(
         mut self,
         mut plugins: Vec<Box<dyn VoglsPlugin>>,
-    ) -> Result<LoweredDesign, LowerError<'a>> {
+    ) -> Result<LoweredDesign, Box<LowerError<'a>>> {
         for plugin in &mut plugins {
             plugin.register_handles(&mut self);
         }
@@ -397,7 +394,7 @@ impl<'a> ElaboratedDesign<'a> {
                 tokenized: _,
                 time_scale: _,
             } = ctx;
-            return Err(LowerError {
+            return Err(Box::new(LowerError {
                 design: Self {
                     logic_mode,
                     ast,
@@ -414,7 +411,7 @@ impl<'a> ElaboratedDesign<'a> {
                 },
                 diagnostics: mctx.diagnostics,
                 stage: LowerErrorStage::GlobalItems,
-            });
+            }));
         }
 
         for key in ctx.table.symbol_id_iter() {
@@ -437,7 +434,7 @@ impl<'a> ElaboratedDesign<'a> {
                 tokenized: _,
                 time_scale: _,
             } = ctx;
-            return Err(LowerError {
+            return Err(Box::new(LowerError {
                 design: Self {
                     logic_mode,
                     ast,
@@ -454,11 +451,11 @@ impl<'a> ElaboratedDesign<'a> {
                 },
                 diagnostics: mctx.diagnostics,
                 stage: LowerErrorStage::Modules,
-            });
+            }));
         }
 
         let mut opt =
-            FuseGraphOptimizer::new(FuseGraph::from_connections(&mut mctx.gl, &mctx.connections));
+            FuseGraphOptimizer::new(FuseGraph::from_connections(&mctx.gl, &mctx.connections));
         if let Some(unoptimized_fgs) = unoptimized_fgs.as_mut() {
             writeln!(
                 unoptimized_fgs.lock().unwrap(),
@@ -518,7 +515,7 @@ impl<'a> ElaboratedDesign<'a> {
             vcd: None,
             has_vcd: mctx.has_vcd,
             ident_table: arenas.ident_table,
-            token_buffer: token_buffer,
+            token_buffer,
             itrace: false,
             emit_vm: false,
             stats: false,

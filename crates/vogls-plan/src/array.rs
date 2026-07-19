@@ -33,6 +33,9 @@ pub trait ArrayBuilder {
     fn reserve(&mut self, capacity: usize);
     fn extend(&mut self, arr: &Array);
     fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
     fn finish(self: Box<Self>) -> Array;
 }
 
@@ -155,6 +158,10 @@ impl Array {
             Self::UInts(items) => items.len(),
             Self::Bits(bits, stride) => (bits.size().get() / stride.get()) as usize,
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn as_byte_ptr(&self) -> *const u8 {

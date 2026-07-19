@@ -137,7 +137,7 @@ impl ComputeNode for LazyOutput {
         ctx: &ComputeContext,
         inputs: &ComputeInputs,
     ) -> ComputeResult<<Self as ComputeNode>::Output> {
-        Ok(self.f.compute(ctx, inputs)?)
+        self.f.compute(ctx, inputs)
     }
 }
 

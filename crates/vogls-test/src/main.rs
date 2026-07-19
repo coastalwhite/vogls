@@ -156,7 +156,7 @@ enum FailureInfo {
 }
 
 impl FailureInfo {
-    pub fn into_char(&self) -> char {
+    pub fn as_char(&self) -> char {
         match self {
             Self::Panic(..) => '!',
             Self::Error { .. } => 'E',
@@ -271,7 +271,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
 
     for path in paths.iter() {
         let offset_path = path.as_path();
-        let path = tests_dir.join(&offset_path);
+        let path = tests_dir.join(offset_path);
         let s = std::fs::read_to_string(&path)?;
         let test_information = TestInfo::parse(&s)?;
 
@@ -328,7 +328,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 Ok(PassKind::Skip) => write!(&mut o, " {ANSI_GREEN}S{ANSI_END}")?,
                 Ok(PassKind::Succeed) => write!(&mut o, " {ANSI_GREEN}P{ANSI_END}")?,
                 Err(info) => {
-                    write!(&mut o, " {ANSI_RED}{}{ANSI_END}", info.into_char())?;
+                    write!(&mut o, " {ANSI_RED}{}{ANSI_END}", info.as_char())?;
                     fails.push(Fail {
                         name: t.offset_path.display().to_string(),
                         mode: t.logic_mode,
@@ -354,17 +354,17 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
                 .filter_map(|t| {
                     match run_test(&t.path, &t.information, t.logic_mode, t.backend, t.opt) {
                         Ok(PassKind::Skip) => {
-                            io::stdout().write_all(&[b'S']).unwrap();
+                            io::stdout().write_all(b"S").unwrap();
                             io::stdout().flush().unwrap();
                             None
                         }
                         Ok(PassKind::Succeed) => {
-                            io::stdout().write_all(&[b'.']).unwrap();
+                            io::stdout().write_all(b".").unwrap();
                             io::stdout().flush().unwrap();
                             None
                         }
                         Err(info) => {
-                            let s = format!("{ANSI_RED}{}{ANSI_END}", info.into_char());
+                            let s = format!("{ANSI_RED}{}{ANSI_END}", info.as_char());
                             io::stdout().write_all(s.as_bytes()).unwrap();
                             io::stdout().flush().unwrap();
                             Some(Fail {
@@ -399,11 +399,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
 fn display_section(o: &mut io::Stdout, section: &str, content: &str) -> io::Result<()> {
     if !content.is_empty() {
         writeln!(o, "  --- [START {section}] ---")?;
-        let stdout = if content.ends_with('\n') {
-            &content[..content.len() - 1]
-        } else {
-            content
-        };
+        let stdout = content.strip_suffix("\n").unwrap_or(content);
         writeln!(o, "  {}", stdout.replace("\n", "\n  "))?;
         writeln!(o, "  ---  [END {section}]  ---")?;
     }
@@ -516,7 +512,7 @@ struct PanicInfo {
     message: String,
 }
 thread_local! {
-    static PANIC_INFO: RefCell<Option<PanicInfo>> = RefCell::new(None);
+    static PANIC_INFO: RefCell<Option<PanicInfo>> = const { RefCell::new(None) };
 }
 
 fn run_test(
@@ -539,7 +535,7 @@ fn run_test(
 
     if test_information.verify_ir {
         let design = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            let mut arena = Arena::new();
+            let arena = Arena::new();
             let mut builder = DesignBuilder::new();
             match logic_mode {
                 LogicMode::TwoValue => {
@@ -549,11 +545,11 @@ fn run_test(
             }
             builder
                 .define_macro("__VOGLS_VERIFY_IR", Macro::default())
-                .add_source(&path)
+                .add_source(path)
                 .map_err(|_| FailureInfo::CompileFailure("failed to tokenize".into()))?;
 
             let parsed = builder
-                .parse(&mut arena)
+                .parse(&arena)
                 .map_err(|_| FailureInfo::CompileFailure("failed to parse".into()))?;
             let mut elab =
                 match parsed.elaborate(logic_mode, test_information.top_level_module.as_deref()) {
@@ -563,11 +559,11 @@ fn run_test(
                     }
                 };
             if let Some(sdf) = sdf.as_deref() {
-                if let Err(_) = elab.annotate_sdf(sdf) {
+                if elab.annotate_sdf(sdf).is_err() {
                     return Err(FailureInfo::CompileFailure("failed to annotate sdf".into()));
                 }
             }
-            if let Err(_) = elab.annotate_specify() {
+            if elab.annotate_specify().is_err() {
                 return Err(FailureInfo::CompileFailure(
                     "failed to annotate specify".into(),
                 ));
@@ -585,7 +581,7 @@ fn run_test(
         match design {
             Ok(design) => match design {
                 Ok(design) => {
-                    let asserted = std::fs::read_to_string(&path.with_extension("v.ir"))?;
+                    let asserted = std::fs::read_to_string(path.with_extension("v.ir"))?;
                     if design.trim() != asserted.trim() {
                         return Err(FailureInfo::VirMismatch {
                             expected: asserted,
@@ -607,12 +603,12 @@ fn run_test(
 
     let result: Result<Result<(), FailureInfo>, Box<dyn std::any::Any + Send + 'static>> =
         std::panic::catch_unwind(|| {
-            let mut arena = Arena::new();
-            let mut design = if path
+            let arena = Arena::new();
+            let design = if path
                 .extension()
                 .is_some_and(|ext| ext.as_encoded_bytes() == b"vir")
             {
-                let s = std::fs::read_to_string(&path)?;
+                let s = std::fs::read_to_string(path)?;
                 let optimized = read_to_string(path.with_extension("vir.opt")).ok();
                 let mut design = VirDesignBuilder::new(&s);
                 design.with_logic_mode(logic_mode);
@@ -645,11 +641,11 @@ fn run_test(
                     LogicMode::FourValue => {}
                 }
                 builder
-                    .add_source(&path)
+                    .add_source(path)
                     .map_err(|_| FailureInfo::CompileFailure("failed to tokenize".into()))?;
 
                 let parsed = builder
-                    .parse(&mut arena)
+                    .parse(&arena)
                     .map_err(|_| FailureInfo::CompileFailure("failed to parse".into()))?;
                 let mut elab = match parsed
                     .elaborate(logic_mode, test_information.top_level_module.as_deref())
@@ -660,11 +656,11 @@ fn run_test(
                     }
                 };
                 if let Some(sdf) = sdf.as_deref() {
-                    if let Err(_) = elab.annotate_sdf(sdf) {
+                    if elab.annotate_sdf(sdf).is_err() {
                         return Err(FailureInfo::CompileFailure("failed to annotate SDF".into()));
                     }
                 }
-                if let Err(_) = elab.annotate_specify() {
+                if elab.annotate_specify().is_err() {
                     return Err(FailureInfo::CompileFailure(
                         "failed to annotate specify".into(),
                     ));

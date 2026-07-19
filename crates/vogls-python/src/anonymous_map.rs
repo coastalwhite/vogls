@@ -56,7 +56,7 @@ impl vogls_plan::map::Map for PyAnonymousMap {
             let result = f.call1((PyArray(input),))?;
             let result = result
                 .extract::<Py<PyArray>>()
-                .map_err(|err| <_ as Into<pyo3::PyErr>>::into(err))?;
+                .map_err(<_ as Into<pyo3::PyErr>>::into)?;
             Ok(result.get().0.clone())
         })
     }

@@ -12,3 +12,6 @@ vogls = { workspace = true, features = ["native"] }
 vogls-ir.workspace = true
 vogls-bytecode.workspace = true
 vogls-verilog.workspace = true
+
+[lints]
+workspace = true

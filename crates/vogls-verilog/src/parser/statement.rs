@@ -54,7 +54,7 @@ impl<'a> Consumable<'a> for Statement<'a> {
             diagnostics.as_deref_mut(),
             |t| t == T::LeftParenStar,
         )?;
-        let content = StatementContent::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let content = StatementContent::consume(tkw, sc, arenas, ast, diagnostics)?;
 
         Ok(Self {
             attr_instances,
@@ -163,7 +163,9 @@ impl<'a> Consumable<'a> for StatementContent<'a> {
                     while tkw.next_if_equals(T::LeftBrace) {
                         let Some(corresponding_brace) = tkw.find_next_same_depth(T::RightBrace)
                         else {
-                            diagnostics.map(|d| d.no_corresponding(tkw.offset - 1, T::RightBrace));
+                            if let Some(d) = diagnostics {
+                                d.no_corresponding(tkw.offset - 1, T::RightBrace);
+                            }
                             return Err(());
                         };
 
@@ -196,7 +198,7 @@ impl<'a> Consumable<'a> for StatementContent<'a> {
                             diagnostics.as_deref_mut(),
                         )?;
                         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
-                        return Ok(Self::BlockingAssignment(ba));
+                        Ok(Self::BlockingAssignment(ba))
                     }
                     T::LessThanEquals => {
                         let nba = parse::<NonBlockingAssignment>(
@@ -207,10 +209,12 @@ impl<'a> Consumable<'a> for StatementContent<'a> {
                             diagnostics.as_deref_mut(),
                         )?;
                         tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
-                        return Ok(Self::NonBlockingAssignment(nba));
+                        Ok(Self::NonBlockingAssignment(nba))
                     }
                     _ => {
-                        diagnostics.map(|d| d.incomplete(tkw.offset, "statement"));
+                        if let Some(d) = diagnostics {
+                            d.incomplete(tkw.offset, "statement");
+                        }
                         Err(())
                     }
                 }
@@ -218,7 +222,9 @@ impl<'a> Consumable<'a> for StatementContent<'a> {
             T::LeftBracket => {
                 tkw.offset += 1;
                 let Some(end) = tkw.find_next_same_depth(T::RightBracket) else {
-                    diagnostics.map(|d| d.no_corresponding(tkw.offset - 1, T::RightBracket));
+                    if let Some(d) = diagnostics {
+                        d.no_corresponding(tkw.offset - 1, T::RightBracket);
+                    }
                     return Err(());
                 };
                 tkw.offset -= 1;
@@ -247,17 +253,23 @@ impl<'a> Consumable<'a> for StatementContent<'a> {
                         Ok(Self::BlockingAssignment(ba))
                     }
                     _ => {
-                        diagnostics.map(|d| d.incomplete(tkw.offset, "statement"));
+                        if let Some(d) = diagnostics {
+                            d.incomplete(tkw.offset, "statement");
+                        }
                         Err(())
                     }
                 }
             }
             T::KeywordEnd => {
-                diagnostics.map(|d| d.unexpected_token(tkw.offset, T::KeywordEnd));
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, T::KeywordEnd);
+                }
                 Err(())
             }
             _ => {
-                diagnostics.map(|d| d.incomplete(tkw.offset, "statement"));
+                if let Some(d) = diagnostics {
+                    d.incomplete(tkw.offset, "statement");
+                }
                 Err(())
             }
         }
@@ -303,7 +315,9 @@ impl<'a> Consumable<'a> for NetLValue<'a> {
                 Ok(Self(lvalues))
             }
             t => {
-                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, t);
+                }
                 Err(())
             }
         }
@@ -347,7 +361,9 @@ impl<'a> Consumable<'a> for NetLValueFlat<'a> {
                 T::PlusColon => BitSliceKind::PlusWidth,
                 T::MinusColon => BitSliceKind::MinusWidth,
                 t => {
-                    diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
+                    if let Some(d) = diagnostics {
+                        d.unexpected_token(tkw.offset - 1, t);
+                    }
                     return Err(());
                 }
             };
@@ -421,7 +437,9 @@ impl<'a> Consumable<'a> for VariableLValue<'a> {
                 Ok(Self(lvalues))
             }
             t => {
-                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, t);
+                }
                 Err(())
             }
         }
@@ -465,7 +483,9 @@ impl<'a> Consumable<'a> for VariableLValueFlat<'a> {
                 T::PlusColon => BitSliceKind::PlusWidth,
                 T::MinusColon => BitSliceKind::MinusWidth,
                 t => {
-                    diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
+                    if let Some(d) = diagnostics {
+                        d.unexpected_token(tkw.offset - 1, t);
+                    }
                     return Err(());
                 }
             };
@@ -520,7 +540,7 @@ impl<'a> Consumable<'a> for BlockingAssignment<'a> {
             parse::<VariableLValue>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
         let delay_or_event_control = try_parse::<DelayOrEventControl>(tkw, sc, arenas, ast);
-        let expression = parse::<Expr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let expression = parse::<Expr>(tkw, sc, arenas, ast, diagnostics)?;
 
         Ok(Self {
             variable_lvalue,
@@ -547,7 +567,7 @@ impl<'a> Consumable<'a> for NonBlockingAssignment<'a> {
             parse::<VariableLValue>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::LessThanEquals, diagnostics.as_deref_mut())?;
         let delay_or_event_control = try_parse::<DelayOrEventControl>(tkw, sc, arenas, ast);
-        let expression = parse::<Expr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let expression = parse::<Expr>(tkw, sc, arenas, ast, diagnostics)?;
 
         Ok(Self {
             variable_lvalue,
@@ -589,7 +609,7 @@ impl<'a> Consumable<'a> for ParBlock<'a> {
             diagnostics.as_deref_mut(),
             |t| t != T::KeywordJoin,
         )?;
-        tkw.next_expect(T::KeywordJoin, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordJoin, diagnostics)?;
 
         Ok(Self { block, statements })
     }
@@ -627,7 +647,7 @@ impl<'a> Consumable<'a> for SeqBlock<'a> {
             diagnostics.as_deref_mut(),
             |t| t != T::KeywordEnd,
         )?;
-        tkw.next_expect(T::KeywordEnd, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordEnd, diagnostics)?;
 
         Ok(Self { block, statements })
     }
@@ -653,7 +673,7 @@ impl<'a> Consumable<'a> for Block<'a> {
             sc,
             arenas,
             ast,
-            diagnostics.as_deref_mut(),
+            diagnostics,
             |t| {
                 matches!(
                     t,
@@ -705,11 +725,15 @@ impl<'a> Consumable<'a> for DelayOrEventControl<'a> {
                 Ok(Self::EventControl(event_control))
             }
             T::KeywordRepeat => {
-                diagnostics.map(|d| d.incomplete(tkw.offset, "delay_or_event_control repeat"));
+                if let Some(d) = diagnostics {
+                    d.incomplete(tkw.offset, "delay_or_event_control repeat");
+                }
                 Err(())
             }
             t => {
-                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, t);
+                }
                 Err(())
             }
         }
@@ -740,7 +764,7 @@ impl<'a> Consumable<'a> for DelayControl<'a> {
             Ok(Self::MinTypMax(mintypmax))
         } else {
             let delay_value =
-                parse::<DelayValue>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+                parse::<DelayValue>(tkw, sc, arenas, ast, diagnostics)?;
             Ok(Self::DelayValue(delay_value))
         }
     }
@@ -777,7 +801,9 @@ impl<'a> Consumable<'a> for DelayValue {
                 Ok(Self::Identifier(ident))
             }
             _ => {
-                diagnostics.map(|d| d.incomplete(tkw.offset, "delay_value"));
+                if let Some(d) = diagnostics {
+                    d.incomplete(tkw.offset, "delay_value");
+                }
                 Err(())
             }
         }
@@ -803,7 +829,7 @@ impl<'a> Consumable<'a> for MinTypMaxExpression<'a> {
         if tkw.next_if_equals(T::Colon) {
             let typical = parse::<Expr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
             tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
-            let max = parse::<Expr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+            let max = parse::<Expr>(tkw, sc, arenas, ast, diagnostics)?;
 
             Ok(Self {
                 typical,
@@ -849,7 +875,7 @@ impl<'a> Consumable<'a> for EventControl<'a> {
         tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
         let event_expression =
             EventExpression::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::RightParen, diagnostics)?;
 
         Ok(Self::EventExpression(event_expression))
     }
@@ -886,7 +912,7 @@ impl<'a> Consumable<'a> for EventExpressionPrimary<'a> {
                 Self::Negedge(expr)
             }
             _ => {
-                let expr = parse::<Expr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+                let expr = parse::<Expr>(tkw, sc, arenas, ast, diagnostics)?;
                 Self::Expression(expr)
             }
         })
@@ -951,7 +977,9 @@ impl<'a> Consumable<'a> for ProceduralTimingControl<'a> {
                 Ok(Self::EventControl(event_control))
             }
             t => {
-                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, t);
+                }
                 Err(())
             }
         }
@@ -985,7 +1013,7 @@ impl<'a> Consumable<'a> for SystemTaskEnable<'a> {
             )?;
             tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
         }
-        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics)?;
 
         Ok(Self {
             system_task_identifier,
@@ -1000,10 +1028,10 @@ impl<'a> Consumable<'a> for SystemTaskIdentifier {
         _sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
         _ast: &'a Arena,
-        mut diagnostics: Option<&mut Diagnostics>,
+        diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
-        let t = tkw.next_expect(T::DollarIdent, diagnostics.as_deref_mut())?;
+        let t = tkw.next_expect(T::DollarIdent, diagnostics)?;
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.start() + 1..span.end()];
         let ident_id = arenas.ident_table.get_or_insert(content);
@@ -1026,7 +1054,7 @@ impl<'a> Consumable<'a> for VariableAssignment<'a> {
 
         let lvalue = parse::<VariableLValue>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
-        let expr = parse::<Expr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let expr = parse::<Expr>(tkw, sc, arenas, ast, diagnostics)?;
 
         Ok(Self { lvalue, expr })
     }
@@ -1080,12 +1108,14 @@ impl<'a> Consumable<'a> for LoopStatement<'a> {
             }
 
             t => {
-                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, t);
+                }
                 return Err(());
             }
         };
 
-        let statement = parse::<Statement>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let statement = parse::<Statement>(tkw, sc, arenas, ast, diagnostics)?;
         Ok(Self { variant, statement })
     }
 }
@@ -1112,7 +1142,9 @@ impl<'a> Consumable<'a> for CaseStatement<'a> {
             T::KeywordCaseX => CaseStatementVariant::CaseX,
             T::KeywordCaseZ => CaseStatementVariant::CaseZ,
             t => {
-                diagnostics.map(|d| d.unexpected_token(tkw.offset - 1, t));
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset - 1, t);
+                }
                 return Err(());
             }
         };
@@ -1129,7 +1161,7 @@ impl<'a> Consumable<'a> for CaseStatement<'a> {
             diagnostics.as_deref_mut(),
             |t| t != T::KeywordEndCase,
         )?;
-        tkw.next_expect(T::KeywordEndCase, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordEndCase, diagnostics)?;
 
         Ok(Self {
             variant,
@@ -1164,7 +1196,9 @@ impl<'a> Consumable<'a> for CaseItem<'a> {
             (token_range, CaseItemPattern::Default)
         } else {
             let Some(colon_offset) = tkw.find_next_same_depth(T::Colon) else {
-                diagnostics.map(|d| d.no_corresponding(tkw.offset, T::Colon));
+                if let Some(d) = diagnostics {
+                    d.no_corresponding(tkw.offset, T::Colon);
+                }
                 return Err(());
             };
             let mut expressions_tkw = tkw.end_at(colon_offset);
@@ -1187,7 +1221,7 @@ impl<'a> Consumable<'a> for CaseItem<'a> {
         arenas.spans.push(token_range);
         let pattern = AstItem { item: pattern, loc };
         let statement_or_null =
-            parse::<StatementOrNull>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+            parse::<StatementOrNull>(tkw, sc, arenas, ast, diagnostics)?;
 
         Ok(Self {
             pattern,
@@ -1230,7 +1264,7 @@ impl<'a> Consumable<'a> for StatementOrNull<'a> {
         }
 
         tkw.offset = start;
-        let statement = parse::<Statement>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let statement = parse::<Statement>(tkw, sc, arenas, ast, diagnostics)?;
         Ok(Self::Statement(statement))
     }
 }
@@ -1313,7 +1347,7 @@ impl<'a> Consumable<'a> for IfBranch<'a> {
         tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
         let condition = parse::<Expr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
-        let statement = parse::<StatementOrNull>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let statement = parse::<StatementOrNull>(tkw, sc, arenas, ast, diagnostics)?;
 
         Ok(Self {
             condition,
@@ -1336,7 +1370,7 @@ impl<'a> Consumable<'a> for ProceduralTimingControlStatement<'a> {
         let procedural_timing_control =
             parse::<ProceduralTimingControl>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         let statement_or_null =
-            parse::<StatementOrNull>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+            parse::<StatementOrNull>(tkw, sc, arenas, ast, diagnostics)?;
 
         Ok(Self {
             procedural_timing_control,
@@ -1372,7 +1406,7 @@ impl<'a> Consumable<'a> for TaskEnable<'a> {
             )?;
             tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
         }
-        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics)?;
 
         Ok(Self { ident, exprs })
     }
@@ -1394,7 +1428,9 @@ impl<'a> Consumable<'a> for WaitStatement<'a> {
         tkw.next_expect(T::KeywordWait, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
         let Some(end) = tkw.find_next_same_depth(T::RightParen) else {
-            diagnostics.map(|d| d.no_corresponding(tkw.offset - 1, T::RightParen));
+            if let Some(d) = diagnostics {
+                d.no_corresponding(tkw.offset - 1, T::RightParen);
+            }
             return Err(());
         };
 
@@ -1405,12 +1441,12 @@ impl<'a> Consumable<'a> for WaitStatement<'a> {
             parse::<StatementOrNull>(tkw, sc, arenas, ast, diagnostics.as_deref_mut());
 
         if end != expression_end {
-            diagnostics.map(|d| {
+            if let Some(d) = diagnostics {
                 d.leftover_tokens(TokenRange {
                     start: expression_end,
                     end,
                 })
-            });
+            }
             return Err(());
         }
 

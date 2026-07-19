@@ -2431,7 +2431,7 @@ impl<'a> Consumable<'a> for ParameterDeclarationTyping<'a> {
         sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
         ast: &'a Arena,
-        mut diagnostics: Option<&mut Diagnostics>,
+        diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
         use Token as T;
         Ok(match tkw.get(tkw.offset).map(|t| *t.kind) {
@@ -2478,8 +2478,7 @@ impl<'a> Consumable<'a> for ParamAssignment<'a> {
 
         let param = item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
-        let constant =
-            parse::<ConstantMinTypMaxExpression>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let constant = parse::<ConstantMinTypMaxExpression>(tkw, sc, arenas, ast, diagnostics)?;
         Ok(Self { param, constant })
     }
 }
@@ -2501,7 +2500,7 @@ impl<'a> Consumable<'a> for Range<'a> {
         let msb = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
         let lsb = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        tkw.next_expect(T::RightBrace, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::RightBrace, diagnostics)?;
 
         Ok(Self { msb, lsb })
     }
@@ -2533,7 +2532,7 @@ impl<'a> Consumable<'a> for LoopGenerateConstruct<'a> {
 
         tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
 
-        let block = parse::<GenerateBlock>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let block = parse::<GenerateBlock>(tkw, sc, arenas, ast, diagnostics)?;
 
         Ok(Self {
             initialization,
@@ -2575,7 +2574,7 @@ impl<'a> Consumable<'a> for IfGenerateConstruct<'a> {
                 sc,
                 arenas,
                 ast,
-                diagnostics.as_deref_mut(),
+                diagnostics,
             )?);
         }
 
@@ -2620,7 +2619,7 @@ impl<'a> Consumable<'a> for CaseGenerateConstruct<'a> {
             sc,
             arenas,
             ast,
-            diagnostics.as_deref_mut(),
+            diagnostics,
         )?;
         tkw.offset = end + 1;
 
@@ -2664,8 +2663,7 @@ impl<'a> Consumable<'a> for CaseGenerateItem<'a> {
             CaseGeneratePattern::Exprs(values)
         };
 
-        let block =
-            parse::<Option<GenerateBlock>>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let block = parse::<Option<GenerateBlock>>(tkw, sc, arenas, ast, diagnostics)?;
         Ok(Self { pattern, block })
     }
 }
@@ -2686,7 +2684,7 @@ impl<'a> Consumable<'a> for GenvarAssignment<'a> {
 
         let ident = item_parse(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
-        let expr = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let expr = parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics)?;
 
         Ok(Self { ident, expr })
     }
@@ -2856,7 +2854,7 @@ impl<'a> Consumable<'a> for BlockItemDeclaration<'a> {
                 if let Some(d) = diagnostics {
                     d.incomplete(tkw.offset, "block_item_declaration");
                 }
-                return Err(());
+                Err(())
             }
             t => {
                 if let Some(d) = diagnostics {
@@ -2891,13 +2889,7 @@ impl<'a> Consumable<'a> for TfType<'a> {
                 let signed = tkw.next_if_equals(T::KeywordSigned);
                 let mut range = None;
                 if tkw.is_next_equal_to(T::LeftBrace) {
-                    range = Some(parse::<Range>(
-                        tkw,
-                        sc,
-                        arenas,
-                        ast,
-                        diagnostics.as_deref_mut(),
-                    )?);
+                    range = Some(parse::<Range>(tkw, sc, arenas, ast, diagnostics)?);
                 }
                 Ok(Self::Net { reg, signed, range })
             }
@@ -2943,17 +2935,11 @@ impl<'a> Consumable<'a> for TfInputDeclaration<'a> {
 
         tkw.next_expect(T::KeywordInput, diagnostics.as_deref_mut())?;
         let tf_type = TfType::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        let port_identifiers = parse_one_or_more_while::<Identifier>(
-            tkw,
-            sc,
-            arenas,
-            ast,
-            diagnostics.as_deref_mut(),
-            |tkw| {
+        let port_identifiers =
+            parse_one_or_more_while::<Identifier>(tkw, sc, arenas, ast, diagnostics, |tkw| {
                 tkw.get(tkw.offset + 1).is_some_and(|t| *t.kind == T::Ident)
                     && tkw.next_if_equals(T::Comma)
-            },
-        )?;
+            })?;
 
         Ok(Self {
             tf_type,
@@ -2979,17 +2965,11 @@ impl<'a> Consumable<'a> for TfOutputDeclaration<'a> {
 
         tkw.next_expect(T::KeywordOutput, diagnostics.as_deref_mut())?;
         let tf_type = TfType::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        let port_identifiers = parse_one_or_more_while::<Identifier>(
-            tkw,
-            sc,
-            arenas,
-            ast,
-            diagnostics.as_deref_mut(),
-            |tkw| {
+        let port_identifiers =
+            parse_one_or_more_while::<Identifier>(tkw, sc, arenas, ast, diagnostics, |tkw| {
                 tkw.get(tkw.offset + 1).is_some_and(|t| *t.kind == T::Ident)
                     && tkw.next_if_equals(T::Comma)
-            },
-        )?;
+            })?;
 
         Ok(Self {
             tf_type,
@@ -3015,17 +2995,11 @@ impl<'a> Consumable<'a> for TfInoutDeclaration<'a> {
 
         tkw.next_expect(T::KeywordInout, diagnostics.as_deref_mut())?;
         let tf_type = TfType::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        let port_identifiers = parse_one_or_more_while::<Identifier>(
-            tkw,
-            sc,
-            arenas,
-            ast,
-            diagnostics.as_deref_mut(),
-            |tkw| {
+        let port_identifiers =
+            parse_one_or_more_while::<Identifier>(tkw, sc, arenas, ast, diagnostics, |tkw| {
                 tkw.get(tkw.offset + 1).is_some_and(|t| *t.kind == T::Ident)
                     && tkw.next_if_equals(T::Comma)
-            },
-        )?;
+            })?;
 
         Ok(Self {
             tf_type,
@@ -3140,13 +3114,7 @@ impl<'a> Consumable<'a> for FunctionRangeOrType<'a> {
             _ => {
                 let mut range = None;
                 if tkw.is_next_equal_to(T::LeftBrace) {
-                    range = Some(parse::<Range>(
-                        tkw,
-                        sc,
-                        arenas,
-                        ast,
-                        diagnostics.as_deref_mut(),
-                    )?);
+                    range = Some(parse::<Range>(tkw, sc, arenas, ast, diagnostics)?);
                 }
                 Ok(Self::Unsigned(range))
             }
@@ -3273,7 +3241,7 @@ impl<'a> Consumable<'a> for FunctionDeclaration<'a> {
             (tf_input_decls, block_item_decls)
         };
         let statement = parse::<Statement>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        tkw.next_expect(T::KeywordEndFunction, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordEndFunction, diagnostics)?;
 
         Ok(Self {
             automatic,

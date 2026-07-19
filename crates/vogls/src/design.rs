@@ -291,7 +291,7 @@ fn extend_symbol_table_to_vcd_scope(
                 };
                 extend_symbol_table_to_vcd_scope(
                     &mut subscope,
-                    table[*sid].children(&table),
+                    table[*sid].children(table),
                     table,
                     ident_table,
                     variable_table,

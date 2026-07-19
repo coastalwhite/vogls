@@ -30,7 +30,7 @@ where
     let mut length = None;
     for input in inputs.iter() {
         if let Some(input_length) = input.ty().length {
-            if length.is_some_and(|l| l as usize != input_length) {
+            if length.is_some_and(|l| l != input_length) {
                 return Err(ComputeError::NumTracesMismatch);
             }
 
@@ -49,7 +49,7 @@ where
             Some(n) => RunWidth::Constant(n as u64),
             None => RunWidth::Variable,
         },
-        length: length,
+        length,
     }));
     Ok(DslRunVector {
         ty,
@@ -195,7 +195,9 @@ where
                 inputs.iter().map(|rv| rv.get_at_y(i)),
             );
             builder.extend(&T::compute(&self.inner, inputs, ctx, &mut scratch)?);
-            offsets.as_mut().map(|v| v.push(builder.len() as u64));
+            if let Some(v) = offsets.as_mut() {
+                v.push(builder.len() as u64);
+            }
         }
 
         let offsets = match output_dtype.length {

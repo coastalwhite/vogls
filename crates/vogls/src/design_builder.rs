@@ -90,7 +90,7 @@ impl DesignBuilder {
         self
     }
 
-    pub fn parse<'a>(self, arena: &'a Arena) -> Result<ParsedDesign<'a>, ParseError> {
+    pub fn parse<'a>(self, arena: &'a Arena) -> Result<ParsedDesign<'a>, Box<ParseError>> {
         let mut tkw = TokenWalker::new(&self.token_buffer);
         let mut arenas = AstArenas::default();
 
@@ -104,10 +104,10 @@ impl DesignBuilder {
             &mut ParseContext::new(),
         );
         let Ok(ast) = ast else {
-            return Err(ParseError {
+            return Err(Box::new(ParseError {
                 builder: self,
                 diagnostics,
-            });
+            }));
         };
 
         Ok(ParsedDesign {

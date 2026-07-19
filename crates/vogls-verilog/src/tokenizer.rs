@@ -289,7 +289,7 @@ impl Tokenized {
                         fn is_valid_prefix(s: &str) -> bool {
                             let pattern = &['D', 'd', 'B', 'b', 'O', 'o', 'H', 'h'];
                             s.starts_with('\'')
-                                && if s[1..].starts_with(&['S', 's']) {
+                                && if s[1..].starts_with(['S', 's']) {
                                     s[2..].starts_with(pattern)
                                 } else {
                                     s[1..].starts_with(pattern)
@@ -516,7 +516,7 @@ impl Tokenized {
                                                     break 'arg_parsing;
                                                 }
 
-                                                if arguments.len() > 0 {
+                                                if !arguments.is_empty() {
                                                     if bytes[j] != b',' {
                                                         panic!("invalid argument");
                                                     }
@@ -827,11 +827,7 @@ fn str_length(s: &str) -> Option<usize> {
     debug_assert!(s.starts_with('"'));
     let bytes = s.as_bytes();
     let mut i = 1;
-    loop {
-        let Some(b) = bytes.get(i) else {
-            return None;
-        };
-
+    while let Some(b) = bytes.get(i) {
         match b {
             b'"' => return Some(i + 1),
             // @TODO: Better escaping.
@@ -839,6 +835,8 @@ fn str_length(s: &str) -> Option<usize> {
             _ => i += 1,
         }
     }
+
+    None
 }
 
 macro_rules! define_tokens {

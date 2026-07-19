@@ -12,7 +12,7 @@ use vogls_verilog::lower::specify::{Delay, Delays};
 /// - The triple mask is a bitmask that determines whether an element stores a `min:typ:max` (when
 ///   set to 1) or just a single `typ` value (when set to 0).
 /// - The variant determines whether there are 1, 2, 3, 6 or 12 elements. The encoding is of the
-/// the values of [`DelayPtrVariant`].
+///   the values of [`DelayPtrVariant`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DelayPtr(u64);
 
@@ -55,6 +55,7 @@ impl DelayPtr {
         self.variant().len()
     }
 
+    #[expect(unused)]
     pub fn total_num_entries(self) -> usize {
         self.num_triples() as usize * 2 + self.num_delays()
     }

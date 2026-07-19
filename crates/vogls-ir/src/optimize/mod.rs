@@ -302,11 +302,7 @@ pub fn remove_bbs(
             }
         });
 
-        has_phi_instruction |= bb
-            .instrs
-            .iter()
-            .find(|i| matches!(i, Instruction::Phi(..)))
-            .is_some();
+        has_phi_instruction |= bb.instrs.iter().any(|i| matches!(i, Instruction::Phi(..)));
     }
 
     // If there are no PHI instructions to patch up, what are we doing here? Stop early.

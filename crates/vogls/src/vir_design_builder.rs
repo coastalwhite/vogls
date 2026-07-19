@@ -28,7 +28,7 @@ impl<'a> VirDesignBuilder<'a> {
         let mut gl = GlobalContext::default();
         // @TODO: Fill ident table and symbol table.
         let ident_table = IdentTable::default();
-        vogls_ir::parse::parse(&self.content, &mut gl)?;
+        vogls_ir::parse::parse(self.content, &mut gl)?;
         Ok(LoweredDesign {
             table: FrozenSymbolTable::default(),
             gl,

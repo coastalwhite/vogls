@@ -127,6 +127,7 @@ impl<'a> TokenWalker<'a> {
         next == kind
     }
 
+    #[expect(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<TokenLoc<'_>> {
         if self.is_empty() {
             return None;
@@ -198,7 +199,7 @@ impl<'a> TokenWalker<'a> {
                         ParseErrorReason::NoCorresponding(token),
                     ));
                 }
-                return Err(());
+                Err(())
             }
             Some(i) => Ok(i),
         }
@@ -218,8 +219,8 @@ impl<'a> TokenWalker<'a> {
             tokens: &self.tokens[..at],
             spans: &self.spans[..at],
             file_idxs: &self.file_idxs[..at],
-            contents: &self.contents,
-            paths: &self.paths,
+            contents: self.contents,
+            paths: self.paths,
             offset: self.offset,
         }
     }

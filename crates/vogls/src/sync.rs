@@ -13,7 +13,7 @@ pub struct ParsedDesign {
     design: crate::ParsedDesign<'static>,
 }
 impl ParsedDesign {
-    pub fn parse(builder: crate::DesignBuilder) -> Result<Self, crate::ParseError> {
+    pub fn parse(builder: crate::DesignBuilder) -> Result<Self, Box<crate::ParseError>> {
         let arena = Arena::new();
         let design = builder.parse(&arena)?;
         // SAFETY:
@@ -35,7 +35,7 @@ impl ParsedDesign {
     ) -> Result<ElaboratedDesign, ()> {
         let Self { arena, design } = self;
         let design = design
-            .elaborate(mode.into(), top_level_module)
+            .elaborate(mode, top_level_module)
             .map_err(|_| ())?;
         let design = ElaboratedDesign { arena, design };
         Ok(design)

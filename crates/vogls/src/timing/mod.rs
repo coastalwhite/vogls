@@ -245,7 +245,7 @@ pub fn lower_sdf<'a>(
             }
             Instance::Star => todo!(),
             Instance::HierarchicalIdent(hident) => {
-                let Ok(cell_sid) = resolve_ident(ctx, root, &hident, &mut mctx.diagnostics) else {
+                let Ok(cell_sid) = resolve_ident(ctx, root, hident, &mut mctx.diagnostics) else {
                     error = true;
                     continue;
                 };

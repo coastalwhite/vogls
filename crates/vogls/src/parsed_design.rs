@@ -136,7 +136,7 @@ impl<'a> ParsedDesign<'a> {
         self,
         mode: LogicMode,
         top_level_module: Option<impl AsRef<str>>,
-    ) -> Result<ElaboratedDesign<'a>, ElaborationError<'a>> {
+    ) -> Result<ElaboratedDesign<'a>, Box<ElaborationError<'a>>> {
         // @TODO: Verify that all modules are uniquely named.
         let module_lut = VgHashMap::<IdentId, AstId<Module>>::from_iter(
             self.ast.descriptions.iter().filter_map(|id| match &*id {
@@ -154,12 +154,12 @@ impl<'a> ParsedDesign<'a> {
                     .and_then(|name| module_lut.get(&name).copied());
                 match id {
                     None => {
-                        return Err(ElaborationError {
+                        return Err(Box::new(ElaborationError {
                             design: self,
                             kind: ElaborationErrorKind::CannotFindTopLevelModule(
                                 name.as_ref().to_string(),
                             ),
-                        });
+                        }));
                     }
                     Some(id) => id,
                 }
@@ -167,10 +167,10 @@ impl<'a> ParsedDesign<'a> {
             None => match self.infer_top_level_module() {
                 Ok((m, _)) => m,
                 Err(top_level_modules) => {
-                    return Err(ElaborationError {
+                    return Err(Box::new(ElaborationError {
                         design: self,
                         kind: ElaborationErrorKind::AmbiguousTopLevelModule(top_level_modules),
-                    });
+                    }));
                 }
             },
         };
@@ -198,10 +198,10 @@ impl<'a> ParsedDesign<'a> {
             &module_lut,
             &mut mctx.diagnostics,
         ) else {
-            return Err(ElaborationError {
+            return Err(Box::new(ElaborationError {
                 design: self,
                 kind: ElaborationErrorKind::Diagnostics(mctx.diagnostics),
-            });
+            }));
         };
 
         for description in self.ast.descriptions.iter() {

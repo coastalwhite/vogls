@@ -208,8 +208,14 @@ pub struct ParseContext {
     default_nettype: Option<DefaultNettype>,
 }
 
+impl Default for ParseContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ParseContext {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             timescale: (
                 TimeSize::N1,
@@ -240,7 +246,7 @@ pub fn parse_file<'a>(
     for (i, t) in tkw.tokens.iter().enumerate() {
         if *t == T::KeywordPrimitive {
             tkw.offset = i + 1;
-            if let Ok(ident) = Identifier::consume(tkw, scratches, arenas, &ast, None) {
+            if let Ok(ident) = Identifier::consume(tkw, scratches, arenas, ast, None) {
                 scratches.udps.insert(ident.0);
             }
         }
@@ -255,7 +261,7 @@ pub fn parse_file<'a>(
             tkw,
             scratches,
             arenas,
-            &ast,
+            ast,
             diagnostics.as_deref_mut(),
             |t| t == T::LeftParenStar,
         )?;
@@ -268,7 +274,7 @@ pub fn parse_file<'a>(
             T::KeywordModule => {
                 let start = tkw.offset;
                 let mut module =
-                    Module::consume(tkw, scratches, arenas, &ast, diagnostics.as_deref_mut())?;
+                    Module::consume(tkw, scratches, arenas, ast, diagnostics.as_deref_mut())?;
                 let tr = TokenRange {
                     start,
                     end: tkw.offset,
@@ -290,7 +296,7 @@ pub fn parse_file<'a>(
                     tkw,
                     scratches,
                     arenas,
-                    &ast,
+                    ast,
                     diagnostics.as_deref_mut(),
                 )?;
                 let tr = TokenRange {
@@ -302,7 +308,9 @@ pub fn parse_file<'a>(
                 trs.push(tr);
             }
             T::KeywordConfig => {
-                diagnostics.map(|d| d.incomplete(tkw.offset, "description::config"));
+                if let Some(d) = diagnostics {
+                    d.incomplete(tkw.offset, "description::config");
+                }
                 return Err(());
             }
             T::Directive => {
@@ -443,9 +451,9 @@ impl<'a> Consumable<'a> for Identifier {
         _sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
         _ast: &'a Arena,
-        mut diagnostics: Option<&mut Diagnostics>,
+        diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
-        let t = tkw.next_expect(Token::Ident, diagnostics.as_deref_mut())?;
+        let t = tkw.next_expect(Token::Ident, diagnostics)?;
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.as_range()];
         let content = &content[usize::from(content.starts_with('\\'))..];
@@ -472,7 +480,9 @@ impl<'a> Consumable<'a> for DecimalRef {
                 Ok(Self { at })
             }
             Err(_) => {
-                diagnostics.map(|d| d.incomplete(tkw.offset - 1, "decimal overflow"));
+                if let Some(d) = diagnostics {
+                    d.incomplete(tkw.offset - 1, "decimal overflow");
+                }
                 Err(())
             }
         }
@@ -493,8 +503,10 @@ impl<'a> Consumable<'a> for SizedNumberRef {
         let (content, size) = if content.starts_with('\'') {
             (content, None)
         } else {
-            let Ok((content, size)) = take_size(&content) else {
-                diagnostics.map(|d| d.incomplete(tkw.offset - 1, "decimal overflow"));
+            let Ok((content, size)) = take_size(content) else {
+                if let Some(d) = diagnostics {
+                    d.incomplete(tkw.offset - 1, "decimal overflow");
+                }
                 return Err(());
             };
             (content, Some(size))
@@ -514,7 +526,9 @@ impl<'a> Consumable<'a> for SizedNumberRef {
         };
 
         let Ok(bits) = f(content, size) else {
-            diagnostics.map(|d| d.incomplete(tkw.offset - 1, "decimal overflow"));
+            if let Some(d) = diagnostics {
+                d.incomplete(tkw.offset - 1, "decimal overflow");
+            }
             return Err(());
         };
 
@@ -541,9 +555,9 @@ impl<'a> Consumable<'a> for StringRef {
         _sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
         _ast: &'a Arena,
-        mut diagnostics: Option<&mut Diagnostics>,
+        diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
-        let t = tkw.next_expect(Token::String, diagnostics.as_deref_mut())?;
+        let t = tkw.next_expect(Token::String, diagnostics)?;
         let (span, file) = (*t.span, *t.file);
         let content = &tkw.content(file)[span.as_range()];
         let content = &content[1..content.len() - 1];
@@ -593,7 +607,7 @@ impl<'a> Consumable<'a> for AttributeInstance<'a> {
             T::Comma,
             diagnostics.as_deref_mut(),
         )?;
-        tkw.next_expect(T::StarRightParen, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::StarRightParen, diagnostics)?;
 
         Ok(Self(attr_specs))
     }
@@ -616,13 +630,7 @@ impl<'a> Consumable<'a> for AttrSpec<'a> {
         let attr_name = item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         let mut constant_expression = None;
         if tkw.next_if_equals(T::Equals) {
-            constant_expression = Some(parse::<ConstantExpr>(
-                tkw,
-                sc,
-                arenas,
-                ast,
-                diagnostics.as_deref_mut(),
-            )?);
+            constant_expression = Some(parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics)?);
         }
 
         Ok(Self {
@@ -665,7 +673,9 @@ impl<'a> Consumable<'a> for HIdent<'a> {
             } else if t == Some(T::LeftBrace) {
                 tkw.offset += 1;
                 let Some(at) = tkw.find_next_same_depth(T::RightBrace) else {
-                    diagnostics.map(|d| d.no_corresponding(tkw.offset - 1, T::RightBrace));
+                    if let Some(d) = diagnostics {
+                        d.no_corresponding(tkw.offset - 1, T::RightBrace);
+                    }
                     return Err(());
                 };
 

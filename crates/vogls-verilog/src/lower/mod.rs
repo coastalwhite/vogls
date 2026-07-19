@@ -839,7 +839,7 @@ pub fn evaluate_range<'a>(
 pub fn create_nba_process(
     gl: &mut GlobalContext,
     signal: SignalKey,
-    needs_mask: bool,
+    _needs_mask: bool,
 ) -> (ProcessKey, SignalKey, Option<SignalKey>) {
     let needs_mask = true;
     let vogls_ir::Signal {

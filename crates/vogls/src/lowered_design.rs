@@ -194,7 +194,7 @@ impl LoweredDesign {
             NUM_REGIONS,
         )?;
 
-        return Ok(Design {
+        Ok(Design {
             gl: self.gl,
             ident_table: self.ident_table,
             elab_table: self.table,
@@ -203,7 +203,7 @@ impl LoweredDesign {
             signal_to_heap,
             signal_mode,
             initial_state: DesignState::Compiled(initial_state),
-        });
+        })
     }
 
     pub fn to_bytecode(mut self) -> Result<Design, Box<dyn std::error::Error>> {
@@ -394,7 +394,7 @@ pub fn generate_signals_heap(
             let size = signal.size;
             let mut num_bits = size.get();
             if signal.mode == LogicMode::FourValue {
-                num_bits = num_bits * 2;
+                num_bits *= 2;
             }
 
             if (min_bits..=max_bits).contains(&num_bits) {
@@ -468,7 +468,7 @@ pub fn lower_to_shared_object(
         }));
 
     for signal in gl.signals.keys() {
-        lower_signal_drive_header(&mut out, signal, &signal_map)?;
+        lower_signal_drive_header(&mut out, signal, signal_map)?;
     }
 
     let lower_options = CLowerOptions {

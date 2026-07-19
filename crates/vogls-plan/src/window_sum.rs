@@ -68,7 +68,6 @@ impl Map for WindowSum {
 
         let mut inner_offset = 0;
         let sums = (0..num_bins)
-            .into_iter()
             .map(|i| {
                 let start = i * self.width;
                 let end = ((i + 1) * self.width).min(self.end);

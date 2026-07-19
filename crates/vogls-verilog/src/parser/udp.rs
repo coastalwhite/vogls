@@ -143,7 +143,7 @@ impl<'a> Consumable<'a> for UdpDeclaration<'a> {
         };
         tkw.next_expect(T::KeywordEndTable, diagnostics.as_deref_mut())?;
 
-        tkw.next_expect(T::KeywordEndPrimitive, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::KeywordEndPrimitive, diagnostics)?;
 
         Ok(Self {
             attribute_instances,
@@ -195,7 +195,9 @@ impl<'a> Consumable<'a> for UdpPortDeclaration<'a> {
                 Ok(Self::Reg(decl))
             }
             t => {
-                diagnostics.map(|d| d.unexpected_token(tkw.offset, *t));
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, *t);
+                }
                 Err(())
             }
         }
@@ -258,13 +260,7 @@ impl<'a> Consumable<'a> for UdpOutputDeclaration<'a> {
 
         let mut constant_expr = None;
         if is_reg && tkw.next_if_equals(T::Equals) {
-            constant_expr = Some(parse::<ConstantExpr>(
-                tkw,
-                sc,
-                arenas,
-                ast,
-                diagnostics.as_deref_mut(),
-            )?);
+            constant_expr = Some(parse::<ConstantExpr>(tkw, sc, arenas, ast, diagnostics)?);
         }
 
         Ok(Self {
@@ -293,7 +289,7 @@ impl<'a> Consumable<'a> for UdpRegDeclaration<'a> {
                 t == T::LeftParenStar
             })?;
         tkw.next_expect(T::KeywordReg, diagnostics.as_deref_mut())?;
-        let ident = item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let ident = item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics)?;
 
         Ok(Self {
             attribute_instances,
@@ -326,7 +322,7 @@ impl<'a> Consumable<'a> for UdpCombinationalEntry<'a> {
         tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
         let output_symbol =
             item_parse::<UdpOutputSymbol>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics)?;
 
         Ok(Self {
             level_input_list,
@@ -386,7 +382,7 @@ impl<'a> Consumable<'a> for UdpSequentialEntry<'a> {
         tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
         let next_state =
             item_parse::<UdpNextState>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics)?;
 
         Ok(Self {
             level_list,
@@ -414,7 +410,7 @@ impl<'a> Consumable<'a> for UdpInitialStatement {
             item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Equals, diagnostics.as_deref_mut())?;
         let init_val = item_parse::<UdpInitVal>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics)?;
 
         Ok(Self {
             output_port_ident,
@@ -480,13 +476,17 @@ impl<'a> Consumable<'a> for UdpLevelSymbol {
                 {
                     Ok(symbol)
                 } else {
-                    diagnostics.map(|d| d.unexpected_token(tkw.offset, tkind));
+                    if let Some(d) = diagnostics {
+                        d.unexpected_token(tkw.offset, tkind);
+                    }
                     Err(())
                 }
             }
             T::QuestionMark => Ok(Self::QuestionMark),
             t => {
-                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, t);
+                }
                 Err(())
             }
         }
@@ -516,12 +516,16 @@ impl<'a> Consumable<'a> for UdpOutputSymbol {
                 {
                     Ok(symbol)
                 } else {
-                    diagnostics.map(|d| d.unexpected_token(tkw.offset, tkind));
+                    if let Some(d) = diagnostics {
+                        d.unexpected_token(tkw.offset, tkind);
+                    }
                     Err(())
                 }
             }
             t => {
-                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, t);
+                }
                 Err(())
             }
         }
@@ -551,13 +555,17 @@ impl<'a> Consumable<'a> for UdpEdgeSymbol {
                 {
                     Ok(symbol)
                 } else {
-                    diagnostics.map(|d| d.unexpected_token(tkw.offset, tkind));
+                    if let Some(d) = diagnostics {
+                        d.unexpected_token(tkw.offset, tkind);
+                    }
                     Err(())
                 }
             }
             T::Star => Ok(Self::Star),
             t => {
-                diagnostics.map(|d| d.unexpected_token(tkw.offset, t));
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, t);
+                }
                 Err(())
             }
         }
@@ -610,7 +618,9 @@ impl<'a> Consumable<'a> for UdpEdgeIndicator {
                 let (Some(before), Some(after)) =
                     (byte_to_level_symbol(before), byte_to_level_symbol(after))
                 else {
-                    diagnostics.map(|d| d.unexpected_token(tkw.offset, kind));
+                    if let Some(d) = diagnostics {
+                        d.unexpected_token(tkw.offset, kind);
+                    }
                     return Err(());
                 };
                 let tr = TokenRange::at(tkw.offset);
@@ -632,8 +642,7 @@ impl<'a> Consumable<'a> for UdpEdgeIndicator {
                 Ok(Self::Levels(before, after))
             }
         } else {
-            item_parse::<UdpEdgeSymbol>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())
-                .map(Self::Edge)
+            item_parse::<UdpEdgeSymbol>(tkw, sc, arenas, ast, diagnostics).map(Self::Edge)
         }
     }
 }
@@ -653,12 +662,16 @@ impl<'a> Consumable<'a> for UdpInitVal {
             Some("1'b1" | "1'B1" | "1") => UdpInitVal::L1,
             Some("1'bx" | "1'bX" | "1'Bx" | "1'BX") => UdpInitVal::X,
             None => {
-                diagnostics.map(|d| d.missing_token(tkw.offset));
+                if let Some(d) = diagnostics {
+                    d.missing_token(tkw.offset);
+                }
                 return Err(());
             }
             Some(_) => {
                 let t = tkw.get(tkw.offset).unwrap().kind;
-                diagnostics.map(|d| d.unexpected_token(tkw.offset, *t));
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, *t);
+                }
                 return Err(());
             }
         };
@@ -691,7 +704,7 @@ impl<'a> Consumable<'a> for UdpInstantiation<'a> {
             diagnostics.as_deref_mut(),
             |tkw| tkw.next_if_equals(T::Comma),
         )?;
-        tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Semicolon, diagnostics)?;
 
         Ok(Self {
             identifier,
@@ -738,7 +751,7 @@ impl<'a> Consumable<'a> for UdpInstance<'a> {
             parse_one_or_more_while(tkw, sc, arenas, ast, diagnostics.as_deref_mut(), |tkw| {
                 tkw.next_if_equals(T::Comma)
             })?;
-        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::RightParen, diagnostics)?;
 
         Ok(Self {
             name,

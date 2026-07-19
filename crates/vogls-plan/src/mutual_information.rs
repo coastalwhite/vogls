@@ -28,8 +28,7 @@ fn cut(data: impl Iterator<Item = u64> + Clone, out: &mut Vec<u64>) {
         }
 
         let idx = ((v - min) / width).floor() as u64;
-        let idx = idx.min(NUM_BREAKS as u64 - 1);
-        idx
+        idx.min(NUM_BREAKS as u64 - 1)
     }));
 }
 
