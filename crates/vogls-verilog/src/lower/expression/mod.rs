@@ -9,10 +9,11 @@ use vogls_utils::OrderedSet;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::ast::{AstId, HIdent};
-use crate::elaborate::{VSymbol, VectorTransform};
+use crate::elaborate::{VSymbol, VSymbolTable, VectorTransform};
 use crate::lower::addressing::{Address, AddressingContext, RangeExpr, lower_addressing};
 use crate::lower::{VType, hident_span, try_resolve_hident};
 use crate::number::Sign;
+use crate::parser::AstArenas;
 pub use constant_expr::eval_constant_expr;
 pub use ty::get_expr_type;
 
@@ -217,7 +218,41 @@ pub fn lower_expr<'a>(
                 result_stack.push(Some(result));
             }
             Expr::Concatenation(exprs) => {
-                if exprs.is_empty() {
+                if !item.dispatched {
+                    item.dispatched = true;
+                    dispatch_stack.push(item);
+                    dispatch_stack.extend(
+                        exprs
+                            .iter()
+                            .rev()
+                            .filter(|e| {
+                                !is_zero_sized_replication(
+                                    &mctx.gl,
+                                    &ctx.arenas,
+                                    &ctx.table,
+                                    scope,
+                                    &**e,
+                                )
+                            })
+                            .map(StackItem::new_no_ctx),
+                    );
+                    continue;
+                }
+
+                // @NOTE: Zero-sized replications are allowed in concatenations per 5.1.14.
+                //
+                // > A replication operation may have a replication constant with a value of zero.
+                // > This is useful in parameterized code. A replication with a zero replication
+                // > constant is considered to have a size of zero and is ignored. Such a
+                // > replication shall appear only within a concatenation in which at least one of
+                // > the operands of the concatenation has a positive size.
+                let num_exprs = exprs
+                    .iter()
+                    .filter(|e| {
+                        !is_zero_sized_replication(&mctx.gl, &ctx.arenas, &ctx.table, scope, e)
+                    })
+                    .count();
+                if num_exprs == 0 {
                     mctx.diagnostics.not_yet_implemented(
                         ctx.arenas.get_span(item.expr),
                         "concatenation without expressions",
@@ -227,21 +262,14 @@ pub fn lower_expr<'a>(
                     continue;
                 }
 
-                if !item.dispatched {
-                    item.dispatched = true;
-                    dispatch_stack.push(item);
-                    dispatch_stack.extend(exprs.iter().rev().map(StackItem::new_no_ctx));
-                    continue;
-                }
-
-                let end_stack_size = result_stack.len() - exprs.len();
+                let end_stack_size = result_stack.len() - num_exprs;
                 let Some((mut output, ty)) = result_stack.pop().unwrap() else {
                     result_stack.truncate(end_stack_size);
                     result_stack.push(None);
                     continue;
                 };
                 let mut width = ty.force_net_width().get();
-                for _ in 1..exprs.len() {
+                for _ in 1..num_exprs {
                     let Some((next, next_ty)) = result_stack.pop().unwrap() else {
                         result_stack.truncate(end_stack_size);
                         result_stack.push(None);
@@ -1173,4 +1201,29 @@ pub fn get_used_ident_signals<'a>(
         | VSymbol::GenerateBlocks => {}
     }
     Ok(())
+}
+
+fn is_zero_sized_replication<'a>(
+    gl: &GlobalContext,
+    arenas: &'a AstArenas,
+    table: &VSymbolTable,
+    scope: SymbolId,
+    expr: &Expr<'a>,
+) -> bool {
+    if let Expr::Replication(r) = expr
+        && eval_constant_expr(
+            gl,
+            arenas,
+            table,
+            scope,
+            &mut Diagnostics::default(),
+            r.constant_expr,
+            None,
+        )
+        .is_ok_and(|v| v.into_bits().is_equal_to_zero())
+    {
+        true
+    } else {
+        false
+    }
 }

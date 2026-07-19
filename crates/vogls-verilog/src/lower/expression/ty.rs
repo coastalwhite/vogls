@@ -7,7 +7,9 @@ use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::elaborate::{VSymbol, VSymbolTable};
 use crate::lower::expression::system_function_call::get_system_function_call_output_ty;
-use crate::lower::expression::{coerce_to_max_size_ty, system_function_call};
+use crate::lower::expression::{
+    coerce_to_max_size_ty, is_zero_sized_replication, system_function_call,
+};
 use crate::lower::{
     Diagnostics, VType, eval_constant_expr, hident_span, msb_lsb_to_width, try_resolve_hident,
 };
@@ -107,13 +109,23 @@ pub fn get_expr_type<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);
-                    dispatch_stack.extend(exprs.iter().rev().map(StackItem::new_no_ctx));
+                    dispatch_stack.extend(
+                        exprs
+                            .iter()
+                            .rev()
+                            .filter(|e| !is_zero_sized_replication(gl, arenas, table, scope, e))
+                            .map(StackItem::new_no_ctx),
+                    );
                     continue;
                 }
 
+                let num_exprs = exprs
+                    .iter()
+                    .filter(|e| !is_zero_sized_replication(gl, arenas, table, scope, e))
+                    .count();
                 let mut size = 0;
                 let mut child_error = false;
-                for ty in result_stack.drain(..exprs.len()) {
+                for ty in result_stack.drain(..num_exprs) {
                     let Some(ty) = ty else {
                         child_error = true;
                         break;

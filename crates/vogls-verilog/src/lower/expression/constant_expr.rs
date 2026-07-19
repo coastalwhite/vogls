@@ -15,7 +15,7 @@ use crate::lower::{hident_span, try_resolve_constant, try_resolve_hident};
 use crate::number::Sign;
 use crate::parser::AstArenas;
 
-use super::Diagnostics;
+use super::{Diagnostics, is_zero_sized_replication};
 
 pub fn eval_constant_expr<'a>(
     gl: &GlobalContext,
@@ -399,18 +399,42 @@ pub fn eval_constant_expr<'a>(
                 if !item.dispatched {
                     item.dispatched = true;
                     dispatch_stack.push(item);
-                    dispatch_stack.extend(exprs.iter().map(StackItem::new_no_ctx));
+                    dispatch_stack.extend(
+                        exprs
+                            .iter()
+                            .filter(|e| !is_zero_sized_replication(gl, arenas, table, scope, e))
+                            .map(StackItem::new_no_ctx),
+                    );
                     continue;
                 }
 
-                let end_length = result_stack.len() - exprs.len();
+                // @NOTE: Zero-sized replications are allowed in concatenations per 5.1.14.
+                //
+                // > A replication operation may have a replication constant with a value of zero.
+                // > This is useful in parameterized code. A replication with a zero replication
+                // > constant is considered to have a size of zero and is ignored. Such a
+                // > replication shall appear only within a concatenation in which at least one of
+                // > the operands of the concatenation has a positive size.
+                let num_exprs = exprs
+                    .iter()
+                    .filter(|e| !is_zero_sized_replication(gl, arenas, table, scope, e))
+                    .count();
+                if num_exprs == 0 {
+                    diagnostics
+                        .not_yet_implemented(arenas.get_span(expr), "zero sized concatenation");
+                    error = true;
+                    result_stack.push(None);
+                    continue;
+                }
+
+                let end_length = result_stack.len() - num_exprs;
                 let Some(mut value) = result_stack.pop().unwrap() else {
                     result_stack.truncate(end_length);
                     result_stack.push(None);
                     continue;
                 };
 
-                for _ in 1..exprs.len() {
+                for _ in 1..num_exprs {
                     let Some(next) = result_stack.pop().unwrap() else {
                         result_stack.truncate(end_length);
                         result_stack.push(None);
