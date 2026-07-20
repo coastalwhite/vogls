@@ -144,6 +144,34 @@ impl BinaryOperator {
             | O::BitwiseOr => lhs.max(rhs),
         }
     }
+
+    pub fn context_width(self, lhs: VectorSize, rhs: VectorSize) -> VectorSize {
+        use BinaryOperator as O;
+        match self {
+            O::ShiftLeft | O::ShiftRight | O::ArithmeticLeftShift | O::ArithmeticRightShift => lhs,
+
+            O::GreaterThan
+            | O::GreaterThanEqual
+            | O::LessThan
+            | O::LessThanEqual
+            | O::LogicalEquality
+            | O::LogicalInequality
+            | O::CaseEquality
+            | O::CaseInequality
+            | O::LogicalAnd
+            | O::LogicalOr
+            | O::Power
+            | O::Multiply
+            | O::Divide
+            | O::Modulus
+            | O::BinaryPlus
+            | O::BinaryMinus
+            | O::BitwiseAnd
+            | O::BitwiseXor
+            | O::BitwiseXnor
+            | O::BitwiseOr => lhs.max(rhs),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]

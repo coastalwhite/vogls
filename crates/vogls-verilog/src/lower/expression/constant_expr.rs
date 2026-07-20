@@ -91,7 +91,7 @@ pub fn eval_constant_expr<'a>(
                     };
 
                     let mut child_context_width =
-                        op.output_width(l_ty.force_net_width(), r_ty.force_net_width());
+                        op.context_width(l_ty.force_net_width(), r_ty.force_net_width());
                     let (l_is_self_det, r_is_self_det) = op.is_self_determined();
                     if let Some(context_width) = item.context_width {
                         child_context_width = child_context_width.max(context_width);
