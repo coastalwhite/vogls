@@ -22,7 +22,7 @@ This repository contains the source code, tests and documentation for Vogls. Alo
 To get started and install the Vogls Command-Line Interface:
 
 ```bash
-git clone https://url/to/this/repo
+git clone https://codeberg.org/coastalwhite/vogls
 cd vogls
 
 # Requires a Rust toolchain.
