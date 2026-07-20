@@ -501,9 +501,15 @@ fn lower_instruction(
                 }
                 (O::ReduceXor, M::FourValue, _, None) => bce.heap_fv_reduce_xor(rd, rs, src_size),
                 (O::LeadingZeros, M::TwoValue, _, Some(size)) => bce.leading_zeros(rd, rs, size),
-                (O::LeadingZeros, M::TwoValue, _, None) => bce.heap_tv_leading_zeros(rd, rs, src_size),
-                (O::LeadingZeros, M::FourValue, _, Some(size)) => bce.fv_leading_zeros(rd, rs, size),
-                (O::LeadingZeros, M::FourValue, _, None) => bce.heap_fv_leading_zeros(rd, rs, src_size),
+                (O::LeadingZeros, M::TwoValue, _, None) => {
+                    bce.heap_tv_leading_zeros(rd, rs, src_size)
+                }
+                (O::LeadingZeros, M::FourValue, _, Some(size)) => {
+                    bce.fv_leading_zeros(rd, rs, size)
+                }
+                (O::LeadingZeros, M::FourValue, _, None) => {
+                    bce.heap_fv_leading_zeros(rd, rs, src_size)
+                }
                 (O::TvToFv, _, _, Some(src_size)) => {
                     // @Performance: better lowering.
                     let (spc, val) = rd.to_spc_and_val();
@@ -2439,7 +2445,10 @@ fn to_reg(
                 };
                 let offset = kind_offset as u64 + offset as u64;
                 match SignedImmediate::new_from_u64(offset) {
-                    None => todo!(),
+                    None => {
+                        bytecode.load_u64(backup, offset);
+                        bytecode.stack_offset_register(backup, kind, backup);
+                    }
                     Some(offset) => bytecode.stack_offset(backup, kind, offset),
                 }
             }
@@ -2494,7 +2503,10 @@ fn store_back(
                 };
                 let offset = kind_offset as u64 + offset as u64;
                 match SignedImmediate::new_from_u64(offset) {
-                    None => todo!(),
+                    None => {
+                        bytecode.load_u64(scratch, offset);
+                        bytecode.stack_offset_register(scratch, kind, scratch);
+                    }
                     Some(offset) => bytecode.stack_offset(scratch, kind, offset),
                 }
 

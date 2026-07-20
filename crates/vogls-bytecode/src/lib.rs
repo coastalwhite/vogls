@@ -446,6 +446,7 @@ opcodes![
     Intrinsic,
     SignExtend,
     StackOffset,
+    StackOffsetReg,
     LoadImm,
     Jump,
     RelJump,
