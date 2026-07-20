@@ -144,7 +144,7 @@ pub fn lower_addressing<C: AddressingContext>(
             elem_offset: None,
             output_width: elem_width,
             array,
-            is_unsigned: true,
+            is_unsigned: false,
         });
     };
 
