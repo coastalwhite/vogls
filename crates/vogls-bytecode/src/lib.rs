@@ -524,22 +524,26 @@ impl BytecodeInstruction for LoadSize {
         write_padded_mnemonic(f, "load_size")?;
         match self.0 {
             Some(size) => fmt::Display::fmt(&size, f),
-            None => todo!(),
+            None => f.write_str("..."),
         }
     }
 
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         _state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
         match self.0 {
-            None => todo!(),
+            None => {
+                let size = VectorSize::new(code[*pc as usize].0).unwrap();
+                *pc += 1;
+                regs.size = size;
+            }
             Some(size) => regs.size = size,
         }
     }
@@ -973,9 +977,11 @@ impl BytecodeEncoder {
 
     pub fn load_size(&mut self, size: VectorSize) {
         if size.get() >= (1u32 << 24) {
-            todo!();
+            self.data.push(LoadSize(None).encode());
+            self.data.push(Bytecode(size.get()));
+        } else {
+            self.data.push(LoadSize(Some(size)).encode());
         }
-        self.data.push(LoadSize(Some(size)).encode());
     }
 }
 
