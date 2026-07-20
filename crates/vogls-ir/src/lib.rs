@@ -315,6 +315,18 @@ pub struct Signal {
     pub flags: SignalFlags,
     pub origin: TokenRange,
 }
+impl Signal {
+    /// Should the signal poke all standing watchers at `t=0`?
+    pub fn triggers_t0_poke(&self) -> bool {
+        self.initialize.as_ref().is_some_and(|v| match self.mode {
+            // Two-valued always registers the first write.
+            LogicMode::TwoValue => true,
+
+            // Four-valued logic starts as `x`, so a write of `x` does not trigger a poke.
+            LogicMode::FourValue => v.count_unknown() != v.size().get(),
+        })
+    }
+}
 
 pub const SCALAR_VSIZE: VectorSize = NonZeroU32::new(1).unwrap();
 pub const VSIZE_32: VectorSize = NonZeroU32::new(32).unwrap();
@@ -1709,6 +1721,16 @@ define_process_kinds! {
 #[derive(Debug, Clone)]
 pub struct Process {
     pub kind: ProcessKind,
+
+    /// A process can be "standing", meaning that is semantically always gets scheduled before
+    /// other processes as a watcher of certain signals. In the real world, this means that we arm
+    /// the listeners before the simulation begins and move the watch to the end of the process.
+    ///
+    /// This is a _street smarts_ trick and solves a quirk of Verilog todo with combinational
+    /// logic. Theoretically, `always (*)` can be scheduled at the end of the `t=0` active region,
+    /// but in reality everyone assumes it gets scheduled before everything else. This solves that
+    /// problem.
+    pub standing: Option<Box<[SignalKey]>>,
 
     // @Performance: Use UnitVec here.
     pub regions: Vec<TemporalRegionKey>,

@@ -70,7 +70,17 @@ pub fn lower_process_to_bytecode(
         &mut bb_phis,
     );
 
-    schedule.push_active(InstructionPtr(bytecode.data.len() as u64));
+    // Standing processes are not scheduled in the active queue, instead their listeners are armed
+    // right at the start.
+    let mut standing = process.standing.as_ref().filter(|watchers| {
+        watchers
+            .iter()
+            .any(|s| !gl.signals[*s].triggers_t0_poke())
+    });
+    if standing.is_none() {
+        schedule.push_active(InstructionPtr(bytecode.data.len() as u64));
+    }
+
     for tr in &process.regions {
         bb_seen.clear();
         assignment.clear();
@@ -212,8 +222,15 @@ pub fn lower_process_to_bytecode(
                     ));
                     bytecode.panic();
                 }
-                T::Watch(target, _) => {
+                T::Watch(target, signals) => {
                     let index = watch_map.get_watch_index(bb_key);
+                    if standing
+                        .take_if(|s| s.as_ref() == signals.as_slice())
+                        .is_some()
+                    {
+                        listeners.arm(index);
+                    }
+
                     jump_targets.push((
                         bytecode.data.len(),
                         target.entry(),
@@ -397,6 +414,8 @@ pub fn lower_process_to_bytecode(
         eprintln!("}}");
         eprintln!();
     }
+
+    assert!(standing.is_none());
 }
 
 const T0: Reg = Reg::X10;

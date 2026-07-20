@@ -1,11 +1,12 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_fuse_signals::InputEdge;
 use vogls_ir::{
-    Bits, ConnectionDirection, GlobalContext, ProcessBuilder, ProcessKind, SCALAR_VSIZE,
+    Bits, ConnectionDirection, GlobalContext, ProcessBuilder, ProcessKind, SCALAR_VSIZE, SignalKey,
     SignalSlice, VectorSize,
 };
-use vogls_utils::OrderedSet;
+use vogls_utils::{IndexSet, OrderedSet};
 
+use crate::ast::expr::Expr;
 use crate::ast::module::{
     Dimension, GateInstantiation, GenerateBlock, ListOfPortConnections, ModuleInstance,
     ModuleInstantiation, ModuleOrGenerateItem, ModuleOrGenerateItemContent,
@@ -13,13 +14,17 @@ use crate::ast::module::{
     NOutputGateType, NamedPortConnection, NetDeclAssignment, NetDeclarationNets, VariableType,
     VariableTypeVariant,
 };
+use crate::ast::statement::{
+    EventControl, EventExpressionPrimary, ProceduralTimingControl, Statement, StatementContent,
+    StatementOrNull,
+};
 use crate::ast::udp::{UdpInstance, UdpInstantiation};
 use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::{VSymbol, VSymbolTable};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_size, net_lvalue_width};
 use crate::lower::expression::{self, get_used_signals, lower_expr, truncate_or_extend};
 use crate::lower::fuse::{try_fuse_assign, try_lower_fuse_driver_expr};
-use crate::lower::statement::statements_to_process;
+use crate::lower::statement::{get_used_signals_stmt_or_null, statements_to_process};
 use crate::lower::udp::lower_udp;
 use crate::lower::{
     VType, assign_input_port, assign_port_output, eval_constant_expr, evaluate_range,
@@ -467,10 +472,37 @@ pub fn lower<'a>(
             let statement = id.0;
             let (process, bb_builder) =
                 ProcessBuilder::new(mctx.gl(), ProcessKind::Always, ctx.arenas.get_span(id));
-            let bb_key = bb_builder.key();
-            let bb_builder =
-                statements_to_process(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;
-            bb_builder.jump_to(mctx.gl(), bb_key);
+
+            // Combination `always` get special handling to deal with real designs. You don't want
+            // them to sporedically trigger. Instead, you want them to arm immediately at the
+            // start. We use the `standing` field on a process for that.
+            //
+            // We define *combinational* always similar to Icarus Verilog, in that we say if your
+            // `always` blocks only includes an event control with a STAR or identifiers that do
+            // not include an edge.
+            match extract_standing_signals(ctx, mctx, scope, statement)? {
+                Some((signals, stmt)) => {
+                    process.set_standing(mctx.gl(), signals.clone());
+                    let bb_key = bb_builder.key();
+                    let stmts = match &*stmt {
+                        StatementOrNull::Statement(stmt) => AstIdRange::single(*stmt),
+                        StatementOrNull::Attribute(_) => AstIdRange::default(),
+                    };
+                    let bb_builder = statements_to_process(ctx, mctx, scope, bb_builder, stmts)?;
+                    bb_builder.watch_to(mctx.gl(), signals.into(), bb_key);
+                }
+                None => {
+                    let bb_key = bb_builder.key();
+                    let bb_builder = statements_to_process(
+                        ctx,
+                        mctx,
+                        scope,
+                        bb_builder,
+                        AstIdRange::single(statement),
+                    )?;
+                    bb_builder.jump_to(mctx.gl(), bb_key);
+                }
+            }
             process.finalize(mctx.gl());
         }
 
@@ -481,6 +513,58 @@ pub fn lower<'a>(
     }
 
     Ok(())
+}
+
+fn extract_standing_signals<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    statement: AstId<'a, Statement<'a>>,
+) -> Result<Option<(Box<[SignalKey]>, AstId<'a, StatementOrNull<'a>>)>, ()> {
+    let StatementContent::ProceduralTimingControlStatement(ptcs) = statement.content else {
+        return Ok(None);
+    };
+
+    let ProceduralTimingControl::EventControl(ectrl) = &*ptcs.procedural_timing_control else {
+        return Ok(None);
+    };
+
+    match &**ectrl {
+        EventControl::Star => {
+            let mut signals = OrderedSet::default();
+            get_used_signals_stmt_or_null(ctx, mctx, scope, &mut signals, ptcs.statement_or_null)?;
+            let mut signals = signals.items;
+            signals.sort_unstable();
+            Ok(Some((signals.into(), ptcs.statement_or_null)))
+        }
+        EventControl::EventExpression(event_expression) => {
+            let mut signals = IndexSet::new();
+            for event_expression in event_expression.0.iter() {
+                let EventExpressionPrimary::Expression(expr) = &*event_expression else {
+                    return Ok(None);
+                };
+                let Expr::Ident(ast_ident, exprs, range_expression) = &**expr else {
+                    return Ok(None);
+                };
+                if !exprs.is_empty() || range_expression.is_some() {
+                    return Ok(None);
+                }
+
+                let net = try_resolve_net(
+                    scope,
+                    &ctx.table,
+                    ctx.arenas,
+                    *ast_ident,
+                    &mut mctx.diagnostics,
+                )?;
+                let signal = net.net.probe_signal();
+                signals.insert(signal);
+            }
+            let mut signals = signals.take_keys();
+            signals.sort_unstable();
+            Ok(Some((signals.into(), ptcs.statement_or_null)))
+        }
+    }
 }
 
 pub fn dims_to_array<'a>(

@@ -392,8 +392,8 @@ use vogls_fuse_signals::{Driver, InputEdge};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariable, VcdVariableKey};
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, LogicMode, ProcessBuilder,
-    ProcessKey, ProcessKind, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize,
+    BasicBlockBuilder, Bits, GlobalContext, LogicMode, ProcessBuilder, ProcessKey, ProcessKind,
+    SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize,
 };
 use vogls_utils::{IndexMap, OrderedSet, Table, VgHashMap};
 
@@ -895,6 +895,7 @@ pub fn create_nba_process(
 
     match mask {
         None => {
+            process.set_standing(gl, [value].into());
             let init_bb = builder.key();
             let value_v = builder.probe(gl, value);
             builder = builder.wait_region(gl, Region::NonBlocking as u8);
@@ -902,17 +903,9 @@ pub fn create_nba_process(
             builder.watch_to(gl, [value].into(), init_bb);
         }
         Some(mask) => {
+            process.set_standing(gl, [mask].into());
             // We need to conditionally branch here as it might have already been assigned before.
-            let mask_v = builder.probe(gl, mask);
-            let mask_ro = builder.reduce_or(gl, mask_v);
-
             let init_bb = builder.key();
-            builder = builder.next_terminate_later(gl);
-
-            let watch_bb = builder.key();
-            builder = builder.watch(gl, [mask].into());
-
-            let waitregion_bb = builder.key();
             builder = builder.wait_region(gl, Region::NonBlocking as u8);
 
             let mask_v = builder.probe(gl, mask);
@@ -925,10 +918,7 @@ pub fn create_nba_process(
             builder.drive(gl, signal, result);
             let zero_mask = builder.constant(gl, Bits::new_zeroed(size));
             builder.drive(gl, mask, zero_mask);
-            builder.jump_to(gl, watch_bb);
-
-            gl.bbs[init_bb].terminator =
-                BasicBlockTerminator::Branch(mask_ro, waitregion_bb, watch_bb);
+            builder.watch_to(gl, [mask].into(), init_bb);
         }
     }
     process.finalize(gl);

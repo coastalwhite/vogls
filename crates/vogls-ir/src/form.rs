@@ -88,6 +88,7 @@ pub fn check_ir_form(regions: &[TemporalRegionKey], gl: &GlobalContext) {
 
     if !fails.is_empty() {
         let process = Process {
+            standing: None,
             kind: ProcessKind::Other,
             regions: regions.to_vec(),
             origin: TokenRange::default(),

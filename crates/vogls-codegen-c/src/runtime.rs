@@ -8,7 +8,7 @@ use vogls_codegen::HeapRef;
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::{Bits, GlobalContext, Mode, ReadMem, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
-use vogls_runtime::{RtSignalKey, SimulationIo};
+use vogls_runtime::{RtSignalKey, RuntimeState, SimulationIo};
 use vogls_utils::TableKey;
 
 use crate::StateBuilder;
@@ -229,10 +229,9 @@ pub struct CDesign {
 impl CDesign {
     pub fn new_state(
         &self,
-        heap: vogls_codegen::Heap,
         num_listening: usize,
         num_regions: u8,
-        lupdt_updated: &[bool],
+        runtime: RuntimeState,
         gl: &GlobalContext,
     ) -> CDesignState {
         let procs = unsafe {
@@ -253,7 +252,7 @@ impl CDesign {
         CDesignState {
             schedule,
             listening,
-            runtime: vogls_runtime::RuntimeState::new(gl, heap, lupdt_updated),
+            runtime,
             plugins: Vec::new(),
         }
     }

@@ -56,6 +56,7 @@ impl ProcessBuilder {
         let region = TemporalRegionKey::from_entry(bb_key);
         gl.bbs[bb_key].region = region;
         let process_key = gl.processes.insert(Process {
+            standing: None,
             kind,
             regions: vec![region],
             origin,
@@ -285,6 +286,10 @@ impl ProcessBuilder {
         if let Some(key) = self.key {
             gl.processes[key].regions = regions;
         }
+    }
+
+    pub fn set_standing(&self, gl: &mut GlobalContext, signals: Box<[SignalKey]>) {
+        gl.processes[self.key.unwrap()].standing = Some(signals);
     }
 }
 

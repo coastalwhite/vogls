@@ -5,8 +5,8 @@ use vogls_ir::GlobalContext;
 use vogls_utils::{TableKey, new_table_key};
 
 pub mod plugins;
-pub mod readmem;
 pub mod random;
+pub mod readmem;
 
 new_table_key! { pub struct RtSignalKey; }
 
@@ -43,15 +43,21 @@ impl Clone for RuntimeState {
 }
 
 impl RuntimeState {
-    pub fn new(gl: &GlobalContext, heap: Heap, lupdt_updated: &[bool]) -> Self {
-        let tvl_first_write = vec![0u64; gl.signals.len().div_ceil(64)];
+    pub fn new(gl: &GlobalContext, heap: Heap, updated: &[bool], lupdt_updated: &[bool]) -> Self {
+        let mut tvl_first_write = vec![0u64; gl.signals.len().div_ceil(64)];
+        let last_active_time = lupdt_updated
+            .iter()
+            .map(|updated| if *updated { 0 } else { u64::MAX })
+            .collect();
+        for (i, updated) in updated.iter().enumerate() {
+            if *updated {
+                tvl_first_write[i / 64] |= 1u64 << (i % 64);
+            }
+        }
         Self {
             heap,
             time: 0,
-            last_active_time: lupdt_updated
-                .iter()
-                .map(|updated| if *updated { 0 } else { u64::MAX })
-                .collect(),
+            last_active_time,
             tvl_first_write,
             event_count: 0,
             instruction_count: 0,

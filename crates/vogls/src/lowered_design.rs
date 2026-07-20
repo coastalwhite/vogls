@@ -274,22 +274,21 @@ impl LoweredDesign {
         let stack_offset = heap_builder.claim_words(num_stack_words) as u64;
         let mut heap = heap_builder.finish();
         let mut lupdt_updated = vec![false; lupdt_indexes.len()];
+        let mut updated = vec![false; self.gl.signals.len()];
 
         for (key, signal) in &self.gl.signals {
             if let Some(initialize) = &signal.initialize {
                 let rt_key = rt_signal_map[&key];
                 assert_eq!(initialize.size(), signal.size);
                 heap.store_bits(signal_to_heap[rt_key.as_usize()], signal.mode, initialize);
-                let is_unchanged = match signal.mode {
-                    LogicMode::TwoValue => initialize.count_zeros() == initialize.size().get(),
-                    LogicMode::FourValue => initialize.count_unknown() == initialize.size().get(),
-                };
-                if !is_unchanged && let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
+                if let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
                     lupdt_updated[*lupdt_idx as usize] = true;
                 }
+                updated[rt_key.as_usize()] = true;
             }
         }
-        let runtime = RuntimeState::new(&self.gl, heap, &lupdt_updated);
+
+        let runtime = RuntimeState::new(&self.gl, heap, &updated, &lupdt_updated);
         let state = vogls_bytecode::State {
             runtime,
             plugins,
@@ -572,19 +571,17 @@ pub fn lower_to_shared_object(
 
     let mut heap = heap_builder.finish();
     let mut lupdt_updated = vec![false; lupdt_indexes.len()];
+    let mut updated = vec![false; gl.signals.len()];
 
     for (key, signal) in &gl.signals {
         if let Some(initialize) = &signal.initialize {
             let rt_key = signal_map[&key];
             assert_eq!(initialize.size(), signal.size);
             heap.store_bits(heap_refs[rt_key.as_usize()], signal.mode, initialize);
-            let is_unchanged = match signal.mode {
-                LogicMode::TwoValue => initialize.count_zeros() == initialize.size().get(),
-                LogicMode::FourValue => initialize.count_unknown() == initialize.size().get(),
-            };
-            if !is_unchanged && let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
+            if let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
                 lupdt_updated[*lupdt_idx as usize] = true;
             }
+            updated[rt_key.as_usize()] = true;
         }
     }
 
@@ -593,13 +590,9 @@ pub fn lower_to_shared_object(
         state_builder,
         num_additional_regions,
     );
-    let mut initial_state = design.new_state(
-        heap,
-        listener_builder.top,
-        num_additional_regions,
-        &lupdt_updated,
-        gl,
-    );
+    let runtime = RuntimeState::new(gl, heap, &updated, &lupdt_updated);
+    let mut initial_state =
+        design.new_state(listener_builder.top, num_additional_regions, runtime, gl);
     initial_state.plugins = plugins;
 
     Ok((initial_state, design))

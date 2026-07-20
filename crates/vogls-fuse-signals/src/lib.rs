@@ -515,11 +515,34 @@ impl FuseGraphOptimizer {
                     }
                     Some(FuseTarget::Constant(_)) => false,
                 });
+                // Canonicalize the signal list.
+                signals.sort_unstable();
+                signals.dedup();
 
                 if signals.is_empty() {
                     gl.bbs[key].terminator = BasicBlockTerminator::Halt;
                 }
             }
+        }
+
+        for (_, process) in gl.processes.iter_mut() {
+            let Some(standing) = process.standing.as_mut() else {
+                continue;
+            };
+
+            let mut standing_vec = standing.to_vec();
+            standing_vec.retain_mut(|s| match self.fused_signals.get(s) {
+                None => true,
+                Some(FuseTarget::Signal(to, _)) => {
+                    *s = *to;
+                    true
+                }
+                Some(FuseTarget::Constant(_)) => false,
+            });
+            // Canonicalize the signal list.
+            standing_vec.sort_unstable();
+            standing_vec.dedup();
+            *standing = standing_vec.into_boxed_slice();
         }
 
         for n in self.marshalls {

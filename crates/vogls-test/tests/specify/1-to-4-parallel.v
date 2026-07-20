@@ -15,7 +15,7 @@ module tb();
 
     gate g(i, o);
 
-    always @(o) #0 $display("[T=%0d] o = %0x",  $time(), o);
+    always @(o) if ($time() != 0) #0 $display("[T=%0d] o = %0x",  $time(), o);
 
     initial begin
         #20 i = 1'b0;

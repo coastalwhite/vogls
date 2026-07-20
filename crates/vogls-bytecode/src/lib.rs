@@ -745,6 +745,11 @@ impl BytecodeListeners {
     pub fn set_ptr(&mut self, index: usize, ptr: InstructionPtr) {
         self.map[index] = ptr;
     }
+
+    #[inline(always)]
+    fn arm(&mut self, index: usize) {
+        self.active[index / 64] |= 1u64 << (index % 64);
+    }
 }
 
 #[derive(Clone, Copy)]

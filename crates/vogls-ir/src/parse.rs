@@ -537,6 +537,7 @@ fn parse_process<'a>(
     }
 
     let process = gl.processes.insert(crate::Process {
+        standing: None,
         kind,
         regions,
         origin: TokenRange::default(),

@@ -417,8 +417,7 @@ impl BytecodeInstruction for RescheduleListen {
         listeners: &mut BytecodeListeners,
         cldctx: &mut ColdContext,
     ) {
-        let i = self.index as usize;
-        listeners.active[i / 64] |= 1u64 << (i % 64);
+        listeners.arm(self.index as usize);
         *pc = schedule
             .pop(state, cldctx.plugins)
             .map_or(u64::MAX, |ptr| ptr.0);
