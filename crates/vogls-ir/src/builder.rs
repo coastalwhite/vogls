@@ -7,8 +7,8 @@ use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
     BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, LogicMode, Process,
     ProcessKey, ProcessKind, RandomKind, ResizeOp, ResizeOpSimplification, SCALAR_VSIZE,
-    SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp, UnaryOpSimplification,
-    VSIZE_32, VSIZE_64, VariableKey, VectorSize,
+    ShiftImmOp, SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp,
+    UnaryOpSimplification, VSIZE_32, VSIZE_64, VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -356,6 +356,21 @@ macro_rules! bin_imm_ops {
     };
 }
 
+macro_rules! shift_imm_ops {
+    ($(($name:ident, $op:ident))+) => {
+        $(
+        pub fn $name(
+            &mut self,
+            gl: &mut GlobalContext,
+            src: VariableKey,
+            imm: u32,
+        ) -> VariableKey {
+            self.shift_imm_op(gl, src, imm, ShiftImmOp::$op)
+        }
+        )+
+    };
+}
+
 impl BasicBlockBuilder {
     pub fn key(&self) -> BasicBlockKey {
         self.key
@@ -554,6 +569,12 @@ impl BasicBlockBuilder {
         (case_equals_constant, CaseEquality)
     }
 
+    shift_imm_ops! {
+        (logical_shift_left_imm, LogicalShiftLeft)
+        (logical_shift_right_imm, LogicalShiftRight)
+        (arith_shift_right_imm, ArithmeticShiftRight)
+    }
+
     pub fn logical_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         let src = self.reduce_or(gl, src);
         self.binary_neg(gl, src)
@@ -648,6 +669,22 @@ impl BasicBlockBuilder {
             }
             BinaryImmOpSimplification::Instruction(i) => self.instrs.push(i),
         }
+        dst
+    }
+    pub fn shift_imm_op(
+        &mut self,
+        gl: &mut GlobalContext,
+        src: VariableKey,
+        imm: u32,
+        op: ShiftImmOp,
+    ) -> VariableKey {
+        if imm == 0 {
+            return src;
+        }
+
+        let src_size = gl.vars.size(src);
+        let dst = gl.vars.insert(src.mode(), src_size);
+        self.instrs.push(Instruction::ShiftImm(dst, op, src, imm));
         dst
     }
 
@@ -853,6 +890,59 @@ impl BasicBlockBuilder {
     pub fn reduce_nand(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         let and = self.reduce_and(gl, src);
         self.logical_neg(gl, and)
+    }
+
+    fn sign_invert(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+        self.revminus_constant(gl, src, Bits::new_zeroed(gl.vars.size(src)))
+    }
+
+    fn signed_divmod_prep(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> (VariableKey, VariableKey, VariableKey, VariableKey) {
+        let lhs_size = gl.vars.size(lhs);
+        let size_m_1 = lhs_size.get() - 1;
+
+        let sx = self.logical_shift_right_imm(gl, lhs, size_m_1);
+        let sx = self.sign_invert(gl, sx);
+        let sy = self.logical_shift_right_imm(gl, rhs, size_m_1);
+        let sy = self.sign_invert(gl, sy);
+
+        let ax = self.xor(gl, lhs, sx);
+        let ax = self.minus(gl, ax, sx);
+        let ay = self.xor(gl, rhs, sy);
+        let ay = self.minus(gl, ay, sy);
+
+        (sx, sy, ax, ay)
+    }
+
+    pub fn signed_divide(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let (sx, sy, ax, ay) = self.signed_divmod_prep(gl, lhs, rhs);
+
+        let qu = self.divide(gl, ax, ay);
+        let s = self.xor(gl, sx, sy);
+
+        let q = self.xor(gl, qu, s);
+        self.minus(gl, q, s)
+    }
+    pub fn signed_modulus(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let (sx, _, ax, ay) = self.signed_divmod_prep(gl, lhs, rhs);
+
+        let ru = self.modulus(gl, ax, ay);
+        let r = self.xor(gl, ru, sx);
+        self.minus(gl, r, sx)
     }
 
     pub fn drive(&mut self, gl: &mut GlobalContext, signal: SignalKey, src: VariableKey) {

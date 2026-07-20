@@ -937,6 +937,34 @@ macro_rules! impl_bin_arithmetic {
         }
         )+
     };
+    ($($f:ident => ($signed_f:ident, $unsigned_f:ident)),+ $(,)?) => {
+        $(
+        fn $f(
+            gl: &mut GlobalContext,
+            builder: &mut BasicBlockBuilder,
+            l: VariableKey,
+            l_ty: VType,
+            r: VariableKey,
+            r_ty: VType,
+        ) -> (VariableKey, VType) {
+            let (l, l_ty, r, r_ty) = coerce_bin_arithmetic(
+                gl,
+                builder,
+                l,
+                l_ty,
+                r,
+                r_ty,
+            );
+            if l_ty.is_signed() {
+                (builder.$signed_f(gl, l, r), l_ty)
+            } else if r_ty.is_signed() {
+                (builder.$signed_f(gl, l, r), r_ty)
+            } else {
+                (builder.$unsigned_f(gl, l, r), l_ty)
+            }
+        }
+        )+
+    };
 }
 
 macro_rules! impl_bin_eq_ineq {
@@ -1016,14 +1044,17 @@ macro_rules! impl_shift {
 impl_bin_arithmetic! {
     bin_power => power,
     bin_multiply => multiply,
-    bin_divide => divide,
-    bin_modulus => modulus,
     bin_plus => plus,
     bin_minus => minus,
     bin_bitwise_and => and,
     bin_bitwise_xor => xor,
     bin_bitwise_xnor => xnor,
     bin_bitwise_or => or,
+}
+
+impl_bin_arithmetic! {
+    bin_divide => (signed_divide, divide),
+    bin_modulus => (signed_modulus, modulus),
 }
 
 impl_bin_eq_ineq! {
