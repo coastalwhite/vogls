@@ -1,5 +1,5 @@
 use crate::VectorSize;
-use crate::util::last_word_mask;
+use crate::util::{last_word_mask, mask_size_1to64};
 
 pub fn tv_l_logical_shift_left(dst: &mut [u64], src: &[u64], shift: u32, size: VectorSize) {
     tv_l_logical_shift_left_with(dst, src, shift, size, false);
@@ -99,15 +99,40 @@ pub fn tv_l_arithmetic_shift_right(dst: &mut [u64], src: &[u64], shift: u32, siz
     tv_l_logical_shift_right_with(dst, src, shift, size, msb_val);
 }
 
+#[inline(always)]
 pub fn tv_shift_arith_right(val: u64, shift: u32, size: VectorSize) -> u64 {
-    assert!(size.get() <= 64);
+    debug_assert!(size.get() <= 64);
     let unused_bits = 64 - size.get();
     let val = ((val as i64) << unused_bits).unbounded_shr(unused_bits.saturating_add(shift));
     let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
     val as u64 & mask
 }
+#[inline(always)]
+pub fn fv_logical_shift_left(spc: u64, val: u64, shift: u32, size: VectorSize) -> (u64, u64) {
+    debug_assert!(size.get() <= 64);
+    let mask = mask_size_1to64(size.get());
+    let spc = spc.unbounded_shl(shift);
+    let spc = spc | 1u64.unbounded_shl(shift).wrapping_sub(1);
+    let val = val.unbounded_shl(shift);
+    (spc & mask, val & mask)
+}
+#[inline(always)]
+pub fn fv_logical_shift_right(spc: u64, val: u64, shift: u32, size: VectorSize) -> (u64, u64) {
+    debug_assert!(size.get() <= 64);
+    let mask = mask_size_1to64(size.get());
+
+    let spc = spc.unbounded_shr(shift);
+    let spc = spc
+        | 1u64
+            .unbounded_shl(shift)
+            .wrapping_sub(1)
+            .unbounded_shl((size.get() as u32).saturating_sub(shift));
+    let val = val.unbounded_shr(shift);
+    (spc & mask, val & mask)
+}
+#[inline(always)]
 pub fn fv_shift_arith_right(spc: u64, val: u64, shift: u32, size: VectorSize) -> (u64, u64) {
-    assert!(size.get() <= 64);
+    debug_assert!(size.get() <= 64);
     let unused_bits = 64 - size.get();
     let spc = ((spc as i64) << unused_bits).unbounded_shr(unused_bits.saturating_add(shift));
     let val = ((val as i64) << unused_bits).unbounded_shr(unused_bits.saturating_add(shift));

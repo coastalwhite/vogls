@@ -6,7 +6,7 @@ use vogls_bits::arithmetic::{
 };
 use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::edge::{fv_negedge_u64, fv_posedge_u64};
-use vogls_bits::shift::{fv_shift_arith_right, tv_shift_arith_right};
+use vogls_bits::shift::{fv_logical_shift_left, fv_logical_shift_right, fv_shift_arith_right, tv_shift_arith_right};
 use vogls_bits::util::wrapping_u64_pow;
 use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
@@ -1392,10 +1392,8 @@ impl BytecodeInstruction for FvSll {
                 regs[rs2_val] as u32
             }
         };
-        regs[rd_spc] = regs[rs1_spc].unbounded_shl(shift);
-        regs[rd_spc] |= 1u64.unbounded_shl(shift).wrapping_sub(1);
-        regs[rd_spc] = size.mask(regs[rd_spc]);
-        regs[rd_val] = size.mask(regs[rs1_val].unbounded_shl(shift));
+        (regs[rd_spc], regs[rd_val]) =
+            fv_logical_shift_left(regs[rs1_spc], regs[rs1_val], shift, size.into());
     }
 }
 impl BytecodeInstruction for FvSlr {
@@ -1435,13 +1433,8 @@ impl BytecodeInstruction for FvSlr {
             }
         };
 
-        regs[rd_spc] = regs[rs1_spc].unbounded_shr(shift);
-        regs[rd_spc] |= 1u64
-            .unbounded_shl(shift)
-            .wrapping_sub(1)
-            .unbounded_shl((size as u32).saturating_sub(shift));
-        regs[rd_spc] = size.mask(regs[rd_spc]);
-        regs[rd_val] = size.mask(regs[rs1_val].unbounded_shr(shift));
+        (regs[rd_spc], regs[rd_val]) =
+            fv_logical_shift_right(regs[rs1_spc], regs[rs1_val], shift, size.into());
     }
 }
 impl BytecodeInstruction for FvSar {

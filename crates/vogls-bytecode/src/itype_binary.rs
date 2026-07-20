@@ -1,7 +1,7 @@
 use std::fmt;
 
 use vogls_bits::arithmetic::{fv_bitwise_and_elem, fv_bitwise_or_elem, fv_bitwise_xor_elem};
-use vogls_bits::shift::fv_shift_arith_right;
+use vogls_bits::shift::{fv_logical_shift_left, fv_logical_shift_right, fv_shift_arith_right};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
@@ -1063,8 +1063,9 @@ impl BytecodeInstruction for FvSlli {
         } = self.0;
         let (rdspc, rdval) = rd.to_spc_and_val();
         let (rsspc, rsval) = rs.to_spc_and_val();
-        regs[rdspc] = size.mask(regs[rsspc].unbounded_shl(imm10.get_unsigned()));
-        regs[rdval] = size.mask(regs[rsval].unbounded_shl(imm10.get_unsigned()));
+        let shift = imm10.get_unsigned();
+        (regs[rdspc], regs[rdval]) =
+            fv_logical_shift_left(regs[rsspc], regs[rsval], shift, size.into());
     }
 }
 impl BytecodeInstruction for FvSlri {
@@ -1089,8 +1090,9 @@ impl BytecodeInstruction for FvSlri {
         } = self.0;
         let (rdspc, rdval) = rd.to_spc_and_val();
         let (rsspc, rsval) = rs.to_spc_and_val();
-        regs[rdspc] = size.mask(regs[rsspc].unbounded_shr(imm10.get_unsigned()));
-        regs[rdval] = size.mask(regs[rsval].unbounded_shr(imm10.get_unsigned()));
+        let shift = imm10.get_unsigned();
+        (regs[rdspc], regs[rdval]) =
+            fv_logical_shift_right(regs[rsspc], regs[rsval], shift, size.into());
     }
 }
 impl BytecodeInstruction for FvSari {
