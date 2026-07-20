@@ -345,5 +345,9 @@ module tb();
 		$vogls_assert_eq(129'sb0_1x0z_0zx1_x10x_xx00_1zxz_xz10_z0xx_zz1z_xxx0_zzx0_0101_0xz1_z01z_z0xz_zz00_10zz_1zx0_xxz1_z0xz_01z1_1x0z_0xzz_1010_zxx1_010x_z0xz_z1x1_00zx_x11x_zzz1_zxz0_101x >>> 81, 129'b0_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_01x0_z0zx_1x10_xxx0_01zx_zxz1_0z0x_xzz1_zxxx_0zzx_0010_10xz);
 		$vogls_assert_eq(129'sb0_1z1z_x0zx_0z1z_0011_z1z1_x110_xx0x_x0zz_zzxx_zx01_zzx1_1zzx_zx00_000z_0z0z_0xz1_1zz0_1z0x_zzz0_x1xx_xxz1_0z00_01xx_x1z1_z1z0_z1z1_zx1z_1010_zx1x_1000_z010_0z01 >>> 116, 129'b0_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_1z1z_x0zx_0z1z);
 `endif
+
+		// Signed right shift operators should be treated as unsigned numbers.
+		$vogls_assert_eq(8'h2d >>> 3'sb101, 8'h01); 
+		$vogls_assert_eq(8'h2d >>> 3'b101,  8'h01); 
 	end
 endmodule

@@ -1001,6 +1001,11 @@ macro_rules! impl_shift {
             r: VariableKey,
             r_ty: VType,
         ) -> (VariableKey, VType) {
+            // From LRM: 5.1.12 Shift operators
+            // > The right operand is always treated as an unsigned number and has no effect on the
+            // > signedness of the result.
+            let r_ty = r_ty.to_unsigned();
+
             let r = sign_or_zero_extend(gl, builder, r, r_ty, INTEGER_VSIZE);
             (builder.$builder_f(gl, l, r), l_ty)
         }
@@ -1050,6 +1055,10 @@ fn bin_arithmetic_shift_right(
     r: VariableKey,
     r_ty: VType,
 ) -> (VariableKey, VType) {
+    // From LRM: 5.1.12 Shift operators
+    // > The right operand is always treated as an unsigned number and has no effect on the
+    // > signedness of the result.
+    let r_ty = r_ty.to_unsigned();
     let r = sign_or_zero_extend(gl, builder, r, r_ty, INTEGER_VSIZE);
     if l_ty.is_signed() {
         (builder.arithmetic_shift_right(gl, l, r), l_ty)
