@@ -1,4 +1,5 @@
 use std::fmt;
+use std::num::NonZeroU16;
 
 use vogls_bits::slice::tv_ll_slice;
 use vogls_codegen::{HeapAlignment, HeapOffset};
@@ -18,7 +19,7 @@ pub struct FvLoadAligned(pub LoadRelArgs);
 pub struct LoadHeapAligned {
     pub rd: Reg,
     pub rs: Reg,
-    pub num_words: u16,
+    pub num_words: Option<NonZeroU16>,
 }
 pub struct LoadHeapUnaligned {
     pub rd: Reg,
@@ -496,7 +497,7 @@ impl BytecodeInstruction for LoadHeapAligned {
         Self {
             rd: Reg::new_masked(v >> 8),
             rs: Reg::new_masked(v >> 12),
-            num_words: (v >> 16) as u16,
+            num_words: NonZeroU16::new((v >> 16) as u16),
         }
     }
     #[inline(always)]
@@ -505,21 +506,32 @@ impl BytecodeInstruction for LoadHeapAligned {
             BytecodeOpcode::LoadHeapAligned as u32
                 | ((self.rd as u32) << 8)
                 | ((self.rs as u32) << 12)
-                | ((self.num_words as u32) << 16),
+                | (self.num_words.map_or(0, |v| (v.get() as u32) << 16)),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { rd, rs, num_words } = self;
         write_padded_mnemonic(f, "load_heap_aligned")?;
-        write!(f, "{rd}, {rs}, {num_words}")
+        write!(f, "{rd}, {rs}, ")?;
+        match num_words {
+            Some(n) => fmt::Display::fmt(n, f),
+            None => f.write_str("..."),
+        }
+    }
+
+    fn num_slots(&self) -> u8 {
+        match self.num_words {
+            Some(_) => 1,
+            None => 2,
+        }
     }
 
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -532,7 +544,16 @@ impl BytecodeInstruction for LoadHeapAligned {
         debug_assert!(HeapAlignment::B64.is_aligned(dst_offset));
         debug_assert!(HeapAlignment::B64.is_aligned(src_offset));
 
-        let num_words = usize::from(num_words);
+        let num_words = match num_words {
+            None => {
+                let num_words = code[*pc as usize].0;
+                *pc += 1;
+                num_words
+            }
+            Some(n) => n.get() as u32,
+        };
+
+        let num_words = num_words as usize;
         let [dst, src] = state.heap.get_u64_cell_slices([
             (
                 HeapOffset {
@@ -688,9 +709,28 @@ impl BytecodeEncoder {
             .encode(),
         )
     }
-    pub fn load_heap_aligned(&mut self, rd: Reg, rs: Reg, num_words: u16) {
-        self.data
-            .push(LoadHeapAligned { rd, rs, num_words }.encode())
+    pub fn load_heap_aligned(&mut self, rd: Reg, rs: Reg, num_words: u32) {
+        match u16::try_from(num_words).ok().and_then(NonZeroU16::new) {
+            Some(num_words) => self.data.push(
+                LoadHeapAligned {
+                    rd,
+                    rs,
+                    num_words: Some(num_words),
+                }
+                .encode(),
+            ),
+            None => {
+                self.data.push(
+                    LoadHeapAligned {
+                        rd,
+                        rs,
+                        num_words: None,
+                    }
+                    .encode(),
+                );
+                self.data.push(Bytecode(num_words));
+            }
+        }
     }
     pub fn load_heap_unaligned(
         &mut self,

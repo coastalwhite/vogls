@@ -1992,18 +1992,14 @@ fn lower_instruction(
                 match (dst.mode(), SixBitSize::from_vector_size(signal_size)) {
                     (LogicMode::TwoValue, None) => {
                         bce.load_u64(rsignal, signal_addr);
-                        bce.load_heap_aligned(rd, rsignal, signal_size.get().div_ceil(64) as u16);
+                        bce.load_heap_aligned(rd, rsignal, signal_size.get().div_ceil(64));
                     }
                     (LogicMode::TwoValue, Some(signal_size)) => {
                         bce.tv_load_aligned(rd, signal_addr, signal_size)
                     }
                     (LogicMode::FourValue, None) => {
                         bce.load_u64(rsignal, signal_addr);
-                        bce.load_heap_aligned(
-                            rd,
-                            rsignal,
-                            signal_size.get().div_ceil(64) as u16 * 2,
-                        );
+                        bce.load_heap_aligned(rd, rsignal, signal_size.get().div_ceil(64) * 2);
                     }
                     (LogicMode::FourValue, Some(signal_size)) => {
                         bce.load_u64(rsignal, signal_addr);
