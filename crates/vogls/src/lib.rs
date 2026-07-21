@@ -16,6 +16,8 @@ pub mod design;
 pub mod symbol;
 pub mod timing;
 
+#[cfg(test)]
+mod tests;
 mod design_builder;
 mod elaborated_design;
 mod lowered_design;

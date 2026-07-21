@@ -693,6 +693,12 @@ impl FuseGraph {
                             (edge.driver_slice != SignalSlice::with_end(nodes[edge.driver].size))
                                 .then_some(edge.driver_slice),
                         ),
+                        NodeContent::Constant(_)
+                            if nodes[edge.driver].flags.contains(NodeFlags::DRIVE) =>
+                        {
+                            marshalls.push(k);
+                            continue;
+                        }
                         NodeContent::Constant(value) => FuseTarget::Constant(
                             value.slicez(edge.driver_slice.lsb(), edge.driver_slice.width()),
                         ),
