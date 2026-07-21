@@ -236,8 +236,10 @@ pub fn linear_scan_register_allocation(
                     let offset =
                         heap_builder.claim_constant(dst.mode(), value.clone_lowering_mode());
                     assignment.insert(*dst, Slot::Heap(offset.offset.bit_offset as u64));
+                    continue;
                 } else if let Some(simple_bits) = SimpleBits::from_bits(value) {
                     assignment.insert(*dst, Slot::Constant(simple_bits));
+                    continue;
                 }
             }
             if let Some(dst) = i.get_destination_variable() {
@@ -312,6 +314,10 @@ pub fn linear_scan_register_allocation(
 
         for idx in live.true_idx_iter() {
             let var = vars.get_at_index(idx).unwrap();
+            if assignment.contains_key(var) {
+                continue;
+            }
+
             let size = var_map.size(*var);
             intervals
                 .entry(*var)
