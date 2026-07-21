@@ -6,6 +6,7 @@ edition.workspace = true
 [[bin]]
 name = "vogls"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 vogls = { workspace = true, features = ["unstable", "native"] }
