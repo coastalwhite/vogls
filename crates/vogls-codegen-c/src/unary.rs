@@ -1,5 +1,6 @@
 use std::io;
 
+use vogls_bits::util::last_word_mask;
 use vogls_ir::{LogicMode, SCALAR_VSIZE};
 
 use crate::{CExpr, CVar, INDENT, mask};
@@ -9,11 +10,7 @@ pub fn cgc_negate(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Result<(
     assert_eq!(dst.ty.size, src.ty().size);
 
     let size = dst.ty.size;
-    let msbs_mask = if !size.get().is_multiple_of(64) {
-        u64::MAX
-    } else {
-        (1u64 << (dst.ty.size.get() % 64)) - 1
-    };
+    let msbs_mask = last_word_mask(size);
 
     let (d, s) = (dst.ident, src);
     match (dst.ty.mode, dst.ty.array_size()) {
@@ -129,18 +126,15 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resu
     assert_eq!(dst.ty.mode, src.ty().mode);
     assert_eq!(dst.ty.size, SCALAR_VSIZE);
 
+    let size = src.ty().size;
+    let msbs_mask = last_word_mask(size);
+
     let (d, s) = (dst.ident, src);
     match (dst.ty.mode, src.ty().array_size()) {
         (LogicMode::TwoValue, None) => {
-            let msbs_mask = mask(src.ty().size.get());
             writeln!(f, "{INDENT}{d} = (uint8_t)({s} == 0x{msbs_mask:x});")?
         }
         (LogicMode::TwoValue, Some(arr_size)) => {
-            let msbs_mask = if !src.ty().size.get().is_multiple_of(64) {
-                u64::MAX
-            } else {
-                mask(src.ty().size.get() % 64)
-            };
             writeln!(
                 f,
                 "{INDENT}{d} = (uint8_t)({s}[{i}] == 0x{msbs_mask:x});",
@@ -157,8 +151,7 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resu
         // z1 = &spc | (spc & !value != 0);
         // z0 = &spc & &value;
         (LogicMode::FourValue, None) => {
-            let size = src.ty().size;
-            let spc_mask = mask(src.ty().size.get());
+            let spc_mask = msbs_mask;
             let val_mask = spc_mask << size.get();
             writeln!(f, "{INDENT}{{")?;
             writeln!(
@@ -193,13 +186,12 @@ pub fn cgc_reduce_and(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resu
                 )?;
             }
             if !src.ty().size.get().is_multiple_of(64) {
-                let mask = mask(src.ty().size.get() % 64);
                 let last_i = arr_size - 1;
                 writeln!(
                     f,
-                    "{INDENT}{INDENT}redandspc &= {s}[{num_words_loop}] == 0x{mask:x};"
+                    "{INDENT}{INDENT}redandspc &= {s}[{num_words_loop}] == 0x{msbs_mask:x};"
                 )?;
-                writeln!(f, "{INDENT}{INDENT}z0 &= {s}[{last_i}] == 0x{mask:x};;")?;
+                writeln!(f, "{INDENT}{INDENT}z0 &= {s}[{last_i}] == 0x{msbs_mask:x};")?;
                 writeln!(
                     f,
                     "{INDENT}{INDENT}z1 |= ({s}[{num_words_loop}] & ~{s}[{last_i}]) != 0;"
@@ -219,6 +211,9 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resu
     assert_eq!(dst.ty.mode, src.ty().mode);
     assert_eq!(dst.ty.size, SCALAR_VSIZE);
 
+    let size = src.ty().size;
+    let msbs_mask = last_word_mask(size);
+
     let (d, s) = (dst.ident, src);
     match (dst.ty.mode, src.ty().array_size()) {
         (LogicMode::TwoValue, None) => writeln!(
@@ -236,9 +231,8 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resu
         // z0 = z1 & (popcount(value) % 2 == 0)
         // z1 = spc == mask
         (LogicMode::FourValue, None) => {
-            let size = src.ty().size;
-            let spc_mask = mask(src.ty().size.get());
-            let val_mask = mask(src.ty().size.get()) << size.get();
+            let spc_mask = msbs_mask;
+            let val_mask = spc_mask << size.get();
             writeln!(f, "{INDENT}{{")?;
             writeln!(
                 f,
@@ -271,11 +265,10 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resu
             }
             if !src.ty().size.get().is_multiple_of(64) {
                 let last_i = arr_size - 1;
-                let mask = mask(src.ty().size.get() % 64);
                 writeln!(f, "{INDENT}{INDENT}cnt += popcount64({s}[{last_i}]);")?;
                 writeln!(
                     f,
-                    "{INDENT}{INDENT}z1 &= {s}[{num_words_m_1}] == 0x{mask:x};"
+                    "{INDENT}{INDENT}z1 &= {s}[{num_words_m_1}] == 0x{msbs_mask:x};"
                 )?;
             }
             writeln!(f, "{INDENT}{INDENT}z0 = z1 & (cnt % 2 == 1);")?;
@@ -289,29 +282,24 @@ pub fn cgc_reduce_xor(f: &mut impl io::Write, dst: CVar, src: CExpr) -> io::Resu
 
 pub fn cgc_tv_to_fv(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Result<()> {
     let size = src.ty().size;
-    assert_eq!(dst.ty.size, src.ty().size);
+    assert_eq!(dst.ty.size, size);
     assert_eq!(dst.ty.mode, LogicMode::FourValue);
     assert_eq!(src.ty().mode, LogicMode::TwoValue);
 
     let d = dst.ident;
-    let msbw_mask = if !size.get().is_multiple_of(64) {
-        u64::MAX
-    } else {
-        mask(size.get() % 64)
-    };
+    let msbs_mask = last_word_mask(size);
     match (dst.ty.array_size(), src.ty().array_size()) {
         (None, None) => {
             writeln!(
                 f,
-                "{INDENT}{d} = ((({dst_elem_ty}){src}) << {size}) | 0x{mask:x};",
+                "{INDENT}{d} = ((({dst_elem_ty}){src}) << {size}) | 0x{msbs_mask:x};",
                 dst_elem_ty = dst.ty.element_type(),
-                mask = msbw_mask
             )?;
         }
         (Some(_), None) => {
             writeln!(
                 f,
-                "{INDENT}{d}[0] = 0x{msbw_mask:x}; {d}[1] = (uint64_t){src};"
+                "{INDENT}{d}[0] = 0x{msbs_mask:x}; {d}[1] = (uint64_t){src};"
             )?;
         }
         (Some(_), Some(arr_size)) => {
@@ -332,7 +320,7 @@ pub fn cgc_tv_to_fv(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Re
             }
             if !size.get().is_multiple_of(64) {
                 let last_i = 2 * arr_size - 1;
-                writeln!(f, "{INDENT}{d}[{main_loop_size}] = 0x{msbw_mask:x};")?;
+                writeln!(f, "{INDENT}{d}[{main_loop_size}] = 0x{msbs_mask:x};")?;
                 writeln!(f, "{INDENT}{d}[{last_i}] = {src}[{main_loop_size}];")?;
             }
         }
@@ -348,16 +336,12 @@ pub fn cgc_fv_to_tv(f: &mut impl io::Write, dst: CVar, src: CExpr<'_>) -> io::Re
     assert_eq!(src.ty().mode, LogicMode::FourValue);
 
     let d = dst.ident;
-    let msbw_mask = if !size.get().is_multiple_of(64) {
-        u64::MAX
-    } else {
-        mask(size.get() % 64)
-    };
+    let msbs_mask = last_word_mask(size);
     match (dst.ty.array_size(), src.ty().array_size()) {
         (None, None) => {
             writeln!(
                 f,
-                "{INDENT}{d} = ({dst_elem_ty})({src} >> {size}) & ({dst_elem_ty})({src} & {msbw_mask});",
+                "{INDENT}{d} = ({dst_elem_ty})({src} >> {size}) & ({dst_elem_ty})({src} & {msbs_mask});",
                 dst_elem_ty = dst.ty.element_type(),
             )?;
         }

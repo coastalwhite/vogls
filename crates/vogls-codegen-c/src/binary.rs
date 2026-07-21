@@ -1,6 +1,7 @@
 use std::{fmt, io};
 
 use vogls_bits::arithmetic::FvLogicValue;
+use vogls_bits::util::last_word_mask;
 use vogls_ir::{INTEGER_VSIZE, LogicMode};
 
 use crate::{CExpr, CIdent, CVar, INDENT, mask};
@@ -365,11 +366,7 @@ fn fv_inline_div_rem(
     op: char,
 ) -> io::Result<()> {
     let size = dst.ty.size;
-    let msbs_mask = if !size.get().is_multiple_of(64) {
-        u64::MAX
-    } else {
-        (1u64 << dst.ty.size.get()) - 1
-    };
+    let msbs_mask = last_word_mask(size);
 
     let (d, l, r) = (dst.ident, lhs, rhs);
     writeln!(
@@ -385,11 +382,7 @@ pub fn cgc_bin_add(
     rhs: CExpr<'_>,
 ) -> io::Result<()> {
     let size = dst.ty.size;
-    let msbs_mask = if !size.get().is_multiple_of(64) {
-        u64::MAX
-    } else {
-        (1u64 << (dst.ty.size.get() % 64)) - 1
-    };
+    let msbs_mask = last_word_mask(size);
 
     let (d, l, r) = (dst.ident, lhs, rhs);
     match (dst.ty.mode, dst.ty.array_size()) {
@@ -431,11 +424,7 @@ pub fn cgc_bin_sub(
     rhs: CExpr<'_>,
 ) -> io::Result<()> {
     let size = dst.ty.size;
-    let msbs_mask = if !size.get().is_multiple_of(64) {
-        u64::MAX
-    } else {
-        (1u64 << (dst.ty.size.get() % 64)) - 1
-    };
+    let msbs_mask = last_word_mask(size);
 
     let (d, l, r) = (dst.ident, lhs, rhs);
     match (dst.ty.mode, dst.ty.array_size()) {
@@ -483,11 +472,7 @@ pub fn cgc_bin_mul(
     rhs: CExpr<'_>,
 ) -> io::Result<()> {
     let size = dst.ty.size;
-    let msbs_mask = if !size.get().is_multiple_of(64) {
-        u64::MAX
-    } else {
-        (1u64 << (dst.ty.size.get() % 64)) - 1
-    };
+    let msbs_mask = last_word_mask(size);
 
     let (d, l, r) = (dst.ident, lhs, rhs);
     match (dst.ty.mode, dst.ty.array_size()) {
@@ -528,11 +513,7 @@ pub fn cgc_bin_div(
     assert_eq!(lhs.ty(), rhs.ty());
 
     let size = dst.ty.size;
-    let msbs_mask = if !size.get().is_multiple_of(64) {
-        u64::MAX
-    } else {
-        (1u64 << dst.ty.size.get()) - 1
-    };
+    let msbs_mask = last_word_mask(size);
 
     let (d, l, r) = (dst.ident, lhs, rhs);
     match (
@@ -581,11 +562,7 @@ pub fn cgc_bin_mod(
     assert_eq!(lhs.ty(), rhs.ty());
 
     let size = dst.ty.size;
-    let msbs_mask = if !size.get().is_multiple_of(64) {
-        u64::MAX
-    } else {
-        (1u64 << dst.ty.size.get()) - 1
-    };
+    let msbs_mask = last_word_mask(size);
 
     let (d, l, r) = (dst.ident, lhs, rhs);
     match (

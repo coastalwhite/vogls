@@ -1,6 +1,6 @@
 use std::io;
 
-use vogls_bits::util::saturating_rem;
+use vogls_bits::util::{last_word_mask, saturating_rem};
 use vogls_ir::LogicMode;
 
 use crate::{CExpr, mask};
@@ -26,11 +26,7 @@ pub fn cgc_truncate(f: &mut impl io::Write, dst: CExpr, src: CExpr<'_>) -> io::R
         return cgc_copy(f, dst, src);
     }
 
-    let msbs_mask = if !dst.ty().size.get().is_multiple_of(64) {
-        u64::MAX
-    } else {
-        (1u64 << (dst.ty().size.get() % 64)) - 1
-    };
+    let msbs_mask = last_word_mask(dst.ty().size);
 
     let (d, s) = (dst, src);
     match (dst.ty().mode, dst.ty().array_size(), src.ty().array_size()) {
