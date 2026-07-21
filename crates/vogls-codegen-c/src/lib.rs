@@ -656,7 +656,28 @@ pub fn lower_process(
                         vogls_ir::IntrinsicOp::Finish => {
                             writeln!(buffer, "{INDENT}return 1;")?;
                         }
-                        vogls_ir::IntrinsicOp::Random(..) => todo!(),
+                        vogls_ir::IntrinsicOp::Random(kind) => {
+                            let t = temp_map[dst].ident;
+                            let seed = temp_map[&items[0]].ident;
+
+                            use vogls_ir::RandomKind as R;
+                            let fn_name = match kind {
+                                R::Uniform => "uniform",
+                                R::Normal => "normal",
+                                R::Exponential => "exponential",
+                                R::Poisson => "poisson",
+                                R::ChiSquare => "chi_square",
+                                R::T => "t",
+                                R::Erlang => "erlang",
+                            };
+                            
+                            write!(buffer, "{INDENT}{t} = (cldctx->fn_table.rtl_dist_{fn_name})((int32_t){seed}")?;
+                            for item in &items[1..] {
+                            let item = temp_map[item].ident;
+                                write!(buffer, ", (int32_t){item}")?;
+                            }
+                            writeln!(buffer, ", cldctx->stderr);")?;
+                        },
                         vogls_ir::IntrinsicOp::Display(dyn_format_string) => {
                             // @Performance: scratchpad this.
                             let args = items
@@ -1044,7 +1065,7 @@ fn lower_dyn_format_str(
     let dyn_fmt_ptr = dyn_fmt_strs.insert_index(dyn_format_string.clone());
     write!(
         f,
-        r#"}}; (cldctx->fmt)(cldctx->stdout, (cldctx->fmt_strs+{size_of_dyn_str}*{dyn_fmt_ptr}), args); }}"#,
+        r#"}}; (cldctx->fn_table.fmt)(cldctx->stdout, (cldctx->fmt_strs+{size_of_dyn_str}*{dyn_fmt_ptr}), args); }}"#,
         size_of_dyn_str = size_of::<DynFormatString>(),
     )?;
     Ok(())
@@ -1233,8 +1254,20 @@ typedef struct bits_ref {
 } bits_ref_t;
 
 struct schedule;
-typedef struct cold_context {
+
+typedef struct fn_table {
     void (*fmt)(void*, void*, bits_ref_t*);
+
+    uint64_t (*rtl_dist_uniform)(int32_t seed, int32_t start, int32_t end, void *);
+    uint64_t (*rtl_dist_normal)(int32_t seed, int32_t mean, int32_t df, void *);
+    uint64_t (*rtl_dist_exponential)(int32_t seed, int32_t mean, void *);
+    uint64_t (*rtl_dist_poisson)(int32_t seed, int32_t mean, void *);
+    uint64_t (*rtl_dist_chi_square)(int32_t seed, int32_t dof, void *);
+    uint64_t (*rtl_dist_t)(int32_t seed, int32_t dof, void *);
+    uint64_t (*rtl_dist_erlang)(int32_t seed, int32_t k_stage, int32_t mean, void *);
+} fn_table_t;
+typedef struct cold_context {
+    fn_table_t fn_table;
     void *fmt_strs;
 
     void **plugins;

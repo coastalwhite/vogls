@@ -54,12 +54,59 @@ pub struct BitsRefT {
 }
 
 #[repr(C)]
-pub struct ColdContextT {
+pub struct FnTable {
     fmt: extern "C" fn(
         NonNull<Box<dyn std::io::Write + Send + Sync>>,
         *const DynFormatString,
         *const BitsRefT,
     ),
+
+    rtl_dist_uniform: extern "C" fn(
+        seed: i32,
+        start: i32,
+        end: i32,
+        NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    ) -> u64,
+    rtl_dist_normal: extern "C" fn(
+        seed: i32,
+        mean: i32,
+        df: i32,
+        NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    ) -> u64,
+    rtl_dist_exponential:
+        extern "C" fn(seed: i32, mean: i32, NonNull<Box<dyn std::io::Write + Send + Sync>>) -> u64,
+    rtl_dist_poisson:
+        extern "C" fn(seed: i32, mean: i32, NonNull<Box<dyn std::io::Write + Send + Sync>>) -> u64,
+    rtl_dist_chi_square:
+        extern "C" fn(seed: i32, dof: i32, NonNull<Box<dyn std::io::Write + Send + Sync>>) -> u64,
+    rtl_dist_t:
+        extern "C" fn(seed: i32, dof: i32, NonNull<Box<dyn std::io::Write + Send + Sync>>) -> u64,
+    rtl_dist_erlang: extern "C" fn(
+        seed: i32,
+        k_stage: i32,
+        mean: i32,
+        NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    ) -> u64,
+}
+impl FnTable {
+    fn new() -> Self {
+        Self {
+            fmt,
+            rtl_dist_uniform: random_shims::rtl_dist_uniform,
+            rtl_dist_normal: random_shims::rtl_dist_normal,
+            rtl_dist_exponential: random_shims::rtl_dist_exponential,
+            rtl_dist_poisson: random_shims::rtl_dist_poisson,
+            rtl_dist_chi_square: random_shims::rtl_dist_chi_square,
+            rtl_dist_t: random_shims::rtl_dist_t,
+            rtl_dist_erlang: random_shims::rtl_dist_erlang,
+        }
+    }
+}
+
+#[repr(C)]
+pub struct ColdContextT {
+    fn_table: FnTable,
+
     fmt_strs: *const DynFormatString,
 
     plugins: *mut Box<dyn RuntimePlugin>,
@@ -360,7 +407,7 @@ impl CDesign {
         }
         .unwrap();
         let mut cldctx = ColdContextT {
-            fmt,
+            fn_table: FnTable::new(),
             fmt_strs: self.dyn_fmt_strs.as_ptr(),
             plugins: state.plugins.as_mut_ptr(),
             plugin_poke_signal,
@@ -469,7 +516,7 @@ impl CDesign {
         }
         .unwrap();
         let mut cldctx = ColdContextT {
-            fmt,
+            fn_table: FnTable::new(),
             fmt_strs: self.dyn_fmt_strs.as_ptr(),
 
             plugins: state.plugins.as_mut_ptr(),
@@ -496,5 +543,103 @@ impl CDesign {
                 NonNull::from_mut(&mut cldctx),
             );
         });
+    }
+}
+
+mod random_shims {
+    use std::ptr::NonNull;
+
+    fn combine_seed_result(seed: i32, result: i32) -> u64 {
+        (u64::from(seed.cast_unsigned()) << 32) | u64::from(result.cast_unsigned())
+    }
+
+    pub extern "C" fn rtl_dist_uniform(
+        mut seed: i32,
+        start: i32,
+        end: i32,
+        _io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    ) -> u64 {
+        let result = vogls_runtime::random::rtl_dist_uniform(&mut seed, start, end);
+        combine_seed_result(seed, result)
+    }
+    pub extern "C" fn rtl_dist_normal(
+        mut seed: i32,
+        mean: i32,
+        df: i32,
+        _io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    ) -> u64 {
+        let result = vogls_runtime::random::rtl_dist_normal(&mut seed, mean, df);
+        combine_seed_result(seed, result)
+    }
+    pub extern "C" fn rtl_dist_exponential(
+        mut seed: i32,
+        mean: i32,
+        mut io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    ) -> u64 {
+        let mut warning = None;
+        let result = vogls_runtime::random::rtl_dist_exponential(&mut seed, mean, &mut warning);
+        if let Some(warning) = warning {
+            use std::io::Write;
+            let io = unsafe { io.as_mut() };
+            _ = writeln!(io, "WARNING: {}", warning.as_str());
+        }
+        combine_seed_result(seed, result)
+    }
+    pub extern "C" fn rtl_dist_poisson(
+        mut seed: i32,
+        mean: i32,
+        mut io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    ) -> u64 {
+        let mut warning = None;
+        let result = vogls_runtime::random::rtl_dist_poisson(&mut seed, mean, &mut warning);
+        if let Some(warning) = warning {
+            use std::io::Write;
+            let io = unsafe { io.as_mut() };
+            _ = writeln!(io, "WARNING: {}", warning.as_str());
+        }
+        combine_seed_result(seed, result)
+    }
+    pub extern "C" fn rtl_dist_chi_square(
+        mut seed: i32,
+        dof: i32,
+        mut io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    ) -> u64 {
+        let mut warning = None;
+        let result = vogls_runtime::random::rtl_dist_chi_square(&mut seed, dof, &mut warning);
+        if let Some(warning) = warning {
+            use std::io::Write;
+            let io = unsafe { io.as_mut() };
+            _ = writeln!(io, "WARNING: {}", warning.as_str());
+        }
+        combine_seed_result(seed, result)
+    }
+    pub extern "C" fn rtl_dist_t(
+        mut seed: i32,
+        dof: i32,
+        mut io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    ) -> u64 {
+        let mut warning = None;
+        let result = vogls_runtime::random::rtl_dist_t(&mut seed, dof, &mut warning);
+        if let Some(warning) = warning {
+            use std::io::Write;
+            let io = unsafe { io.as_mut() };
+            _ = writeln!(io, "WARNING: {}", warning.as_str());
+        }
+        combine_seed_result(seed, result)
+    }
+    pub extern "C" fn rtl_dist_erlang(
+        mut seed: i32,
+        k_stage: i32,
+        mean: i32,
+        mut io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    ) -> u64 {
+        let mut warning = None;
+        let result = vogls_runtime::random::rtl_dist_erlang(&mut seed, k_stage, mean, &mut warning);
+        if let Some(warning) = warning {
+            use std::io::Write;
+            let io = unsafe { io.as_mut() };
+            _ = writeln!(io, "WARNING: {}", warning.as_str());
+        }
+        combine_seed_result(seed, result)
     }
 }
