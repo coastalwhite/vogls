@@ -7,9 +7,9 @@ module tb;
 
    initial begin
        $vogls_assert_eq(X1, 64'sd1);
-       $vogls_assert_eq(X1, -64'sd1);
+       $vogls_assert_eq(X2, -64'sd1);
 
-       $vogls_assert_eq(X2, 64'sd8);
-       $vogls_assert_eq(X2, -64'sd8);
+       $vogls_assert_eq(Y1, 64'sd8);
+       $vogls_assert_eq(Y2, -64'sd8);
    end
 endmodule
