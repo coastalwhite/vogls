@@ -6,6 +6,7 @@ edition.workspace = true
 [lib]
 name = "vogls"
 crate-type = ["cdylib"]
+doc = false
 
 [dependencies]
 pyo3.workspace = true
