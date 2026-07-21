@@ -255,9 +255,10 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut backends = Vec::new();
     if args.bytecode {
         backends.push(Backend::Bytecode);
-    }
-    if args.compiled {
+    } else if args.compiled {
         backends.push(Backend::Compile);
+    } else {
+        backends.extend([Backend::Bytecode, Backend::Compile]);
     }
 
     let mut num_tests = 0;
