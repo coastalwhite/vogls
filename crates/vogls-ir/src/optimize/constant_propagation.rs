@@ -269,21 +269,21 @@ fn constant_propagate_instruction(
                 (O::Power, Some(b), _) => additional.push(BI(dst, IO::RevPower, rhs, b.clone())),
                 (O::Power, _, Some(b)) => additional.push(BI(dst, IO::Power, lhs, b.clone())),
                 (O::DivideX, Some(b), _) => {
-                    simplify_div_mod_imm!(dst, lhs, b, RevDivideX, false, false)
+                    simplify_div_mod_imm!(dst, rhs, b, RevDivideX, false, false)
                 }
                 (O::DivideX, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Divide, true, false),
                 (O::Divide0, Some(b), _) => {
-                    simplify_div_mod_imm!(dst, lhs, b, RevDivide0, false, true)
+                    simplify_div_mod_imm!(dst, rhs, b, RevDivide0, false, true)
                 }
                 (O::Divide0, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Divide, true, true),
                 (O::ModulusX, Some(b), _) => {
-                    simplify_div_mod_imm!(dst, lhs, b, RevModulusX, false, false)
+                    simplify_div_mod_imm!(dst, rhs, b, RevModulusX, false, false)
                 }
                 (O::ModulusX, _, Some(b)) => {
                     simplify_div_mod_imm!(dst, lhs, b, Modulus, true, false)
                 }
                 (O::Modulus0, Some(b), _) => {
-                    simplify_div_mod_imm!(dst, lhs, b, RevModulus0, false, true)
+                    simplify_div_mod_imm!(dst, rhs, b, RevModulus0, false, true)
                 }
                 (O::Modulus0, _, Some(b)) => {
                     simplify_div_mod_imm!(dst, lhs, b, Modulus, true, true)
