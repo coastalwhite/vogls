@@ -197,7 +197,7 @@ impl<'a> SourceCursor<'a> {
     }
     pub fn take_imm20(&mut self) -> AssembleResult<u32> {
         // @TODO: Many other syntaxes.
-        self.take_u32().map(|v| v as u32)
+        self.take_u32()
     }
     pub fn take_imm12_unsigned(&mut self) -> AssembleResult<u32> {
         todo!()

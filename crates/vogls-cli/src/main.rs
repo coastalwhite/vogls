@@ -149,7 +149,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
 
         let mut arena = Arena::default();
-        let design = match builder.parse(&mut arena) {
+        let design = match builder.parse(&arena) {
             Ok(design) => design,
             Err(err) => {
                 eprintln!("{err}");

@@ -228,10 +228,10 @@ pub fn lower_expr<'a>(
                             .filter(|e| {
                                 !is_zero_sized_replication(
                                     &mctx.gl,
-                                    &ctx.arenas,
+                                    ctx.arenas,
                                     &ctx.table,
                                     scope,
-                                    &**e,
+                                    e,
                                 )
                             })
                             .map(StackItem::new_no_ctx),
@@ -249,7 +249,7 @@ pub fn lower_expr<'a>(
                 let num_exprs = exprs
                     .iter()
                     .filter(|e| {
-                        !is_zero_sized_replication(&mctx.gl, &ctx.arenas, &ctx.table, scope, e)
+                        !is_zero_sized_replication(&mctx.gl, ctx.arenas, &ctx.table, scope, e)
                     })
                     .count();
                 if num_exprs == 0 {

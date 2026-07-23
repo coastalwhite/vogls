@@ -1,6 +1,9 @@
 lint:
 	cargo clippy
 
+check:
+    cargo check --workspace
+
 test *FLAGS:
     cargo build --release --bin vogls-test
     ./target/release/vogls-test {{FLAGS}}

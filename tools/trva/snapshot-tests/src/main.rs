@@ -131,10 +131,10 @@ fn parse_positions(source: &str) -> SectionPositions {
             if let Ok(v) = parse_hex(rest.trim()) {
                 pos.rodata = v;
             }
-        } else if let Some(rest) = line.strip_prefix("# trva-bss:") {
-            if let Ok(v) = parse_hex(rest.trim()) {
-                pos.bss = v;
-            }
+        } else if let Some(rest) = line.strip_prefix("# trva-bss:")
+            && let Ok(v) = parse_hex(rest.trim())
+        {
+            pos.bss = v;
         }
     }
     pos

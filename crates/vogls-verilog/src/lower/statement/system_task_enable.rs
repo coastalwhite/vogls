@@ -164,7 +164,7 @@ pub fn lower_system_task_enable<'a>(
 
                     let VSymbol::Module(n) = &ctx.table[sid].content else {
                         mctx.diagnostics.not_yet_implemented(
-                            hident_span(&ctx.arenas, *ident),
+                            hident_span(ctx.arenas, *ident),
                             "symbol is not a module",
                         );
                         return Err(());

@@ -882,12 +882,11 @@ impl Assembler {
                             let lbl_offset = resolve_target_label(
                                 lbl,
                                 &section.events,
-                                &local_offsets,
+                                local_offsets,
                                 eid,
                                 local_offset,
                                 &out_symbols,
                             );
-                            let lbl_offset = lbl_offset as u32;
                             out.extend_from_slice(
                                 &encoding::Lui::new(*rd, lbl_offset & !0xFFF)
                                     .encode_as_u32()
@@ -903,7 +902,7 @@ impl Assembler {
                             let lbl_offset = resolve_target_label(
                                 lbl,
                                 &section.events,
-                                &local_offsets,
+                                local_offsets,
                                 eid,
                                 local_offset,
                                 &out_symbols,
@@ -948,7 +947,7 @@ impl Assembler {
                             let lbl_offset = resolve_target_label(
                                 lbl,
                                 &self.text.events,
-                                &local_offsets,
+                                local_offsets,
                                 eid,
                                 local_offset,
                                 &out_symbols,
@@ -959,8 +958,7 @@ impl Assembler {
                                 assert!(in_imm20_range(lbl_offset, offset));
                                 let imm = lbl_offset
                                     .checked_signed_diff(offset)
-                                    .expect("Invariant: should be in range")
-                                    as i32;
+                                    .expect("Invariant: should be in range");
                                 out.extend_from_slice(
                                     &encoding::Jal::new(*rd, imm).encode_as_u32().to_le_bytes(),
                                 );
@@ -973,7 +971,7 @@ impl Assembler {
                             let lbl_offset = resolve_target_label(
                                 lbl,
                                 &self.text.events,
-                                &local_offsets,
+                                local_offsets,
                                 eid,
                                 local_offset,
                                 &out_symbols,
@@ -982,8 +980,7 @@ impl Assembler {
                             reloc_offset += 1;
                             let imm = lbl_offset
                                 .checked_signed_diff(offset)
-                                .expect("Invariant: should be in range")
-                                as i32;
+                                .expect("Invariant: should be in range");
                             if is_in_jump_range {
                                 assert!(in_imm20_range(lbl_offset, offset));
                                 out.extend_from_slice(
@@ -1056,7 +1053,7 @@ impl Assembler {
 }
 
 fn signed_imm_to_imm12(imm: i64) -> Option<i16> {
-    if (imm < -(1i64 << 11)) | (imm >= (1i64 << 11)) {
+    if !(-(1i64 << 11)..(1i64 << 11)).contains(&imm) {
         return None;
     }
     Some(imm as i16)

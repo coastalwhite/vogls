@@ -1,3 +1,5 @@
+#![allow(clippy::no_effect, clippy::new_without_default)]
+
 use std::fmt::Display;
 use std::io;
 
@@ -108,7 +110,7 @@ macro_rules! format_enable {
             $( | { $rs2   ;   0b1_1111u32 << 20 } )?
             $( | { $rs1   ;   0b1_1111u32 << 15 } )?
             $( | { $funct3;      0b111u32 << 12 } )?
-            $( | { $rd    ;   0b1_1111u32 << 07 } )?
+            $( | { $rd    ;   0b1_1111u32 <<  7 } )?
             | 0x7F
     };
     (
@@ -140,7 +142,7 @@ macro_rules! format_enable {
             $( | { $imm11_0    ; 0b1_1111u32   << 20 } )?
             $( | { $rs1        ; 0b1_1111u32   << 15 } )?
             $( | { $funct3     ;    0b111u32   << 12 } )?
-            $( | { $rd         ; 0b1_1111u32   << 07 } )?
+            $( | { $rd         ; 0b1_1111u32   <<  7 } )?
             | 0x7F
     };
     (
@@ -164,7 +166,7 @@ macro_rules! format_enable {
     ) => {
         0u32
             $( | { $imm31_12; 0xFFFF_Fu32 << 12 } )?
-            $( | { $rd      ; 0b1111_1u32 << 07 } )?
+            $( | { $rd      ; 0b1111_1u32 <<  7 } )?
             | 0x7F
     };
     (
@@ -174,7 +176,7 @@ macro_rules! format_enable {
     ) => {
         0u32
             $( | { $imm20_1; 0xFFFF_Fu32 << 12 } )?
-            $( | { $rd     ; 0b1111_1u32 << 07 } )?
+            $( | { $rd     ; 0b1111_1u32 <<  7 } )?
             | 0x7F
     };
 
@@ -189,9 +191,9 @@ macro_rules! format_enable {
         0u32
             $( | { $funct4       ; 0b1111 << 12 } )?
             $( | { $funct2_rd_rs1; 0b0011 << 10 } )?
-            $( | { $rd_rs1       ; 0x001F << 07 } )?
-            $( | { $funct2_rs2   ; 0b0011 << 05 } )?
-            $( | { $rs2          ; 0x001F << 02 } )?
+            $( | { $rd_rs1       ; 0x001F <<  7 } )?
+            $( | { $funct2_rs2   ; 0b0011 <<  5 } )?
+            $( | { $rs2          ; 0x001F <<  2 } )?
             | 0x03
     };
     (
@@ -206,8 +208,8 @@ macro_rules! format_enable {
             $( | { $funct3; 0b111 << 13 } )?
             $( | { $imm_h ; 0b001 << 12 } )?
             $( | { $funct2; 0b011 << 10 } )?
-            $( | { $rd_rs1; 0x01F << 07 } )?
-            $( | { $imm_l ; 0x01F << 02 } )?
+            $( | { $rd_rs1; 0x01F <<  7 } )?
+            $( | { $imm_l ; 0x01F <<  2 } )?
             | 0x03
     };
     (
@@ -304,7 +306,7 @@ macro_rules! format_mask {
             $( | { const RS2:    u32 = $rs2   ; RS2    << 20 } )?
             $( | { const RS1:    u32 = $rs1   ; RS1    << 15 } )?
             $( | { const FUNCT3: u32 = $funct3; FUNCT3 << 12 } )?
-            $( | { const RD:     u32 = $rd    ; RD     << 07 } )?
+            $( | { const RD:     u32 = $rd    ; RD     <<  7 } )?
     };
     (
         i
@@ -321,7 +323,7 @@ macro_rules! format_mask {
             $( | { const IMM11_0:    u32 = $imm11_0   ; IMM11_0    << 20 } )?
             $( | { const RS1:        u32 = $rs1       ; RS1        << 15 } )?
             $( | { const FUNCT3:     u32 = $funct3    ; FUNCT3     << 12 } )?
-            $( | { const RD:         u32 = $rd        ; RD         << 07 } )?
+            $( | { const RD:         u32 = $rd        ; RD         <<  7 } )?
     };
     (
         s
@@ -356,7 +358,7 @@ macro_rules! format_mask {
     ) => {
         0u32
             $( | { const IMM31_12: u32 = $imm31_12; IMM31_12 << 12 } )?
-            $( | { const RD:       u32 = $rd      ; RD       << 07 } )?
+            $( | { const RD:       u32 = $rd      ; RD       <<  7 } )?
     };
     (
         j
@@ -365,7 +367,7 @@ macro_rules! format_mask {
     ) => {
         0u32
             $( | compile_error!($imm20_1); )?
-            $( | { const RD:       u32 = $rd      ; RD       << 07 } )?
+            $( | { const RD:       u32 = $rd      ; RD       <<  7 } )?
     };
 
     (
@@ -379,9 +381,9 @@ macro_rules! format_mask {
         0u32
             $( | { const FUNCT4:        u32 = $funct4;        FUNCT4        << 12 } )?
             $( | { const FUNCT2_RD_RS1: u32 = $funct2_rd_rs1; FUNCT2_RD_RS1 << 10 } )?
-            $( | { const RD_RS1:        u32 = $rd_rs1;        RD_RS1        << 07 } )?
-            $( | { const FUNCT2_RS2:    u32 = $funct2_rs2;    FUNCT2_RS2    << 05 } )?
-            $( | { const RS2:           u32 = $rs2   ;        RS2           << 02 } )?
+            $( | { const RD_RS1:        u32 = $rd_rs1;        RD_RS1        <<  7 } )?
+            $( | { const FUNCT2_RS2:    u32 = $funct2_rs2;    FUNCT2_RS2    <<  5 } )?
+            $( | { const RS2:           u32 = $rs2   ;        RS2           <<  2 } )?
     };
     (
         ci
@@ -395,8 +397,8 @@ macro_rules! format_mask {
             $( | { const FUNCT3: u32 = $funct3; FUNCT3 << 13 } )?
             $( | { const IMM_H:  u32 = $imm_h ; IMM_H  << 12 } )?
             $( | { const FUNCT2: u32 = $funct2; FUNCT2 << 10 } )?
-            $( | { const RD_RS1: u32 = $rd_rs1; RD_RS1 << 07 } )?
-            $( | { const IMM_L:  u32 = $imm_l ; IMM_L  << 02 } )?
+            $( | { const RD_RS1: u32 = $rd_rs1; RD_RS1 <<  7 } )?
+            $( | { const IMM_L:  u32 = $imm_l ; IMM_L  <<  2 } )?
     };
     (
         css
@@ -406,8 +408,8 @@ macro_rules! format_mask {
     ) => {
         0u32
             $( | { const FUNCT3: u32 = $funct3; FUNCT3 << 13 } )?
-            $( | { const IMM:    u32 = $imm   ; IMM    << 07 } )?
-            $( | { const RS2:    u32 = $rs2   ; RS2    << 02 } )?
+            $( | { const IMM:    u32 = $imm   ; IMM    <<  7 } )?
+            $( | { const RS2:    u32 = $rs2   ; RS2    <<  2 } )?
     };
     (
         ciw
@@ -417,8 +419,8 @@ macro_rules! format_mask {
     ) => {
         0u32
             $( | { const FUNCT3: u32 = $funct3; FUNCT3 << 13 } )?
-            $( | { const IMM:    u32 = $imm   ; IMM    << 05 } )?
-            $( | { const RD:     u32 = $rd    ; RD     << 02 } )?
+            $( | { const IMM:    u32 = $imm   ; IMM    <<  5 } )?
+            $( | { const RD:     u32 = $rd    ; RD     <<  2 } )?
     };
     (
         cl
@@ -431,9 +433,9 @@ macro_rules! format_mask {
         0u32
             $( | { const FUNCT3: u32 = $funct3; FUNCT3 << 13 } )?
             $( | { const IMM_H:  u32 = $imm_h ; IMM_H  << 10 } )?
-            $( | { const RS1:    u32 = $rs1   ; RS1    << 07 } )?
-            $( | { const IMM_L:  u32 = $imm_l ; IMM_L  << 05 } )?
-            $( | { const RD:     u32 = $rd    ; RD     << 02 } )?
+            $( | { const RS1:    u32 = $rs1   ; RS1    <<  7 } )?
+            $( | { const IMM_L:  u32 = $imm_l ; IMM_L  <<  5 } )?
+            $( | { const RD:     u32 = $rd    ; RD     <<  2 } )?
     };
     (
         cs
@@ -446,9 +448,9 @@ macro_rules! format_mask {
         0u32
             $( | { const FUNCT3: u32 = $funct3; FUNCT3 << 13 } )?
             $( | { const IMM_H:  u32 = $imm_h ; IMM_H  << 10 } )?
-            $( | { const RS1:    u32 = $rs1   ; RS1    << 07 } )?
-            $( | { const IMM_L:  u32 = $imm_l ; IMM_L  << 05 } )?
-            $( | { const RS2:    u32 = $rs2   ; RS2    << 02 } )?
+            $( | { const RS1:    u32 = $rs1   ; RS1    <<  7 } )?
+            $( | { const IMM_L:  u32 = $imm_l ; IMM_L  <<  5 } )?
+            $( | { const RS2:    u32 = $rs2   ; RS2    <<  2 } )?
     };
     (
         ca
@@ -459,9 +461,9 @@ macro_rules! format_mask {
     ) => {
         0u32
             $( | { const FUNCT6: u32 = $funct6; FUNCT6 << 10 } )?
-            $( | { const RD_RS1: u32 = $rd_rs1; RD_RS1 << 07 } )?
-            $( | { const FUNCT2: u32 = $funct2; FUNCT2 << 05 } )?
-            $( | { const RS2:    u32 = $rs2   ; RS2    << 02 } )?
+            $( | { const RD_RS1: u32 = $rd_rs1; RD_RS1 <<  7 } )?
+            $( | { const FUNCT2: u32 = $funct2; FUNCT2 <<  5 } )?
+            $( | { const RS2:    u32 = $rs2   ; RS2    <<  2 } )?
     };
     (
         cb

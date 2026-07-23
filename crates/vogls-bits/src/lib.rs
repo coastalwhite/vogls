@@ -1726,7 +1726,7 @@ impl Bits {
     }
 
     pub fn logical_equal(&self, other: &Bits) -> FvLogicValue {
-        Self::bitwise_xnor(self, &other).reduce_and()
+        Self::bitwise_xnor(self, other).reduce_and()
     }
 
     pub fn sign_invert(&self) -> Bits {

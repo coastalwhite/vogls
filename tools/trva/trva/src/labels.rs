@@ -22,6 +22,7 @@ pub struct LabelId(NonZeroU64);
 
 /// A table of seen labels.
 #[derive(Clone)]
+#[derive(Default)]
 pub struct LabelTable {
     content: String,
     lut: HashTable<((usize, usize), LabelId)>,
@@ -34,17 +35,6 @@ pub struct LabelTable {
 /// A map from a [`LabelId`] to a value.
 pub struct LabelMap<T>(Vec<Option<T>>);
 
-impl Default for LabelTable {
-    fn default() -> Self {
-        Self {
-            content: String::new(),
-            lut: Default::default(),
-            refs: Vec::new(),
-
-            hash_builder: RandomState::default(),
-        }
-    }
-}
 impl<T> Default for LabelMap<T> {
     fn default() -> Self {
         Self(Vec::default())
@@ -84,6 +74,11 @@ impl<T> LabelMap<T> {
     #[inline(always)]
     pub fn len(&self) -> usize {
         self.0.len()
+    }
+
+    #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     fn grow_to_key(&mut self, key: LabelId) {

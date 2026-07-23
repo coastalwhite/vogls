@@ -153,7 +153,7 @@ impl SamplingProfiler {
             .filter(|&op| per_opcode[op as usize] != 0)
             .map(|op| (op, per_opcode[op as usize]))
             .collect();
-        opcode_rows.sort_by(|a, b| b.1.cmp(&a.1));
+        opcode_rows.sort_by_key(|a| std::cmp::Reverse(a.1));
 
         // --- per bytecode instruction (PC) --------------------------------
         let mut pc_rows: Vec<(usize, u64)> = counts
@@ -162,7 +162,7 @@ impl SamplingProfiler {
             .filter(|&(_, &c)| c != 0)
             .map(|(pc, &c)| (pc, c))
             .collect();
-        pc_rows.sort_by(|a, b| b.1.cmp(&a.1));
+        pc_rows.sort_by_key(|a| std::cmp::Reverse(a.1));
 
         // --- per VIR instruction & per temporal region --------------------
         let mut vir_counts: Vec<u64> = Vec::new();
@@ -210,7 +210,7 @@ impl SamplingProfiler {
                 .filter(|&(_, &c)| c != 0)
                 .map(|(i, &c)| (i, c))
                 .collect();
-            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows.sort_by_key(|a| std::cmp::Reverse(a.1));
             let _ = writeln!(out, "; ===== per temporal region =====");
             let _ = writeln!(out, "; {:>10}  {:>7}  region", "samples", "percent");
             for (i, c) in &rows {
@@ -233,7 +233,7 @@ impl SamplingProfiler {
                 .filter(|&(_, &c)| c != 0)
                 .map(|(i, &c)| (i, c))
                 .collect();
-            rows.sort_by(|a, b| b.1.cmp(&a.1));
+            rows.sort_by_key(|a| std::cmp::Reverse(a.1));
             let _ = writeln!(out, "; ===== per VIR instruction (hottest first) =====");
             let _ = writeln!(out, "; {:>10}  {:>7}  vir", "samples", "percent");
             for (i, c) in &rows {
@@ -307,7 +307,7 @@ impl SamplingProfiler {
 
         // Write the full report to the output file.
         let path = &self.output;
-        match std::fs::write(&path, out.as_bytes()) {
+        match std::fs::write(path, out.as_bytes()) {
             Ok(()) => eprintln!("vogls: wrote sampling profile to {}", path.display()),
             Err(e) => eprintln!("vogls: failed to write profile to {}: {e}", path.display()),
         }

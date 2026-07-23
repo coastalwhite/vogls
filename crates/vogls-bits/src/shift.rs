@@ -126,7 +126,7 @@ pub fn fv_logical_shift_right(spc: u64, val: u64, shift: u32, size: VectorSize) 
         | 1u64
             .unbounded_shl(shift)
             .wrapping_sub(1)
-            .unbounded_shl((size.get() as u32).saturating_sub(shift));
+            .unbounded_shl(size.get().saturating_sub(shift));
     let val = val.unbounded_shr(shift);
     (spc & mask, val & mask)
 }

@@ -109,7 +109,7 @@ pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue,
         .add_source_str(include_str!("../instances/neorv32/tb.v"))
         .map_err(|_| TraceError::Build("failed to tokenize"))?;
     let parsed = builder
-        .parse(&mut arena)
+        .parse(&arena)
         .map_err(|_| TraceError::Build("failed to parse"))?;
     let mut design = parsed
         .elaborate(LogicMode::TwoValue, Some("tb"))
@@ -260,7 +260,7 @@ pub fn get_ibex_trace(
         .add_source_str(include_str!("../instances/ibex/tb.v"))
         .map_err(|_| TraceError::Build("failed to tokenize"))?;
     let parsed = builder
-        .parse(&mut arena)
+        .parse(&arena)
         .map_err(|_| TraceError::Build("failed to parse"))?;
     let mut design = parsed
         .elaborate(LogicMode::TwoValue, Some("tb"))
@@ -465,7 +465,7 @@ pub fn get_trace(
         .add_source_str(include_str!("../instances/picorv32/tb.v"))
         .map_err(|_| TraceError::Build("failed to tokenize"))?;
     let parsed = builder
-        .parse(&mut arena)
+        .parse(&arena)
         .map_err(|_| TraceError::Build("failed to parse"))?;
     let mut design = parsed
         .elaborate(LogicMode::TwoValue, Some("tb"))
@@ -548,7 +548,9 @@ pub fn get_trace(
     let stages = &["TR", "IF", "L1", "L2", "EX", "SH", "ST", "LD"];
 
     let mut output_cycles = num_cycles;
-    let mut traces = vec![Vec::with_capacity(num_cycles as usize); 8];
+    let mut traces = (0..8)
+        .map(|_| Vec::with_capacity(num_cycles as usize))
+        .collect::<Vec<_>>();
     for i in 0..num_cycles {
         let time = state.runtime().time;
         design
@@ -564,6 +566,7 @@ pub fn get_trace(
 
         eprintln!("0x{pc:08x}: {cpu_state:08b}");
 
+        #[expect(clippy::needless_range_loop)]
         for i in 0..stages.len() {
             let value = if cpu_state == i as u32 {
                 (pc / 4) + 1
