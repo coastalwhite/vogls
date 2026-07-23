@@ -366,6 +366,7 @@ mod vogls {
                     base: vogls::BitsFormatBase::UpperHex,
                     separator: Some('_'),
                     align: None,
+                    signed: false,
                     fill: '0',
                     width: vogls::BitsFormatWidth::Expand,
                 })
