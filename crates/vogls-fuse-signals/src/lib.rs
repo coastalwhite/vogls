@@ -90,10 +90,13 @@ pub enum FuseTarget {
 struct NodeFlags(u8);
 impl NodeFlags {
     const EMPTY: Self = Self(0u8);
-    const DRIVE: Self = Self(0b0001u8);
-    const PROBE: Self = Self(0b0010u8);
-    const LUPDT: Self = Self(0b0100u8);
-    const WATCH: Self = Self(0b1000u8);
+    const DRIVE: Self = Self(0b0000_0001u8);
+    const PROBE: Self = Self(0b0000_0010u8);
+    const LUPDT: Self = Self(0b0000_0100u8);
+    const WATCH: Self = Self(0b0000_1000u8);
+
+    /// Drive that is fully external, which we have no control over.
+    const EXT_DRIVE: Self = Self(0b0001_0000u8);
 
     #[inline(always)]
     fn contains(self, flags: NodeFlags) -> bool {
@@ -124,7 +127,7 @@ impl From<SignalFlags> for NodeFlags {
     fn from(value: SignalFlags) -> Self {
         let mut flags = NodeFlags::EMPTY;
         if value.contains(SignalFlags::EXT_DRIVE) {
-            flags |= NodeFlags::DRIVE;
+            flags |= NodeFlags::DRIVE | NodeFlags::EXT_DRIVE;
         }
         if value.contains(SignalFlags::EXT_PROBE) {
             flags |= NodeFlags::PROBE;
@@ -191,10 +194,11 @@ impl FuseGraph {
                 ),
             };
             let drivee = *g.signal_to_node.entry(edge.drivee).or_insert_with(|| {
+                let drivee = &gl.signals[edge.drivee];
                 g.nodes.insert(Node {
                     content: NodeContent::Signal(edge.drivee),
-                    flags: NodeFlags::EMPTY,
-                    size: gl.signals[edge.drivee].size,
+                    flags: NodeFlags::from(drivee.flags),
+                    size: drivee.size,
                     fanin: Vec::new(),
                     fanout: Vec::new(),
                 })
@@ -693,8 +697,9 @@ impl FuseGraph {
                             (edge.driver_slice != SignalSlice::with_end(nodes[edge.driver].size))
                                 .then_some(edge.driver_slice),
                         ),
+                        // If a constant is externally driven, we need to re-read it every time.
                         NodeContent::Constant(_)
-                            if nodes[edge.driver].flags.contains(NodeFlags::DRIVE) =>
+                            if nodes[edge.driver].flags.contains(NodeFlags::EXT_DRIVE) =>
                         {
                             marshalls.push(k);
                             continue;
