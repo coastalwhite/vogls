@@ -4,9 +4,13 @@ lint:
 check:
     cargo check --workspace
 
+test-bytecode *FLAGS:
+    cargo build --bin vogls-test --profile=fast-dev
+    ./target/fast-dev/vogls-test -B {{FLAGS}}
+
 test *FLAGS:
-    cargo build --release --bin vogls-test
-    ./target/release/vogls-test {{FLAGS}}
+    cargo build --bin vogls-test --profile=fast-debug
+    ./target/fast-debug/vogls-test {{FLAGS}}
 
 coverage:
     cargo llvm-cov clean --workspace

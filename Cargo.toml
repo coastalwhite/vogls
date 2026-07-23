@@ -49,6 +49,10 @@ trva.path = "tools/trva/trva"
 inherits = "release"
 debug = true
 
+[profile.fast-dev]
+inherits = "dev"
+opt-level = 3
+
 [workspace.lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(vm_profile)'] }
 
