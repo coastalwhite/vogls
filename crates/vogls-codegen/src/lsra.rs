@@ -443,50 +443,17 @@ pub fn linear_scan_register_allocation(
             assignment.insert(*var, slot);
             insert_active_reg(&mut active_regs, &intervals, i, interval.mode, register);
         } else {
-            // There are not register slots free, we need to spill something. Since active_regs is
-            // stored by the end, we can look at the final one and see if it might be a better
-            // spill candidate.
+            // Spill the current variable itself to the stack.
             //
             // @Performance. Better spilling policy.
-            //   - Maybe it look for the last one with a matching mode?
-            let &(spill_i, _, spill_register) = active_regs.back().unwrap();
-
-            let (spill_var, spill_interval) = intervals[spill_i];
-            if spill_var.mode() == var.mode() && spill_interval.end > interval.end {
-                // We need to make sure that the modes match, but the sizes don't matter since they
-                // all fit into 64-bits.
-                let (stack_slot_alignment, stack_slot_offset) =
-                    claim_stack_slot(stack_tracker, spill_interval.size, spill_interval.mode);
-                let reg_slot = assignment
-                    .insert(
-                        spill_var,
-                        Slot::Stack(stack_slot_alignment, stack_slot_offset),
-                    )
-                    .unwrap();
-                assignment.insert(*var, reg_slot);
-
-                active_regs.pop_back();
-                insert_active_reg(
-                    &mut active_regs,
-                    &intervals,
-                    i,
-                    interval.mode,
-                    spill_register,
-                );
-                insert_active_stack(
-                    &mut active_stack,
-                    &intervals,
-                    spill_i,
-                    spill_interval.mode,
-                    stack_slot_offset,
-                );
-            } else {
-                // Spill the current variable itself to the stack.
-                let (alignment, offset) =
-                    claim_stack_slot(stack_tracker, interval.size, interval.mode);
-                assignment.insert(*var, Slot::Stack(alignment, offset));
-                insert_active_stack(&mut active_stack, &intervals, i, interval.mode, offset);
-            }
+            // There are not register slots free, we need to spill something. At the moment, we
+            // just spill the encountered register. There smarter things that can be done here like
+            // splitting up the interval. If this ever gets improved, take into account the stack
+            // allocation and reclaiming: they interact in nasty ways.
+            let (alignment, offset) =
+                claim_stack_slot(stack_tracker, interval.size, interval.mode);
+            assignment.insert(*var, Slot::Stack(alignment, offset));
+            insert_active_stack(&mut active_stack, &intervals, i, interval.mode, offset);
         }
     }
 
