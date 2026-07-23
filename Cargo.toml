@@ -15,6 +15,7 @@ edition = "2024"
 [workspace.dependencies]
 slotmap = "1"
 bytemuck = "1"
+libc = "0.2"
 proptest = "1"
 hashbrown = "0.16"
 foldhash = "0.2.0"

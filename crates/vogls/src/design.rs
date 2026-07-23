@@ -90,7 +90,17 @@ impl Design {
             #[cfg(not(feature = "tailcall"))]
             (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
                 state.schedule.set_max_time(time);
-                if design.itrace {
+                if let Some(profile) = &design.profile {
+                    design.execute_with_tracer(
+                        &mut vogls_bytecode::profile::SamplingProfiler::new(
+                            design.debug_info.clone(),
+                            profile.as_path(),
+                        ),
+                        state,
+                        &mut io.stdout,
+                        &mut io.stderr,
+                    )
+                } else if design.itrace {
                     design.execute_with_tracer(
                         &mut vogls_bytecode::InstructionTracer::new_stderr(),
                         state,
@@ -132,7 +142,17 @@ impl Design {
             #[cfg(not(feature = "tailcall"))]
             (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
                 state.schedule.set_max_time(time);
-                if design.itrace {
+                if let Some(profile) = &design.profile {
+                    design.execute_with_tracer(
+                        &mut vogls_bytecode::profile::SamplingProfiler::new(
+                            design.debug_info.clone(),
+                            profile.as_path(),
+                        ),
+                        state,
+                        &mut io.stdout,
+                        &mut io.stderr,
+                    )
+                } else if design.itrace {
                     design.execute_with_tracer(
                         &mut vogls_bytecode::InstructionTracer::new_stderr(),
                         state,

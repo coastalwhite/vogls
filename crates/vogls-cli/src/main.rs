@@ -76,6 +76,9 @@ struct Args {
     #[arg(long)]
     print_vm_map: bool,
 
+    #[arg(long = "profile")]
+    profile: Option<PathBuf>,
+
     #[arg(long)]
     emit_unoptimized_fuse_graph: bool,
     #[arg(long)]
@@ -110,6 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         no_common_subexpr_elim,
         no_peephole_optimization,
         print_vm_map,
+        profile,
         emit_unoptimized_fuse_graph,
         emit_optimized_fuse_graph,
     } = Args::parse();
@@ -233,6 +237,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     lowered.debug_symbols = debug_symbols;
     lowered.output_source = output_source.clone();
     lowered.print_vm_map = print_vm_map;
+    lowered.profile = profile;
 
     timers.start("compilation");
     let mut design = if compile {

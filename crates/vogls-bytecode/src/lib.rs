@@ -4,6 +4,7 @@
 )]
 
 use std::fmt::{self, Debug};
+use std::path::PathBuf;
 
 mod control_flow;
 mod extend;
@@ -15,6 +16,7 @@ mod itype_binary;
 mod load;
 mod load_imm;
 pub mod lower;
+pub mod profile;
 mod reg;
 mod rtype_binary;
 mod rtype_unary;
@@ -50,6 +52,10 @@ pub use six_bit_size::SixBitSize;
 pub use stack::*;
 pub use temporal::*;
 
+use std::sync::Arc;
+
+use profile::BytecodeDebugInfo;
+
 pub struct Design {
     pub bytecode: Vec<Bytecode>,
     pub intrinsics: Vec<IntrinsicOp>,
@@ -57,6 +63,8 @@ pub struct Design {
     pub itrace: bool,
     pub stats: bool,
     pub watchers: BytecodeWatchers,
+    pub profile: Option<PathBuf>,
+    pub debug_info: Option<Arc<BytecodeDebugInfo>>,
 }
 pub struct State {
     pub runtime: RuntimeState,
@@ -1016,6 +1024,18 @@ pub trait Tracer {
         _ = (i, code, regs, pc, state, schedule, listeners);
     }
 
+    fn start(
+        &mut self,
+        code: &[Bytecode],
+        regs: &Regs,
+        pc: u64,
+        state: &RuntimeState,
+        schedule: &Schedule,
+        listeners: &BytecodeListeners,
+    ) {
+        _ = (code, regs, pc, state, schedule, listeners);
+    }
+
     fn finish(
         &mut self,
         code: &[Bytecode],
@@ -1223,6 +1243,16 @@ impl Design {
             stderr,
         );
         let mut regs = Regs::new(self.stack_offset);
+
+        tracer.start(
+            code,
+            &regs,
+            pc,
+            &state.runtime,
+            &state.schedule,
+            &state.listeners,
+        );
+
         while let Some(&c) = code.get(pc as usize) {
             let opcode = c.opcode();
             tracer.pre_exec(

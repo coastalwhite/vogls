@@ -893,6 +893,7 @@ name = "vogls-bytecode"
 version = "0.0.1"
 dependencies = [
  "bytemuck",
+ "libc",
  "slotmap",
  "vogls-bits",
  "vogls-codegen",

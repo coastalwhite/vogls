@@ -49,6 +49,7 @@ pub struct LoweredDesign {
     pub debug_symbols: bool,
     pub output_source: Option<PathBuf>,
     pub print_vm_map: bool,
+    pub profile: Option<PathBuf>,
 }
 
 impl Clone for Box<dyn VoglsPlugin> {
@@ -225,7 +226,12 @@ impl LoweredDesign {
         let options = LowerBytecodeOptions {
             emit: self.emit_vm,
             has_plugins: !plugins.is_empty(),
+            collect_debug: self.profile.is_some(),
         };
+        let mut debug_info = self
+            .profile
+            .is_some()
+            .then(vogls_bytecode::profile::BytecodeDebugInfo::default);
 
         let mut offsets = vec![0u64; rt_signal_map.len() + 1];
         let mut watchers = vec![0u64; watch_map.watchers().len()];
@@ -253,7 +259,7 @@ impl LoweredDesign {
         }
         let bc_watch_map = BytecodeWatchers { offsets, watchers };
 
-        for process in self.gl.processes.keys() {
+        for (process_index, process) in self.gl.processes.keys().enumerate() {
             lower_process_to_bytecode(
                 process,
                 &self.gl,
@@ -268,6 +274,8 @@ impl LoweredDesign {
                 &lupdt_indexes,
                 &mut bytecode,
                 &options,
+                process_index,
+                debug_info.as_mut(),
             );
         }
 
@@ -307,6 +315,8 @@ impl LoweredDesign {
             stack_offset,
             itrace: self.itrace,
             stats: self.stats,
+            profile: self.profile.clone(),
+            debug_info: debug_info.map(std::sync::Arc::new),
         };
 
         Ok(Design {

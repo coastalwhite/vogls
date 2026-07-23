@@ -10,6 +10,7 @@ use vogls_ir::{
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
 
+use crate::profile::BytecodeDebugInfo;
 use crate::{
     BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InlineAddrOffset, InlineIndex,
     InlineNBitSize, InstructionPtr, IntrinsicOpEqWrap, Jump, Reg, Schedule, SignedImmediate,
@@ -30,6 +31,9 @@ enum JumpKind {
 pub struct LowerBytecodeOptions {
     pub emit: bool,
     pub has_plugins: bool,
+    /// Collect a PC -> VIR -> temporal-region mapping into the `debug` argument
+    /// of [`lower_process_to_bytecode`] for the sampling profiler.
+    pub collect_debug: bool,
 }
 
 pub fn lower_process_to_bytecode(
@@ -46,8 +50,18 @@ pub fn lower_process_to_bytecode(
     lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
     bytecode: &mut BytecodeEncoder,
     options: &LowerBytecodeOptions,
+    process_index: usize,
+    mut debug: Option<&mut BytecodeDebugInfo>,
 ) {
     let process = &gl.processes[process];
+
+    let debug_ctx = debug.is_some().then(|| {
+        let mut ctx = DisplayContext::new(gl);
+        for tr in &process.regions {
+            ctx.prepare_process(tr.entry());
+        }
+        ctx
+    });
 
     let mut bb_stack = Vec::new();
     let mut bb_stack2 = Vec::new();
@@ -72,16 +86,33 @@ pub fn lower_process_to_bytecode(
 
     // Standing processes are not scheduled in the active queue, instead their listeners are armed
     // right at the start.
-    let mut standing = process.standing.as_ref().filter(|watchers| {
-        watchers
-            .iter()
-            .any(|s| !gl.signals[*s].triggers_t0_poke())
-    });
+    let mut standing = process
+        .standing
+        .as_ref()
+        .filter(|watchers| watchers.iter().any(|s| !gl.signals[*s].triggers_t0_poke()));
     if standing.is_none() {
         schedule.push_active(InstructionPtr(bytecode.data.len() as u64));
     }
 
     for tr in &process.regions {
+        let debug_region = debug.as_deref_mut().map(|dbg| {
+            let ctx = debug_ctx.as_ref().unwrap();
+            let entry = format!(
+                "{}",
+                LabelDisplay {
+                    include_prefix: true,
+                    angles: false,
+                    bb: tr.entry(),
+                }
+                .display(ctx)
+            );
+            let global_id = dbg.regions.len();
+            dbg.push_region(format!(
+                "TR{global_id}  proc[{process_index}] {} {entry}",
+                process.kind.into_static_str(),
+            ))
+        });
+
         bb_seen.clear();
         assignment.clear();
         post_order.clear();
@@ -140,6 +171,12 @@ pub fn lower_process_to_bytecode(
                 if options.emit {
                     emit_sizes.push((bytecode.data.len() - offset) as u8);
                 }
+                if let (Some(dbg), Some(ctx), Some(region)) =
+                    (debug.as_deref_mut(), debug_ctx.as_ref(), debug_region)
+                {
+                    let end = bytecode.data.len();
+                    dbg.push_instr(region, format!("{}", i.display(ctx)), offset, end);
+                }
             }
 
             if let Some(phis) = bb_phis.get(&bb_key) {
@@ -167,6 +204,19 @@ pub fn lower_process_to_bytecode(
                     store_back(bytecode, &gl.vars, &stack_offsets, *dst, dslot, rd, T2);
                     if options.emit {
                         emit_sizes.push((bytecode.data.len() - offset) as u8);
+                    }
+                    if let (Some(dbg), Some(ctx), Some(region)) =
+                        (debug.as_deref_mut(), debug_ctx.as_ref(), debug_region)
+                    {
+                        let end = bytecode.data.len();
+                        if end > offset {
+                            let text = format!(
+                                "%t{} = phi %t{}",
+                                ctx.get_var_name(*dst).unwrap(),
+                                ctx.get_var_name(*src).unwrap()
+                            );
+                            dbg.push_instr(region, text, offset, end);
+                        }
                     }
                 }
             }
@@ -292,6 +342,19 @@ pub fn lower_process_to_bytecode(
 
             if options.emit {
                 emit_sizes.push((bytecode.data.len() - offset) as u8);
+            }
+            if let (Some(dbg), Some(ctx), Some(region)) =
+                (debug.as_deref_mut(), debug_ctx.as_ref(), debug_region)
+            {
+                let end = bytecode.data.len();
+                if end > offset {
+                    dbg.push_instr(
+                        region,
+                        format!("{}", bb.terminator.display(ctx)),
+                        offset,
+                        end,
+                    );
+                }
             }
         }
     }

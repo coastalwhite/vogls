@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+libc.workspace = true
 slotmap.workspace = true
 bytemuck.workspace = true
 vogls-ir.workspace = true
