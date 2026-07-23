@@ -111,27 +111,36 @@ impl Bitset {
     }
 
     pub fn find_n_contiguous_zeros(&self, n: usize) -> Result<usize, usize> {
-        if self.is_empty() {
-            return Err(0);
-        }
-
-        if self.data.iter().all(|v| *v == 0) {
-            return if self.len() > n { Ok(0) } else { Err(0) };
-        }
-
         // @Performance: Specialized implementation
-        let mut prev = 0;
+        let mut run_start = 0;
         for i in self.true_idx_iter() {
-            if i - prev > n {
-                return Ok(prev);
+            // The zeros in the current run occupy `[run_start, i)`.
+            if i - run_start >= n {
+                return Ok(run_start);
             }
-            prev = i;
+            run_start = i + 1;
         }
-        if self.len() - prev > n {
-            Ok(prev + 1)
+
+        // The trailing run of zeros occupies `[run_start, len)`.
+        if self.len() - run_start >= n {
+            Ok(run_start)
         } else {
-            Err(prev + 1)
+            Err(run_start)
         }
+    }
+
+    /// Set `n` contiguous bits to `true` and return the first index.
+    pub fn set_n_contiguous(&mut self, n: usize) -> usize {
+        let offset = match self.find_n_contiguous_zeros(n) {
+            Ok(offset) => offset,
+            Err(offset) => {
+                debug_assert!(offset <= self.len());
+                self.extend_zeroed(n - (self.len() - offset));
+                offset
+            }
+        };
+        self.set_slice_constant(offset, n, true);
+        offset
     }
 
     pub fn set_slice_constant(&mut self, offset: usize, num_words: usize, value: bool) {

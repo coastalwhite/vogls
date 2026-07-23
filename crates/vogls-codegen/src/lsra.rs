@@ -394,77 +394,45 @@ pub fn linear_scan_register_allocation(
     // 1. Use a better queue here.
     // 2. Add a fast-path for the interval end being greater than the last active interval.
     let mut active_registers = 0u64;
-    let mut active = VecDeque::<(usize, LogicMode, Slot)>::with_capacity(num_registers as usize);
+    let mut active_regs =
+        VecDeque::<(usize, LogicMode, u32)>::with_capacity(num_registers as usize);
+    let mut active_stack = VecDeque::<(usize, LogicMode, u32)>::new();
     assignment.reserve(intervals.len());
 
     let mut intervals = intervals.into_iter().collect::<Vec<_>>();
     intervals.sort_unstable_by_key(|(_, i)| i.start);
 
     for (i, (var, interval)) in intervals.iter().enumerate() {
-        // @TODO: Change for `pop_front_if`
-        while active
-            .front()
-            .is_some_and(|&(active_interval, mode, slot)| {
-                let active_interval = intervals[active_interval].1;
-                if active_interval.end > interval.start {
-                    false
-                } else {
-                    match slot {
-                        Slot::Heap(_) => debug_assert!(false),
-                        Slot::Constant(_) => debug_assert!(false),
-                        Slot::Register(r) => {
-                            let mask = 1u64 | (u64::from(mode == LogicMode::FourValue) << 1);
-                            active_registers ^= mask << r;
-                        }
-                        Slot::Stack(kind, offset) => {
-                            let offset = offset as usize;
+        // Expire register intervals.
+        while let Some(&(active_i, mode, register)) = active_regs.front() {
+            if intervals[active_i].1.end > interval.start {
+                break;
+            }
+            let mask = 1u64 | (u64::from(mode == LogicMode::FourValue) << 1);
+            active_registers ^= mask << register;
+            active_regs.pop_front();
+        }
 
-                            use HeapAlignment as K;
-                            match kind {
-                                K::B1 => stack_tracker.b1.set(offset, false),
-                                K::B2 => stack_tracker.b2.set(offset, false),
-                                K::B4 => stack_tracker.b4.set(offset, false),
-                                K::B8 => stack_tracker.b8.set(offset, false),
-                                K::B16 => stack_tracker.b16.set(offset, false),
-                                K::B32 => stack_tracker.b32.set(offset, false),
-                                K::B64 => {
-                                    let mut num_words =
-                                        active_interval.size.get().div_ceil(64) as usize;
-                                    if mode == LogicMode::FourValue {
-                                        num_words *= 2;
-                                    }
-                                    stack_tracker
-                                        .b64
-                                        .set_slice_constant(offset, num_words, false);
-                                }
-                            }
-                        }
-                    }
-                    true
-                }
-            })
-        {
-            _ = active.pop_front();
+        // Expire stack intervals.
+        while let Some(&(active_i, mode, offset)) = active_stack.front() {
+            let active_interval = intervals[active_i].1;
+            if active_interval.end > interval.start {
+                break;
+            }
+            let num_slots = num_bitset_slots(active_interval.size, mode);
+            stack_tracker
+                .get_bitset_for_size(active_interval.size, mode)
+                .set_slice_constant(offset as usize, num_slots, false);
+            active_stack.pop_front();
         }
 
         // Everything that is larger than 64-bits (both two-value and four-value) lives on the
         // stack only. We never put it in a register! The address to the stack-address will live in
         // a temporary register.
         if interval.size > VSIZE_64 {
-            let bitset = stack_tracker.get_bitset_for_size(interval.size, interval.mode);
-            let num_bitset_slots = num_bitset_slots(interval.size, interval.mode);
-            let offset = match bitset.find_n_contiguous_zeros(num_bitset_slots) {
-                Ok(offset) => offset,
-                Err(offset) => {
-                    debug_assert!(offset <= bitset.len());
-                    bitset.extend_zeroed(num_bitset_slots - (bitset.len() - offset));
-                    offset
-                }
-            };
-            bitset.set_slice_constant(offset, num_bitset_slots, true);
-            let offset = offset.try_into().expect("Too large");
-            let slot = Slot::Stack(HeapAlignment::new(interval.size, interval.mode), offset);
-            assignment.insert(*var, slot);
+            let (alignment, offset) = claim_stack_slot(stack_tracker, interval.size, interval.mode);
+            assignment.insert(*var, Slot::Stack(alignment, offset));
+            insert_active_stack(&mut active_stack, &intervals, i, interval.mode, offset);
             continue;
         }
 
@@ -473,62 +441,96 @@ pub fn linear_scan_register_allocation(
         {
             let slot = Slot::Register(register);
             assignment.insert(*var, slot);
-
-            let insert_idx =
-                active.binary_search_by_key(&interval.end, |(i, _, _)| intervals[*i].1.end);
-            let insert_idx = insert_idx.unwrap_or_else(|i| i);
-            active.insert(insert_idx, (i, interval.mode, slot));
+            insert_active_reg(&mut active_regs, &intervals, i, interval.mode, register);
         } else {
-            let (spill_i, _mode, _spill) = active.back().unwrap();
-
+            // There are not register slots free, we need to spill something. Since active_regs is
+            // stored by the end, we can look at the final one and see if it might be a better
+            // spill candidate.
+            //
             // @Performance. Better spilling policy.
-            let (spill_var, spill_interval) = intervals[*spill_i];
-            if spill_var.mode() == var.mode() && spill_interval.end > interval.end {
-                let bitset =
-                    stack_tracker.get_bitset_for_size(spill_interval.size, spill_interval.mode);
-                let num_bitset_slots = num_bitset_slots(spill_interval.size, spill_interval.mode);
-                let offset = match bitset.find_n_contiguous_zeros(num_bitset_slots) {
-                    Ok(offset) => offset,
-                    Err(offset) => {
-                        debug_assert!(offset <= bitset.len());
-                        bitset.extend_zeroed(bitset.len() - offset + num_bitset_slots);
-                        offset
-                    }
-                };
-                bitset.set_slice_constant(offset as usize, num_bitset_slots, true);
-                let offset = offset.try_into().expect("Too large");
-                let slot = Slot::Stack(
-                    HeapAlignment::new(spill_interval.size, spill_interval.mode),
-                    offset,
-                );
-                let slot = assignment.insert(spill_var, slot).unwrap();
-                assignment.insert(*var, slot);
-                active.pop_back();
+            //   - Maybe it look for the last one with a matching mode?
+            let &(spill_i, _, spill_register) = active_regs.back().unwrap();
 
-                let insert_idx =
-                    active.binary_search_by_key(&interval.end, |(i, _, _)| intervals[*i].1.end);
-                let insert_idx = insert_idx.unwrap_or_else(|i| i);
-                active.insert(insert_idx, (i, interval.mode, slot));
+            let (spill_var, spill_interval) = intervals[spill_i];
+            if spill_var.mode() == var.mode() && spill_interval.end > interval.end {
+                // We need to make sure that the modes match, but the sizes don't matter since they
+                // all fit into 64-bits.
+                let (stack_slot_alignment, stack_slot_offset) =
+                    claim_stack_slot(stack_tracker, spill_interval.size, spill_interval.mode);
+                let reg_slot = assignment
+                    .insert(
+                        spill_var,
+                        Slot::Stack(stack_slot_alignment, stack_slot_offset),
+                    )
+                    .unwrap();
+                assignment.insert(*var, reg_slot);
+
+                active_regs.pop_back();
+                insert_active_reg(
+                    &mut active_regs,
+                    &intervals,
+                    i,
+                    interval.mode,
+                    spill_register,
+                );
+                insert_active_stack(
+                    &mut active_stack,
+                    &intervals,
+                    spill_i,
+                    spill_interval.mode,
+                    stack_slot_offset,
+                );
             } else {
-                let bitset = stack_tracker.get_bitset_for_size(interval.size, interval.mode);
-                let num_bitset_slots = num_bitset_slots(interval.size, interval.mode);
-                let offset = match bitset.find_n_contiguous_zeros(num_bitset_slots) {
-                    Ok(offset) => offset,
-                    Err(offset) => {
-                        debug_assert!(offset <= bitset.len());
-                        bitset.extend_zeroed(bitset.len() - offset + num_bitset_slots);
-                        offset
-                    }
-                };
-                bitset.set_slice_constant(offset as usize, num_bitset_slots, true);
-                let offset = offset.try_into().expect("Too large");
-                let slot = Slot::Stack(HeapAlignment::new(interval.size, interval.mode), offset);
-                assignment.insert(*var, slot);
+                // Spill the current variable itself to the stack.
+                let (alignment, offset) =
+                    claim_stack_slot(stack_tracker, interval.size, interval.mode);
+                assignment.insert(*var, Slot::Stack(alignment, offset));
+                insert_active_stack(&mut active_stack, &intervals, i, interval.mode, offset);
             }
         }
     }
 
     stack_tracker.clear();
+}
+
+fn insert_active_reg(
+    active: &mut VecDeque<(usize, LogicMode, u32)>,
+    intervals: &[(VariableKey, Interval)],
+    i: usize,
+    mode: LogicMode,
+    reg: u32,
+) {
+    let end = intervals[i].1.end;
+    let insert_idx = active
+        .binary_search_by_key(&end, |&(j, _, _)| intervals[j].1.end)
+        .unwrap_or_else(|idx| idx);
+    active.insert(insert_idx, (i, mode, reg));
+}
+fn insert_active_stack(
+    active: &mut VecDeque<(usize, LogicMode, u32)>,
+    intervals: &[(VariableKey, Interval)],
+    i: usize,
+    mode: LogicMode,
+    offset: u32,
+) {
+    let end = intervals[i].1.end;
+    let insert_idx = active
+        .binary_search_by_key(&end, |&(j, _, _)| intervals[j].1.end)
+        .unwrap_or_else(|idx| idx);
+    active.insert(insert_idx, (i, mode, offset));
+}
+
+fn claim_stack_slot(
+    stack_tracker: &mut StackTracker,
+    size: VectorSize,
+    mode: LogicMode,
+) -> (HeapAlignment, u32) {
+    let num_slots = num_bitset_slots(size, mode);
+    let offset = stack_tracker
+        .get_bitset_for_size(size, mode)
+        .set_n_contiguous(num_slots);
+    let offset = offset.try_into().expect("Too large");
+    (HeapAlignment::new(size, mode), offset)
 }
 
 fn claim_register_slot(
