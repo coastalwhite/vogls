@@ -329,7 +329,20 @@ fn extend_symbol_table_to_vcd_scope(
                     signal_map.entry(signal).or_default().push(variable_key);
                 }
             }
-            Symbol::Task | Symbol::Function | Symbol::Parameter(_) => {}
+            Symbol::Parameter(value) => {
+                let msb_lsb = (value.size() > vogls_ir::SCALAR_VSIZE).then_some((value.size().get() - 1, 0));
+                let value = VcdValue::Constant(value.clone());
+                let variable_key = variable_table.insert(vogls_ir::vcd::VcdVariable {
+                    name: ident_table[table[*sid].name()].to_string(),
+                    value,
+                    ty: vogls_ir::vcd::NetType::Wire,
+                    msb_lsb,
+                });
+                scope
+                    .items
+                    .push(vogls_ir::vcd::VcdScopeItem::Variable(variable_key));
+            }
+            Symbol::Task | Symbol::Function => {}
         }
     }
 }
