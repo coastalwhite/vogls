@@ -602,10 +602,12 @@ fn constant_propagate_instruction(
                         let dst_size = vars.size(dst);
                         let src_size = signals[signal].size;
 
+                        // Don't make it into a constant slice if that slice would overflow the
+                        // signal.
                         if dst_size
                             .get()
                             .checked_add(offset)
-                            .is_some_and(|v| v < src_size.get())
+                            .is_some_and(|v| v <= src_size.get())
                         {
                             additional.push(I::Probe(dst, signal, offset));
                             return PropagateResult { replace: true };
@@ -627,10 +629,12 @@ fn constant_propagate_instruction(
                         let dst_size = signals[signal].size;
                         let src_size = vars.size(src);
 
+                        // Don't make it into a constant slice if that slice would overflow the
+                        // signal.
                         if src_size
                             .get()
                             .checked_add(offset)
-                            .is_some_and(|v| v < dst_size.get())
+                            .is_some_and(|v| v <= dst_size.get())
                         {
                             additional.push(I::Drive(signal, src, offset));
                             return PropagateResult { replace: true };
