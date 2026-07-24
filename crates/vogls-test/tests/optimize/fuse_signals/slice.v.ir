@@ -1,1 +1,1 @@
-signal a/0: 2
+signal[{mode}] a/0: 2

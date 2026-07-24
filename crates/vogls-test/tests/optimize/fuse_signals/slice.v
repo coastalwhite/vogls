@@ -1,4 +1,5 @@
 // vogls: verify-ir
+// vogls: mode=template
 module bufmod(
     input i,
     output o

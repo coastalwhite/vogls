@@ -1,4 +1,4 @@
-// vogls: skip=two-value-logic
+// vogls: mode=four-value-logic
 module top;
   reg rst_n;
   reg [7:0] q = 8'hFF;

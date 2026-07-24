@@ -1,4 +1,5 @@
 // vogls: verify-ir
+// vogls: mode=template
 module tb();
     reg a, b, c, d, e;
     assign a = b, b = c, c = d, d = e;

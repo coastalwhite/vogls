@@ -1,4 +1,4 @@
-// vogls: skip=two-value-logic
+// vogls: mode=four-value-logic
 // vogls: verify-stdout[sort-lines]
 `timescale 1fs/1fs
 module gate(

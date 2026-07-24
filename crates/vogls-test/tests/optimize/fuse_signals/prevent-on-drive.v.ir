@@ -1,19 +1,22 @@
-signal a/0: 1
-signal x/1: 1
+signal[{mode}] a/0: 1
+signal[{mode}] x/1: 1
 
 proc initial {
-L0:
-  waitregion 1, <L1>
-L1:
-  %t0 = const 1'h1
-  drv $x/1, %t0
+*TR0:
+  waitregion 1, <TR1>
+*TR1:
+{?mode=fvO0}  %t0 = {!mode}.const 1'h1
+{?mode=fvO0}  %t1 = tvtofv %t0
+{?mode=fvO0}  drv $x/1, %t1
+{?!mode=fvO0}  %t0 = {mode}.const 1'h1
+{?!mode=fvO0}  drv $x/1, %t0
   halt
 }
 
 proc fuse {
-L0:
+*TR0:
   %t0 = prb $a/0
   drv $x/1, %t0
-  watch [$a/0], <L0>
+  watch [$a/0], <TR0>
 }
 

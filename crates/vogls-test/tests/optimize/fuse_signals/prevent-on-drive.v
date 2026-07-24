@@ -1,4 +1,5 @@
 // vogls: verify-ir
+// vogls: mode=template
 module m(x);
     inout x;
     initial begin

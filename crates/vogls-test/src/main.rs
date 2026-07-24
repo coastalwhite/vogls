@@ -55,10 +55,51 @@ impl io::Write for Io {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Backend {
     Compile,
     Bytecode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectLogicMode {
+    All,
+    Only(LogicMode),
+    Template,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectBackend {
+    All,
+    Only(Backend),
+}
+
+impl SelectLogicMode {
+    pub fn selection(self, input: &[LogicMode]) -> &[LogicMode] {
+        match self {
+            Self::All | Self::Template => input,
+            Self::Only(LogicMode::TwoValue) if input.contains(&LogicMode::TwoValue) => {
+                &[LogicMode::TwoValue]
+            }
+            Self::Only(LogicMode::FourValue) if input.contains(&LogicMode::FourValue) => {
+                &[LogicMode::FourValue]
+            }
+            Self::Only(_) => &[],
+        }
+    }
+}
+impl SelectBackend {
+    pub fn selection(self, input: &[Backend]) -> &[Backend] {
+        match self {
+            Self::All => input,
+            Self::Only(Backend::Bytecode) if input.contains(&Backend::Bytecode) => {
+                &[Backend::Bytecode]
+            }
+            Self::Only(Backend::Compile) if input.contains(&Backend::Compile) => {
+                &[Backend::Compile]
+            }
+            Self::Only(_) => &[],
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -69,7 +110,8 @@ struct TestInfo {
     annotate_sdf: bool,
     timeout: u64,
     top_level_module: Option<String>,
-    skip: Option<LogicMode>,
+    mode: SelectLogicMode,
+    backend: SelectBackend,
     opt_flags: OptFlags,
 }
 
@@ -94,7 +136,8 @@ impl TestInfo {
             annotate_sdf: false,
             top_level_module: None,
             timeout: u64::MAX,
-            skip: None,
+            mode: SelectLogicMode::All,
+            backend: SelectBackend::All,
             opt_flags: OptFlags::ALL,
         };
 
@@ -118,10 +161,16 @@ impl TestInfo {
                 _ if line.starts_with("timeout=") => {
                     info.timeout = line[8..].parse().expect("failed to parse");
                 }
-                _ if line.starts_with("skip=") => match &line[5..] {
-                    "two-value-logic" => info.skip = Some(LogicMode::TwoValue),
-                    "four-value-logic" => info.skip = Some(LogicMode::FourValue),
-                    _ => return Err("failed to parse 'skip'".into()),
+                _ if line.starts_with("mode=") => match &line[5..] {
+                    "two-value-logic" => info.mode = SelectLogicMode::Only(LogicMode::TwoValue),
+                    "four-value-logic" => info.mode = SelectLogicMode::Only(LogicMode::FourValue),
+                    "template" => info.mode = SelectLogicMode::Template,
+                    _ => return Err("failed to parse 'mode'".into()),
+                },
+                _ if line.starts_with("backend=") => match &line[5..] {
+                    "bytecode" => info.backend = SelectBackend::Only(Backend::Bytecode),
+                    "compile" => info.backend = SelectBackend::Only(Backend::Compile),
+                    _ => return Err("failed to parse 'backend'".into()),
                 },
                 _ if line.starts_with("disable-optimization=") => {
                     let opt = &line["disable-optimization=".len()..].trim();
@@ -277,8 +326,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         let test_information = TestInfo::parse(&s)?;
 
         for &opt_rounds in opt_rounds_configurations {
-            for &logic_mode in modes {
-                for &backend in &backends {
+            for &logic_mode in test_information.mode.selection(modes) {
+                for &backend in test_information.backend.selection(&backends) {
                     configurations.push(TestCase {
                         offset_path: offset_path.to_path_buf(),
                         path: path.clone(),
@@ -523,10 +572,6 @@ fn run_test(
     backend: Backend,
     opts: Optimizations,
 ) -> Result<PassKind, FailureInfo> {
-    if Some(logic_mode) == test_information.skip {
-        return Ok(PassKind::Skip);
-    }
-
     let sdf = test_information
         .annotate_sdf
         .then(|| path.with_extension("sdf"));
@@ -582,7 +627,10 @@ fn run_test(
         match design {
             Ok(design) => match design {
                 Ok(design) => {
-                    let asserted = std::fs::read_to_string(path.with_extension("v.ir"))?;
+                    let mut asserted = std::fs::read_to_string(path.with_extension("v.ir"))?;
+                    if matches!(test_information.mode, SelectLogicMode::Template) {
+                        replace_templates(&mut asserted, logic_mode, opts);
+                    }
                     if design.trim() != asserted.trim() {
                         return Err(FailureInfo::VirMismatch {
                             expected: asserted,
@@ -609,7 +657,10 @@ fn run_test(
                 .extension()
                 .is_some_and(|ext| ext.as_encoded_bytes() == b"vir")
             {
-                let s = std::fs::read_to_string(path)?;
+                let mut s = std::fs::read_to_string(path)?;
+                if matches!(test_information.mode, SelectLogicMode::Template) {
+                    replace_templates(&mut s, logic_mode, opts);
+                }
                 let optimized = read_to_string(path.with_extension("vir.opt")).ok();
                 let mut design = VirDesignBuilder::new(&s);
                 design.with_logic_mode(logic_mode);
@@ -619,8 +670,11 @@ fn run_test(
                 design.optimize(opts);
 
                 if opts.rounds > 0
-                    && let Some(optimized) = optimized
+                    && let Some(mut optimized) = optimized
                 {
+                    if matches!(test_information.mode, SelectLogicMode::Template) {
+                        replace_templates(&mut optimized, logic_mode, opts);
+                    }
                     let out = design.emit_ir().to_string();
                     let optimized = optimized.trim();
                     let out = out.trim();
@@ -745,4 +799,40 @@ fn run_test(
     }
 
     Ok(PassKind::Succeed)
+}
+
+fn replace_templates(s: &mut String, mode: LogicMode, opts: Optimizations) {
+    use regex::{Captures, regex};
+
+    let mode_str = match mode {
+        LogicMode::TwoValue => "tv",
+        LogicMode::FourValue => "fv",
+    };
+    let other_mode_str = match mode {
+        LogicMode::TwoValue => "fv",
+        LogicMode::FourValue => "tv",
+    };
+    let opt_str = if opts.rounds == 0 { "O0" } else { "On" };
+    let want = format!("{mode_str}{opt_str}");
+
+    *s = s.replace("{mode}", mode_str);
+    *s = s.replace("{!mode}", other_mode_str);
+    *s = regex!(r"(?m)^\{\?mode=([A-Za-z0-9]+)\}(.*)(\n?)")
+        .replace_all(s, |c: &Captures| {
+            if &c[1] == want {
+                format!("{}{}", &c[2], &c[3])
+            } else {
+                String::new()
+            }
+        })
+        .into_owned();
+    *s = regex!(r"(?m)^\{\?!mode=([A-Za-z0-9]+)\}(.*)(\n?)")
+        .replace_all(s, |c: &Captures| {
+            if &c[1] != want {
+                format!("{}{}", &c[2], &c[3])
+            } else {
+                String::new()
+            }
+        })
+        .into_owned();
 }
