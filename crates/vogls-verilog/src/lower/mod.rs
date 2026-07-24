@@ -499,26 +499,38 @@ fn assign_input_port<'a>(
 ) -> Result<(), ()> {
     let port = unwrap_get_net(&ctx.table, port);
 
-    mctx.fuse_scratch.clear();
-    if try_lower_fuse_driver_expr(ctx, mctx, scope, expr)? {
-        let drivee = port.net.blocking_drive_signal();
+    let start_connections_length = mctx.connections.len();
 
-        let mut offset = 0;
-        let drivee_width = mctx.gl.signals[drivee].size;
-        for driver in &mctx.fuse_scratch {
-            let width = driver.size(&mctx.gl.signals);
-            let Some(width) = VectorSize::new((drivee_width.get() - offset).min(width.get()))
-            else {
-                break;
-            };
-            mctx.connections.push(InputEdge {
-                driver: driver.clone(),
-                drivee,
-                drivee_slice: Some(SignalSlice::from_width(offset, width).unwrap()),
-            });
-            offset += width.get();
+    mctx.fuse_scratch.clear();
+    'try_fuse: {
+        if try_lower_fuse_driver_expr(ctx, mctx, scope, expr)? {
+            let drivee = port.net.blocking_drive_signal();
+
+            let mut offset = 0;
+            let drivee_width = mctx.gl.signals[drivee].size;
+            for driver in &mctx.fuse_scratch {
+                let driver_width = driver.size(&mctx.gl.signals);
+
+                if driver_width.get() > drivee_width.get() - offset {
+                    mctx.connections.truncate(start_connections_length);
+                    break 'try_fuse;
+                }
+
+                mctx.connections.push(InputEdge {
+                    driver: driver.clone(),
+                    drivee,
+                    drivee_slice: Some(SignalSlice::from_width(offset, driver_width).unwrap()),
+                });
+                offset += driver_width.get();
+            }
+
+            if offset != drivee_width.get() {
+                mctx.connections.truncate(start_connections_length);
+                break 'try_fuse;
+            }
+
+            return Ok(());
         }
-        return Ok(());
     }
 
     let (process, mut bb_builder) =
@@ -556,39 +568,48 @@ fn assign_port_output<'a>(
 ) -> Result<(), ()> {
     let output = unwrap_get_net(&ctx.table, output_net);
 
-    if let Expr::Ident(ident, exprs, range) = &*expr {
-        let to_signal =
-            try_resolve_net(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
-        let driver = output.net.probe_signal();
-        let drivee = to_signal.net.blocking_drive_signal();
+    'try_fuse: {
+        if let Expr::Ident(ident, exprs, range) = &*expr {
+            let to_signal =
+                try_resolve_net(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
+            let driver = output.net.probe_signal();
+            let drivee = to_signal.net.blocking_drive_signal();
 
-        let mut actx = ConstantAddressingContext {
-            gl: &mctx.gl,
-            arenas: ctx.arenas,
-            table: &ctx.table,
-            scope,
-            diagnostics: &mut mctx.diagnostics,
-            loc: expr.loc,
-            _pd: std::marker::PhantomData,
-        };
+            // Don't fuse if the width don't match.
+            if output.ty.force_net_width() != to_signal.ty.force_net_width() {
+                break 'try_fuse;
+            }
 
-        let range = range.map(|r| r.into());
+            let mut actx = ConstantAddressingContext {
+                gl: &mctx.gl,
+                arenas: ctx.arenas,
+                table: &ctx.table,
+                scope,
+                diagnostics: &mut mctx.diagnostics,
+                loc: expr.loc,
+                _pd: std::marker::PhantomData,
+            };
 
-        if let Ok(address) = lower_addressing(
-            &mut actx,
-            to_signal.ty.force_net_width(),
-            &to_signal.dims,
-            to_signal.transform,
-            exprs.iter().map(|e| e.into_constant()),
-            range,
-        ) && let Some(offset) = address.signal_offset_as_u32()
-        {
-            mctx.connections.push(InputEdge {
-                driver: Driver::Signal(driver, None),
-                drivee,
-                drivee_slice: Some(SignalSlice::from_width(offset, address.output_width).unwrap()),
-            });
-            return Ok(());
+            let range = range.map(|r| r.into());
+
+            if let Ok(address) = lower_addressing(
+                &mut actx,
+                to_signal.ty.force_net_width(),
+                &to_signal.dims,
+                to_signal.transform,
+                exprs.iter().map(|e| e.into_constant()),
+                range,
+            ) && let Some(offset) = address.signal_offset_as_u32()
+            {
+                mctx.connections.push(InputEdge {
+                    driver: Driver::Signal(driver, None),
+                    drivee,
+                    drivee_slice: Some(
+                        SignalSlice::from_width(offset, address.output_width).unwrap(),
+                    ),
+                });
+                return Ok(());
+            }
         }
     }
 

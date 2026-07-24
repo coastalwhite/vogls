@@ -4,7 +4,7 @@ use std::fmt::{self, Write};
 
 use slotmap::SlotMap;
 use vogls_bits::format::BitsFormatOptions;
-use vogls_ir::{Signal, SignalKey};
+use vogls_ir::{SCALAR_VSIZE, Signal, SignalKey};
 use vogls_utils::{TableKey, VgHashSet};
 
 use crate::{Edge, EdgeKey, FuseGraph, Node, NodeContent, NodeFlags, NodeKey};
@@ -14,7 +14,13 @@ impl<'a> fmt::Display for NodeDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.0.content {
             NodeContent::Signal(s) if *s == SignalKey::default() => write!(f, "N{}", self.1.get()),
-            NodeContent::Signal(s) => f.write_str(&self.2[*s].name),
+            NodeContent::Signal(s) => {
+                f.write_str(&self.2[*s].name)?;
+                if self.0.size != SCALAR_VSIZE {
+                    write!(f, " [{}:0]", self.0.size.get() - 1)?;
+                }
+                Ok(())
+            }
             NodeContent::Constant(bits) => bits
                 .display(&BitsFormatOptions {
                     prefix: true,
