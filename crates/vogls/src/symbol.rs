@@ -16,18 +16,20 @@ pub enum Symbol {
     Function,
 
     GenerateBlocks,
+    Modules,
 }
 
 impl fmt::Debug for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Symbol::Module => "module",
+            Symbol::Modules => "modules",
             Symbol::Parameter(_) => "param",
             Symbol::Net(_) => "net",
             Symbol::Block => "block",
             Symbol::Task => "task",
             Symbol::Function => "function",
-            Symbol::GenerateBlocks => "block",
+            Symbol::GenerateBlocks => "blocks",
         })
     }
 }
@@ -36,6 +38,7 @@ impl From<VSymbol> for Symbol {
     fn from(value: VSymbol) -> Self {
         match value {
             VSymbol::Module(..) => Self::Module,
+            VSymbol::ModuleRange(..) => Self::Modules,
             VSymbol::Parameter(vvalue) => Self::Parameter(vvalue.into_bits()),
             VSymbol::Net(net) => Self::Net(NetSymbol {
                 ty: net.ty,

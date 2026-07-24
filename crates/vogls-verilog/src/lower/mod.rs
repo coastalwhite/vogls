@@ -55,7 +55,11 @@ fn extend_symbol_table_to_vcd_scope(
     for sid in symbols.iter() {
         let name = &ident_table[table[*sid].name()];
         match &table[*sid].content {
-            S::Module(_) | S::NamedBlock | S::GenerateBlock(_) | S::GenerateBlocks => {
+            S::Module(_)
+            | S::NamedBlock
+            | S::GenerateBlock(_)
+            | S::GenerateBlocks
+            | S::ModuleRange(_) => {
                 let mut subscope = VcdScope {
                     name: name.to_string(),
                     items: Vec::new(),
@@ -496,6 +500,7 @@ fn assign_input_port<'a>(
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
     port: SymbolId,
+    expr_slice: Option<SignalSlice>,
 ) -> Result<(), ()> {
     let port = unwrap_get_net(&ctx.table, port);
 
@@ -503,11 +508,12 @@ fn assign_input_port<'a>(
 
     mctx.fuse_scratch.clear();
     'try_fuse: {
-        if try_lower_fuse_driver_expr(ctx, mctx, scope, expr)? {
+        // @TODO: Implement expr_slice.is_some()
+        if expr_slice.is_none() && try_lower_fuse_driver_expr(ctx, mctx, scope, expr)? {
             let drivee = port.net.blocking_drive_signal();
 
             let mut offset = 0;
-            let drivee_width = mctx.gl.signals[drivee].size;
+            let drivee_width = port.ty.force_net_width();
             for driver in &mctx.fuse_scratch {
                 let driver_width = driver.size(&mctx.gl.signals);
 
@@ -538,13 +544,16 @@ fn assign_input_port<'a>(
     let bb_key = bb_builder.key();
     let context_width = port.ty.force_net_width();
     let (v, v_ty) = lower_expr(ctx, mctx, scope, &mut bb_builder, expr, Some(context_width))?;
-    let v = expression::sign_or_zero_extend(
-        mctx.gl(),
-        &mut bb_builder,
-        v,
-        v_ty,
-        port.ty.force_net_width(),
-    );
+    let v = match expr_slice {
+        None => expression::sign_or_zero_extend(
+            mctx.gl(),
+            &mut bb_builder,
+            v,
+            v_ty,
+            port.ty.force_net_width(),
+        ),
+        Some(slice) => bb_builder.slice_constant(mctx.gl(), v, slice.lsb(), slice.width()),
+    };
     port.net.drive_blocking(mctx.gl(), &mut bb_builder, v, None);
 
     let mut signals = OrderedSet::new();
@@ -564,35 +573,29 @@ fn assign_port_output<'a>(
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
     output_net: SymbolId,
-    _ty: VType,
+    expr_slice: Option<SignalSlice>,
 ) -> Result<(), ()> {
     let output = unwrap_get_net(&ctx.table, output_net);
 
-    'try_fuse: {
-        if let Expr::Ident(ident, exprs, range) = &*expr {
-            let to_signal =
-                try_resolve_net(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
-            let driver = output.net.probe_signal();
-            let drivee = to_signal.net.blocking_drive_signal();
+    if let Expr::Ident(ident, exprs, range) = &*expr {
+        let to_signal =
+            try_resolve_net(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
+        let driver = output.net.probe_signal();
+        let drivee = to_signal.net.blocking_drive_signal();
 
-            // Don't fuse if the width don't match.
-            if output.ty.force_net_width() != to_signal.ty.force_net_width() {
-                break 'try_fuse;
-            }
+        let mut actx = ConstantAddressingContext {
+            gl: &mctx.gl,
+            arenas: ctx.arenas,
+            table: &ctx.table,
+            scope,
+            diagnostics: &mut Diagnostics::default(),
+            loc: expr.loc,
+            _pd: std::marker::PhantomData,
+        };
 
-            let mut actx = ConstantAddressingContext {
-                gl: &mctx.gl,
-                arenas: ctx.arenas,
-                table: &ctx.table,
-                scope,
-                diagnostics: &mut mctx.diagnostics,
-                loc: expr.loc,
-                _pd: std::marker::PhantomData,
-            };
+        let range = range.map(|r| r.into());
 
-            let range = range.map(|r| r.into());
-
-            if let Ok(address) = lower_addressing(
+        if let Ok(address) = lower_addressing(
                 &mut actx,
                 to_signal.ty.force_net_width(),
                 &to_signal.dims,
@@ -600,17 +603,30 @@ fn assign_port_output<'a>(
                 exprs.iter().map(|e| e.into_constant()),
                 range,
             ) && let Some(offset) = address.signal_offset_as_u32()
-            {
-                mctx.connections.push(InputEdge {
-                    driver: Driver::Signal(driver, None),
-                    drivee,
-                    drivee_slice: Some(
-                        SignalSlice::from_width(offset, address.output_width).unwrap(),
-                    ),
-                });
-                return Ok(());
-            }
+            // Don't fuse if the width don't match.
+            && address.output_width == to_signal.ty.force_net_width()
+        {
+            mctx.connections.push(InputEdge {
+                driver: Driver::Signal(driver, None),
+                drivee,
+                drivee_slice: Some(
+                    SignalSlice::from_width(
+                        expr_slice.map_or(0, |v| v.lsb()) + offset,
+                        expr_slice.map_or(address.output_width, |v| v.width()),
+                    )
+                    .unwrap(),
+                ),
+            });
+            return Ok(());
         }
+    }
+
+    if expr_slice.is_some() {
+        mctx.diagnostics.not_yet_implemented(
+            ctx.arenas.get_span(expr),
+            "range specification with concat or repetition output port.",
+        );
+        return Err(());
     }
 
     let (process, mut bb_builder) =

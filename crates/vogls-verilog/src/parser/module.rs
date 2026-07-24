@@ -1408,6 +1408,12 @@ impl<'a> Consumable<'a> for ModuleInstance<'a> {
 
         let name_of_module_instance =
             item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+
+        let mut range = None;
+        if tkw.is_next_equal_to(T::LeftBrace) {
+            range = Some(parse::<Range>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?);
+        }
+
         tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
         let list_of_port_connections =
             parse::<ListOfPortConnections>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
@@ -1415,6 +1421,7 @@ impl<'a> Consumable<'a> for ModuleInstance<'a> {
 
         Ok(ModuleInstance {
             name_of_module_instance,
+            range,
             list_of_port_connections,
         })
     }

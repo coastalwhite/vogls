@@ -5,8 +5,7 @@ use std::sync::Arc;
 use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, LogicMode,
-    ProcessKey, SCALAR_VSIZE, Signal, SignalFlags, SignalKey, VariableKey, VectorSize,
+    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, LogicMode, ProcessKey, Signal, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize, SCALAR_VSIZE
 };
 use vogls_utils::{Entry, IndexMap, Table, VgHashMap, new_table_key};
 
@@ -46,6 +45,7 @@ pub enum VSymbol {
     Function(FunctionSymbol),
 
     GenerateBlocks,
+    ModuleRange(ModuleSymbol),
 }
 
 impl fmt::Debug for VSymbol {
@@ -60,6 +60,7 @@ impl fmt::Debug for VSymbol {
             VSymbol::Task(_) => "task",
             VSymbol::Function(_) => "function",
             VSymbol::GenerateBlocks => "generate_blocks",
+            VSymbol::ModuleRange(_) => "module_range",
         })
     }
 }
@@ -109,6 +110,10 @@ impl Net {
 
     pub fn probe(&self, gl: &mut GlobalContext, bbb: &mut BasicBlockBuilder) -> VariableKey {
         bbb.probe(gl, self.probe_signal())
+    }
+
+    pub fn probe_slice(&self, gl: &mut GlobalContext, bbb: &mut BasicBlockBuilder, slice: SignalSlice) -> VariableKey {
+        bbb.probe_slice_constant(gl, self.probe_signal(), slice.lsb(), slice.width())
     }
 
     pub fn drive_blocking(

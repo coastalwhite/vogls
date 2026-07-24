@@ -227,11 +227,7 @@ pub fn lower_expr<'a>(
                             .rev()
                             .filter(|e| {
                                 !is_zero_sized_replication(
-                                    &mctx.gl,
-                                    ctx.arenas,
-                                    &ctx.table,
-                                    scope,
-                                    e,
+                                    &mctx.gl, ctx.arenas, &ctx.table, scope, e,
                                 )
                             })
                             .map(StackItem::new_no_ctx),
@@ -505,13 +501,21 @@ pub fn lower_expr<'a>(
                             builder.constant(mctx.gl(), value.into_bits()),
                         )
                     }
+                    VSymbol::Net(s) => (
+                        s.ty,
+                        &s.dims[..],
+                        s.transform,
+                        s.net.probe(mctx.gl(), builder),
+                    ),
+
                     VSymbol::Task(_)
                     | VSymbol::GenVar
                     | VSymbol::Function(_)
                     | VSymbol::Module(_)
                     | VSymbol::NamedBlock
                     | VSymbol::GenerateBlock(_)
-                    | VSymbol::GenerateBlocks => {
+                    | VSymbol::GenerateBlocks
+                    | VSymbol::ModuleRange(_) => {
                         mctx.diagnostics.not_yet_implemented(
                             ctx.arenas.get_span(expr),
                             "cannot use this symbol",
@@ -521,12 +525,6 @@ pub fn lower_expr<'a>(
                         result_stack.push(None);
                         continue 'dispatch_loop;
                     }
-                    VSymbol::Net(s) => (
-                        s.ty,
-                        &s.dims[..],
-                        s.transform,
-                        s.net.probe(mctx.gl(), builder),
-                    ),
                 };
 
                 struct LowerExprPartSelect<'a, 'b> {
@@ -1238,7 +1236,8 @@ pub fn get_used_ident_signals<'a>(
         | VSymbol::NamedBlock
         | VSymbol::Function(_)
         | VSymbol::GenerateBlock(_)
-        | VSymbol::GenerateBlocks => {}
+        | VSymbol::GenerateBlocks
+        | VSymbol::ModuleRange(_) => {}
     }
     Ok(())
 }

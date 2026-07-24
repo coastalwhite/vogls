@@ -304,7 +304,7 @@ fn extend_symbol_table_to_vcd_scope(
     for sid in symbols.iter() {
         let name = &ident_table[table[*sid].name()];
         match &table[*sid].content {
-            Symbol::Module | Symbol::Block | Symbol::GenerateBlocks => {
+            Symbol::Module | Symbol::Block | Symbol::GenerateBlocks | Symbol::Modules => {
                 let mut subscope = VcdScope {
                     name: name.to_string(),
                     items: Vec::new(),

@@ -19,7 +19,7 @@ pub fn try_lower_fuse_driver_expr<'a>(
     expr: AstId<'a, Expr<'a>>,
 ) -> Result<bool, ()> {
     // @TODO: This could also allow for `Concat` and `Replication`.
-
+    
     match &*expr {
         Expr::Ident(ident, exprs, range_expr) => {
             try_lower_fuse_driver_ident(ctx, mctx, scope, expr, *ident, *exprs, *range_expr)
@@ -144,11 +144,14 @@ pub fn try_fuse_assign<'a>(
     };
     let drivee = to_net.net.blocking_drive_signal();
 
+    dbg!(offset);
+
     // @TODO: sum(driver.size()) > output_width
     let drivee_signal_width = mctx.gl.signals[to_net.net.blocking_drive_signal()].size;
     let mut offset = offset;
     for driver in &mctx.fuse_scratch {
         let width = driver.size(&mctx.gl.signals);
+        dbg!(width);
         let Some(width) = VectorSize::new((drivee_signal_width.get() - offset).min(width.get()))
         else {
             break;

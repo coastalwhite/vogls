@@ -1,3 +1,4 @@
+`define WIDTH 99
 module full_adder (
 	input cin,
 	input a,
@@ -5,36 +6,43 @@ module full_adder (
 	output z,
 	output cout
 );
-	assign z = a ^ b ^ c;
-	assign cout = (a & b) | (b & c) | (a & c);
+	assign z = a ^ b ^ cin;
+	assign cout = (a & b) | (b & cin) | (a & cin);
 endmodule
 
 module top_module (
-	input [99:0] a, b,
+	input [`WIDTH:0] a, b,
     input cin,
-    output [99:0] cout,
-    output [99:0] sum
+    output [`WIDTH:0] cout,
+    output [`WIDTH:0] sum
 );	
-	full_adder f[99:0] (
-		.cin  ({ cin, cout[98:0]}),
+	full_adder f[`WIDTH:0] (
+		.cin  ({ cout[`WIDTH - 1:0], cin }),
 		.a    (a),
 		.b    (b),
 		.z    (sum),
-		.cout (cout),
+		.cout (cout)
 	);
 endmodule
 
 module tb();
-    reg [254:0] in;
-    wire [7:0] out;
+    reg [`WIDTH:0] a, b;
+    reg cin;
+    wire [`WIDTH:0] cout, sum;
 
-    top_module m(in, out);
+    top_module m(
+        .a(a),
+        .b(b),
+        .cin(cin),
+        .cout(cout),
+        .sum(sum)
+    );
 
     initial begin
-        #1 in = 0;
-        #1 $vogls_assert_eq(out, 0); in = 1;
-        #1 $vogls_assert_eq(out, 1); in = 100'h1_1234_5678_aaaa_bbbb_cccc_dddd;
-        #1 $vogls_assert_eq(out, 54); in = 255'hFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFFFFF;
-        #1 $vogls_assert_eq(out, 255);
+        a = 0; b = 0; cin = 0;
+        #1 $vogls_assert_eq(cout, 0); $vogls_assert_eq(sum, 0); a = 1'b1;
+        #1 $vogls_assert_eq(cout, 0); $vogls_assert_eq(sum, 1); b = 1'b1;
+        #1 $vogls_assert_eq(cout, 1); $vogls_assert_eq(sum, 2); a = 4'b1001;
+        #1 $vogls_assert_eq(cout, 1); $vogls_assert_eq(sum, 4'b1010);
     end
 endmodule

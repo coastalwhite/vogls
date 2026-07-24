@@ -367,6 +367,7 @@ pub struct NamedParameterAssignment<'a> {
 #[derive(Clone, Copy)]
 pub struct ModuleInstance<'a> {
     pub name_of_module_instance: AstItem<Identifier>,
+    pub range: Option<AstId<'a, Range<'a>>>,
     pub list_of_port_connections: AstId<'a, ListOfPortConnections<'a>>,
 }
 

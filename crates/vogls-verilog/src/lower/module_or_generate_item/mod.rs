@@ -1,3 +1,4 @@
+use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_fuse_signals::InputEdge;
 use vogls_ir::{
@@ -22,13 +23,15 @@ use crate::ast::udp::{UdpInstance, UdpInstantiation};
 use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::{VSymbol, VSymbolTable};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_size, net_lvalue_width};
-use crate::lower::expression::{self, get_used_signals, lower_expr, truncate_or_extend};
+use crate::lower::expression::{
+    self, get_expr_type, get_used_signals, lower_expr, truncate_or_extend,
+};
 use crate::lower::fuse::{try_fuse_assign, try_lower_fuse_driver_expr};
 use crate::lower::statement::{get_used_signals_stmt_or_null, statements_to_process};
 use crate::lower::udp::lower_udp;
 use crate::lower::{
     VType, assign_input_port, assign_port_output, eval_constant_expr, evaluate_range,
-    resolve_symbol_id, try_resolve_net, unwrap_get_module,
+    resolve_symbol_id, try_resolve_net,
 };
 use crate::parser::AstArenas;
 
@@ -358,20 +361,34 @@ pub fn lower<'a>(
             for instance in module_instances.iter() {
                 let ModuleInstance {
                     name_of_module_instance,
+                    range: _,
                     list_of_port_connections,
                 } = &*instance;
 
                 let instance_sid =
                     resolve_symbol_id(scope, &ctx.table, name_of_module_instance.item.0).unwrap();
 
+                let instance_symbol = &ctx.table[instance_sid];
+                let (symbol, module_sid, range_specification) = match &instance_symbol.content {
+                    VSymbol::Module(symbol) => (symbol, instance_sid, None),
+                    VSymbol::ModuleRange(_) => {
+                        let module_sid = instance_symbol.children()[0];
+                        let VSymbol::Module(symbol) = &ctx.table[module_sid].content else {
+                            unreachable!();
+                        };
+                        (symbol, module_sid, Some(instance_sid))
+                    },
+                    _ => unreachable!(),
+                };
+
                 match &**list_of_port_connections {
                     ListOfPortConnections::Ordered(ports) => {
                         // @TODO:
-                        // Icarus Verilog has as good perspective on how to deal with unequal port
+                        // Icarus Verilog has a good perspective on how to deal with unequal port
                         // lengths. We should always warn here, but allow less ports.
                         //
                         // https://steveicarus.github.io/iverilog/developer/guide/misc/ieee1364-notes.html.
-                        if unwrap_get_module(&ctx.table, instance_sid).ports.len() != ports.len() {
+                        if symbol.ports.len() != ports.len() {
                             mctx.diagnostics.not_yet_implemented(
                                 ctx.arenas.get_range_span(*ports),
                                 "unequal number of ports",
@@ -379,28 +396,24 @@ pub fn lower<'a>(
                             return Err(());
                         }
 
-                        for (pi, l_p) in ports.iter().enumerate() {
-                            let (net, connection) =
-                                unwrap_get_module(&ctx.table, instance_sid).ports[pi];
-                            let VSymbol::Net(n) = &ctx.table[net].content else {
-                                unreachable!();
-                            };
-                            let ty = n.ty;
-                            let is_input = matches!(
+                        for (pi, expr) in ports.iter().enumerate() {
+                            let (port, connection) = symbol.ports[pi];
+                            let range_specification = range_specification
+                                .map(|modules_sid| (modules_sid, ctx.table[port].name()));
+                            assign_port(
+                                ctx,
+                                mctx,
+                                scope,
+                                range_specification,
                                 connection,
-                                ConnectionDirection::In | ConnectionDirection::Both
-                            );
-                            if is_input {
-                                assign_input_port(ctx, mctx, scope, l_p, net)?;
-                            } else {
-                                assign_port_output(ctx, mctx, scope, l_p, net, ty)?;
-                            }
+                                expr,
+                                port,
+                            )?;
                         }
                     }
                     ListOfPortConnections::Named(ports) => {
                         let mut error = false;
-                        let mut signals_assigned =
-                            vec![false; unwrap_get_module(&ctx.table, instance_sid).ports.len()];
+                        let mut signals_assigned = vec![false; symbol.ports.len()];
                         for p in ports.iter() {
                             let named_port_connection = &*p;
                             let NamedPortConnection {
@@ -410,7 +423,7 @@ pub fn lower<'a>(
 
                             let port = ctx
                                 .table
-                                .resolve(instance_sid, ast_port_identifier.item.0)
+                                .resolve(module_sid, ast_port_identifier.item.0)
                                 .and_then(|symid| {
                                     let VSymbol::Net(n) = &ctx.table[symid].content else {
                                         return None;
@@ -418,30 +431,28 @@ pub fn lower<'a>(
                                     n.port_idx.map(|i| (i, &n.ty))
                                 });
 
-                            let Some((port_idx, port_ty)) = port else {
+                            let Some((port_idx, _)) = port else {
                                 mctx.diagnostics.port_not_found(
                                     ctx.arenas,
-                                    unwrap_get_module(&ctx.table, instance_sid),
+                                    symbol,
                                     ast_port_identifier,
                                 );
                                 error = true;
                                 continue;
                             };
-
-                            let (net, connection) =
-                                unwrap_get_module(&ctx.table, instance_sid).ports[port_idx];
-
-                            let is_input = matches!(
-                                connection,
-                                ConnectionDirection::In | ConnectionDirection::Both
-                            );
-
-                            if let Some(e) = expression {
-                                if is_input {
-                                    assign_input_port(ctx, mctx, scope, e, net)?;
-                                } else {
-                                    assign_port_output(ctx, mctx, scope, e, net, *port_ty)?;
-                                }
+                            let (port, connection) = symbol.ports[port_idx];
+                            if let Some(expr) = expression {
+                                let range_specification = range_specification
+                                    .map(|modules_sid| (modules_sid, ast_port_identifier.item.0));
+                                assign_port(
+                                    ctx,
+                                    mctx,
+                                    scope,
+                                    range_specification,
+                                    connection,
+                                    expr,
+                                    port,
+                                )?;
                             }
 
                             if std::mem::replace(&mut signals_assigned[port_idx], true) {
@@ -648,4 +659,73 @@ pub fn lower_variable_type<'a>(
             Ok((Vec::new(), ty.force_net_width(), Some(value.into_bits())))
         }
     }
+}
+
+pub fn assign_port<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    range_specification: Option<(SymbolId, IdentId)>,
+    connection: ConnectionDirection,
+    value: AstId<'a, Expr<'a>>,
+    port: SymbolId,
+) -> Result<(), ()> {
+    let VSymbol::Net(port_net) = &ctx.table[port].content else {
+        unreachable!();
+    };
+    let is_input = matches!(
+        connection,
+        ConnectionDirection::In | ConnectionDirection::Both
+    );
+
+    let Some((modules_sid, port_ident)) = range_specification else {
+        // Base case is that you have no range specification for your port.
+        if is_input {
+            assign_input_port(ctx, mctx, scope, value, port, None)?;
+        } else {
+            assign_port_output(ctx, mctx, scope, value, port, None)?;
+        }
+        return Ok(());
+    };
+
+    let assigner_bit_length = get_expr_type(
+        &mut mctx.gl,
+        ctx.arenas,
+        &ctx.table,
+        scope,
+        &mut mctx.diagnostics,
+        value,
+    )?
+    .force_net_width();
+    let assigned_bit_length = port_net.ty.force_net_width();
+
+    let module_instances = ctx.table[modules_sid].children();
+
+    let mut split_width = 0u32;
+    if assigner_bit_length != assigned_bit_length {
+        let expected_bit_length = u32::try_from(module_instances.len())
+            .ok()
+            .and_then(|num_instances| num_instances.checked_mul(assigned_bit_length.get()));
+
+        if expected_bit_length != Some(assigner_bit_length.get()) {
+            mctx.diagnostics
+                .not_yet_implemented(ctx.arenas.get_span(value), "unexpected bit length");
+            return Err(());
+        }
+        split_width = assigned_bit_length.get();
+    }
+
+    // Get the SymbolId of the actual module instance.
+    for (i, &module_sid) in module_instances.iter().enumerate() {
+        let port = ctx.table.resolve(module_sid, port_ident).unwrap();
+        let lsb = i as u32 * split_width;
+        let slice = SignalSlice::from_width(lsb, assigned_bit_length).unwrap();
+        if is_input {
+            assign_input_port(ctx, mctx, scope, value, port, Some(slice))?;
+        } else {
+            assign_port_output(ctx, mctx, scope, value, port, Some(slice))?;
+        }
+    }
+
+    Ok(())
 }

@@ -47,6 +47,7 @@ pub enum ElabLevel<'a> {
     GenerateCase(AstId<'a, CaseGenerateConstruct<'a>>),
     GenerateBlock(AstIdRange<'a, ModuleOrGenerateItem<'a>>),
     Module(AstId<'a, Module<'a>>),
+    ModuleRange(AstId<'a, Module<'a>>, usize),
 }
 
 #[derive(Clone, Copy)]
@@ -58,6 +59,7 @@ pub enum InLevelSymbol<'a> {
     ),
     ModuleInstance(
         Option<AstId<'a, ParameterValueAssignment<'a>>>,
+        Option<AstId<'a, Range<'a>>>,
         AstId<'a, Module<'a>>,
     ),
     Integer(AstId<'a, VariableType<'a>>),
@@ -215,6 +217,11 @@ pub fn elaborate<'a>(
             }
             ElabLevel::Module(module) => {
                 lvl_error |= elaborate_module(module, scope, ctx, &mut st, diagnostics).is_err();
+            }
+            ElabLevel::ModuleRange(module, num_instances) => {
+                lvl_error |=
+                    elaborate_module_range(module, scope, num_instances, ctx, &mut st, diagnostics)
+                        .is_err();
             }
         };
 
@@ -621,6 +628,34 @@ fn extend_param_decl_idents_into_scope<'a, 'b>(
 pub enum ParameterType {
     NonLocal,
     Local,
+}
+
+fn elaborate_module_range<'a, 'b>(
+    module: AstId<'a, Module<'a>>,
+    scope: SymbolId,
+    num_instances: usize,
+    ctx: &mut LowerContext<'a, '_>,
+    st: &mut ElaborationState<'a, 'b>,
+    diagnostics: &mut Diagnostics,
+) -> Result<(), ()> {
+    let module_range_symbol = &ctx.table[scope];
+    let name = module_range_symbol.name();
+    let origin = module_range_symbol.origin();
+    let VSymbol::ModuleRange(s) = &module_range_symbol.content else {
+        unreachable!();
+    };
+
+    // This is really inefficient as each element of a module range gets re-elaborated, but I don't
+    // really know how to deal with nested module ranges otherwise.
+    let symbol = s.clone();
+    for _ in 0..num_instances {
+        let module_sid =
+            ctx.table
+                .insert_unlinked(name, scope, origin, VSymbol::Module(symbol.clone()));
+        elaborate_module(module, module_sid, ctx, st, diagnostics)?;
+    }
+
+    Ok(())
 }
 
 fn elaborate_module<'a, 'b>(
@@ -1133,14 +1168,18 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                     parameter_overrides: Arc::new(VgHashMap::default()),
                     parameter_override_values: Arc::new(Vec::default()),
                     contains_specify: false,
-                    time_scale: ctx.time_scale,
+                    time_scale: module.time_scale,
+                };
+                let symbol = match module_instance.range {
+                    None => VSymbol::Module(symbol),
+                    Some(_) => VSymbol::ModuleRange(symbol),
                 };
                 let Ok(sid) = try_table_insert(
                     ctx.arenas,
                     &mut ctx.table,
                     scope,
                     module_instance.name_of_module_instance,
-                    VSymbol::Module(symbol),
+                    symbol,
                     diagnostics,
                 ) else {
                     error = true;
@@ -1148,7 +1187,11 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                 };
                 st.insert_lvl_symbol(
                     sid,
-                    InLevelSymbol::ModuleInstance(*parameter_value_assignment, *module),
+                    InLevelSymbol::ModuleInstance(
+                        *parameter_value_assignment,
+                        module_instance.range,
+                        *module,
+                    ),
                 );
             }
             if error { Err(()) } else { Ok(()) }
@@ -1411,7 +1454,7 @@ impl<'a> InLevelSymbol<'a> {
                     extend_expr_needs(scope, table, st, *e);
                 }
             }
-            InLevelSymbol::ModuleInstance(parameter_value_assignment, _) => {
+            InLevelSymbol::ModuleInstance(parameter_value_assignment, range, _) => {
                 if let Some(parameter_value_assignment) = parameter_value_assignment {
                     match &**parameter_value_assignment {
                         ParameterValueAssignment::Ordered(exprs) => {
@@ -1436,6 +1479,10 @@ impl<'a> InLevelSymbol<'a> {
                             }
                         }
                     }
+                }
+                if let Some(range) = range {
+                    extend_expr_needs(scope, table, st, range.msb);
+                    extend_expr_needs(scope, table, st, range.lsb);
                 }
             }
             InLevelSymbol::Net(NetInLevelSymbol {
@@ -2011,7 +2058,7 @@ pub fn finalize_symbol<'a>(
 
             res?;
         }
-        InLevelSymbol::ModuleInstance(parameter_value_assignment, module) => {
+        InLevelSymbol::ModuleInstance(parameter_value_assignment, range, module) => {
             let (parameter_overrides, parameter_override_values) = match *parameter_value_assignment
             {
                 None => Default::default(),
@@ -2072,11 +2119,59 @@ pub fn finalize_symbol<'a>(
                 },
             };
 
-            let module_symbol = unwrap_get_module_mut(&mut ctx.table, sid);
-            module_symbol.parameter_overrides = Arc::new(parameter_overrides);
-            module_symbol.parameter_override_values = Arc::new(parameter_override_values);
+            match range {
+                None => {
+                    let module_symbol = unwrap_get_module_mut(&mut ctx.table, sid);
+                    module_symbol.parameter_overrides = Arc::new(parameter_overrides);
+                    module_symbol.parameter_override_values = Arc::new(parameter_override_values);
+                    next_levels.push_back((sid, ElabLevel::Module(*module), module.time_scale));
+                }
+                Some(range) => {
+                    let msb = eval_constant_expr(
+                        gl,
+                        ctx.arenas,
+                        &ctx.table,
+                        scope,
+                        diagnostics,
+                        range.msb,
+                        None,
+                    )?;
+                    let lsb = eval_constant_expr(
+                        gl,
+                        ctx.arenas,
+                        &ctx.table,
+                        scope,
+                        diagnostics,
+                        range.lsb,
+                        None,
+                    )?;
 
-            next_levels.push_back((sid, ElabLevel::Module(*module), module.time_scale));
+                    let VSymbol::ModuleRange(module_symbol) = &mut ctx.table[sid].content else {
+                        unreachable!();
+                    };
+                    module_symbol.parameter_overrides = Arc::new(parameter_overrides);
+                    module_symbol.parameter_override_values = Arc::new(parameter_override_values);
+
+                    let (Some(msb), Some(lsb)) = (msb.as_integer(), lsb.as_integer()) else {
+                        diagnostics.not_yet_implemented(ctx.arenas.get_span(*range), "not integer");
+                        return Err(());
+                    };
+
+                    let num_instances = (msb.abs_diff(lsb) + 1) as usize;
+
+                    // @TODO: Instead of re-elaborating each instance again. Elaborate once and
+                    // deepcopy from there, we know the parameters are the same so the tree should
+                    // be the same.
+                    //
+                    // We add this main expansion to allow for signal resolving against the main
+                    // instance.
+                    next_levels.push_back((
+                        sid,
+                        ElabLevel::ModuleRange(*module, num_instances),
+                        module.time_scale,
+                    ));
+                }
+            }
         }
     }
 
