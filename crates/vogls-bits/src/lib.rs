@@ -1318,6 +1318,16 @@ impl Bits {
             _ => None,
         }
     }
+    pub fn extract_u64(&self) -> Option<u64> {
+        if self.size().get() > 64 || self.contains_special() {
+            return None;
+        }
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(v) => Some(v),
+            BitsDataRef::SeparateFv(v) => Some(v[1]),
+            _ => None,
+        }
+    }
 
     pub fn extract_exact_u32(&self) -> Option<u32> {
         assert_eq!(self.size().get(), 32);
@@ -1718,11 +1728,7 @@ impl Bits {
             return None;
         }
 
-        Some(
-            self.size().get()
-                - self.leading_zeroes()
-                - if self.count_ones() == 1 { 1 } else { 0 },
-        )
+        Some(self.size().get() - self.leading_zeroes() - if self.count_ones() == 1 { 1 } else { 0 })
     }
 
     pub fn logical_equal(&self, other: &Bits) -> FvLogicValue {
@@ -1731,6 +1737,53 @@ impl Bits {
 
     pub fn sign_invert(&self) -> Bits {
         Self::subtract(&Self::new_zeroed(self.size()), self)
+    }
+
+    pub fn as_signed_i64(&self) -> Option<i64> {
+        if self.contains_special() {
+            return None;
+        }
+
+        if let Some(value) = self.extract_u64() {
+            let shift = 64 - self.size().get();
+            return Some(((value << shift) as i64) >> shift);
+        }
+
+        if !self
+            .slicez(64, VectorSize::new(self.size.get() - 64).unwrap())
+            .eq_zero()
+        {
+            return None;
+        }
+
+        Some(
+            self.slicez(0, VectorSize::new(64).unwrap())
+                .extract_u64()
+                .unwrap() as i64,
+        )
+    }
+
+    pub fn as_unsigned_i64(&self) -> Option<i64> {
+        if self.contains_special() {
+            return None;
+        }
+
+        if let Some(value) = self.extract_u64() {
+            return value.try_into().ok();
+        }
+
+        if !self
+            .slicez(64, VectorSize::new(self.size.get() - 64).unwrap())
+            .eq_zero()
+        {
+            return None;
+        }
+
+        self.slicez(0, VectorSize::new(64).unwrap())
+            .extract_u64()
+            .unwrap()
+            .try_into()
+            .ok()
     }
 }
 
