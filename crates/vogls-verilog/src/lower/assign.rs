@@ -407,7 +407,7 @@ fn assign_net_lvalue_flat<'a>(
     Ok(())
 }
 
-pub fn net_lvalue_width<'a>(
+pub fn net_lvalue_bit_length<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,

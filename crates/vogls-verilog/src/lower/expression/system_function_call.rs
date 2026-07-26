@@ -101,6 +101,12 @@ pub fn lower_system_function_call(
             );
             Ok((e, e_ty))
         }
+        "vogls_blackbox" => {
+            ensure_num_args_equal!(1);
+            let (e, e_ty) = arguments[0].ok_or(())?;
+            let e = builder.intrinsic(mctx.gl(), IntrinsicOp::BlackBox, [e].into());
+            Ok((e, e_ty))
+        }
         "vogls_copyx" => {
             ensure_num_args_equal!(2);
             let (l, l_ty) = arguments[1].ok_or(())?;
@@ -235,6 +241,11 @@ pub fn get_system_function_call_output_ty(
 
         // VoGLS specific system function calls
         "vogls_dbg" => {
+            ensure_num_args_equal!(1);
+            let e_ty = arguments[0].ok_or(())?;
+            Ok(e_ty)
+        }
+        "vogls_blackbox" => {
             ensure_num_args_equal!(1);
             let e_ty = arguments[0].ok_or(())?;
             Ok(e_ty)

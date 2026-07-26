@@ -305,6 +305,15 @@ pub enum StatementOrNull<'a> {
     Statement(AstId<'a, Statement<'a>>),
 }
 
+impl<'a> StatementOrNull<'a> {
+    pub fn into_stmt_range(self) -> AstIdRange<'a, Statement<'a>> {
+        match self {
+            StatementOrNull::Attribute(_) => AstIdRange::empty(),
+            StatementOrNull::Statement(stmt) => AstIdRange::single(stmt),
+        }
+    }
+}
+
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 499
 // conditional_statement ::
 //   if ( expression ) statement_or_null

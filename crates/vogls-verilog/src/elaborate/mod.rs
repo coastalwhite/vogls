@@ -47,6 +47,26 @@ pub enum VSymbol {
     GenerateBlocks,
     ModuleRange(ModuleSymbol),
 }
+impl VSymbol {
+    pub fn as_net(&self) -> Option<&NetSymbol> {
+        match self {
+            VSymbol::Net(s) => Some(s),
+            _ => None,
+        }
+    }
+    pub fn as_module(&self) -> Option<&ModuleSymbol> {
+        match self {
+            VSymbol::Module(s) => Some(s),
+            _ => None,
+        }
+    }
+    pub fn as_param(&self) -> Option<&VValue> {
+        match self {
+            VSymbol::Parameter(s) => Some(s),
+            _ => None,
+        }
+    }
+}
 
 impl fmt::Debug for VSymbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

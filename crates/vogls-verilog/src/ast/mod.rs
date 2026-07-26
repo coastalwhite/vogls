@@ -18,6 +18,14 @@ pub struct AstId<'a, T> {
     pub node: &'a T,
     pub loc: usize,
 }
+impl<'a> AstId<'a, statement::StatementOrNull<'a>> {
+    pub fn as_id_range(self) -> AstIdRange<'a, statement::Statement<'a>> {
+        match &*self {
+            statement::StatementOrNull::Attribute(_) => AstIdRange::empty(),
+            statement::StatementOrNull::Statement(id) => AstIdRange::single(*id),
+        }
+    }
+}
 pub struct AstIdRange<'a, T> {
     pub node: &'a [T],
     pub loc: usize,
@@ -39,10 +47,7 @@ impl<'a, T> Deref for AstId<'a, T> {
 
 impl<'a, T> Default for AstIdRange<'a, T> {
     fn default() -> Self {
-        Self {
-            node: Default::default(),
-            loc: Default::default(),
-        }
+        Self::empty()
     }
 }
 impl<'a, T> Clone for AstIdRange<'a, T> {
@@ -53,6 +58,11 @@ impl<'a, T> Clone for AstIdRange<'a, T> {
 impl<'a, T> Copy for AstIdRange<'a, T> {}
 
 impl<'a, T> AstIdRange<'a, T> {
+    #[inline(always)]
+    pub const fn empty() -> AstIdRange<'a, T> {
+        Self { node: &[], loc: 0 }
+    }
+
     pub fn first(self) -> Option<AstId<'a, T>> {
         self.node.first().map(|node| AstId {
             node,

@@ -1,15 +1,16 @@
 signal[{mode}] a/0: 1
 signal[{mode}] x/1: 1
 
-proc initial {
+proc assign {
 *TR0:
-  waitregion 1, <TR1>
-*TR1:
-{?mode=fvO0}  %t0 = {!mode}.const 1'h1
-{?mode=fvO0}  %t1 = tvtofv %t0
-{?mode=fvO0}  drv $x/1, %t1
-{?!mode=fvO0}  %t0 = {mode}.const 1'h1
-{?!mode=fvO0}  drv $x/1, %t0
+  %t0 = tv.const 1'h0
+  %t1 = vogls.black_box %t0
+{?mode=fvO0}  %t2 = tvtofv %t1
+{?mode=fvOn}  %t2 = tvtofv %t1
+{?mode=fvO0}  drv $x/1, %t2
+{?mode=fvOn}  drv $x/1, %t2
+{?mode=tvO0}  drv $x/1, %t1
+{?mode=tvOn}  drv $x/1, %t1
   halt
 }
 
