@@ -5,7 +5,7 @@ use vogls_utils::OrderedSet;
 use crate::ast::expr::Expr;
 use crate::ast::statement::{
     DelayControl, DelayValue, EventControl, EventExpressionPrimary, ProceduralTimingControl,
-    StatementOrNull,
+    ProceduralTimingControlStatement, StatementOrNull,
 };
 use crate::ast::{AstId, AstItem};
 use crate::elaborate::NetSymbol;
@@ -20,12 +20,11 @@ pub fn lower<'a>(
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     mut builder: BasicBlockBuilder,
-    ptc: AstId<'a, ProceduralTimingControl<'a>>,
-    statement: AstId<'a, StatementOrNull<'a>>,
+    ptc_stmt: AstId<'a, ProceduralTimingControlStatement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
-    match &*ptc {
+    match *ptc_stmt.procedural_timing_control {
         ProceduralTimingControl::DelayControl(ast_delay_control) => {
-            let delay_control = &**ast_delay_control;
+            let delay_control = &*ast_delay_control;
             match delay_control {
                 DelayControl::DelayValue(ast_delay_value) => {
                     if let DelayValue::UnsignedNumber(value) = &**ast_delay_value
@@ -84,20 +83,32 @@ pub fn lower<'a>(
                     builder = builder.variable_wait(mctx.gl(), delay);
                 }
             }
-            builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
+            builder = super::lower_stmts(
+                ctx,
+                mctx,
+                scope,
+                builder,
+                ptc_stmt.statement_or_null.as_id_range(),
+            )?;
         }
-        ProceduralTimingControl::EventControl(event_control) => match &**event_control {
+        ProceduralTimingControl::EventControl(event_control) => match &*event_control {
             EventControl::Star => {
                 let mut ins = OrderedSet::new();
-                match &*statement {
+                match *ptc_stmt.statement_or_null {
                     StatementOrNull::Attribute(_) => {}
                     StatementOrNull::Statement(stmt) => {
-                        super::get_used_signals(ctx, mctx, scope, &mut ins, *stmt)?
+                        super::get_used_signals(ctx, mctx, scope, &mut ins, stmt)?
                     }
                 }
 
                 builder = builder.watch(mctx.gl(), ins.items);
-                builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
+                builder = super::lower_stmts(
+                    ctx,
+                    mctx,
+                    scope,
+                    builder,
+                    ptc_stmt.statement_or_null.as_id_range(),
+                )?;
             }
             EventControl::EventExpression(event_expression) => {
                 builder = builder.jump(mctx.gl());
@@ -163,7 +174,13 @@ pub fn lower<'a>(
 
                     builder = builder.branch_false_to(mctx.gl(), acc, start_key);
                 }
-                builder = super::lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
+                builder = super::lower_stmts(
+                    ctx,
+                    mctx,
+                    scope,
+                    builder,
+                    ptc_stmt.statement_or_null.as_id_range(),
+                )?;
             }
         },
     }

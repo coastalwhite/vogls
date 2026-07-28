@@ -3,7 +3,7 @@ use vogls_ir::{ProcessBuilder, ProcessKind};
 
 use crate::ast::{AstId, AstIdRange};
 use crate::ast::module::InitialConstruct;
-use crate::lower::statement::statements_to_process;
+use crate::lower::statement::lower_stmts;
 use crate::lower::{LowerContext, MutLowerContext};
 
 /// Lower a Verilog `initial` construct to Vogls IR.
@@ -21,7 +21,7 @@ pub fn lower<'a>(
         ProcessBuilder::new(mctx.gl(), ProcessKind::Initial, ctx.arenas.get_span(id));
 
     let bb_builder =
-        statements_to_process(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;
+        lower_stmts(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;
     bb_builder.halt(mctx.gl());
     
     process.finalize(mctx.gl());

@@ -9,7 +9,7 @@ use crate::lower::expression::coerce_bin_arithmetic;
 use crate::lower::lower_expr;
 use crate::lower::{LowerContext, MutLowerContext};
 
-use super::lower_statement_or_null;
+use super::lower_stmts;
 
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
@@ -30,8 +30,13 @@ pub fn lower<'a>(
     let mut origins = Vec::new();
 
     let (mut branch_ref, mut if_true_builder) = builder.branch(mctx.gl(), condition);
-    if_true_builder =
-        lower_statement_or_null(ctx, mctx, scope, if_true_builder, if_branch.statement)?;
+    if_true_builder = lower_stmts(
+        ctx,
+        mctx,
+        scope,
+        if_true_builder,
+        if_branch.statement.as_id_range(),
+    )?;
     origins.push(if_true_builder.key());
 
     let mut builder = if_true_builder.next_terminate_later(mctx.gl());
@@ -50,8 +55,13 @@ pub fn lower<'a>(
         let condition = builder.reduce_or(mctx.gl(), condition);
 
         (branch_ref, if_true_builder) = builder.branch(mctx.gl(), condition);
-        if_true_builder =
-            lower_statement_or_null(ctx, mctx, scope, if_true_builder, else_if_branch.statement)?;
+        if_true_builder = lower_stmts(
+            ctx,
+            mctx,
+            scope,
+            if_true_builder,
+            else_if_branch.statement.as_id_range(),
+        )?;
         origins.push(if_true_builder.key());
 
         builder = if_true_builder.next_terminate_later(mctx.gl());
@@ -61,7 +71,7 @@ pub fn lower<'a>(
     if let Some(statement) = else_branch {
         builder.update_branch_falsy(mctx.gl(), branch_ref.take().unwrap(), builder.key());
 
-        builder = lower_statement_or_null(ctx, mctx, scope, builder, *statement)?;
+        builder = lower_stmts(ctx, mctx, scope, builder, statement.as_id_range())?;
         origins.push(builder.key());
 
         builder = builder.jump(mctx.gl());
@@ -150,12 +160,12 @@ pub fn lower_case_statement<'a>(
 
         let condition = builder.reduce_or(mctx.gl(), condition);
         let (branch_ref, mut if_true_builder) = builder.branch(mctx.gl(), condition);
-        if_true_builder = lower_statement_or_null(
+        if_true_builder = lower_stmts(
             ctx,
             mctx,
             scope,
             if_true_builder,
-            case_item.statement_or_null,
+            case_item.statement_or_null.as_id_range(),
         )?;
         origins.push(if_true_builder.key());
 
@@ -164,7 +174,7 @@ pub fn lower_case_statement<'a>(
     }
 
     if let Some(statement) = default {
-        builder = lower_statement_or_null(ctx, mctx, scope, builder, statement)?;
+        builder = lower_stmts(ctx, mctx, scope, builder, statement.as_id_range())?;
         builder = builder.jump(mctx.gl());
     } else {
         builder = builder.jump(mctx.gl());

@@ -87,7 +87,7 @@ pub fn lower_loop_statement<'a>(
     };
 
     builder =
-        super::statements_to_process(ctx, mctx, scope, builder, AstIdRange::single(ls.statement))?;
+        super::lower_stmts(ctx, mctx, scope, builder, AstIdRange::single(ls.statement))?;
 
     match ls.variant {
         V::For(_, _, step) => {

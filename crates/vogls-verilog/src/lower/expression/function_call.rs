@@ -4,7 +4,8 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, ConnectionDirection, VariableKey};
 
 use crate::ast::expr::Expr;
-use crate::ast::{AstId, AstIdRange, AstItem, HIdent, Identifier};
+use crate::ast::statement::TaskEnable;
+use crate::ast::{AstId, HIdent};
 use crate::elaborate::VSymbol;
 use crate::lower::expression::{lower_expr, truncate_or_extend};
 use crate::lower::{LowerContext, assign_task_output};
@@ -104,9 +105,9 @@ pub fn lower_task_enable<'a>(
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     mut builder: BasicBlockBuilder,
-    ident: AstItem<Identifier>,
-    arguments: AstIdRange<Expr>,
+    task_enable: AstId<'a, TaskEnable<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
+    let TaskEnable { ident, exprs } = *task_enable;
     let fn_symbol =
         try_resolve_hident(scope, &ctx.table, ctx.arenas, ident, &mut mctx.diagnostics)?;
     let VSymbol::Task(task_symbol) = &ctx.table[fn_symbol].content else {
@@ -116,7 +117,7 @@ pub fn lower_task_enable<'a>(
     };
 
     let lowered = task_symbol.lowered.as_ref().unwrap();
-    if task_symbol.io.len() != arguments.len() {
+    if task_symbol.io.len() != exprs.len() {
         mctx.diagnostics.not_yet_implemented(
             ctx.arenas.get_item_span(ident),
             "invalid number of arguments",
@@ -134,7 +135,7 @@ pub fn lower_task_enable<'a>(
             continue;
         }
 
-        let arg = arguments.get(i);
+        let arg = exprs.get(i);
 
         let (arg_variable, arg_ty) = lower_expr(
             ctx,
@@ -202,7 +203,7 @@ pub fn lower_task_enable<'a>(
             continue;
         }
 
-        let arg = arguments.get(i);
+        let arg = exprs.get(i);
         let output_var = builder.probe(mctx.gl(), signal);
         assign_task_output(ctx, mctx, scope, &mut builder, output_var, arg, output_ty)?;
     }

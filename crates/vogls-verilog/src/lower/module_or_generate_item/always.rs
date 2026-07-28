@@ -9,7 +9,7 @@ use crate::ast::statement::{
     StatementOrNull,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::lower::statement::{get_used_signals_stmt_or_null, statements_to_process};
+use crate::lower::statement::{get_used_signals_stmt_or_null, lower_stmts};
 use crate::lower::{LowerContext, MutLowerContext, try_resolve_net};
 
 /// Lower a Verilog `always` construct to Vogls IR.
@@ -40,7 +40,7 @@ pub fn lower<'a>(
         //   `always begin stmt; @(...); end`
         // with a standing watch.
         let bb_builder =
-            statements_to_process(ctx, mctx, scope, bb_builder, stmt.into_stmt_range())?;
+            lower_stmts(ctx, mctx, scope, bb_builder, stmt.into_stmt_range())?;
         bb_builder.watch_to(mctx.gl(), signals.clone().into(), bb_key);
 
         process.set_standing(mctx.gl(), signals);
@@ -50,7 +50,7 @@ pub fn lower<'a>(
     }
 
     let bb_builder =
-        statements_to_process(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;
+        lower_stmts(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;
     bb_builder.jump_to(mctx.gl(), bb_key);
 
     process.finalize(mctx.gl());

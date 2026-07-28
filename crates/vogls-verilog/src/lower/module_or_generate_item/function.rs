@@ -25,7 +25,7 @@ pub fn lower<'a>(
     let (process, builder) = ProcessBuilder::new_anonymous(mctx.gl());
     let entry_key = builder.key();
 
-    let builder = crate::lower::statement::statements_to_process(
+    let builder = crate::lower::statement::lower_stmts(
         ctx,
         mctx,
         scope,
@@ -63,12 +63,12 @@ pub fn lower_task<'a>(
 
     let entry_key = builder.key();
 
-    let builder = crate::lower::statement::lower_statement_or_null(
+    let builder = crate::lower::statement::lower_stmts(
         ctx,
         mctx,
         scope,
         builder,
-        *statement_or_null,
+        statement_or_null.as_id_range(),
     )?;
 
     let terminate_key = builder.key();
