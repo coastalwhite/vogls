@@ -122,6 +122,7 @@ macro_rules! graph {
             nodes,
             edges,
             signal_to_node,
+            max_rounds: super::DEFAULT_MAX_ROUNDS,
         }
     }};
 }

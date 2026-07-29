@@ -36,6 +36,7 @@ pub struct ElaboratedDesign<'a> {
 
     pub(crate) unoptimized_fgs: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>>,
     pub(crate) optimized_fgs: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>>,
+    pub max_fuse_signals_rounds: usize,
 }
 
 pub struct ElaborationError<'a> {
@@ -322,6 +323,8 @@ impl<'a> ElaboratedDesign<'a> {
 
             mut unoptimized_fgs,
             mut optimized_fgs,
+
+            max_fuse_signals_rounds,
         } = self;
 
         let mut ctx = LowerContext {
@@ -412,6 +415,8 @@ impl<'a> ElaboratedDesign<'a> {
 
                     unoptimized_fgs,
                     optimized_fgs,
+
+                    max_fuse_signals_rounds,
                 },
                 diagnostics: mctx.diagnostics,
                 stage: LowerErrorStage::GlobalItems,
@@ -453,14 +458,19 @@ impl<'a> ElaboratedDesign<'a> {
 
                     unoptimized_fgs,
                     optimized_fgs,
+
+                    max_fuse_signals_rounds,
                 },
                 diagnostics: mctx.diagnostics,
                 stage: LowerErrorStage::Modules,
             }));
         }
 
-        let mut opt =
-            FuseGraphOptimizer::new(FuseGraph::from_connections(&mctx.gl, &mctx.connections));
+        let mut opt = FuseGraphOptimizer::new(FuseGraph::from_connections(
+            max_fuse_signals_rounds,
+            &mctx.gl,
+            &mctx.connections,
+        ));
         if let Some(unoptimized_fgs) = unoptimized_fgs.as_mut() {
             writeln!(
                 unoptimized_fgs.lock().unwrap(),

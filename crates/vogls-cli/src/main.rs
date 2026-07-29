@@ -44,6 +44,9 @@ struct Args {
     #[arg(short, long, default_value_t = u64::MAX)]
     time: u64,
 
+    #[arg(long)]
+    max_fuse_signals_rounds: Option<usize>,
+
     #[arg(long = "opt-rounds", default_value_t = 0)]
     opt_rounds: u8,
     #[arg(long = "fv-logic", short = 'F')]
@@ -116,6 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         profile,
         emit_unoptimized_fuse_graph,
         emit_optimized_fuse_graph,
+        max_fuse_signals_rounds,
     } = Args::parse();
     let logic_mode = if four_value_logic {
         LogicMode::FourValue
@@ -164,6 +168,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("failed to elaborate".into());
             }
         };
+
+        if let Some(max_fuse_signals_rounds) = max_fuse_signals_rounds {
+            elaborate.max_fuse_signals_rounds = max_fuse_signals_rounds;
+        }
 
         if emit_unoptimized_fuse_graph {
             elaborate.set_unoptimized_fuse_graphs_emit(Arc::new(Mutex::new(stdout())) as _);

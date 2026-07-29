@@ -1,4 +1,5 @@
 // vogls: verify-ir
+// vogls: mode=template
 module tb();
     reg a, b;
     wire [1:0] c;

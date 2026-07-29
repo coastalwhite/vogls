@@ -29,11 +29,13 @@ mod format;
 #[cfg(test)]
 mod tests;
 
-#[derive(Default)]
+pub const DEFAULT_MAX_ROUNDS: usize = 1024;
+
 pub struct FuseGraph {
     nodes: Table<NodeKey, Node>,
     edges: Table<EdgeKey, Edge>,
     signal_to_node: VgHashMap<SignalKey, NodeKey>,
+    max_rounds: usize,
 }
 
 pub struct FuseGraphOptimizer {
@@ -160,8 +162,21 @@ pub struct InputEdge {
 }
 
 impl FuseGraph {
-    pub fn from_connections(gl: &GlobalContext, connections: &[InputEdge]) -> Self {
-        let mut g = FuseGraph::default();
+    pub fn new(max_rounds: usize) -> Self {
+        Self {
+            nodes: Table::new(),
+            edges: Table::new(),
+            signal_to_node: VgHashMap::default(),
+            max_rounds,
+        }
+    }
+
+    pub fn from_connections(
+        max_rounds: usize,
+        gl: &GlobalContext,
+        connections: &[InputEdge],
+    ) -> Self {
+        let mut g = FuseGraph::new(max_rounds);
 
         // Form the graph.
         for edge in connections.iter() {
@@ -233,7 +248,7 @@ impl FuseGraph {
                             .get(s)
                             .map(|n| g.nodes[*n].flags |= NodeFlags::PROBE)
                     }
-                    I::Drive(s, _, _) => {
+                    I::Drive(s, _, _) | I::DriveSlice(s, _, _) => {
                         _ = g
                             .signal_to_node
                             .get(s)
@@ -582,7 +597,7 @@ impl FuseGraphOptimizer {
                     ),
                 };
 
-                builder.drive_partial_constant(gl, *signal, value, edge.drivee_slice.lsb())
+                builder.drive_partial_constant(gl, *signal, value, edge.drivee_slice.lsb());
             }
             let entry = builder.key();
             builder.watch_to(gl, watch_signals.items, entry);
@@ -651,6 +666,7 @@ impl FuseGraph {
                     nodes,
                     edges,
                     signal_to_node: _,
+                    max_rounds: _,
                 } = self;
 
                 for &k in subgraph.iter() {
@@ -726,12 +742,12 @@ impl FuseGraph {
             nodes,
             edges,
             signal_to_node: _,
+            max_rounds,
         } = self;
 
-        const MAX_ROUNDS: u32 = 1024;
         let mut reached_fixed_point = false;
         let mut round = 0;
-        while !reached_fixed_point && round < MAX_ROUNDS {
+        while !reached_fixed_point && round < *max_rounds {
             reached_fixed_point = true;
             round += 1;
 
@@ -932,8 +948,7 @@ impl FuseGraph {
 
                 // Inversion
                 #[expect(clippy::overly_complex_bool_expr)]
-                if false
-                    && reached_fixed_point
+                if reached_fixed_point
                     && passes.contains(FusePasses::INVERSION)
                     && !nodes[n].flags.contains(NodeFlags::DRIVE)
                     && nodes[n].fanin.iter().any(|&e| {
@@ -976,6 +991,10 @@ impl FuseGraph {
                         };
 
                         if edge.driver_slice != SignalSlice::with_end(nodes[edge.driver].size) {
+                            continue;
+                        }
+
+                        if nodes[edge.driver].fanout.len() != 1 {
                             continue;
                         }
 

@@ -226,6 +226,8 @@ impl<'a> ParsedDesign<'a> {
             gl,
             nbas: IndexMap::default(),
 
+            max_fuse_signals_rounds: vogls_fuse_signals::DEFAULT_MAX_ROUNDS,
+
             unoptimized_fgs: None,
             optimized_fgs: None,
         })
