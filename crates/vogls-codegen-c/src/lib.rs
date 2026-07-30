@@ -670,14 +670,17 @@ pub fn lower_process(
                                 R::T => "t",
                                 R::Erlang => "erlang",
                             };
-                            
-                            write!(buffer, "{INDENT}{t} = (cldctx->fn_table.rtl_dist_{fn_name})((int32_t){seed}")?;
+
+                            write!(
+                                buffer,
+                                "{INDENT}{t} = (cldctx->fn_table.rtl_dist_{fn_name})((int32_t){seed}"
+                            )?;
                             for item in &items[1..] {
-                            let item = temp_map[item].ident;
+                                let item = temp_map[item].ident;
                                 write!(buffer, ", (int32_t){item}")?;
                             }
                             writeln!(buffer, ", cldctx->stderr);")?;
-                        },
+                        }
                         vogls_ir::IntrinsicOp::Display(dyn_format_string) => {
                             // @Performance: scratchpad this.
                             let args = items
@@ -785,7 +788,7 @@ pub fn lower_process(
                             offset_t.into(),
                         )?;
                     }
-                    I::Drive(signal, src, partial) => {
+                    I::Drive(_dst, signal, src, partial) => {
                         let t: CExpr = temp_map[src].into();
                         let bits = Bits::new_u32(*partial);
                         let partial = if *partial != 0 || gl.signals[*signal].size != t.ty().size {
@@ -796,7 +799,7 @@ pub fn lower_process(
                         let dst = io_signals[signal];
                         drive::drive(&mut buffer, signals, signal_to_tv_index, dst, t, partial)?;
                     }
-                    I::DriveSlice(signal, src, partial) => {
+                    I::DriveSlice(_dst, signal, src, partial) => {
                         let t: CExpr = temp_map[src].into();
                         let partial = temp_map[partial];
                         let partial = Some(partial.into());
@@ -822,14 +825,14 @@ pub fn lower_process(
                     let mut content = String::from("*   : ");
                     let mut arg_offsets = Vec::new();
                     let mut args = Vec::new();
-                    if let Some(dst) = i.get_destination_variable() {
-                        let var = temp_map[&dst];
-                        content.push_str(&dst.display(&display_context).to_string());
-                        content.push_str(" = ");
-                        arg_offsets.push((content.len(), DynFormatArgument::default()));
-                        content.push_str("; ");
-                        args.push(CExpr::from(var));
-                    }
+                    let dst = i.get_destination_variable();
+                    let var = temp_map[&dst];
+                    content.push_str(&dst.display(&display_context).to_string());
+                    content.push_str(" = ");
+                    arg_offsets.push((content.len(), DynFormatArgument::default()));
+                    content.push_str("; ");
+                    args.push(CExpr::from(var));
+
                     i.for_each_src(|src| {
                         let var = temp_map[&src];
                         content.push_str(&src.display(&display_context).to_string());

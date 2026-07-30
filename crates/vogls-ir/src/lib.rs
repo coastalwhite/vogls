@@ -100,9 +100,7 @@ impl BasicBlock {
         mut f: impl FnMut(VariableKey) -> Result<(), E>,
     ) -> Result<(), E> {
         for i in &self.instrs {
-            if let Some(dst) = i.get_destination_variable() {
-                f(dst)?;
-            }
+            f(i.get_destination_variable())?;
         }
         Ok(())
     }
@@ -644,9 +642,9 @@ pub enum Instruction {
     ///
     /// A drive can be a "partial" drive, meaning that the source value is offset by a certain
     /// amount of bits, and no bits beyond a certain point will be affected.
-    Drive(SignalKey, VariableKey, u32),
+    Drive(VariableKey, SignalKey, VariableKey, u32),
 
-    DriveSlice(SignalKey, VariableKey, VariableKey),
+    DriveSlice(VariableKey, SignalKey, VariableKey, VariableKey),
 
     Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
 }
@@ -664,7 +662,7 @@ impl Instruction {
         }
     }
 
-    pub fn get_destination_variable(&self) -> Option<VariableKey> {
+    pub fn get_destination_variable(&self) -> VariableKey {
         match self {
             Self::Constant(dst, _)
             | Self::Unary(dst, _, _)
@@ -679,8 +677,9 @@ impl Instruction {
             | Self::LastUpdateTime(dst, _)
             | Self::Probe(dst, _, _)
             | Self::ProbeSlice(dst, _, _)
-            | Self::Intrinsic(dst, _, _) => Some(*dst),
-            Self::Drive(..) | Self::DriveSlice(..) => None,
+            | Self::Intrinsic(dst, _, _)
+            | Self::Drive(dst, ..)
+            | Self::DriveSlice(dst, ..) => *dst,
         }
     }
 
@@ -699,8 +698,9 @@ impl Instruction {
             | Self::LastUpdateTime(dst, _)
             | Self::Probe(dst, _, _)
             | Self::ProbeSlice(dst, _, _)
-            | Self::Intrinsic(dst, _, _) => Some(dst),
-            Self::Drive(..) | Self::DriveSlice(..) => None,
+            | Self::Intrinsic(dst, _, _)
+            | Self::Drive(dst, ..)
+            | Self::DriveSlice(dst, ..) => Some(dst),
         }
     }
 
@@ -751,11 +751,13 @@ impl Instruction {
                     *s = f(*s);
                 }
             }
-            Self::DriveSlice(_, src, partial) => {
+            Self::DriveSlice(dst, _, src, partial) => {
+                *dst = f(*dst);
                 *src = f(*src);
                 *partial = f(*partial);
             }
-            Self::Drive(_, src, _) => {
+            Self::Drive(dst, _, src, _) => {
+                *dst = f(*dst);
                 *src = f(*src);
             }
             Self::Select(dst, cond, truthy, falsy) => {
@@ -797,10 +799,12 @@ impl Instruction {
                     f(*s);
                 }
             }
-            Self::Drive(_, src, _) => {
+            Self::Drive(dst, _, src, _) => {
+                f(*dst);
                 f(*src);
             }
-            Self::DriveSlice(_, src, partial) => {
+            Self::DriveSlice(dst, _, src, partial) => {
+                f(*dst);
                 f(*src);
                 f(*partial);
             }
@@ -824,7 +828,7 @@ impl Instruction {
             | Self::SliceImm(_, src, _)
             | Self::ShiftImm(_, _, src, _)
             | Self::ProbeSlice(_, _, src)
-            | Self::Drive(_, src, _) => f(*src),
+            | Self::Drive(_, _, src, _) => f(*src),
             Self::Binary(_, _, src1, src2) | Self::Slice(_, src1, src2) => {
                 f(*src1);
                 f(*src2);
@@ -839,7 +843,7 @@ impl Instruction {
                     f(*s);
                 }
             }
-            Self::DriveSlice(_, src, partial) => {
+            Self::DriveSlice(_dst, _, src, partial) => {
                 f(*src);
                 f(*partial);
             }
@@ -859,7 +863,7 @@ impl Instruction {
             | Self::SliceImm(_, src, _)
             | Self::ShiftImm(_, _, src, _)
             | Self::ProbeSlice(_, _, src)
-            | Self::Drive(_, src, _) => *src = f(*src),
+            | Self::Drive(_, _, src, _) => *src = f(*src),
             Self::Binary(_, _, src1, src2) | Self::Slice(_, src1, src2) => {
                 *src1 = f(*src1);
                 *src2 = f(*src2);
@@ -874,7 +878,7 @@ impl Instruction {
                     *s = f(*s);
                 }
             }
-            Self::DriveSlice(_, src, partial) => {
+            Self::DriveSlice(_dst, _, src, partial) => {
                 *src = f(*src);
                 *partial = f(*partial);
             }
@@ -891,8 +895,8 @@ impl Instruction {
         match self {
             Instruction::Probe(_, s, _)
             | Instruction::ProbeSlice(_, s, _)
-            | Instruction::Drive(s, _, _)
-            | Instruction::DriveSlice(s, _, _)
+            | Instruction::Drive(_, s, _, _)
+            | Instruction::DriveSlice(_, s, _, _)
             | Instruction::LastUpdateTime(_, s) => *s = f(*s),
             Instruction::Constant(..)
             | Instruction::Unary(..)

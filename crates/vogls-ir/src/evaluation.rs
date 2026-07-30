@@ -98,12 +98,22 @@ fn evaluate_impl(
                 };
                 _ = variables.insert(*dst, bits);
             }
-            I::Drive(dst_signal, src, offset) => {
-                if *offset > 0 || gl.vars.size(*src) != gl.signals[*dst_signal].size {
-                    todo!();
-                }
-                let bits = variables[src].clone();
-                signals.insert(*dst_signal, bits);
+            I::Drive(dst, dst_signal, src, offset) => {
+                let old_value = signals.entry(*dst_signal).or_insert_with(|| {
+                    let signal = &gl.signals[*dst_signal];
+                    match &signal.initialize {
+                        Some(v) => v.clone(),
+                        None if signal.mode.is_two_value() => Bits::new_zeroed(signal.size),
+                        None => Bits::new_unknown(signal.size),
+                    }
+                });
+                let src_size = gl.vars.size(*src);
+                let src = variables[src].clone();
+                let old_value_slice = old_value.slicez(*offset, src_size);
+                let update_mask = Bits::bitwise_case_equality(&old_value_slice, &src);
+                let new_value = old_value.set_slice(*offset, &src);
+                variables.insert(*dst, update_mask);
+                signals.insert(*dst_signal, new_value);
             }
             I::DriveSlice(..) => {
                 todo!()

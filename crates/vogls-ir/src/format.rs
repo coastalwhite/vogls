@@ -526,8 +526,9 @@ impl ContextFormat for Instruction {
                 f.write_str(", ")?;
                 offset.ctx_fmt(f, ctx)?;
             }
-            Self::Drive(sig, var, offset) => {
-                f.write_str("drv")?;
+            Self::Drive(dst, sig, var, offset) => {
+                dst.ctx_fmt(f, ctx)?;
+                f.write_str(" = drv")?;
                 f.write_str(" ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
@@ -537,8 +538,9 @@ impl ContextFormat for Instruction {
                     offset.fmt(f)?;
                 }
             }
-            Self::DriveSlice(sig, var, offset) => {
-                f.write_str("drv")?;
+            Self::DriveSlice(dst, sig, var, offset) => {
+                dst.ctx_fmt(f, ctx)?;
+                f.write_str(" = drv")?;
                 f.write_str(" ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;

@@ -54,8 +54,8 @@ pub fn deadcode_elimination(
             bb.terminator
                 .for_each_var(|v| _ = nodes.insert(v, VariableState::Used));
             for i in bb.instrs.iter().rev() {
+                let dst = i.get_destination_variable();
                 if !i.has_side_effects_on_call()
-                    && let Some(dst) = i.get_destination_variable()
                     && nodes
                         .get(&dst)
                         .is_none_or(|s| matches!(s, VariableState::MaybeUnused(_)))
@@ -160,9 +160,7 @@ pub fn deadcode_elimination(
                 }
             });
             bb.instrs.retain(|i| {
-                i.has_side_effects_on_call()
-                    || i.get_destination_variable()
-                        .is_none_or(|n| !nodes.contains_key(&n))
+                i.has_side_effects_on_call() || !nodes.contains_key(&i.get_destination_variable())
             });
             bb.instrs.shrink_to_fit();
         }

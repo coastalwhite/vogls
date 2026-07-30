@@ -5,7 +5,7 @@ proc other {
   %t0 = tv.const 32'h0000_0001
   %t1 = prb[2] $a, %t0
   %t2 = fvtotv %t1
-  drv $a, %t2
+  %t3 = drv $a, %t2
   halt
 }
 
@@ -14,6 +14,6 @@ proc other {
   %t0 = prb $a
   %t1 = concati_left %t0, 1'h1
   %t2 = slicei[2] %t1, 1
-  drv $a, %t2
+  %t3 = drv $a, %t2
   halt
 }

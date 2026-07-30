@@ -490,8 +490,14 @@ fn parse_process<'a>(
                 I::LastUpdateTime(..) => unreachable!(),
                 I::Probe(..) => unreachable!(),
                 I::ProbeSlice(..) => unreachable!(),
-                I::Drive(..) => unreachable!(),
-                I::DriveSlice(..) => unreachable!(),
+                I::Drive(_, _, src, _) | I::DriveSlice(_, _, src, _) => {
+                    if let VarSize::Resolved(_, src_size) = symbols.var_sizes[&src.identifier()] {
+                        symbols
+                            .var_sizes
+                            .insert(key, VarSize::Resolved(LogicMode::TwoValue, src_size));
+                        num_unresolved_vars -= 1;
+                    }
+                }
                 I::Phi(_, items) => {
                     if let Some((src_mode, src_size)) = items.iter().find_map(|(_, v)| {
                         if let VarSize::Resolved(mode, size) = symbols.var_sizes[&v.identifier()] {
@@ -562,7 +568,7 @@ fn parse_bb<'a>(
             break;
         }
 
-        if c.next_if_equals('%') {
+        let dst = if c.next_if_equals('%') {
             if terminator.is_some() {
                 return Err(Box::new(ParseError {
                     at: c.offset,
@@ -592,454 +598,21 @@ fn parse_bb<'a>(
             c.trim_cursor();
             c.expect_char('=')?;
 
-            c.trim_cursor();
-            let iname = c.take_ident()?;
+            dst
+        } else {
+            if c.is_next_equal_to('.') || c.is_next_equal_to('*') {
+                break;
+            }
 
-            use BinaryImmOp as BI;
-            use BinaryOp as B;
-            use ResizeOp as R;
-            use ShiftImmOp as SI;
-            use UnaryOp as UO;
-            let i = match iname {
-                "tv.const" => {
-                    c.trim_cursor();
-                    let imm = parse_imm(c)?;
-                    symbols.var_sizes.insert(
-                        dst.identifier(),
-                        VarSize::Resolved(LogicMode::TwoValue, imm.size()),
-                    );
-                    Instruction::Constant(dst, imm)
-                }
-                "fv.const" => {
-                    c.trim_cursor();
-                    let imm = parse_imm(c)?;
-                    symbols.var_sizes.insert(
-                        dst.identifier(),
-                        VarSize::Resolved(LogicMode::FourValue, imm.size()),
-                    );
-                    Instruction::Constant(dst, imm)
-                }
+            gl.vars.insert(LogicMode::TwoValue, SCALAR_VSIZE)
+        };
 
-                // Unary
-                "negate" => parse_unary(c, symbols, gl, dst, UO::Neg)?,
-                "reduce_or" => parse_unary(c, symbols, gl, dst, UO::ReduceOr)?,
-                "reduce_and" => parse_unary(c, symbols, gl, dst, UO::ReduceAnd)?,
-                "reduce_xor" => parse_unary(c, symbols, gl, dst, UO::ReduceXor)?,
-                "leading_zeros" => parse_unary(c, symbols, gl, dst, UO::LeadingZeros)?,
-                "tvtofv" => parse_unary(c, symbols, gl, dst, UO::TvToFv)?,
-                "fvtotv" => parse_unary(c, symbols, gl, dst, UO::FvToTv)?,
-
-                // Resize
-                "truncate" => parse_resize(c, symbols, gl, dst, R::Truncate)?,
-                "sign_extend" => parse_resize(c, symbols, gl, dst, R::SignExtend)?,
-                "zero_extend" => parse_resize(c, symbols, gl, dst, R::ZeroExtend)?,
-
-                // Binary
-                "and" => parse_binary(c, symbols, gl, dst, B::And)?,
-                "or" => parse_binary(c, symbols, gl, dst, B::Or)?,
-                "xor" => parse_binary(c, symbols, gl, dst, B::Xor)?,
-                "add" => parse_binary(c, symbols, gl, dst, B::Add)?,
-                "sub" => parse_binary(c, symbols, gl, dst, B::Sub)?,
-                "mul" => parse_binary(c, symbols, gl, dst, B::Multiply)?,
-                "pow" => parse_binary(c, symbols, gl, dst, B::Power)?,
-                "divx" => parse_binary(c, symbols, gl, dst, B::DivideX)?,
-                "div0" => parse_binary(c, symbols, gl, dst, B::Divide0)?,
-                "remx" => parse_binary(c, symbols, gl, dst, B::ModulusX)?,
-                "rem0" => parse_binary(c, symbols, gl, dst, B::Modulus0)?,
-                "ule" => parse_binary(c, symbols, gl, dst, B::UnsignedLessEqual)?,
-                "lsl" => parse_binary(c, symbols, gl, dst, B::LogicalShiftLeft)?,
-                "lsr" => parse_binary(c, symbols, gl, dst, B::LogicalShiftRight)?,
-                "asr" => parse_binary(c, symbols, gl, dst, B::ArithmeticShiftRight)?,
-                "concat" => parse_binary(c, symbols, gl, dst, B::Concat)?,
-                "copyx" => parse_binary(c, symbols, gl, dst, B::CopyX)?,
-                "copyz" => parse_binary(c, symbols, gl, dst, B::CopyZ)?,
-                "min" => parse_binary(c, symbols, gl, dst, B::Min)?,
-                "max" => parse_binary(c, symbols, gl, dst, B::Max)?,
-                "ceq" => parse_binary(c, symbols, gl, dst, B::CaseEquality)?,
-                "posedge" => parse_binary(c, symbols, gl, dst, B::Posedge)?,
-                "negedge" => parse_binary(c, symbols, gl, dst, B::Negedge)?,
-
-                // BinaryImm
-                "andi" => parse_binary_imm(c, symbols, gl, dst, BI::And)?,
-                "ori" => parse_binary_imm(c, symbols, gl, dst, BI::Or)?,
-                "xori" => parse_binary_imm(c, symbols, gl, dst, BI::Xor)?,
-                "addi" => parse_binary_imm(c, symbols, gl, dst, BI::Add)?,
-                "subi" => parse_binary_imm(c, symbols, gl, dst, BI::Sub)?,
-                "muli" => parse_binary_imm(c, symbols, gl, dst, BI::Multiply)?,
-                "powi" => parse_binary_imm(c, symbols, gl, dst, BI::Power)?,
-                "divi" => parse_binary_imm(c, symbols, gl, dst, BI::Divide)?,
-                "remi" => parse_binary_imm(c, symbols, gl, dst, BI::Modulus)?,
-                "revsubi" => parse_binary_imm(c, symbols, gl, dst, BI::RevSub)?,
-                "revpowi" => parse_binary_imm(c, symbols, gl, dst, BI::RevPower)?,
-                "revdivxi" => parse_binary_imm(c, symbols, gl, dst, BI::RevDivideX)?,
-                "revdiv0i" => parse_binary_imm(c, symbols, gl, dst, BI::RevDivide0)?,
-                "revremxi" => parse_binary_imm(c, symbols, gl, dst, BI::RevModulusX)?,
-                "revrem0i" => parse_binary_imm(c, symbols, gl, dst, BI::RevModulus0)?,
-                "ulei" => parse_binary_imm(c, symbols, gl, dst, BI::UnsignedLessEqual)?,
-                "ugei" => parse_binary_imm(c, symbols, gl, dst, BI::UnsignedGreaterEqual)?,
-                "concati_left" => parse_binary_imm(c, symbols, gl, dst, BI::ConcatLeft)?,
-                "concati_right" => parse_binary_imm(c, symbols, gl, dst, BI::ConcatRight)?,
-                "mini" => parse_binary_imm(c, symbols, gl, dst, BI::Min)?,
-                "maxi" => parse_binary_imm(c, symbols, gl, dst, BI::Max)?,
-                "ceqi" => parse_binary_imm(c, symbols, gl, dst, BI::CaseEquality)?,
-
-                "slice" => {
-                    c.trim_cursor();
-                    let size = parse_braced_size(c)?;
-                    symbols.var_sizes.insert(
-                        dst.identifier(),
-                        VarSize::Resolved(LogicMode::FourValue, size),
-                    );
-
-                    c.trim_cursor();
-                    let lhs = parse_var(c, symbols, gl)?;
-
-                    c.trim_cursor();
-                    c.expect_char(',')?;
-
-                    c.trim_cursor();
-                    let rhs = parse_var(c, symbols, gl)?;
-                    Instruction::Slice(dst, lhs, rhs)
-                }
-                "slicei" => {
-                    c.trim_cursor();
-                    let size = parse_braced_size(c)?;
-                    let mut dst = dst;
-                    gl.vars.update(&mut dst, LogicMode::TwoValue, size);
-
-                    c.trim_cursor();
-                    let lhs = parse_var(c, symbols, gl)?;
-
-                    c.trim_cursor();
-                    c.expect_char(',')?;
-
-                    c.trim_cursor();
-                    let rhs = parse_u32(c)?;
-                    Instruction::SliceImm(dst, lhs, rhs)
-                }
-
-                "lsli" => parse_shift_imm(c, symbols, gl, dst, SI::LogicalShiftLeft)?,
-                "lsri" => parse_shift_imm(c, symbols, gl, dst, SI::LogicalShiftRight)?,
-                "asri" => parse_shift_imm(c, symbols, gl, dst, SI::ArithmeticShiftRight)?,
-
-                "select" => {
-                    c.trim_cursor();
-                    let cond = parse_var(c, symbols, gl)?;
-                    c.trim_cursor();
-                    c.expect_char(',')?;
-
-                    c.trim_cursor();
-                    let truthy = parse_var(c, symbols, gl)?;
-                    c.trim_cursor();
-                    c.expect_char(',')?;
-
-                    c.trim_cursor();
-                    let falsy = parse_var(c, symbols, gl)?;
-
-                    if let Some(VarSize::Resolved(_, cond_size)) =
-                        symbols.var_sizes.get(&cond.identifier())
-                        && *cond_size != SCALAR_VSIZE
-                    {
-                        return Err(Box::new(ParseError {
-                            at: c.offset,
-                            error: format!("invalid condition: {}", cond_size),
-                        }));
-                    }
-
-                    if let Some(VarSize::Resolved(truthy_mode, truthy_size)) =
-                        symbols.var_sizes.get(&truthy.identifier())
-                        && let Some(VarSize::Resolved(falsy_mode, falsy_size)) =
-                            symbols.var_sizes.get(&falsy.identifier())
-                    {
-                        if truthy_mode != falsy_mode {
-                            return Err(Box::new(ParseError {
-                                at: c.offset,
-                                error: format!(
-                                    "invalid mode combination: {truthy_mode:?}, {falsy_mode:?}"
-                                ),
-                            }));
-                        }
-                        if truthy_size != falsy_size {
-                            return Err(Box::new(ParseError {
-                                at: c.offset,
-                                error: format!(
-                                    "invalid size combination: {truthy_size}, {falsy_size}"
-                                ),
-                            }));
-                        };
-                        symbols.var_sizes.insert(
-                            dst.identifier(),
-                            VarSize::Resolved(*truthy_mode, *truthy_size),
-                        );
-                    }
-
-                    Instruction::Select(dst, cond, truthy, falsy)
-                }
-
-                "lupdt" => {
-                    c.trim_cursor();
-                    let signal = parse_signal(c, symbols)?;
-                    symbols.var_sizes.insert(
-                        dst.identifier(),
-                        VarSize::Resolved(LogicMode::TwoValue, TIME_VSIZE),
-                    );
-                    Instruction::LastUpdateTime(dst, signal)
-                }
-
-                "prb" => {
-                    let mut size = None;
-                    if c.is_next_equal_to('[') {
-                        size = Some(parse_braced_size(c)?);
-                    }
-                    c.trim_cursor();
-                    let signal = parse_signal(c, symbols)?;
-                    let gl_signal = &gl.signals[signal];
-                    let size = size.unwrap_or(gl_signal.size);
-                    symbols
-                        .var_sizes
-                        .insert(dst.identifier(), VarSize::Resolved(gl_signal.mode, size));
-
-                    c.trim_cursor();
-                    if c.next_if_equals(',') {
-                        c.trim_cursor();
-                        if c.is_next_equal_to('%') {
-                            let offset = parse_var(c, symbols, gl)?;
-                            Instruction::ProbeSlice(dst, signal, offset)
-                        } else {
-                            let offset = parse_u32(c)?;
-                            Instruction::Probe(dst, signal, offset)
-                        }
-                    } else {
-                        Instruction::Probe(dst, signal, 0)
-                    }
-                }
-
-                "vogls.black_box" => {
-                    c.trim_cursor();
-                    let src = parse_var(c, symbols, gl)?;
-                    let op = IntrinsicOp::BlackBox;
-                    Instruction::Intrinsic(dst, Box::new(op), [src].into())
-                }
-                "vogls.assert" => {
-                    c.trim_cursor();
-                    let dyn_format_string = parse_dyn_format_string(c)?;
-                    let args = (0..dyn_format_string.arguments().len() + 1)
-                        .map(|_| {
-                            c.trim_cursor();
-                            c.expect_char(',')?;
-                            c.trim_cursor();
-                            parse_var(c, symbols, gl)
-                        })
-                        .collect::<Result<Box<[_]>, _>>()?;
-                    let op = IntrinsicOp::Assert(Box::new(dyn_format_string));
-
-                    symbols.var_sizes.insert(
-                        dst.identifier(),
-                        VarSize::Resolved(LogicMode::TwoValue, SCALAR_VSIZE),
-                    );
-                    Instruction::Intrinsic(dst, Box::new(op), args)
-                }
-                "vogls.display" => {
-                    c.trim_cursor();
-                    let dyn_format_string = parse_dyn_format_string(c)?;
-                    let args = (0..dyn_format_string.arguments().len())
-                        .map(|_| {
-                            c.trim_cursor();
-                            c.expect_char(',')?;
-                            c.trim_cursor();
-                            parse_var(c, symbols, gl)
-                        })
-                        .collect::<Result<Box<[_]>, _>>()?;
-                    let op = IntrinsicOp::Display(Box::new(dyn_format_string));
-
-                    symbols.var_sizes.insert(
-                        dst.identifier(),
-                        VarSize::Resolved(LogicMode::TwoValue, SCALAR_VSIZE),
-                    );
-                    Instruction::Intrinsic(dst, Box::new(op), args)
-                }
-                "vogls.finish" => {
-                    let op = IntrinsicOp::Finish;
-                    symbols.var_sizes.insert(
-                        dst.identifier(),
-                        VarSize::Resolved(LogicMode::TwoValue, SCALAR_VSIZE),
-                    );
-                    Instruction::Intrinsic(dst, Box::new(op), [].into())
-                }
-
-                "phi" => {
-                    c.trim_cursor();
-                    c.expect_char('[')?;
-                    let mut srcs = Vec::new();
-                    c.trim_cursor();
-                    while !c.next_if_equals(']') {
-                        if !srcs.is_empty() {
-                            c.expect_char(',')?;
-                            c.trim_cursor();
-                        }
-
-                        let var = parse_var(c, symbols, gl)?;
-                        c.trim_cursor();
-                        let bb = parse_label_ref(c, symbols, gl, region)?;
-                        srcs.push((bb, var));
-
-                        c.trim_cursor();
-                    }
-                    if let Some((src_mode, src_size)) = srcs.iter().find_map(|(_, v)| {
-                        if let Some(VarSize::Resolved(mode, size)) =
-                            symbols.var_sizes.get(&v.identifier())
-                        {
-                            return Some((*mode, *size));
-                        }
-                        None
-                    }) {
-                        symbols
-                            .var_sizes
-                            .insert(dst.identifier(), VarSize::Resolved(src_mode, src_size));
-                    }
-                    Instruction::Phi(dst, srcs.into())
-                }
-                _ => {
-                    return Err(Box::new(ParseError {
-                        at: c.offset,
-                        error: format!("unknown instruction: '{iname}'"),
-                    }));
-                }
-            };
-
+        if let Some(i) = parse_instr(c, symbols, gl, dst, region, &mut terminator)? {
             symbols
                 .var_sizes
                 .entry(dst.identifier())
                 .or_insert_with(|| VarSize::Unresolved(i.clone()));
             instrs.push(i);
-        } else {
-            if c.is_next_equal_to('.') || c.is_next_equal_to('*') {
-                break;
-            }
-            let ident = c.take_ident()?;
-
-            if terminator.is_some() {
-                return Err(Box::new(ParseError {
-                    at: c.offset,
-                    error: "already saw terminator".to_string(),
-                }));
-            }
-
-            if ident == "drv" {
-                c.trim_cursor();
-                let signal = parse_signal(c, symbols)?;
-
-                c.trim_cursor();
-                c.expect_char(',')?;
-
-                c.trim_cursor();
-                let src = parse_var(c, symbols, gl)?;
-                instrs.push(Instruction::Drive(signal, src, 0));
-                continue;
-            }
-
-            use BasicBlockTerminator as T;
-            terminator = Some(match ident {
-                "wait" => {
-                    c.trim_cursor();
-                    c.expect_char('#')?;
-                    let time = parse_u64(c)?;
-                    c.trim_cursor();
-                    c.expect_char(',')?;
-                    c.trim_cursor();
-                    let next = parse_label_ref(c, symbols, gl, region)?;
-                    let tr = gl.bbs[next].region;
-                    if tr.entry() != next {
-                        return Err(Box::new(ParseError {
-                            at: c.offset,
-                            error: "Can only wait to root of temporal region.".to_string(),
-                        }));
-                    }
-                    T::Wait(tr, Time(time))
-                }
-                "varwait" => {
-                    c.trim_cursor();
-                    let time = parse_var(c, symbols, gl)?;
-                    c.trim_cursor();
-                    c.expect_char(',')?;
-                    c.trim_cursor();
-                    let next = parse_label_ref(c, symbols, gl, region)?;
-                    let tr = gl.bbs[next].region;
-                    if tr.entry() != next {
-                        return Err(Box::new(ParseError {
-                            at: c.offset,
-                            error: "Can only wait to root of temporal region.".to_string(),
-                        }));
-                    }
-                    T::VariableWait(tr, time)
-                }
-                "waitregion" => {
-                    c.trim_cursor();
-                    let waitregion = parse_u8(c)?;
-                    c.trim_cursor();
-                    c.expect_char(',')?;
-                    c.trim_cursor();
-                    let next = parse_label_ref(c, symbols, gl, region)?;
-                    let tr = gl.bbs[next].region;
-                    if tr.entry() != next {
-                        return Err(Box::new(ParseError {
-                            at: c.offset,
-                            error: "Can only wait to root of temporal region.".to_string(),
-                        }));
-                    }
-                    T::WaitRegion(tr, waitregion)
-                }
-                "watch" => {
-                    c.trim_cursor();
-
-                    let mut signals = Vec::new();
-                    c.expect_char('[')?;
-                    signals.push(parse_signal(c, symbols)?);
-                    c.trim_cursor();
-                    while c.next_if_equals(',') {
-                        signals.push(parse_signal(c, symbols)?);
-                        c.trim_cursor();
-                    }
-                    c.expect_char(']')?;
-                    c.trim_cursor();
-
-                    c.expect_char(',')?;
-                    c.trim_cursor();
-                    let next = parse_label_ref(c, symbols, gl, region)?;
-                    let tr = gl.bbs[next].region;
-                    if tr.entry() != next {
-                        return Err(Box::new(ParseError {
-                            at: c.offset,
-                            error: "Can only wait to root of temporal region.".to_string(),
-                        }));
-                    }
-                    T::Watch(tr, signals)
-                }
-                "jump" => {
-                    c.trim_cursor();
-                    let next = parse_label_ref(c, symbols, gl, region)?;
-                    T::Jump(next)
-                }
-                "branch" => {
-                    let condition = parse_var(c, symbols, gl)?;
-                    c.trim_cursor();
-                    c.expect_char(',')?;
-                    c.trim_cursor();
-                    let truthy = parse_label_ref(c, symbols, gl, region)?;
-                    c.trim_cursor();
-                    c.expect_char(',')?;
-                    c.trim_cursor();
-                    let falsy = parse_label_ref(c, symbols, gl, region)?;
-                    T::Branch(condition, truthy, falsy)
-                }
-                "halt" => T::Halt,
-                _ => {
-                    return Err(Box::new(ParseError {
-                        at: c.offset,
-                        error: format!("unknown instruction: '{ident}'"),
-                    }));
-                }
-            });
         }
     }
 
@@ -1056,6 +629,449 @@ fn parse_bb<'a>(
     };
 
     Ok(())
+}
+
+fn parse_instr<'a>(
+    c: &mut Cursor<'a>,
+    symbols: &mut Symbols<'a>,
+    gl: &mut GlobalContext,
+    dst: VariableKey,
+    region: TemporalRegionKey,
+    terminator: &mut Option<BasicBlockTerminator>,
+) -> Result<Option<Instruction>, Box<ParseError>> {
+    c.trim_cursor();
+    let iname = c.take_ident()?;
+
+    use BasicBlockTerminator as T;
+    use BinaryImmOp as BI;
+    use BinaryOp as B;
+    use ResizeOp as R;
+    use ShiftImmOp as SI;
+    use UnaryOp as UO;
+    let i = match iname {
+        "tv.const" => {
+            c.trim_cursor();
+            let imm = parse_imm(c)?;
+            symbols.var_sizes.insert(
+                dst.identifier(),
+                VarSize::Resolved(LogicMode::TwoValue, imm.size()),
+            );
+            Instruction::Constant(dst, imm)
+        }
+        "fv.const" => {
+            c.trim_cursor();
+            let imm = parse_imm(c)?;
+            symbols.var_sizes.insert(
+                dst.identifier(),
+                VarSize::Resolved(LogicMode::FourValue, imm.size()),
+            );
+            Instruction::Constant(dst, imm)
+        }
+
+        // Unary
+        "negate" => parse_unary(c, symbols, gl, dst, UO::Neg)?,
+        "reduce_or" => parse_unary(c, symbols, gl, dst, UO::ReduceOr)?,
+        "reduce_and" => parse_unary(c, symbols, gl, dst, UO::ReduceAnd)?,
+        "reduce_xor" => parse_unary(c, symbols, gl, dst, UO::ReduceXor)?,
+        "leading_zeros" => parse_unary(c, symbols, gl, dst, UO::LeadingZeros)?,
+        "tvtofv" => parse_unary(c, symbols, gl, dst, UO::TvToFv)?,
+        "fvtotv" => parse_unary(c, symbols, gl, dst, UO::FvToTv)?,
+
+        // Resize
+        "truncate" => parse_resize(c, symbols, gl, dst, R::Truncate)?,
+        "sign_extend" => parse_resize(c, symbols, gl, dst, R::SignExtend)?,
+        "zero_extend" => parse_resize(c, symbols, gl, dst, R::ZeroExtend)?,
+
+        // Binary
+        "and" => parse_binary(c, symbols, gl, dst, B::And)?,
+        "or" => parse_binary(c, symbols, gl, dst, B::Or)?,
+        "xor" => parse_binary(c, symbols, gl, dst, B::Xor)?,
+        "add" => parse_binary(c, symbols, gl, dst, B::Add)?,
+        "sub" => parse_binary(c, symbols, gl, dst, B::Sub)?,
+        "mul" => parse_binary(c, symbols, gl, dst, B::Multiply)?,
+        "pow" => parse_binary(c, symbols, gl, dst, B::Power)?,
+        "divx" => parse_binary(c, symbols, gl, dst, B::DivideX)?,
+        "div0" => parse_binary(c, symbols, gl, dst, B::Divide0)?,
+        "remx" => parse_binary(c, symbols, gl, dst, B::ModulusX)?,
+        "rem0" => parse_binary(c, symbols, gl, dst, B::Modulus0)?,
+        "ule" => parse_binary(c, symbols, gl, dst, B::UnsignedLessEqual)?,
+        "lsl" => parse_binary(c, symbols, gl, dst, B::LogicalShiftLeft)?,
+        "lsr" => parse_binary(c, symbols, gl, dst, B::LogicalShiftRight)?,
+        "asr" => parse_binary(c, symbols, gl, dst, B::ArithmeticShiftRight)?,
+        "concat" => parse_binary(c, symbols, gl, dst, B::Concat)?,
+        "copyx" => parse_binary(c, symbols, gl, dst, B::CopyX)?,
+        "copyz" => parse_binary(c, symbols, gl, dst, B::CopyZ)?,
+        "min" => parse_binary(c, symbols, gl, dst, B::Min)?,
+        "max" => parse_binary(c, symbols, gl, dst, B::Max)?,
+        "ceq" => parse_binary(c, symbols, gl, dst, B::CaseEquality)?,
+        "posedge" => parse_binary(c, symbols, gl, dst, B::Posedge)?,
+        "negedge" => parse_binary(c, symbols, gl, dst, B::Negedge)?,
+
+        // BinaryImm
+        "andi" => parse_binary_imm(c, symbols, gl, dst, BI::And)?,
+        "ori" => parse_binary_imm(c, symbols, gl, dst, BI::Or)?,
+        "xori" => parse_binary_imm(c, symbols, gl, dst, BI::Xor)?,
+        "addi" => parse_binary_imm(c, symbols, gl, dst, BI::Add)?,
+        "subi" => parse_binary_imm(c, symbols, gl, dst, BI::Sub)?,
+        "muli" => parse_binary_imm(c, symbols, gl, dst, BI::Multiply)?,
+        "powi" => parse_binary_imm(c, symbols, gl, dst, BI::Power)?,
+        "divi" => parse_binary_imm(c, symbols, gl, dst, BI::Divide)?,
+        "remi" => parse_binary_imm(c, symbols, gl, dst, BI::Modulus)?,
+        "revsubi" => parse_binary_imm(c, symbols, gl, dst, BI::RevSub)?,
+        "revpowi" => parse_binary_imm(c, symbols, gl, dst, BI::RevPower)?,
+        "revdivxi" => parse_binary_imm(c, symbols, gl, dst, BI::RevDivideX)?,
+        "revdiv0i" => parse_binary_imm(c, symbols, gl, dst, BI::RevDivide0)?,
+        "revremxi" => parse_binary_imm(c, symbols, gl, dst, BI::RevModulusX)?,
+        "revrem0i" => parse_binary_imm(c, symbols, gl, dst, BI::RevModulus0)?,
+        "ulei" => parse_binary_imm(c, symbols, gl, dst, BI::UnsignedLessEqual)?,
+        "ugei" => parse_binary_imm(c, symbols, gl, dst, BI::UnsignedGreaterEqual)?,
+        "concati_left" => parse_binary_imm(c, symbols, gl, dst, BI::ConcatLeft)?,
+        "concati_right" => parse_binary_imm(c, symbols, gl, dst, BI::ConcatRight)?,
+        "mini" => parse_binary_imm(c, symbols, gl, dst, BI::Min)?,
+        "maxi" => parse_binary_imm(c, symbols, gl, dst, BI::Max)?,
+        "ceqi" => parse_binary_imm(c, symbols, gl, dst, BI::CaseEquality)?,
+
+        "slice" => {
+            c.trim_cursor();
+            let size = parse_braced_size(c)?;
+            symbols.var_sizes.insert(
+                dst.identifier(),
+                VarSize::Resolved(LogicMode::FourValue, size),
+            );
+
+            c.trim_cursor();
+            let lhs = parse_var(c, symbols, gl)?;
+
+            c.trim_cursor();
+            c.expect_char(',')?;
+
+            c.trim_cursor();
+            let rhs = parse_var(c, symbols, gl)?;
+            Instruction::Slice(dst, lhs, rhs)
+        }
+        "slicei" => {
+            c.trim_cursor();
+            let size = parse_braced_size(c)?;
+            let mut dst = dst;
+            gl.vars.update(&mut dst, LogicMode::TwoValue, size);
+
+            c.trim_cursor();
+            let lhs = parse_var(c, symbols, gl)?;
+
+            c.trim_cursor();
+            c.expect_char(',')?;
+
+            c.trim_cursor();
+            let rhs = parse_u32(c)?;
+            Instruction::SliceImm(dst, lhs, rhs)
+        }
+
+        "lsli" => parse_shift_imm(c, symbols, gl, dst, SI::LogicalShiftLeft)?,
+        "lsri" => parse_shift_imm(c, symbols, gl, dst, SI::LogicalShiftRight)?,
+        "asri" => parse_shift_imm(c, symbols, gl, dst, SI::ArithmeticShiftRight)?,
+
+        "select" => {
+            c.trim_cursor();
+            let cond = parse_var(c, symbols, gl)?;
+            c.trim_cursor();
+            c.expect_char(',')?;
+
+            c.trim_cursor();
+            let truthy = parse_var(c, symbols, gl)?;
+            c.trim_cursor();
+            c.expect_char(',')?;
+
+            c.trim_cursor();
+            let falsy = parse_var(c, symbols, gl)?;
+
+            if let Some(VarSize::Resolved(_, cond_size)) = symbols.var_sizes.get(&cond.identifier())
+                && *cond_size != SCALAR_VSIZE
+            {
+                return Err(Box::new(ParseError {
+                    at: c.offset,
+                    error: format!("invalid condition: {}", cond_size),
+                }));
+            }
+
+            if let Some(VarSize::Resolved(truthy_mode, truthy_size)) =
+                symbols.var_sizes.get(&truthy.identifier())
+                && let Some(VarSize::Resolved(falsy_mode, falsy_size)) =
+                    symbols.var_sizes.get(&falsy.identifier())
+            {
+                if truthy_mode != falsy_mode {
+                    return Err(Box::new(ParseError {
+                        at: c.offset,
+                        error: format!("invalid mode combination: {truthy_mode:?}, {falsy_mode:?}"),
+                    }));
+                }
+                if truthy_size != falsy_size {
+                    return Err(Box::new(ParseError {
+                        at: c.offset,
+                        error: format!("invalid size combination: {truthy_size}, {falsy_size}"),
+                    }));
+                };
+                symbols.var_sizes.insert(
+                    dst.identifier(),
+                    VarSize::Resolved(*truthy_mode, *truthy_size),
+                );
+            }
+
+            Instruction::Select(dst, cond, truthy, falsy)
+        }
+
+        "lupdt" => {
+            c.trim_cursor();
+            let signal = parse_signal(c, symbols)?;
+            symbols.var_sizes.insert(
+                dst.identifier(),
+                VarSize::Resolved(LogicMode::TwoValue, TIME_VSIZE),
+            );
+            Instruction::LastUpdateTime(dst, signal)
+        }
+
+        "prb" => {
+            let mut size = None;
+            if c.is_next_equal_to('[') {
+                size = Some(parse_braced_size(c)?);
+            }
+            c.trim_cursor();
+            let signal = parse_signal(c, symbols)?;
+            let gl_signal = &gl.signals[signal];
+            let size = size.unwrap_or(gl_signal.size);
+            symbols
+                .var_sizes
+                .insert(dst.identifier(), VarSize::Resolved(gl_signal.mode, size));
+
+            c.trim_cursor();
+            if c.next_if_equals(',') {
+                c.trim_cursor();
+                if c.is_next_equal_to('%') {
+                    let offset = parse_var(c, symbols, gl)?;
+                    Instruction::ProbeSlice(dst, signal, offset)
+                } else {
+                    let offset = parse_u32(c)?;
+                    Instruction::Probe(dst, signal, offset)
+                }
+            } else {
+                Instruction::Probe(dst, signal, 0)
+            }
+        }
+        "drv" => {
+            c.trim_cursor();
+            let signal = parse_signal(c, symbols)?;
+
+            c.trim_cursor();
+            c.expect_char(',')?;
+
+            c.trim_cursor();
+            let src = parse_var(c, symbols, gl)?;
+            Instruction::Drive(dst, signal, src, 0)
+        }
+
+        "vogls.black_box" => {
+            c.trim_cursor();
+            let src = parse_var(c, symbols, gl)?;
+            let op = IntrinsicOp::BlackBox;
+            Instruction::Intrinsic(dst, Box::new(op), [src].into())
+        }
+        "vogls.assert" => {
+            c.trim_cursor();
+            let dyn_format_string = parse_dyn_format_string(c)?;
+            let args = (0..dyn_format_string.arguments().len() + 1)
+                .map(|_| {
+                    c.trim_cursor();
+                    c.expect_char(',')?;
+                    c.trim_cursor();
+                    parse_var(c, symbols, gl)
+                })
+                .collect::<Result<Box<[_]>, _>>()?;
+            let op = IntrinsicOp::Assert(Box::new(dyn_format_string));
+
+            symbols.var_sizes.insert(
+                dst.identifier(),
+                VarSize::Resolved(LogicMode::TwoValue, SCALAR_VSIZE),
+            );
+            Instruction::Intrinsic(dst, Box::new(op), args)
+        }
+        "vogls.display" => {
+            c.trim_cursor();
+            let dyn_format_string = parse_dyn_format_string(c)?;
+            let args = (0..dyn_format_string.arguments().len())
+                .map(|_| {
+                    c.trim_cursor();
+                    c.expect_char(',')?;
+                    c.trim_cursor();
+                    parse_var(c, symbols, gl)
+                })
+                .collect::<Result<Box<[_]>, _>>()?;
+            let op = IntrinsicOp::Display(Box::new(dyn_format_string));
+
+            symbols.var_sizes.insert(
+                dst.identifier(),
+                VarSize::Resolved(LogicMode::TwoValue, SCALAR_VSIZE),
+            );
+            Instruction::Intrinsic(dst, Box::new(op), args)
+        }
+        "vogls.finish" => {
+            let op = IntrinsicOp::Finish;
+            symbols.var_sizes.insert(
+                dst.identifier(),
+                VarSize::Resolved(LogicMode::TwoValue, SCALAR_VSIZE),
+            );
+            Instruction::Intrinsic(dst, Box::new(op), [].into())
+        }
+
+        "phi" => {
+            c.trim_cursor();
+            c.expect_char('[')?;
+            let mut srcs = Vec::new();
+            c.trim_cursor();
+            while !c.next_if_equals(']') {
+                if !srcs.is_empty() {
+                    c.expect_char(',')?;
+                    c.trim_cursor();
+                }
+
+                let var = parse_var(c, symbols, gl)?;
+                c.trim_cursor();
+                let bb = parse_label_ref(c, symbols, gl, region)?;
+                srcs.push((bb, var));
+
+                c.trim_cursor();
+            }
+            if let Some((src_mode, src_size)) = srcs.iter().find_map(|(_, v)| {
+                if let Some(VarSize::Resolved(mode, size)) = symbols.var_sizes.get(&v.identifier())
+                {
+                    return Some((*mode, *size));
+                }
+                None
+            }) {
+                symbols
+                    .var_sizes
+                    .insert(dst.identifier(), VarSize::Resolved(src_mode, src_size));
+            }
+            Instruction::Phi(dst, srcs.into())
+        }
+
+        "wait" | "varwait" | "waitregion" | "watch" | "jump" | "branch" | "halt"
+            if terminator.is_some() =>
+        {
+            return Err(Box::new(ParseError {
+                at: c.offset,
+                error: "already saw terminator".to_string(),
+            }));
+        }
+
+        "wait" => {
+            c.trim_cursor();
+            c.expect_char('#')?;
+            let time = parse_u64(c)?;
+            c.trim_cursor();
+            c.expect_char(',')?;
+            c.trim_cursor();
+            let next = parse_label_ref(c, symbols, gl, region)?;
+            let tr = gl.bbs[next].region;
+            if tr.entry() != next {
+                return Err(Box::new(ParseError {
+                    at: c.offset,
+                    error: "Can only wait to root of temporal region.".to_string(),
+                }));
+            }
+            *terminator = Some(T::Wait(tr, Time(time)));
+            return Ok(None);
+        }
+        "varwait" => {
+            c.trim_cursor();
+            let time = parse_var(c, symbols, gl)?;
+            c.trim_cursor();
+            c.expect_char(',')?;
+            c.trim_cursor();
+            let next = parse_label_ref(c, symbols, gl, region)?;
+            let tr = gl.bbs[next].region;
+            if tr.entry() != next {
+                return Err(Box::new(ParseError {
+                    at: c.offset,
+                    error: "Can only wait to root of temporal region.".to_string(),
+                }));
+            }
+            *terminator = Some(T::VariableWait(tr, time));
+            return Ok(None);
+        }
+        "waitregion" => {
+            c.trim_cursor();
+            let waitregion = parse_u8(c)?;
+            c.trim_cursor();
+            c.expect_char(',')?;
+            c.trim_cursor();
+            let next = parse_label_ref(c, symbols, gl, region)?;
+            let tr = gl.bbs[next].region;
+            if tr.entry() != next {
+                return Err(Box::new(ParseError {
+                    at: c.offset,
+                    error: "Can only wait to root of temporal region.".to_string(),
+                }));
+            }
+            *terminator = Some(T::WaitRegion(tr, waitregion));
+            return Ok(None);
+        }
+        "watch" => {
+            c.trim_cursor();
+
+            let mut signals = Vec::new();
+            c.expect_char('[')?;
+            signals.push(parse_signal(c, symbols)?);
+            c.trim_cursor();
+            while c.next_if_equals(',') {
+                signals.push(parse_signal(c, symbols)?);
+                c.trim_cursor();
+            }
+            c.expect_char(']')?;
+            c.trim_cursor();
+
+            c.expect_char(',')?;
+            c.trim_cursor();
+            let next = parse_label_ref(c, symbols, gl, region)?;
+            let tr = gl.bbs[next].region;
+            if tr.entry() != next {
+                return Err(Box::new(ParseError {
+                    at: c.offset,
+                    error: "Can only wait to root of temporal region.".to_string(),
+                }));
+            }
+            *terminator = Some(T::Watch(tr, signals));
+            return Ok(None);
+        }
+        "jump" => {
+            c.trim_cursor();
+            let next = parse_label_ref(c, symbols, gl, region)?;
+            *terminator = Some(T::Jump(next));
+            return Ok(None);
+        }
+        "branch" => {
+            let condition = parse_var(c, symbols, gl)?;
+            c.trim_cursor();
+            c.expect_char(',')?;
+            c.trim_cursor();
+            let truthy = parse_label_ref(c, symbols, gl, region)?;
+            c.trim_cursor();
+            c.expect_char(',')?;
+            c.trim_cursor();
+            let falsy = parse_label_ref(c, symbols, gl, region)?;
+            *terminator = Some(T::Branch(condition, truthy, falsy));
+            return Ok(None);
+        }
+        "halt" => {
+            *terminator = Some(T::Halt);
+            return Ok(None);
+        }
+        _ => {
+            return Err(Box::new(ParseError {
+                at: c.offset,
+                error: format!("unknown instruction: '{iname}'"),
+            }));
+        }
+    };
+    Ok(Some(i))
 }
 
 fn parse_var<'a>(

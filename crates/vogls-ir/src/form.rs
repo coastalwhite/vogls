@@ -214,12 +214,14 @@ fn check_instruction(
             assert_eq!(dst.mode(), LogicMode::FourValue);
             assert_eq!(gl.vars.size(*offset), VSIZE_32);
         }
-        I::Drive(signal, src, _) => {
+        I::Drive(dst, signal, src, _) => {
             FailReason::assert_mode(gl.signals[*signal].mode, src.mode())?;
+            FailReason::assert_size(gl.vars.size(*dst), gl.vars.size(*src))?;
         }
-        I::DriveSlice(signal, src, offset) => {
+        I::DriveSlice(dst, signal, src, offset) => {
             FailReason::assert_mode(gl.signals[*signal].mode, src.mode())?;
             FailReason::assert_size(VSIZE_32, gl.vars.size(*offset))?;
+            FailReason::assert_size(gl.vars.size(*dst), gl.vars.size(*src))?;
         }
         I::Phi(..) => {}
     }

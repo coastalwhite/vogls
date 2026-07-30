@@ -1785,6 +1785,36 @@ impl Bits {
             .try_into()
             .ok()
     }
+
+    pub fn set_slice(&self, offset: u32, src: &Bits) -> Bits {
+        let Some(middle_size) = self
+            .size()
+            .get()
+            .checked_sub(offset)
+            .and_then(VectorSize::new)
+        else {
+            return self.clone();
+        };
+
+        let lsbs = VectorSize::new(offset).map(|size| self.slicez(0, size));
+        let msbs_start = offset + src.size().get();
+        let msbs = self
+            .size()
+            .get()
+            .checked_sub(msbs_start)
+            .and_then(VectorSize::new)
+            .map(|size| self.slicez(msbs_start, size));
+
+        let mut middle = src.slicez(0, middle_size);
+
+        if let Some(lsbs) = lsbs {
+            middle = Bits::concatenate(&middle, &lsbs);
+        }
+        if let Some(msbs) = msbs {
+            middle = Bits::concatenate(&msbs, &middle);
+        }
+        middle
+    }
 }
 
 macro_rules! impl_shift {

@@ -7,17 +7,17 @@ proc assign {
   %t1 = vogls.black_box %t0
 {?mode=fvO0}  %t2 = tvtofv %t1
 {?mode=fvOn}  %t2 = tvtofv %t1
-{?mode=fvO0}  drv $x/1, %t2
-{?mode=fvOn}  drv $x/1, %t2
-{?mode=tvO0}  drv $x/1, %t1
-{?mode=tvOn}  drv $x/1, %t1
+{?mode=fvO0}  %t3 = drv $x/1, %t2
+{?mode=fvOn}  %t3 = drv $x/1, %t2
+{?mode=tvO0}  %t2 = drv $x/1, %t1
+{?mode=tvOn}  %t2 = drv $x/1, %t1
   halt
 }
 
 proc fuse {
 *TR0:
   %t0 = prb $a/0
-  drv $x/1, %t0
+  %t1 = drv $x/1, %t0
   watch [$a/0], <TR0>
 }
 

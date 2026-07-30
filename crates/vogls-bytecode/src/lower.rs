@@ -2212,7 +2212,7 @@ fn lower_instruction(
 
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T3);
         }
-        I::Drive(signal, src, partial) => {
+        I::Drive(_dst, signal, src, partial) => {
             // Temporary Register Allocation:
             // T0:    RS       (ADDR / VAL / SPC)
             // T1:    RS       (VAL)
@@ -2323,7 +2323,7 @@ fn lower_instruction(
                 options,
             );
         }
-        I::DriveSlice(signal, src, partial) => {
+        I::DriveSlice(_dst, signal, src, partial) => {
             // Temporary Register Allocation:
             // T0:    RS       (ADDR / VAL / SPC)
             // T1:    RS       (VAL)

@@ -5,6 +5,6 @@ proc other {
 *TR0:
   %t0 = prb $a
   %t1 = concat %t0, %t0
-  drv $b, %t1
+  %t2 = drv $b, %t1
   halt
 }

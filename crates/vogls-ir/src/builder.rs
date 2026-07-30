@@ -146,9 +146,8 @@ impl ProcessBuilder {
             bb.region = region;
 
             for i in &bb.instrs {
-                if let Some(dst) = i.get_destination_variable() {
-                    var_def_region.insert(dst, region);
-                }
+                let dst = i.get_destination_variable();
+                var_def_region.insert(dst, region);
             }
 
             use BasicBlockTerminator as T;
@@ -261,13 +260,11 @@ impl ProcessBuilder {
                 let bb = &mut gl.bbs[bb_key];
 
                 for instr in &bb.instrs {
-                    let Some(var) = instr
-                        .get_destination_variable()
-                        .filter(|var| temporal_var_to_signal.contains_key(var))
-                    else {
+                    let dst = instr.get_destination_variable();
+                    if !temporal_var_to_signal.contains_key(&dst) {
                         continue;
-                    };
-                    temporal_vars.insert(var);
+                    }
+                    temporal_vars.insert(dst);
                 }
 
                 if temporal_vars.is_empty() {
@@ -275,7 +272,8 @@ impl ProcessBuilder {
                 }
                 bb.instrs.extend(temporal_vars.iter().map(|var| {
                     let signal = temporal_var_to_signal[var];
-                    Instruction::Drive(signal, *var, 0)
+                    let dst = gl.vars.insert(LogicMode::TwoValue, gl.vars.size(*var));
+                    Instruction::Drive(dst, signal, *var, 0)
                 }));
             }
         }
@@ -959,9 +957,13 @@ impl BasicBlockBuilder {
         signal: SignalKey,
         src: VariableKey,
         offset: u32,
-    ) {
+    ) -> VariableKey {
+        let src_size = gl.vars.size(src);
+        let dst = gl.vars.insert(LogicMode::TwoValue, src_size);
         let src = self.convert_mode(gl, src, gl.signals[signal].mode);
-        self.instrs.push(Instruction::Drive(signal, src, offset));
+        self.instrs
+            .push(Instruction::Drive(dst, signal, src, offset));
+        dst
     }
     pub fn drive_partial(
         &mut self,
@@ -978,16 +980,19 @@ impl BasicBlockBuilder {
         signal: SignalKey,
         src: VariableKey,
         partial: Option<VariableKey>,
-    ) {
+    ) -> VariableKey {
+        let src_size = gl.vars.size(src);
+        let dst = gl.vars.insert(LogicMode::TwoValue, src_size);
         let src = self.convert_mode(gl, src, gl.signals[signal].mode);
         match partial {
-            None => self.instrs.push(Instruction::Drive(signal, src, 0)),
+            None => self.instrs.push(Instruction::Drive(dst, signal, src, 0)),
             Some(offset) => {
                 assert_eq!(gl.vars.size(offset), INTEGER_VSIZE);
                 self.instrs
-                    .push(Instruction::DriveSlice(signal, src, offset))
+                    .push(Instruction::DriveSlice(dst, signal, src, offset))
             }
         }
+        dst
     }
 
     pub fn probe(&mut self, gl: &mut GlobalContext, signal: SignalKey) -> VariableKey {

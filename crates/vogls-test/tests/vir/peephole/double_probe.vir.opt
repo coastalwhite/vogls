@@ -4,6 +4,6 @@ signal[tv] b: 3
 proc other {
 *TR0:
   %t0 = prb[1] $b, 2
-  drv $a, %t0
+  %t1 = drv $a, %t0
   halt
 }

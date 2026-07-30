@@ -209,9 +209,7 @@ pub fn linear_scan_register_allocation(
 
     for &bb in post_order_bbs {
         for i in &bbs[bb].instrs {
-            if let Some(dst) = i.get_destination_variable() {
-                vars.insert(dst);
-            }
+            vars.insert(i.get_destination_variable());
         }
     }
 
@@ -242,9 +240,8 @@ pub fn linear_scan_register_allocation(
                     continue;
                 }
             }
-            if let Some(dst) = i.get_destination_variable() {
-                k.get_mut().set(vars.get_index(&dst).unwrap(), true);
-            }
+            let dst = i.get_destination_variable();
+            k.get_mut().set(vars.get_index(&dst).unwrap(), true);
             i.for_each_src(|src| {
                 // Constant variables might be None here.
                 if let Some(src) = vars.get_index(&src) {
@@ -332,11 +329,10 @@ pub fn linear_scan_register_allocation(
 
         for (i, instr) in bbs[bb].instrs.iter().enumerate().rev() {
             let inum = block_from + i as u64 * 2;
-            if let Some(dst) = instr.get_destination_variable()
+            let dst = instr.get_destination_variable();
 
-                // Don't insert intervals for large constants.
-                && !assignment.contains_key(&dst)
-            {
+            // Don't insert intervals for large constants.
+            if !assignment.contains_key(&dst) {
                 let size = var_map.size(dst);
                 let interval = intervals
                     .entry(dst)
@@ -450,8 +446,7 @@ pub fn linear_scan_register_allocation(
             // just spill the encountered register. There smarter things that can be done here like
             // splitting up the interval. If this ever gets improved, take into account the stack
             // allocation and reclaiming: they interact in nasty ways.
-            let (alignment, offset) =
-                claim_stack_slot(stack_tracker, interval.size, interval.mode);
+            let (alignment, offset) = claim_stack_slot(stack_tracker, interval.size, interval.mode);
             assignment.insert(*var, Slot::Stack(alignment, offset));
             insert_active_stack(&mut active_stack, &intervals, i, interval.mode, offset);
         }

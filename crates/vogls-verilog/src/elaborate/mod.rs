@@ -142,7 +142,7 @@ impl Net {
         bbb: &mut BasicBlockBuilder,
         src: VariableKey,
         partial: Option<VariableKey>,
-    ) {
+    ) -> VariableKey {
         bbb.drive_opt_partial(gl, self.blocking_drive_signal(), src, partial)
     }
     pub fn drive_non_blocking(

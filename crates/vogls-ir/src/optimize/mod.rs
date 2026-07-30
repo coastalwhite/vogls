@@ -237,9 +237,7 @@ pub fn remap_vars(
     while let Some(bb_key) = scratch_stack.pop() {
         let bb = &mut bbs[bb_key];
         bb.instrs.retain_mut(|i| {
-            if i.get_destination_variable()
-                .is_some_and(|dst| var_map.contains_key(&dst))
-            {
+            if var_map.contains_key(&i.get_destination_variable()) {
                 false
             } else {
                 i.map_vars(|v| var_map.get(&v).copied().unwrap_or(v));

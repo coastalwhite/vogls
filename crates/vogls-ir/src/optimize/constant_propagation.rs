@@ -136,9 +136,7 @@ fn constant_propagate_instruction(
     use Instruction as I;
 
     // Skip the instruction if it is already handled.
-    if i.get_destination_variable()
-        .is_some_and(|dst| scratch_map.contains_key(&dst))
-    {
+    if scratch_map.contains_key(&i.get_destination_variable()) {
         return PropagateResult { replace: false };
     }
 
@@ -618,7 +616,7 @@ fn constant_propagate_instruction(
             not_constant!(dst);
         }
         I::Drive(..) => PropagateResult { replace: false },
-        I::DriveSlice(signal, src, offset) => {
+        I::DriveSlice(dst, signal, src, offset) => {
             let (signal, src) = (*signal, *src);
             let offset_bits = get!(offset);
             match offset_bits.as_ref() {
@@ -636,7 +634,7 @@ fn constant_propagate_instruction(
                             .checked_add(offset)
                             .is_some_and(|v| v <= dst_size.get())
                         {
-                            additional.push(I::Drive(signal, src, offset));
+                            additional.push(I::Drive(*dst, signal, src, offset));
                             return PropagateResult { replace: true };
                         }
                     }

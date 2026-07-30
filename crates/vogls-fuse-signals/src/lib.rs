@@ -248,7 +248,7 @@ impl FuseGraph {
                             .get(s)
                             .map(|n| g.nodes[*n].flags |= NodeFlags::PROBE)
                     }
-                    I::Drive(s, _, _) | I::DriveSlice(s, _, _) => {
+                    I::Drive(_, s, _, _) | I::DriveSlice(_, s, _, _) => {
                         _ = g
                             .signal_to_node
                             .get(s)
@@ -418,24 +418,24 @@ impl FuseGraphOptimizer {
                             continue;
                         }
                     }
-                    I::Drive(signal, src, offset) => {
+                    I::Drive(dst, signal, src, offset) => {
                         if let Some((to, slice)) = self.drive_map.get(signal) {
                             let mut offset = *offset;
                             if let Some(slice) = slice {
                                 offset += slice.lsb();
                             }
-                            builder.push_raw_instruction(I::Drive(*to, *src, offset));
+                            builder.push_raw_instruction(I::Drive(*dst, *to, *src, offset));
                             continue;
                         }
                     }
-                    I::DriveSlice(signal, src, partial) => {
+                    I::DriveSlice(dst, signal, src, partial) => {
                         if let Some((to, slice)) = self.drive_map.get(signal) {
                             let mut offset = *partial;
                             if let Some(slice) = slice {
                                 offset =
                                     builder.plus_constant(gl, offset, Bits::new_u32(slice.lsb()));
                             }
-                            builder.push_raw_instruction(I::DriveSlice(*to, *src, offset));
+                            builder.push_raw_instruction(I::DriveSlice(*dst, *to, *src, offset));
                             continue;
                         }
                     }
