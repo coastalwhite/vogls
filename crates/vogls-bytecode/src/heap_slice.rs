@@ -1,7 +1,7 @@
 use std::fmt;
 
 use vogls_codegen::HeapAlignment;
-use vogls_ir::LogicMode;
+use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
 use crate::{write_padded_mnemonic, write_register};
@@ -48,6 +48,8 @@ impl HeapRegSlice {
 #[inline(always)]
 pub fn execute<const SRC_FV: bool, const FILL_WITH_X: bool, const OFFSET_IS_FV: bool>(
     operands: HeapRegSlice,
+    code: &[Bytecode],
+    pc: &mut u64,
     regs: &mut Regs,
     state: &mut RuntimeState,
 ) {
@@ -59,7 +61,7 @@ pub fn execute<const SRC_FV: bool, const FILL_WITH_X: bool, const OFFSET_IS_FV: 
         src_size,
     } = operands;
 
-    let src_size = src_size.get(regs);
+    let src_size = src_size.get(pc, code);
     let offset = if OFFSET_IS_FV {
         let (spc, val) = roff.to_spc_and_val();
         if regs[spc] != u32::MAX as u64 {
@@ -217,27 +219,31 @@ macro_rules! impl_op {
             #[inline(always)]
             fn execute(
                 self,
-                _code: &[Bytecode],
+                code: &[Bytecode],
                 regs: &mut Regs,
-                _pc: &mut u64,
+                pc: &mut u64,
                 state: &mut RuntimeState,
                 _schedule: &mut Schedule,
                 _listeners: &mut BytecodeListeners,
                 _cldctx: &mut ColdContext,
             ) {
-                execute::<$src_fv, $fill_with_x, $offset_is_fv>(self.0, regs, state)
+                execute::<$src_fv, $fill_with_x, $offset_is_fv>(self.0, code, pc, regs, state)
             }
         }
         )+
 
         impl BytecodeEncoder {
             $(
-            pub fn $name(&mut self, rd: Reg, rs: Reg, roff: Reg, dst_size: SixBitSize, src_size: InlineNBitSize<6>) {
+            pub fn $name(&mut self, rd: Reg, rs: Reg, roff: Reg, dst_size: SixBitSize, src_size: VectorSize) {
+                let inline_src_size = InlineNBitSize::new(src_size);
                 self.data.push($variant(HeapRegSlice {
                     rd, rs, roff,
                     dst_size,
-                    src_size
+                    src_size: inline_src_size,
                 }).encode());
+                if inline_src_size.0.is_none() {
+                    self.data.push(Bytecode(src_size.get()));
+                }
             }
             )+
         }

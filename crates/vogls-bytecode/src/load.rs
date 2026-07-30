@@ -611,9 +611,9 @@ impl BytecodeInstruction for LoadHeapUnaligned {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -625,7 +625,7 @@ impl BytecodeInstruction for LoadHeapUnaligned {
 
         debug_assert!(HeapAlignment::B64.is_aligned(dst_offset));
 
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         let dst_num_words = size.get().div_ceil(64) as usize;
         let src_start = src_offset - src_offset % 64;
         let src_end = (src_offset + size.get() as u64).next_multiple_of(64);

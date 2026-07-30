@@ -10,7 +10,6 @@ use vogls_bits::arithmetic::{
 use vogls_bits::comparison::{bitwise_ceq, fv_l_unsigned_leq, tv_gtu64_unsigned_leq};
 use vogls_bits::concat::{fv_l_concat, tv_l_concat};
 use vogls_bits::copyxz::{copy_x, copy_z};
-use vogls_bits::format::BitsFormatOptions;
 use vogls_bits::leading_trailing::{fv_leading_zeros, tv_leading_zeros};
 use vogls_bits::negate::{fv_cell_negate, tv_cell_negate};
 use vogls_bits::reduce::{
@@ -98,8 +97,9 @@ pub struct HeapCaseEq {
     rd: Reg,
     rs1: Reg,
     rs2: Reg,
+    fv: bool,
     ne: bool,
-    num_words: InlineNBitSize<13>,
+    size: InlineNBitSize<12>,
 }
 pub struct HeapBinaryShift {
     rd: Reg,
@@ -167,60 +167,12 @@ impl BytecodeInstruction for HeapBinaryBitwise {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}")
     }
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        let size = self.size.get(regs);
-        let mode = if self.op.is_four_value() {
-            LogicMode::FourValue
-        } else {
-            LogicMode::TwoValue
-        };
-        let rs1 = state
-            .heap
-            .load_bits(regs.get_as_addr(self.rs1).to_ref(size), mode);
-        let rs2 = state
-            .heap
-            .load_bits(regs.get_as_addr(self.rs2).to_ref(size), mode);
-        writeln!(
-            f,
-            "rs1 = {}, rs2 = {}",
-            rs1.display(&BitsFormatOptions::default()),
-            rs2.display(&BitsFormatOptions::default())
-        )
-    }
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        let size = self.size.get(regs);
-        let mode = if self.op.is_four_value() {
-            LogicMode::FourValue
-        } else {
-            LogicMode::TwoValue
-        };
-        let rd = state
-            .heap
-            .load_bits(regs.get_as_addr(self.rd).to_ref(size), mode);
-        writeln!(f, "rd = {}", rd.display(&BitsFormatOptions::default()))
-    }
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -233,7 +185,7 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             op,
             size,
         } = self;
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         let num_words = size.get().div_ceil(64) as usize;
         let mut src_num_words = num_words;
         let mut dst_num_words = num_words;
@@ -358,9 +310,9 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -373,7 +325,7 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
             op,
             size,
         } = self;
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         let mut num_words = size.get().div_ceil(64) as usize;
         if op.is_four_value() {
             num_words *= 2;
@@ -460,9 +412,9 @@ impl BytecodeInstruction for HeapBinaryDivMod {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -477,7 +429,7 @@ impl BytecodeInstruction for HeapBinaryDivMod {
             is_mod,
             size,
         } = self;
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         let num_words = size.get().div_ceil(64) as usize;
         let mut src_num_words = num_words;
         let mut dst_num_words = num_words;
@@ -560,9 +512,9 @@ impl BytecodeInstruction for HeapBinaryCmp {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -575,7 +527,7 @@ impl BytecodeInstruction for HeapBinaryCmp {
             op,
             size,
         } = self;
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         let mut num_words = size.get().div_ceil(64) as usize;
         if op.is_four_value() {
             num_words *= 2;
@@ -650,9 +602,9 @@ impl BytecodeInstruction for HeapBinaryShift {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -665,7 +617,7 @@ impl BytecodeInstruction for HeapBinaryShift {
             op,
             size,
         } = self;
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         let mut num_words = size.get().div_ceil(64) as usize;
         if op.is_four_value() {
             num_words *= 2;
@@ -756,9 +708,9 @@ impl BytecodeInstruction for HeapBinaryMinMax {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -772,7 +724,7 @@ impl BytecodeInstruction for HeapBinaryMinMax {
             is_max,
             size,
         } = self;
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         let mut num_words = size.get().div_ceil(64) as usize;
         let mut offset = 0;
         if is_fv {
@@ -816,8 +768,9 @@ impl BytecodeInstruction for HeapCaseEq {
             rd: Reg::new_masked(v >> 8),
             rs1: Reg::new_masked(v >> 12),
             rs2: Reg::new_masked(v >> 16),
-            ne: (v >> 20) & 1 != 0,
-            num_words: InlineNBitSize::new_masked(v >> 21),
+            fv: (v >> 20) & 1 != 0,
+            ne: (v >> 21) & 1 != 0,
+            size: InlineNBitSize::new_masked(v >> 22),
         }
     }
     #[inline(always)]
@@ -827,8 +780,9 @@ impl BytecodeInstruction for HeapCaseEq {
                 | ((self.rd as u32) << 8)
                 | ((self.rs1 as u32) << 12)
                 | ((self.rs2 as u32) << 16)
-                | ((self.ne as u32) << 20)
-                | (self.num_words.encode() << 21),
+                | ((self.fv as u32) << 20)
+                | ((self.ne as u32) << 21)
+                | (self.size.encode() << 22),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -836,10 +790,16 @@ impl BytecodeInstruction for HeapCaseEq {
             rd,
             rs1,
             rs2,
+            fv,
             ne,
-            num_words: _,
+            size: _,
         } = self;
-        let mnemonic = if *ne { "heap_cne" } else { "heap_ceq" };
+        let mnemonic = match (*fv, *ne) {
+            (false, false) => "tv_heap_ceq",
+            (false, true) => "tv_heap_cne",
+            (true, false) => "fv_heap_ceq",
+            (true, true) => "fv_heap_cne",
+        };
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}")
     }
@@ -859,9 +819,9 @@ impl BytecodeInstruction for HeapCaseEq {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -872,9 +832,14 @@ impl BytecodeInstruction for HeapCaseEq {
             rs1,
             rs2,
             ne,
-            num_words,
+            size,
+            fv,
         } = self;
-        let num_words = num_words.get(regs).get() as usize;
+        let size = size.get(pc, code);
+        let mut num_words = size.get().div_ceil(64) as usize;
+        if fv {
+            num_words *= 2;
+        }
         let src1 = state.heap.get_u64_slice(
             HeapOffset {
                 bit_offset: regs[rs1] as usize,
@@ -934,83 +899,13 @@ impl BytecodeInstruction for HeapConcat {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}, {rs2_size}")
     }
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-
-        let rs1_size = VectorSize::new(regs[Reg::X11] as u32).unwrap();
-        let rs2_size = self.rs2_size.get(regs);
-
-        let mode = if self.fv {
-            LogicMode::FourValue
-        } else {
-            LogicMode::TwoValue
-        };
-        if rs1_size <= VSIZE_64 {
-            write_register(f, regs, "rs1", self.rs1, mode)?;
-        } else {
-            write!(
-                f,
-                "rs1 = {}",
-                state
-                    .heap
-                    .load_bits(regs.get_as_addr(self.rs1).to_ref(rs1_size), mode)
-            )?;
-        }
-        write!(f, ", ")?;
-        if rs2_size <= VSIZE_64 {
-            write_register(f, regs, "rs2", self.rs2, mode)?;
-        } else {
-            write!(
-                f,
-                "rs2 = {}",
-                state
-                    .heap
-                    .load_bits(regs.get_as_addr(self.rs2).to_ref(rs2_size), mode)
-            )?;
-        }
-        writeln!(f)
-    }
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        state: &RuntimeState,
-    ) -> fmt::Result {
-        let rs1_size = VectorSize::new(regs[Reg::X11] as u32).unwrap();
-        let rs2_size = self.rs2_size.get(regs);
-
-        let dst_size = VectorSize::new(rs1_size.get() + rs2_size.get()).unwrap();
-
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        let mode = if self.fv {
-            LogicMode::FourValue
-        } else {
-            LogicMode::TwoValue
-        };
-        writeln!(
-            f,
-            "rd = {}",
-            state
-                .heap
-                .load_bits(regs.get_as_addr(self.rd).to_ref(dst_size), mode,)
-        )
-    }
 
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -1023,8 +918,9 @@ impl BytecodeInstruction for HeapConcat {
             fv,
             rs2_size,
         } = self;
-        let rs1_size = VectorSize::new(regs[Reg::X11] as u32).unwrap();
-        let rs2_size = rs2_size.get(regs);
+        let rs1_size = VectorSize::new(code[*pc as usize].0).expect("Expected non-zero size");
+        *pc += 1;
+        let rs2_size = rs2_size.get(pc, code);
         let dst_size = rs1_size.get() + rs2_size.get();
 
         assert!(dst_size > 64);
@@ -1134,72 +1030,13 @@ impl BytecodeInstruction for HeapSlice {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs}, {roff}, {dst_size}")
     }
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        let mode = if self.fv {
-            LogicMode::FourValue
-        } else {
-            LogicMode::TwoValue
-        };
-        write!(
-            f,
-            "rs = {}, ",
-            state.heap.load_bits(
-                regs.get_as_addr(self.rs)
-                    .to_ref(VectorSize::new(regs[Reg::X11] as u32).unwrap()),
-                mode,
-            )
-        )?;
-        write_register(
-            f,
-            regs,
-            "roff",
-            self.roff,
-            if self.offset_is_fv {
-                LogicMode::FourValue
-            } else {
-                LogicMode::TwoValue
-            },
-        )?;
-        writeln!(f)
-    }
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        let mode = if self.fv | self.offset_is_fv | self.fill_with_x {
-            LogicMode::FourValue
-        } else {
-            LogicMode::TwoValue
-        };
-        writeln!(
-            f,
-            "rd = {}",
-            state.heap.load_bits(
-                regs.get_as_addr(self.rd).to_ref(self.dst_size.get(regs)),
-                mode,
-            )
-        )
-    }
 
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -1214,8 +1051,9 @@ impl BytecodeInstruction for HeapSlice {
             offset_is_fv,
             dst_size,
         } = self;
-        let src_size = VectorSize::new(regs[Reg::X11] as u32).unwrap();
-        let dst_size = dst_size.get(regs);
+        let src_size = VectorSize::new(code[*pc as usize].0).expect("Expected non-zero size");
+        *pc += 1;
+        let dst_size = dst_size.get(pc, code);
 
         assert!(dst_size > VSIZE_64);
         let mut src_num_words = src_size.get().div_ceil(64) as usize;
@@ -1318,33 +1156,13 @@ impl BytecodeInstruction for HeapFill {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {}, {size}", value.to_char())
     }
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        let size = self.size.get(regs);
-        let mode = if self.fv {
-            LogicMode::FourValue
-        } else {
-            LogicMode::TwoValue
-        };
-        let rd = state
-            .heap
-            .load_bits(regs.get_as_addr(self.rd).to_ref(size), mode);
-        writeln!(f, "rd = {}", rd.display(&BitsFormatOptions::default()))
-    }
 
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -1357,7 +1175,7 @@ impl BytecodeInstruction for HeapFill {
             val,
             size,
         } = self;
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         let mut num_words = size.get().div_ceil(64) as usize;
         if fv {
             num_words *= 2;
@@ -1431,16 +1249,16 @@ impl BytecodeInstruction for HeapUnary {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
         let Self { rd, rs, op, size } = self;
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         let mut num_words = size.get().div_ceil(64) as usize;
         if op.is_four_value() {
             num_words *= 2;
@@ -1535,11 +1353,11 @@ impl BytecodeInstruction for HeapUnary {
                     Some(value) => {
                         regs[spc] = u32::MAX.into();
                         regs[val] = value.into();
-                    },
+                    }
                     None => {
                         regs[spc] = 0;
                         regs[val] = 0;
-                    },
+                    }
                 }
             }
         }
@@ -1750,26 +1568,35 @@ impl UnaryOp {
 }
 
 impl BytecodeEncoder {
-    fn heap_ceq_impl(&mut self, rd: Reg, rs1: Reg, rs2: Reg, ne: bool, num_words: u32) {
-        assert_ne!(num_words, 0);
-        let num_words = InlineNBitSize::new(VectorSize::new(num_words).unwrap(), self);
+    fn heap_ceq_impl(&mut self, rd: Reg, rs1: Reg, rs2: Reg, fv: bool, ne: bool, size: VectorSize) {
+        let inline_size = InlineNBitSize::new(size);
         self.data.push(
             HeapCaseEq {
                 rd,
                 rs1,
                 rs2,
+                fv,
                 ne,
-                num_words,
+                size: inline_size,
             }
             .encode(),
         );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
 
-    pub fn heap_ceq(&mut self, rd: Reg, rs1: Reg, rs2: Reg, num_words: u32) {
-        self.heap_ceq_impl(rd, rs1, rs2, false, num_words);
+    pub fn heap_tv_ceq(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_ceq_impl(rd, rs1, rs2, false, false, size);
     }
-    pub fn heap_cne(&mut self, rd: Reg, rs1: Reg, rs2: Reg, num_words: u32) {
-        self.heap_ceq_impl(rd, rs1, rs2, true, num_words);
+    pub fn heap_fv_ceq(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_ceq_impl(rd, rs1, rs2, true, false, size);
+    }
+    pub fn heap_tv_cne(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_ceq_impl(rd, rs1, rs2, false, true, size);
+    }
+    pub fn heap_fv_cne(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_ceq_impl(rd, rs1, rs2, true, true, size);
     }
 
     fn heap_binary_bitwise(
@@ -1780,17 +1607,20 @@ impl BytecodeEncoder {
         op: BitwiseOp,
         size: VectorSize,
     ) {
-        let size = InlineNBitSize::new(size, self);
+        let inline_size = InlineNBitSize::new(size);
         self.data.push(
             HeapBinaryBitwise {
                 rd,
                 rs1,
                 rs2,
                 op,
-                size,
+                size: inline_size,
             }
             .encode(),
         );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
     fn heap_binary_arith(
         &mut self,
@@ -1800,43 +1630,52 @@ impl BytecodeEncoder {
         op: ArithmeticOp,
         size: VectorSize,
     ) {
-        let size = InlineNBitSize::new(size, self);
+        let inline_size = InlineNBitSize::new(size);
         self.data.push(
             HeapBinaryArithmetic {
                 rd,
                 rs1,
                 rs2,
                 op,
-                size,
+                size: inline_size,
             }
             .encode(),
         );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
     fn heap_binary_cmp(&mut self, rd: Reg, rs1: Reg, rs2: Reg, op: CompareOp, size: VectorSize) {
-        let size = InlineNBitSize::new(size, self);
+        let inline_size = InlineNBitSize::new(size);
         self.data.push(
             HeapBinaryCmp {
                 rd,
                 rs1,
                 rs2,
                 op,
-                size,
+                size: inline_size,
             }
             .encode(),
         );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
     fn heap_binary_shift(&mut self, rd: Reg, rs1: Reg, rs2: Reg, op: ShiftOp, size: VectorSize) {
-        let size = InlineNBitSize::new(size, self);
+        let inline_size = InlineNBitSize::new(size);
         self.data.push(
             HeapBinaryShift {
                 rd,
                 rs1,
                 rs2,
                 op,
-                size,
+                size: inline_size,
             }
             .encode(),
         );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
     fn heap_binary_divmod(
         &mut self,
@@ -1848,7 +1687,7 @@ impl BytecodeEncoder {
         is_mod: bool,
         size: VectorSize,
     ) {
-        let size = InlineNBitSize::new(size, self);
+        let inline_size = InlineNBitSize::new(size);
         self.data.push(
             HeapBinaryDivMod {
                 rd,
@@ -1857,10 +1696,13 @@ impl BytecodeEncoder {
                 src_fv,
                 fill_x,
                 is_mod,
-                size,
+                size: inline_size,
             }
             .encode(),
         );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
     fn heap_binary_minmax(
         &mut self,
@@ -1871,7 +1713,7 @@ impl BytecodeEncoder {
         is_max: bool,
         size: VectorSize,
     ) {
-        let size = InlineNBitSize::new(size, self);
+        let inline_size = InlineNBitSize::new(size);
         self.data.push(
             HeapBinaryMinMax {
                 rd,
@@ -1879,14 +1721,28 @@ impl BytecodeEncoder {
                 rs2,
                 is_fv,
                 is_max,
-                size,
+                size: inline_size,
             }
             .encode(),
         );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
     fn heap_unary(&mut self, rd: Reg, rs: Reg, op: UnaryOp, size: VectorSize) {
-        let size = InlineNBitSize::new(size, self);
-        self.data.push(HeapUnary { rd, rs, op, size }.encode());
+        let inline_size = InlineNBitSize::new(size);
+        self.data.push(
+            HeapUnary {
+                rd,
+                rs,
+                op,
+                size: inline_size,
+            }
+            .encode(),
+        );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
 
     pub fn heap_tv_and(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
@@ -2080,23 +1936,27 @@ impl BytecodeEncoder {
         self.heap_unary(rd, rs, UnaryOp::FvLeadingZeros, size);
     }
 
-    pub fn heap_fill(&mut self, rd: Reg, fv: bool, spc: bool, val: bool, size: InlineNBitSize<17>) {
+    pub fn heap_fill(&mut self, rd: Reg, fv: bool, spc: bool, val: bool, size: VectorSize) {
+        let inline_size = InlineNBitSize::new(size);
         self.data.push(
             HeapFill {
                 rd,
                 fv,
                 spc,
                 val,
-                size,
+                size: inline_size,
             }
             .encode(),
         );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
 
-    pub fn tv_heap_fill(&mut self, rd: Reg, value: bool, size: InlineNBitSize<17>) {
+    pub fn tv_heap_fill(&mut self, rd: Reg, value: bool, size: VectorSize) {
         self.heap_fill(rd, false, false, value, size);
     }
-    pub fn fv_heap_fill(&mut self, rd: Reg, value: FvLogicValue, size: InlineNBitSize<17>) {
+    pub fn fv_heap_fill(&mut self, rd: Reg, value: FvLogicValue, size: VectorSize) {
         self.heap_fill(rd, true, value.spc(), value.val(), size);
     }
 
@@ -2109,18 +1969,21 @@ impl BytecodeEncoder {
         rs2_size: VectorSize,
         fv: bool,
     ) {
-        self.load_u64(Reg::X11, rs1_size.get().into());
-        let rs2_size = InlineNBitSize::new(rs2_size, self);
+        let inline_rs2_size = InlineNBitSize::new(rs2_size);
         self.data.push(
             HeapConcat {
                 rd,
                 fv,
                 rs1,
                 rs2,
-                rs2_size,
+                rs2_size: inline_rs2_size,
             }
             .encode(),
         );
+        self.data.push(Bytecode(rs1_size.get()));
+        if inline_rs2_size.0.is_none() {
+            self.data.push(Bytecode(rs2_size.get()));
+        }
     }
 
     pub fn tv_heap_concat(
@@ -2155,8 +2018,7 @@ impl BytecodeEncoder {
         fill_with_x: bool,
         offset_is_fv: bool,
     ) {
-        self.load_u64(Reg::X11, src_size.get().into());
-        let dst_size = InlineNBitSize::new(dst_size, self);
+        let inline_dst_size = InlineNBitSize::new(dst_size);
         self.data.push(
             HeapSlice {
                 rd,
@@ -2165,9 +2027,13 @@ impl BytecodeEncoder {
                 fv,
                 fill_with_x,
                 offset_is_fv,
-                dst_size,
+                dst_size: inline_dst_size,
             }
             .encode(),
         );
+        self.data.push(Bytecode(src_size.get()));
+        if inline_dst_size.0.is_none() {
+            self.data.push(Bytecode(dst_size.get()));
+        }
     }
 }

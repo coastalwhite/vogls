@@ -560,9 +560,9 @@ impl BytecodeInstruction for SetHeapUnaligned {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -575,7 +575,7 @@ impl BytecodeInstruction for SetHeapUnaligned {
             size,
             imm4,
         }) = self;
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         let bit_offset = imm4.get(regs[roff]);
 
         let dst_start_offset = bit_offset - bit_offset % 64;
@@ -615,9 +615,9 @@ impl BytecodeInstruction for TvSetHeapAligned {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -630,7 +630,7 @@ impl BytecodeInstruction for TvSetHeapAligned {
             size,
             imm4,
         }) = self;
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         let roff_offset = imm4.get(regs[roff]);
         let src_offset = regs[rs];
 
@@ -668,9 +668,9 @@ impl BytecodeInstruction for FvSetHeapAligned {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -683,7 +683,7 @@ impl BytecodeInstruction for FvSetHeapAligned {
             size,
             imm4,
         }) = self;
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         let roff_offset = imm4.get(regs[roff]);
         let src_offset = regs[rs];
 
@@ -839,56 +839,68 @@ impl BytecodeEncoder {
         rd: Reg,
         rs: Reg,
         roff: Reg,
-        size: InlineNBitSize<8>,
+        size: VectorSize,
         imm4: InlineAddrOffset<4>,
     ) {
+        let inline_size = InlineNBitSize::new(size);
         self.data.push(
             TvSetHeapAligned(SetHeapArgs {
                 rd,
                 rs,
                 roff,
-                size,
+                size: inline_size,
                 imm4,
             })
             .encode(),
-        )
+        );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
     pub fn fv_set_heap_aligned(
         &mut self,
         rd: Reg,
         rs: Reg,
         roff: Reg,
-        size: InlineNBitSize<8>,
+        size: VectorSize,
         imm4: InlineAddrOffset<4>,
     ) {
+        let inline_size = InlineNBitSize::new(size);
         self.data.push(
             FvSetHeapAligned(SetHeapArgs {
                 rd,
                 rs,
                 roff,
-                size,
+                size: inline_size,
                 imm4,
             })
             .encode(),
-        )
+        );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
     pub fn set_heap_unaligned(
         &mut self,
         rd: Reg,
         rs: Reg,
         roff: Reg,
-        size: InlineNBitSize<8>,
+        size: VectorSize,
         imm4: InlineAddrOffset<4>,
     ) {
+        let inline_size = InlineNBitSize::new(size);
         self.data.push(
             SetHeapUnaligned(SetHeapArgs {
                 rd,
                 rs,
                 roff,
-                size,
+                size: inline_size,
                 imm4,
             })
             .encode(),
-        )
+        );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
 }

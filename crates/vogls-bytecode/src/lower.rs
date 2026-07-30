@@ -8,13 +8,12 @@ use vogls_ir::{
     ShiftImmOp, SignalKey, UnaryOp, VSIZE_64, VariableKey, VariableMap,
 };
 use vogls_runtime::RtSignalKey;
-use vogls_utils::{NonMaxU16, VgHashMap, VgHashSet};
+use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::profile::BytecodeDebugInfo;
 use crate::{
     BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InlineAddrOffset, InlineIndex,
-    InlineNBitSize, InstructionPtr, IntrinsicOpEqWrap, Jump, Reg, Schedule, SignedImmediate,
-    SixBitSize,
+    InstructionPtr, IntrinsicOpEqWrap, Jump, Reg, Schedule, SignedImmediate, SixBitSize,
 };
 
 use super::{BranchFalse, BranchTrue, RescheduleListen, RescheduleRegion, RescheduleWait};
@@ -611,8 +610,7 @@ fn lower_instruction(
                     }
                     bce.heap_tv_copy(val, rs, src_size);
 
-                    let size = InlineNBitSize::new(src_size, bce);
-                    bce.tv_heap_fill(rd, true, size);
+                    bce.tv_heap_fill(rd, true, src_size);
                 }
                 (O::FvToTv, _, _, Some(_)) => {
                     let (spc, val) = rs.to_spc_and_val();
@@ -674,9 +672,7 @@ fn lower_instruction(
                     bce.load_rel_unaligned(rd, rs, InlineAddrOffset::ZERO, dst_size);
                 }
                 (O::Truncate, M::TwoValue, None, None) => {
-                    let dst_size = InlineNBitSize::new(dst_size, bce);
-                    bce.load_u64(T4, src_size.get() as u64);
-                    bce.heapheap_tv_truncate(rd, rs, dst_size, T4);
+                    bce.heapheap_tv_truncate(rd, rs, dst_size, src_size);
                 }
                 (O::Truncate, M::FourValue, Some(dst_size), Some(_)) => {
                     // @Performance: One instruction maybe?
@@ -697,9 +693,7 @@ fn lower_instruction(
                     bce.load_rel_unaligned(rdval, addr, offset, dst_size);
                 }
                 (O::Truncate, M::FourValue, None, None) => {
-                    let dst_size = InlineNBitSize::new(dst_size, bce);
-                    bce.load_u64(T4, src_size.get() as u64);
-                    bce.heapheap_fv_truncate(rd, rs, dst_size, T4);
+                    bce.heapheap_fv_truncate(rd, rs, dst_size, src_size);
                 }
                 (O::ZeroExtend, M::TwoValue, Some(_), Some(_)) => {
                     bce.copy(rd, rs);
@@ -721,23 +715,17 @@ fn lower_instruction(
                     bce.copy(rdval, rsval);
                 }
                 (O::ZeroExtend, M::TwoValue, None, Some(src_size)) => {
-                    let dst_size = InlineNBitSize::new(dst_size, bce);
                     bce.heapreg_tv_zero_extend(rd, rs, dst_size, src_size);
                 }
                 (O::ZeroExtend, M::FourValue, None, Some(src_size)) => {
-                    let dst_size = InlineNBitSize::new(dst_size, bce);
                     bce.heapreg_fv_zero_extend(rd, rs, dst_size, src_size);
                 }
 
                 (O::ZeroExtend, M::TwoValue, None, None) => {
-                    let src_size = InlineNBitSize::new(src_size, bce);
-                    bce.load_u64(T4, dst_size.get().into());
-                    bce.heapheap_tv_zero_extend(rd, rs, T4, src_size);
+                    bce.heapheap_tv_zero_extend(rd, rs, dst_size, src_size);
                 }
                 (O::ZeroExtend, M::FourValue, None, None) => {
-                    let src_size = InlineNBitSize::new(src_size, bce);
-                    bce.load_u64(T4, dst_size.get().into());
-                    bce.heapheap_fv_zero_extend(rd, rs, T4, src_size);
+                    bce.heapheap_fv_zero_extend(rd, rs, dst_size, src_size);
                 }
 
                 (O::SignExtend, M::TwoValue, Some(dst_size), Some(src_size)) => {
@@ -751,23 +739,17 @@ fn lower_instruction(
                     bce.sign_extend(rdval, rsval, dst_size, src_size);
                 }
                 (O::SignExtend, M::TwoValue, None, Some(src_size)) => {
-                    let dst_size = InlineNBitSize::new(dst_size, bce);
                     bce.heapreg_tv_sign_extend(rd, rs, dst_size, src_size);
                 }
                 (O::SignExtend, M::FourValue, None, Some(src_size)) => {
-                    let dst_size = InlineNBitSize::new(dst_size, bce);
                     bce.heapreg_fv_sign_extend(rd, rs, dst_size, src_size);
                 }
 
                 (O::SignExtend, M::TwoValue, None, None) => {
-                    let src_size = InlineNBitSize::new(src_size, bce);
-                    bce.load_u64(T4, dst_size.get().into());
-                    bce.heapheap_tv_sign_extend(rd, rs, T4, src_size);
+                    bce.heapheap_tv_sign_extend(rd, rs, dst_size, src_size);
                 }
                 (O::SignExtend, M::FourValue, None, None) => {
-                    let src_size = InlineNBitSize::new(src_size, bce);
-                    bce.load_u64(T4, dst_size.get().into());
-                    bce.heapheap_fv_sign_extend(rd, rs, T4, src_size);
+                    bce.heapheap_fv_sign_extend(rd, rs, dst_size, src_size);
                 }
 
                 (O::Truncate, _, None, Some(_)) => unreachable!(),
@@ -961,11 +943,11 @@ fn lower_instruction(
 
                 (O::CaseEquality, _, Some(_), M::TwoValue, _) => bce.ceq(rd, rs1, rs2),
                 (O::CaseEquality, _, None, M::TwoValue, _) => {
-                    bce.heap_ceq(rd, rs1, rs2, lhs_size.get().div_ceil(64))
+                    bce.heap_tv_ceq(rd, rs1, rs2, lhs_size)
                 }
                 (O::CaseEquality, _, Some(_), M::FourValue, _) => bce.fv_ceq(rd, rs1, rs2),
                 (O::CaseEquality, _, None, M::FourValue, _) => {
-                    bce.heap_ceq(rd, rs1, rs2, lhs_size.get().div_ceil(64) * 2)
+                    bce.heap_fv_ceq(rd, rs1, rs2, lhs_size)
                 }
 
                 (O::Posedge, _, _, M::TwoValue, _) => bce.andnot(rd, rs2, rs1, SixBitSize::N1),
@@ -1544,7 +1526,7 @@ fn lower_instruction(
                 (O::CaseEquality, _, _, M::TwoValue, _, None) => {
                     let imm = heap_builder.claim_constant(M::TwoValue, imm.clone());
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
-                    bce.heap_ceq(rd, rs, T4, src_size.get().div_ceil(64));
+                    bce.heap_tv_ceq(rd, rs, T4, src_size);
                 }
                 (O::CaseEquality, _, _, M::FourValue, _, Some(src_size)) => {
                     match SignedImmediate::new_from_bits(imm) {
@@ -1558,7 +1540,7 @@ fn lower_instruction(
                 (O::CaseEquality, _, _, M::FourValue, _, None) => {
                     let imm = heap_builder.claim_constant(M::FourValue, imm.clone());
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
-                    bce.heap_ceq(rd, rs, T4, src_size.get().div_ceil(64) * 2);
+                    bce.heap_fv_ceq(rd, rs, T4, src_size);
                 }
                 (O::BitwiseCaseEquality, _, _, M::TwoValue, _, Some(src_size)) => {
                     match SignedImmediate::new_from_bits(&imm.bitwise_negate()) {
@@ -1643,8 +1625,7 @@ fn lower_instruction(
 
                     // If IMM contains special values, the output should be all `x`.
                     if dst_size > VSIZE_64 {
-                        let size = InlineNBitSize::new(dst_size, bce);
-                        bce.fv_heap_fill(rd, FvLogicValue::X, size);
+                        bce.fv_heap_fill(rd, FvLogicValue::X, dst_size);
                     } else {
                         let (rdspc, rdval) = rd.to_spc_and_val();
                         bce.load_u64(rdspc, 0);
@@ -1678,11 +1659,9 @@ fn lower_instruction(
                     bce.fv_slrx(rd, rs, rimm, dst_size, LogicMode::TwoValue);
                 }
                 (M::TwoValue, Some(dst_size), None) => {
-                    let src_size = InlineNBitSize::new(src_size, bce);
                     bce.tvtv_heap_slicex(rd, rs, rimm, dst_size, src_size);
                 }
                 (M::FourValue, Some(dst_size), None) => {
-                    let src_size = InlineNBitSize::new(src_size, bce);
                     bce.fvtv_heap_slicex(rd, rs, rimm, dst_size, src_size);
                 }
                 (M::TwoValue, None, None) => {
@@ -1997,14 +1976,7 @@ fn lower_instruction(
                     io_signals,
                     op.as_ref(),
                 )));
-            let intrinsic_id = match intrinsic_id.try_into().ok().and_then(NonMaxU16::new) {
-                None => {
-                    bce.load_u64(T4, intrinsic_id as u64);
-                    None
-                }
-                Some(v) => Some(v),
-            };
-            bce.intrinsic(rd, intrinsic_id);
+            bce.intrinsic(rd, intrinsic_id as u64);
 
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T2);
         }
@@ -2139,8 +2111,7 @@ fn lower_instruction(
                     assert_eq!(dst.mode(), M::FourValue);
                     match SixBitSize::from_vector_size(dst_size) {
                         None => {
-                            let size = InlineNBitSize::new(dst_size, bce);
-                            bce.fv_heap_fill(rd, FvLogicValue::X, size);
+                            bce.fv_heap_fill(rd, FvLogicValue::X, dst_size);
                         }
                         Some(_) => {
                             let (spc, val) = rd.to_spc_and_val();
@@ -2181,8 +2152,7 @@ fn lower_instruction(
                     );
                 }
                 (M::TwoValue, Some(size)) => {
-                    let src_size = InlineNBitSize::new(signal_size, bce);
-                    bce.tvtv_heap_slicex(rd, rsignal, roffset, size, src_size);
+                    bce.tvtv_heap_slicex(rd, rsignal, roffset, size, signal_size);
                 }
                 (M::FourValue, None) => {
                     // TempReg: dst_size > 64 => T1 is free.
@@ -2199,8 +2169,7 @@ fn lower_instruction(
                     );
                 }
                 (M::FourValue, Some(size)) => {
-                    let src_size = InlineNBitSize::new(signal_size, bce);
-                    bce.fvtv_heap_slicex(rd, rsignal, roffset, size, src_size);
+                    bce.fvtv_heap_slicex(rd, rsignal, roffset, size, signal_size);
                 }
             }
 
@@ -2247,14 +2216,18 @@ fn lower_instruction(
                     (LogicMode::TwoValue, None) => {
                         let roff = T2;
                         bce.load_u64(roff, offset);
-                        let size = InlineNBitSize::new(src_size, bce);
-                        bce.set_heap_unaligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
+                        bce.set_heap_unaligned(rpoke, rs, roff, src_size, InlineAddrOffset::ZERO);
                     }
                     (LogicMode::FourValue, None) => {
                         let roff = T2;
                         bce.load_u64(roff, offset);
-                        let size = InlineNBitSize::new(src_size, bce);
-                        bce.set_heap_unaligned(rpoke_t1, rs, roff, size, InlineAddrOffset::ZERO);
+                        bce.set_heap_unaligned(
+                            rpoke_t1,
+                            rs,
+                            roff,
+                            src_size,
+                            InlineAddrOffset::ZERO,
+                        );
 
                         let dst_offset = HeapAlignment::B64.next_aligned(signal_size.get() as u64);
                         let src_offset = HeapAlignment::B64.next_aligned(src_size.get() as u64);
@@ -2273,7 +2246,13 @@ fn lower_instruction(
                             }
                             Some(imm) => bce.addi(T1, rs, imm, SixBitSize::N64),
                         }
-                        bce.set_heap_unaligned(rpoke_t2, T1, roff, size, InlineAddrOffset::ZERO);
+                        bce.set_heap_unaligned(
+                            rpoke_t2,
+                            T1,
+                            roff,
+                            src_size,
+                            InlineAddrOffset::ZERO,
+                        );
                         bce.or(rpoke, rpoke_t1, rpoke_t2);
                     }
                     (LogicMode::TwoValue, Some(src_size)) => {
@@ -2294,14 +2273,18 @@ fn lower_instruction(
                     (LogicMode::TwoValue, None) => {
                         let roff = T2;
                         bce.load_u64(roff, signal_addr);
-                        let size = InlineNBitSize::new(signal_size, bce);
-                        bce.tv_set_heap_aligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
+                        bce.tv_set_heap_aligned(rpoke, rs, roff, src_size, InlineAddrOffset::ZERO);
                     }
                     (LogicMode::FourValue, None) => {
                         let roff = T2;
                         bce.load_u64(roff, signal_addr);
-                        let size = InlineNBitSize::new(signal_size, bce);
-                        bce.fv_set_heap_aligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
+                        bce.fv_set_heap_aligned(
+                            rpoke,
+                            rs,
+                            roff,
+                            signal_size,
+                            InlineAddrOffset::ZERO,
+                        );
                     }
                     (LogicMode::TwoValue, Some(signal_size)) => {
                         bce.tv_set_aligned(rpoke, rs, signal_addr, signal_size)
@@ -2386,12 +2369,10 @@ fn lower_instruction(
             let rpoke_t2 = T5;
             match (src.mode(), SixBitSize::from_vector_size(src_size)) {
                 (LogicMode::TwoValue, None) => {
-                    let size = InlineNBitSize::new(src_size, bce);
-                    bce.set_heap_unaligned(rpoke, rs, roff, size, InlineAddrOffset::ZERO);
+                    bce.set_heap_unaligned(rpoke, rs, roff, src_size, InlineAddrOffset::ZERO);
                 }
                 (LogicMode::FourValue, None) => {
-                    let size = InlineNBitSize::new(src_size, bce);
-                    bce.set_heap_unaligned(rpoke_t1, rs, roff, size, InlineAddrOffset::ZERO);
+                    bce.set_heap_unaligned(rpoke_t1, rs, roff, src_size, InlineAddrOffset::ZERO);
 
                     let dst_offset = HeapAlignment::B64.next_aligned(signal_size.get() as u64);
                     let src_offset = HeapAlignment::B64.next_aligned(src_size.get() as u64);
@@ -2410,7 +2391,7 @@ fn lower_instruction(
                         }
                         Some(imm) => bce.addi(T1, rs, imm, SixBitSize::N64),
                     }
-                    bce.set_heap_unaligned(rpoke_t2, T1, roff, size, InlineAddrOffset::ZERO);
+                    bce.set_heap_unaligned(rpoke_t2, T1, roff, src_size, InlineAddrOffset::ZERO);
                     bce.or(rpoke, rpoke_t1, rpoke_t2);
                 }
                 (LogicMode::TwoValue, Some(src_size)) => {

@@ -498,7 +498,6 @@ opcodes![
     HeapFill,
     HeapConcat,
     HeapSlice,
-    LoadSize,
     TvTvHeapSlice0,
     TvTvHeapSliceX,
     TvFvHeapSlice0,
@@ -516,55 +515,19 @@ pub struct BytecodeListeners {
     active: Vec<u64>,
 }
 
-struct LoadSize(Option<VectorSize>);
-
-impl BytecodeInstruction for LoadSize {
-    fn extract(v: Bytecode) -> Self {
-        debug_assert_eq!(v.opcode(), BytecodeOpcode::LoadSize as u8);
-        Self(VectorSize::new(v.0 >> 8))
-    }
-
-    fn encode(&self) -> Bytecode {
-        Bytecode(BytecodeOpcode::LoadSize as u32 | (self.0.map_or(0, |v| v.get()) << 8))
-    }
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_padded_mnemonic(f, "load_size")?;
-        match self.0 {
-            Some(size) => fmt::Display::fmt(&size, f),
-            None => f.write_str("..."),
-        }
-    }
-
-    fn execute(
-        self,
-        code: &[Bytecode],
-        regs: &mut Regs,
-        pc: &mut u64,
-        _state: &mut RuntimeState,
-        _schedule: &mut Schedule,
-        _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
-    ) {
-        match self.0 {
-            None => {
-                let size = VectorSize::new(code[*pc as usize].0).unwrap();
-                *pc += 1;
-                regs.size = size;
-            }
-            Some(size) => regs.size = size,
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 pub struct InlineNBitSize<const N: usize>(Option<VectorSize>);
 
 impl<const N: usize> InlineNBitSize<N> {
     #[inline(always)]
-    pub fn get(self, regs: &Regs) -> VectorSize {
+    pub fn get(self, pc: &mut u64, code: &[Bytecode]) -> VectorSize {
         match self.0 {
-            None => regs.size,
+            None => {
+                let size = code[*pc as usize].0;
+                let size = VectorSize::new(size).expect("Expected non-zero size");
+                *pc += 1;
+                size
+            }
             Some(s) => s,
         }
     }
@@ -580,12 +543,10 @@ impl<const N: usize> InlineNBitSize<N> {
         self.0.map_or(0, |v| v.get())
     }
 
-    pub fn new(size: VectorSize, bce: &mut BytecodeEncoder) -> Self {
+    pub fn new(size: VectorSize) -> Self {
         if size.get() < (1u32 << N) {
             return Self(Some(size));
         }
-
-        bce.load_size(size);
         Self(None)
     }
 }
@@ -986,15 +947,6 @@ impl BytecodeEncoder {
     }
     pub fn mask(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
         self.andi(rd, rs, SignedImmediate::MINUS_ONE, size)
-    }
-
-    pub fn load_size(&mut self, size: VectorSize) {
-        if size.get() >= (1u32 << 24) {
-            self.data.push(LoadSize(None).encode());
-            self.data.push(Bytecode(size.get()));
-        } else {
-            self.data.push(LoadSize(Some(size)).encode());
-        }
     }
 }
 

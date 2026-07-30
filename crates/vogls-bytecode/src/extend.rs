@@ -25,18 +25,16 @@ pub struct HeapHeapTruncate {
     rd: Reg,
     rs: Reg,
 
-    dst_size: InlineNBitSize<11>,
+    dst_size: InlineNBitSize<15>,
     fv: bool,
-    src_size: Reg,
 }
 
 pub struct HeapHeapExtend {
     rd: Reg,
     rs: Reg,
 
-    dst_size: Reg,
     op: ExtendOp,
-    src_size: InlineNBitSize<12>,
+    src_size: InlineNBitSize<14>,
 }
 
 pub struct HeapRegExtend {
@@ -81,9 +79,8 @@ impl BytecodeInstruction for HeapHeapExtend {
         Self {
             rd: Reg::new_masked(v >> 8),
             rs: Reg::new_masked(v >> 12),
-            dst_size: Reg::new_masked(v >> 16),
-            op: ExtendOp::new_masked(v >> 20),
-            src_size: InlineNBitSize::new_masked(v >> 22),
+            op: ExtendOp::new_masked(v >> 16),
+            src_size: InlineNBitSize::new_masked(v >> 18),
         }
     }
 
@@ -92,9 +89,8 @@ impl BytecodeInstruction for HeapHeapExtend {
             BytecodeOpcode::HeapHeapExtend as u32
                 | ((self.rd as u32) << 8)
                 | ((self.rs as u32) << 12)
-                | ((self.dst_size as u32) << 16)
-                | ((self.op as u32) << 20)
-                | (self.src_size.encode() << 22),
+                | ((self.op as u32) << 16)
+                | (self.src_size.encode() << 18),
         )
     }
 
@@ -102,7 +98,6 @@ impl BytecodeInstruction for HeapHeapExtend {
         let Self {
             rd,
             rs,
-            dst_size,
             op,
             src_size,
         } = self;
@@ -113,15 +108,15 @@ impl BytecodeInstruction for HeapHeapExtend {
             ExtendOp::FvSignExtend => "fv.heapheap_sign_extend",
         };
         write_padded_mnemonic(f, mnemonic)?;
-        write!(f, "{rd}, {rs}, {dst_size}, {src_size}")
+        write!(f, "{rd}, {rs}, {src_size}")
     }
 
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -130,12 +125,12 @@ impl BytecodeInstruction for HeapHeapExtend {
         let Self {
             rd,
             rs,
-            dst_size,
             op,
             src_size,
         } = self;
-        let dst_size = VectorSize::new(regs[dst_size].try_into().unwrap()).unwrap();
-        let src_size = src_size.get(regs);
+        let dst_size = VectorSize::new(code[*pc as usize].0).expect("Expected non-zero size");
+        *pc += 1;
+        let src_size = src_size.get(pc, code);
         let dst = regs.get_as_addr(rd);
         let src = regs.get_as_addr(rs);
 
@@ -179,8 +174,7 @@ impl BytecodeInstruction for HeapHeapTruncate {
             rd: Reg::new_masked(v >> 8),
             rs: Reg::new_masked(v >> 12),
             dst_size: InlineNBitSize::new_masked(v >> 16),
-            fv: (v >> 27) & 1 != 0,
-            src_size: Reg::new_masked(v >> 28),
+            fv: (v >> 31) & 1 != 0,
         }
     }
 
@@ -190,8 +184,7 @@ impl BytecodeInstruction for HeapHeapTruncate {
                 | ((self.rd as u32) << 8)
                 | ((self.rs as u32) << 12)
                 | (self.dst_size.encode() << 16)
-                | ((self.fv as u32) << 27)
-                | ((self.src_size as u32) << 28),
+                | ((self.fv as u32) << 31),
         )
     }
 
@@ -201,7 +194,6 @@ impl BytecodeInstruction for HeapHeapTruncate {
             rs,
             dst_size,
             fv,
-            src_size,
         } = self;
         let mnemonic = if *fv {
             "fv.heapheap_truncate"
@@ -209,15 +201,15 @@ impl BytecodeInstruction for HeapHeapTruncate {
             "tv.heapheap_truncate"
         };
         write_padded_mnemonic(f, mnemonic)?;
-        write!(f, "{rd}, {rs}, {dst_size}, {src_size}")
+        write!(f, "{rd}, {rs}, {dst_size}")
     }
 
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -228,10 +220,10 @@ impl BytecodeInstruction for HeapHeapTruncate {
             rs,
             dst_size,
             fv,
-            src_size,
         } = self;
-        let src_size = VectorSize::new(regs[src_size].try_into().unwrap()).unwrap();
-        let dst_size = dst_size.get(regs);
+        let src_size = VectorSize::new(code[*pc as usize].0).expect("Expected non-zero size");
+        *pc += 1;
+        let dst_size = dst_size.get(pc, code);
         let dst = regs.get_as_addr(rd);
         let src = regs.get_as_addr(rs);
 
@@ -300,9 +292,9 @@ impl BytecodeInstruction for HeapRegExtend {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
@@ -315,7 +307,7 @@ impl BytecodeInstruction for HeapRegExtend {
             op,
             src_size,
         } = self;
-        let dst_size = dst_size.get(regs);
+        let dst_size = dst_size.get(pc, code);
         let dst = regs.get_as_addr(rd);
 
         let mut dst_num_words = dst_size.get().div_ceil(64) as usize;
@@ -425,150 +417,148 @@ impl BytecodeInstruction for SignExtend {
 }
 
 impl BytecodeEncoder {
-    pub fn heapheap_tv_zero_extend(
+    pub fn heapheap_extend(
         &mut self,
         rd: Reg,
         rs: Reg,
-        dst_size: Reg,
-        src_size: InlineNBitSize<12>,
+        dst_size: VectorSize,
+        src_size: VectorSize,
+        op: ExtendOp,
     ) {
+        let inline_src_size = InlineNBitSize::new(src_size);
         self.data.push(
             HeapHeapExtend {
                 rd,
                 rs,
-                dst_size,
-                op: ExtendOp::TvZeroExtend,
-                src_size,
+                src_size: inline_src_size,
+                op,
             }
             .encode(),
         );
+        self.data.push(Bytecode(dst_size.get()));
+        if inline_src_size.0.is_none() {
+            self.data.push(Bytecode(src_size.get()));
+        }
+    }
+    pub fn heapreg_extend(
+        &mut self,
+        rd: Reg,
+        rs: Reg,
+        dst_size: VectorSize,
+        src_size: SixBitSize,
+        op: ExtendOp,
+    ) {
+        let inline_dst_size = InlineNBitSize::new(dst_size);
+        self.data.push(
+            HeapRegExtend {
+                rd,
+                rs,
+                src_size,
+                dst_size: inline_dst_size,
+                op,
+            }
+            .encode(),
+        );
+        if inline_dst_size.0.is_none() {
+            self.data.push(Bytecode(dst_size.get()));
+        }
+    }
+    fn heapheap_truncate(
+        &mut self,
+        rd: Reg,
+        rs: Reg,
+        dst_size: VectorSize,
+        src_size: VectorSize,
+        fv: bool,
+    ) {
+        let inline_dst_size = InlineNBitSize::new(dst_size);
+        self.data.push(
+            HeapHeapTruncate {
+                rd,
+                rs,
+                dst_size: inline_dst_size,
+                fv,
+            }
+            .encode(),
+        );
+        self.data.push(Bytecode(src_size.get()));
+        if inline_dst_size.0.is_none() {
+            self.data.push(Bytecode(dst_size.get()));
+        }
+    }
+
+    pub fn heapheap_tv_zero_extend(
+        &mut self,
+        rd: Reg,
+        rs: Reg,
+        dst_size: VectorSize,
+        src_size: VectorSize,
+    ) {
+        self.heapheap_extend(rd, rs, dst_size, src_size, ExtendOp::TvZeroExtend);
     }
     pub fn heapheap_tv_sign_extend(
         &mut self,
         rd: Reg,
         rs: Reg,
-        dst_size: Reg,
-        src_size: InlineNBitSize<12>,
+        dst_size: VectorSize,
+        src_size: VectorSize,
     ) {
-        self.data.push(
-            HeapHeapExtend {
-                rd,
-                rs,
-                dst_size,
-                op: ExtendOp::TvSignExtend,
-                src_size,
-            }
-            .encode(),
-        );
+        self.heapheap_extend(rd, rs, dst_size, src_size, ExtendOp::TvSignExtend);
     }
     pub fn heapheap_fv_zero_extend(
         &mut self,
         rd: Reg,
         rs: Reg,
-        dst_size: Reg,
-        src_size: InlineNBitSize<12>,
+        dst_size: VectorSize,
+        src_size: VectorSize,
     ) {
-        self.data.push(
-            HeapHeapExtend {
-                rd,
-                rs,
-                dst_size,
-                op: ExtendOp::FvZeroExtend,
-                src_size,
-            }
-            .encode(),
-        );
+        self.heapheap_extend(rd, rs, dst_size, src_size, ExtendOp::FvZeroExtend);
     }
     pub fn heapheap_fv_sign_extend(
         &mut self,
         rd: Reg,
         rs: Reg,
-        dst_size: Reg,
-        src_size: InlineNBitSize<12>,
+        dst_size: VectorSize,
+        src_size: VectorSize,
     ) {
-        self.data.push(
-            HeapHeapExtend {
-                rd,
-                rs,
-                dst_size,
-                op: ExtendOp::FvSignExtend,
-                src_size,
-            }
-            .encode(),
-        );
+        self.heapheap_extend(rd, rs, dst_size, src_size, ExtendOp::FvSignExtend);
     }
 
     pub fn heapreg_tv_zero_extend(
         &mut self,
         rd: Reg,
         rs: Reg,
-        dst_size: InlineNBitSize<8>,
+        dst_size: VectorSize,
         src_size: SixBitSize,
     ) {
-        self.data.push(
-            HeapRegExtend {
-                rd,
-                rs,
-                op: ExtendOp::TvZeroExtend,
-                dst_size,
-                src_size,
-            }
-            .encode(),
-        );
+        self.heapreg_extend(rd, rs, dst_size, src_size, ExtendOp::TvZeroExtend);
     }
     pub fn heapreg_tv_sign_extend(
         &mut self,
         rd: Reg,
         rs: Reg,
-        dst_size: InlineNBitSize<8>,
+        dst_size: VectorSize,
         src_size: SixBitSize,
     ) {
-        self.data.push(
-            HeapRegExtend {
-                rd,
-                rs,
-                dst_size,
-                op: ExtendOp::TvSignExtend,
-                src_size,
-            }
-            .encode(),
-        );
+        self.heapreg_extend(rd, rs, dst_size, src_size, ExtendOp::TvSignExtend);
     }
     pub fn heapreg_fv_zero_extend(
         &mut self,
         rd: Reg,
         rs: Reg,
-        dst_size: InlineNBitSize<8>,
+        dst_size: VectorSize,
         src_size: SixBitSize,
     ) {
-        self.data.push(
-            HeapRegExtend {
-                rd,
-                rs,
-                dst_size,
-                op: ExtendOp::FvZeroExtend,
-                src_size,
-            }
-            .encode(),
-        );
+        self.heapreg_extend(rd, rs, dst_size, src_size, ExtendOp::FvZeroExtend);
     }
     pub fn heapreg_fv_sign_extend(
         &mut self,
         rd: Reg,
         rs: Reg,
-        dst_size: InlineNBitSize<8>,
+        dst_size: VectorSize,
         src_size: SixBitSize,
     ) {
-        self.data.push(
-            HeapRegExtend {
-                rd,
-                rs,
-                dst_size,
-                op: ExtendOp::FvSignExtend,
-                src_size,
-            }
-            .encode(),
-        );
+        self.heapreg_extend(rd, rs, dst_size, src_size, ExtendOp::FvSignExtend);
     }
 
     pub fn sign_extend(&mut self, rd: Reg, rs: Reg, dst_size: SixBitSize, src_size: SixBitSize) {
@@ -587,36 +577,18 @@ impl BytecodeEncoder {
         &mut self,
         rd: Reg,
         rs: Reg,
-        dst_size: InlineNBitSize<11>,
-        src_size: Reg,
+        dst_size: VectorSize,
+        src_size: VectorSize,
     ) {
-        self.data.push(
-            HeapHeapTruncate {
-                rd,
-                rs,
-                dst_size,
-                fv: false,
-                src_size,
-            }
-            .encode(),
-        );
+        self.heapheap_truncate(rd, rs, dst_size, src_size, false);
     }
     pub fn heapheap_fv_truncate(
         &mut self,
         rd: Reg,
         rs: Reg,
-        dst_size: InlineNBitSize<11>,
-        src_size: Reg,
+        dst_size: VectorSize,
+        src_size: VectorSize,
     ) {
-        self.data.push(
-            HeapHeapTruncate {
-                rd,
-                rs,
-                dst_size,
-                fv: true,
-                src_size,
-            }
-            .encode(),
-        );
+        self.heapheap_truncate(rd, rs, dst_size, src_size, true);
     }
 }

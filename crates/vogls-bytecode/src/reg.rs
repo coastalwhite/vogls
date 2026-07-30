@@ -2,12 +2,10 @@ use std::fmt::{self, Write};
 use std::ops::{Index, IndexMut};
 
 use vogls_codegen::HeapOffset;
-use vogls_ir::{SCALAR_VSIZE, VectorSize};
 
 /// The register bank used by the bytecode interpreter for temporary results.
 pub struct Regs {
     value: [u64; 16],
-    pub size: VectorSize,
     pub stack_offset: u64,
 }
 impl Regs {
@@ -15,7 +13,6 @@ impl Regs {
     pub fn new(stack_offset: u64) -> Self {
         Self {
             value: [0u64; 16],
-            size: SCALAR_VSIZE,
             stack_offset,
         }
     }

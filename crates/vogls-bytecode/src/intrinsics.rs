@@ -1,7 +1,6 @@
 use std::fmt;
 
 use vogls_bits::arithmetic::FvLogicValue;
-use vogls_bits::format::BitsFormatOptions;
 use vogls_codegen::HeapOffset;
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::vcd::VcdVariableKey;
@@ -12,14 +11,12 @@ use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_utils::{NonMaxU16, SecondaryTable};
 use vogls_vcd::VcdScopeItem;
 
-use crate::{
-    BytecodeOpcode, EXEC_ITRACE_INDENT, MNEMONIC_ALIGN, value_to_heap_ref, write_padded_mnemonic,
-};
+use crate::{BytecodeOpcode, MNEMONIC_ALIGN, value_to_heap_ref, write_padded_mnemonic};
 
 use super::reg::{Reg, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, ColdContext, InlineNBitSize,
-    Schedule, write_register,
+    Schedule,
 };
 
 pub struct PushArgument {
@@ -87,41 +84,19 @@ impl BytecodeInstruction for PushArgument {
         write!(f, "{rs}, {mode:?}, {size}")
     }
 
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        let size = self.size.get(regs);
-        if size > VSIZE_64 {
-            let rs = state
-                .heap
-                .load_bits(regs.get_as_addr(self.rs).to_ref(size), self.mode);
-            write!(f, "rs = {}", rs.display(&BitsFormatOptions::default()))?;
-        } else {
-            write_register(f, regs, "rs", self.rs, self.mode)?;
-        }
-        writeln!(f)?;
-        Ok(())
-    }
-
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         _state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
         cldctx: &mut ColdContext,
     ) {
         let Self { size, mode, rs } = self;
-        let size = size.get(regs);
+        let size = size.get(pc, code);
         cldctx.stack_args.push((size, mode));
         match mode {
             LogicMode::FourValue if size <= VSIZE_64 => {
@@ -159,7 +134,7 @@ impl BytecodeInstruction for Intrinsic {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
         pc: &mut u64,
         state: &mut RuntimeState,
@@ -168,7 +143,15 @@ impl BytecodeInstruction for Intrinsic {
         cldctx: &mut ColdContext,
     ) {
         let Self { rd, id } = self;
-        let id = id.map_or_else(|| regs[Reg::X14], |v| v.get() as u64);
+        let id = id.map_or_else(
+            || {
+                let low = code[*pc as usize].0;
+                let high = code[*pc as usize + 1].0;
+                *pc += 2;
+                ((high as u64) << 32) | (low as u64)
+            },
+            |v| v.get() as u64,
+        );
         let intrinsic = &cldctx.intrinsics[id as usize];
 
         use IntrinsicOp as O;
@@ -454,11 +437,33 @@ impl BytecodeInstruction for Intrinsic {
 
 impl BytecodeEncoder {
     pub fn push_argument(&mut self, size: VectorSize, mode: LogicMode, rs: Reg) {
-        let size = InlineNBitSize::new(size, self);
-        self.data.push(PushArgument { size, mode, rs }.encode());
+        let inline_size = InlineNBitSize::new(size);
+        self.data.push(
+            PushArgument {
+                size: inline_size,
+                mode,
+                rs,
+            }
+            .encode(),
+        );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
     }
 
-    pub fn intrinsic(&mut self, rd: Reg, id: Option<NonMaxU16>) {
-        self.data.push(Intrinsic { rd, id }.encode());
+    pub fn intrinsic(&mut self, rd: Reg, id: u64) {
+        if id >= u16::MAX as u64 {
+            self.data.push(Intrinsic { rd, id: None }.encode());
+            self.data.push(Bytecode((id & 0xFFFF_FFFF) as u32));
+            self.data.push(Bytecode((id >> 32) as u32));
+        } else {
+            self.data.push(
+                Intrinsic {
+                    rd,
+                    id: NonMaxU16::new(id as u16),
+                }
+                .encode(),
+            );
+        }
     }
 }
