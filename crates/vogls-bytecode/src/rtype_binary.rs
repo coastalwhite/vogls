@@ -11,10 +11,10 @@ use vogls_bits::util::wrapping_u64_pow;
 use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
 
-use super::reg::{Reg, Regs};
+use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    EXEC_ITRACE_INDENT, Schedule, SixBitSize, write_padded_mnemonic, write_register,
+    Schedule, SixBitSize, write_padded_mnemonic,
 };
 
 pub struct BitwiseRType {
@@ -190,33 +190,12 @@ macro_rules! impl_bitwise {
         fn encode(&self) -> Bytecode {
             self.0.encode(BytecodeOpcode::$variant)
         }
-        fn pre_exec_itrace(
-            &self,
-            f: &mut fmt::Formatter<'_>,
-            _code: &[Bytecode],
-            _pc: u64,
-            regs: &Regs,
-            _state: &RuntimeState,
-        ) -> fmt::Result {
-            f.write_str(EXEC_ITRACE_INDENT)?;
-            write_register(f, regs, "rs1", self.0.rs1, LogicMode::$rs1_mode)?;
-            f.write_str(", ")?;
-            write_register(f, regs, "rs2", self.0.rs2, LogicMode::$rs2_mode)?;
-            writeln!(f)?;
-            Ok(())
+        fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.push(RegInfo::register("rs1", self.0.rs1, LogicMode::$rs1_mode, None));
+            operands.push(RegInfo::register("rs2", self.0.rs2, LogicMode::$rs2_mode, None));
         }
-        fn post_exec_itrace(
-            &self,
-            f: &mut fmt::Formatter<'_>,
-            _code: &[Bytecode],
-            _pc: u64,
-            regs: &Regs,
-            _state: &RuntimeState,
-        ) -> fmt::Result {
-            f.write_str(EXEC_ITRACE_INDENT)?;
-            write_register(f, regs, "rd", self.0.rd, LogicMode::$rd_mode)?;
-            writeln!(f)?;
-            Ok(())
+        fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.push(RegInfo::register("rd", self.0.rd, LogicMode::$rd_mode, None));
         }
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write_padded_mnemonic(f, $mnemonic)?;
@@ -234,33 +213,13 @@ macro_rules! impl_sbs_bitwise {
         fn encode(&self) -> Bytecode {
             self.0.encode(BytecodeOpcode::$variant)
         }
-        fn pre_exec_itrace(
-            &self,
-            f: &mut fmt::Formatter<'_>,
-            _code: &[Bytecode],
-            _pc: u64,
-            regs: &Regs,
-            _state: &RuntimeState,
-        ) -> fmt::Result {
-            f.write_str(EXEC_ITRACE_INDENT)?;
-            write_register(f, regs, "rs1", self.0.rs1, LogicMode::$rs1_mode)?;
-            f.write_str(", ")?;
-            write_register(f, regs, "rs2", self.0.rs2, LogicMode::$rs2_mode)?;
-            writeln!(f)?;
-            Ok(())
+        fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            let size = Some(self.0.size.into());
+            operands.push(RegInfo::register("rs1", self.0.rs1, LogicMode::$rs1_mode, size));
+            operands.push(RegInfo::register("rs2", self.0.rs2, LogicMode::$rs2_mode, size));
         }
-        fn post_exec_itrace(
-            &self,
-            f: &mut fmt::Formatter<'_>,
-            _code: &[Bytecode],
-            _pc: u64,
-            regs: &Regs,
-            _state: &RuntimeState,
-        ) -> fmt::Result {
-            f.write_str(EXEC_ITRACE_INDENT)?;
-            write_register(f, regs, "rd", self.0.rd, LogicMode::$rd_mode)?;
-            writeln!(f)?;
-            Ok(())
+        fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.push(RegInfo::register("rd", self.0.rd, LogicMode::$rd_mode, Some(self.0.size.into())));
         }
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write_padded_mnemonic(f, $mnemonic)?;
@@ -278,33 +237,12 @@ macro_rules! impl_fv_shift {
         fn encode(&self) -> Bytecode {
             self.0.encode(BytecodeOpcode::$variant)
         }
-        fn pre_exec_itrace(
-            &self,
-            f: &mut fmt::Formatter<'_>,
-            _code: &[Bytecode],
-            _pc: u64,
-            regs: &Regs,
-            _state: &RuntimeState,
-        ) -> fmt::Result {
-            f.write_str(EXEC_ITRACE_INDENT)?;
-            write_register(f, regs, "rs1", self.0.rs1, LogicMode::$rs1_mode)?;
-            f.write_str(", ")?;
-            write_register(f, regs, "rs2", self.0.rs2, self.0.offset_mode)?;
-            writeln!(f)?;
-            Ok(())
+        fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.push(RegInfo::register("rs1", self.0.rs1, LogicMode::$rs1_mode, Some(self.0.size.into())));
+            operands.push(RegInfo::register("rs2", self.0.rs2, self.0.offset_mode, None));
         }
-        fn post_exec_itrace(
-            &self,
-            f: &mut fmt::Formatter<'_>,
-            _code: &[Bytecode],
-            _pc: u64,
-            regs: &Regs,
-            _state: &RuntimeState,
-        ) -> fmt::Result {
-            f.write_str(EXEC_ITRACE_INDENT)?;
-            write_register(f, regs, "rd", self.0.rd, LogicMode::$rd_mode)?;
-            writeln!(f)?;
-            Ok(())
+        fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.push(RegInfo::register("rd", self.0.rd, LogicMode::$rd_mode, Some(self.0.size.into())));
         }
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write_padded_mnemonic(f, $mnemonic)?;

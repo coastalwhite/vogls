@@ -2,6 +2,8 @@ use std::fmt;
 
 use vogls_runtime::RuntimeState;
 
+use crate::reg::RegInfo;
+
 use super::reg::Regs;
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
@@ -37,6 +39,9 @@ impl BytecodeInstruction for Interrupt {
     ) {
         panic!()
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
 impl BytecodeEncoder {

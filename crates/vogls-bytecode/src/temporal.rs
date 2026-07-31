@@ -4,11 +4,10 @@ use vogls_utils::TableKey;
 
 use std::fmt;
 
-use super::reg::{Reg, Regs};
+use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    EXEC_ITRACE_INDENT, InlineIndex, InstructionPtr, Schedule, SignedImmediate, TimedEvent,
-    write_padded_mnemonic, write_register,
+    InlineIndex, InstructionPtr, Schedule, SignedImmediate, TimedEvent, write_padded_mnemonic,
 };
 
 pub struct Wake {
@@ -75,17 +74,6 @@ impl BytecodeInstruction for Wake {
         }
     }
 
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        writeln!(f, "{EXEC_ITRACE_INDENT}rcond = {}", regs[self.rcond] != 0)
-    }
-
     fn encode(&self) -> Bytecode {
         Bytecode(
             BytecodeOpcode::Wake as u32 | ((self.rcond as u32) << 8) | (self.index.encode() << 12),
@@ -115,6 +103,11 @@ impl BytecodeInstruction for Wake {
             wake(index, schedule, listeners);
         }
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rcond", self.rcond, LogicMode::TwoValue, None));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 impl BytecodeInstruction for WakeMultiple {
     fn extract(v: Bytecode) -> Self {
@@ -124,17 +117,6 @@ impl BytecodeInstruction for WakeMultiple {
             rcond: Reg::new_masked(v >> 8),
             index: InlineIndex::new_shifted(v, 12),
         }
-    }
-
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        writeln!(f, "{EXEC_ITRACE_INDENT}rcond = {}", regs[self.rcond] != 0)
     }
 
     fn encode(&self) -> Bytecode {
@@ -171,6 +153,11 @@ impl BytecodeInstruction for WakeMultiple {
             }
         }
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rcond", self.rcond, LogicMode::TwoValue, None));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
 impl BytecodeInstruction for PluginPoke {
@@ -181,17 +168,6 @@ impl BytecodeInstruction for PluginPoke {
             rcond: Reg::new_masked(v >> 8),
             index: InlineIndex::new_shifted(v, 12),
         }
-    }
-
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        writeln!(f, "{EXEC_ITRACE_INDENT}rcond = {}", regs[self.rcond] != 0)
     }
 
     fn encode(&self) -> Bytecode {
@@ -228,6 +204,11 @@ impl BytecodeInstruction for PluginPoke {
             }
         }
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rcond", self.rcond, LogicMode::TwoValue, None));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
 impl BytecodeInstruction for RescheduleWait {
@@ -253,18 +234,6 @@ impl BytecodeInstruction for RescheduleWait {
         write_padded_mnemonic(f, "reschedule_wait")?;
         write!(f, "{rtime}, {offset}")?;
         Ok(())
-    }
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rtime", self.rtime, LogicMode::TwoValue)?;
-        writeln!(f)
     }
 
     #[inline(always)]
@@ -300,6 +269,11 @@ impl BytecodeInstruction for RescheduleWait {
             .pop(state, cldctx.plugins)
             .map_or(u64::MAX, |ptr| ptr.0);
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rtime", self.rtime, LogicMode::TwoValue, None));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
 #[cold]
@@ -356,6 +330,9 @@ impl BytecodeInstruction for RescheduleRegion {
             .pop(state, cldctx.plugins)
             .map_or(u64::MAX, |ptr| ptr.0);
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
 impl BytecodeInstruction for NextEvent {
@@ -387,6 +364,9 @@ impl BytecodeInstruction for NextEvent {
             .pop(state, cldctx.plugins)
             .map_or(u64::MAX, |ptr| ptr.0);
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
 impl BytecodeInstruction for RescheduleListen {
@@ -422,6 +402,9 @@ impl BytecodeInstruction for RescheduleListen {
             .pop(state, cldctx.plugins)
             .map_or(u64::MAX, |ptr| ptr.0);
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
 impl BytecodeInstruction for LastUpdateTime {
@@ -448,19 +431,6 @@ impl BytecodeInstruction for LastUpdateTime {
         write!(f, "{rd}, {idx}")
     }
 
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rd", self.rd, LogicMode::TwoValue)?;
-        writeln!(f)
-    }
-
     #[inline(always)]
     fn execute(
         self,
@@ -474,6 +444,11 @@ impl BytecodeInstruction for LastUpdateTime {
     ) {
         let i = self.idx.get(regs, Reg::X15);
         regs[self.rd] = state.last_active_time[i as usize];
+    }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rd", self.rd, LogicMode::TwoValue, None));
     }
 }
 
@@ -501,19 +476,6 @@ impl BytecodeInstruction for SetLupdt {
         write!(f, "{rcond}, {idx}")
     }
 
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rcond", self.rcond, LogicMode::TwoValue)?;
-        writeln!(f)
-    }
-
     #[inline(always)]
     fn execute(
         self,
@@ -531,6 +493,11 @@ impl BytecodeInstruction for SetLupdt {
             *i = state.time;
         }
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rcond", self.rcond, LogicMode::TwoValue, None));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
 impl BytecodeInstruction for TvCorrectFirst {
@@ -557,31 +524,6 @@ impl BytecodeInstruction for TvCorrectFirst {
         write!(f, "{rcond}, {idx}")
     }
 
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rcond", self.rcond, LogicMode::TwoValue)?;
-        writeln!(f)
-    }
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rcond", self.rcond, LogicMode::TwoValue)?;
-        writeln!(f)
-    }
-
     #[inline(always)]
     fn execute(
         self,
@@ -599,6 +541,13 @@ impl BytecodeInstruction for TvCorrectFirst {
         let i = &mut state.tvl_first_write[word];
         regs[self.rcond] |= ((!*i) >> boff) & 1;
         *i |= 1u64 << boff;
+    }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rcond", self.rcond, LogicMode::TwoValue, None));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rcond", self.rcond, LogicMode::TwoValue, None));
     }
 }
 

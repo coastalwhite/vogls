@@ -7,11 +7,10 @@ use vogls_runtime::RuntimeState;
 
 use crate::BytecodeOpcode;
 
-use super::reg::{Reg, Regs};
+use super::reg::{Reg, RegInfo, Regs};
 use super::{
-    Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, ColdContext,
-    EXEC_ITRACE_INDENT, InlineNBitSize, Schedule, SixBitSize, write_padded_mnemonic,
-    write_register,
+    Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, ColdContext, InlineNBitSize,
+    Schedule, SixBitSize, write_padded_mnemonic,
 };
 
 pub struct SignExtend {
@@ -111,6 +110,27 @@ impl BytecodeInstruction for HeapHeapExtend {
         write!(f, "{rd}, {rs}, {src_size}")
     }
 
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc + 1;
+        let src_size = self.src_size.get(&mut pc, code);
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rs", self.rs, mode, src_size));
+    }
+
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let dst_size = VectorSize::new(code[pc as usize].0).expect("Expected non-zero size");
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rd", self.rd, mode, dst_size));
+    }
+
     #[inline(always)]
     fn execute(
         self,
@@ -204,6 +224,27 @@ impl BytecodeInstruction for HeapHeapTruncate {
         write!(f, "{rd}, {rs}, {dst_size}")
     }
 
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let src_size = VectorSize::new(code[pc as usize].0).expect("Expected non-zero size");
+        let mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rs", self.rs, mode, src_size));
+    }
+
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc + 1;
+        let dst_size = self.dst_size.get(&mut pc, code);
+        let mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rd", self.rd, mode, dst_size));
+    }
+
     #[inline(always)]
     fn execute(
         self,
@@ -289,6 +330,26 @@ impl BytecodeInstruction for HeapRegExtend {
         write!(f, "{rd}, {rs}, {dst_size}, {src_size}")
     }
 
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::register("rs", self.rs, mode, Some(self.src_size.into())));
+    }
+
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let dst_size = self.dst_size.get(&mut pc, code);
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rd", self.rd, mode, dst_size));
+    }
+
     #[inline(always)]
     fn execute(
         self,
@@ -368,29 +429,20 @@ impl BytecodeInstruction for SignExtend {
         write!(f, "{rd}, {rs}, {dst_size}, {src_size}")
     }
 
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rs", self.rs, LogicMode::TwoValue)?;
-        writeln!(f)
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register(
+            "rs", self.rs,
+            LogicMode::TwoValue,
+            Some(self.src_size.into()),
+        ));
     }
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rd", self.rd, LogicMode::TwoValue)?;
-        writeln!(f)
+
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register(
+            "rd", self.rd,
+            LogicMode::TwoValue,
+            Some(self.dst_size.into()),
+        ));
     }
 
     #[inline(always)]

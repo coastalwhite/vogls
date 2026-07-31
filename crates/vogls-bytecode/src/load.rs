@@ -6,12 +6,12 @@ use vogls_codegen::{HeapAlignment, HeapOffset};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
-use crate::{write_padded_mnemonic, write_register};
+use crate::write_padded_mnemonic;
 
-use super::reg::{Reg, Regs};
+use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    EXEC_ITRACE_INDENT, InlineAddrOffset, InlineNBitSize, Schedule, SixBitSize,
+    InlineAddrOffset, InlineNBitSize, Schedule, SixBitSize,
 };
 
 pub struct TvLoadRelAligned(pub LoadRelArgs);
@@ -139,41 +139,19 @@ macro_rules! impl_load_args {
 impl BytecodeInstruction for TvLoadRelAligned {
     impl_load_rel_args!(TvLoadRelAligned, "tv.load_rel_aligned");
 
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        let Self(LoadRelArgs {
-            rd: _,
-            rs,
-            size: _,
-            imm10: _,
-        }) = self;
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rs", *rs, LogicMode::TwoValue)?;
-        writeln!(f)
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::heap(
+            "rs", self.0.rs,
+            LogicMode::TwoValue,
+            self.0.size.into(),
+        ));
     }
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        let Self(LoadRelArgs {
-            rd,
-            rs: _,
-            size: _,
-            imm10: _,
-        }) = self;
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rd", *rd, LogicMode::TwoValue)?;
-        writeln!(f)
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register(
+            "rd", self.0.rd,
+            LogicMode::TwoValue,
+            Some(self.0.size.into()),
+        ));
     }
 
     #[inline(always)]
@@ -208,40 +186,6 @@ impl BytecodeInstruction for TvLoadRelAligned {
 impl BytecodeInstruction for TvLoadAligned {
     impl_load_args!(TvLoadAligned, "tv.load_aligned");
 
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        _regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        let Self(LoadArgs {
-            rd: _,
-            size: _,
-            imm14: _,
-        }) = self;
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        writeln!(f)
-    }
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        let Self(LoadArgs {
-            rd,
-            size: _,
-            imm14: _,
-        }) = self;
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rd", *rd, LogicMode::TwoValue)?;
-        writeln!(f)
-    }
-
     fn num_slots(&self) -> u8 {
         2
     }
@@ -270,47 +214,19 @@ impl BytecodeInstruction for TvLoadAligned {
         let heap = &state.heap.0;
         regs[rd] = size.mask(heap[word as usize] >> boff);
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register(
+            "rd", self.0.rd,
+            LogicMode::TwoValue,
+            Some(self.0.size.into()),
+        ));
+    }
 }
 
 impl BytecodeInstruction for FvLoadAligned {
     impl_load_rel_args!(FvLoadAligned, "fv.load_aligned");
-
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        let Self(LoadRelArgs {
-            rd: _,
-            rs,
-            size: _,
-            imm10: _,
-        }) = self;
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rs", *rs, LogicMode::TwoValue)?;
-        writeln!(f)
-    }
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        let Self(LoadRelArgs {
-            rd,
-            rs: _,
-            size: _,
-            imm10: _,
-        }) = self;
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rd", *rd, LogicMode::FourValue)?;
-        writeln!(f)
-    }
 
     #[inline(always)]
     fn execute(
@@ -347,47 +263,25 @@ impl BytecodeInstruction for FvLoadAligned {
         regs[spc] = mask & (heap[spc_word as usize] >> spc_boff);
         regs[val] = mask & (heap[val_word as usize] >> val_boff);
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::heap(
+            "rs", self.0.rs,
+            LogicMode::TwoValue,
+            self.0.size.into(),
+        ));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register(
+            "rd", self.0.rd,
+            LogicMode::FourValue,
+            Some(self.0.size.into()),
+        ));
+    }
 }
 
 impl BytecodeInstruction for LoadRelUnaligned {
     impl_load_rel_args!(LoadRelUnaligned, "load_rel_unaligned");
-
-    fn pre_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        let Self(LoadRelArgs {
-            rd: _,
-            rs,
-            size: _,
-            imm10: _,
-        }) = self;
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rs", *rs, LogicMode::TwoValue)?;
-        writeln!(f)
-    }
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        let Self(LoadRelArgs {
-            rd,
-            rs: _,
-            size: _,
-            imm10: _,
-        }) = self;
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rd", *rd, LogicMode::TwoValue)?;
-        writeln!(f)
-    }
 
     #[inline(always)]
     fn execute(
@@ -426,28 +320,25 @@ impl BytecodeInstruction for LoadRelUnaligned {
         let w = (w1 >> boff) | (w2 << (64 - boff));
         regs[rd] = size.mask(w);
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::heap(
+            "rs", self.0.rs,
+            LogicMode::TwoValue,
+            self.0.size.into(),
+        ));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register(
+            "rd", self.0.rd,
+            LogicMode::TwoValue,
+            Some(self.0.size.into()),
+        ));
+    }
 }
 
 impl BytecodeInstruction for LoadUnaligned {
     impl_load_args!(LoadUnaligned, "load_unaligned");
-
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        let Self(LoadArgs {
-            rd,
-            imm14: _,
-            size: _,
-        }) = self;
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rd", *rd, LogicMode::TwoValue)?;
-        writeln!(f)
-    }
 
     fn num_slots(&self) -> u8 {
         2
@@ -487,6 +378,15 @@ impl BytecodeInstruction for LoadUnaligned {
         let w = (w1 >> boff) | (w2 << (64 - boff));
         regs[rd] = size.mask(w);
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register(
+            "rd", self.0.rd,
+            LogicMode::TwoValue,
+            Some(self.0.size.into()),
+        ));
+    }
 }
 
 impl BytecodeInstruction for LoadHeapAligned {
@@ -524,6 +424,29 @@ impl BytecodeInstruction for LoadHeapAligned {
             Some(_) => 1,
             None => 2,
         }
+    }
+
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let num_words = match self.num_words {
+            Some(n) => n.get() as u32,
+            None => code[pc as usize].0,
+        };
+        operands.push(RegInfo::heap(
+            "rs", self.rs,
+            LogicMode::TwoValue,
+            VectorSize::new(num_words * 64).unwrap(),
+        ));
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let num_words = match self.num_words {
+            Some(n) => n.get() as u32,
+            None => code[pc as usize].0,
+        };
+        operands.push(RegInfo::heap(
+            "rd", self.rd,
+            LogicMode::TwoValue,
+            VectorSize::new(num_words * 64).unwrap(),
+        ));
     }
 
     #[inline(always)]
@@ -606,6 +529,17 @@ impl BytecodeInstruction for LoadHeapUnaligned {
         write_padded_mnemonic(f, "load_heap_unaligned")?;
         let imm8 = imm8.0;
         write!(f, "{rd}, {rs}, {imm8}")
+    }
+
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        operands.push(RegInfo::heap("rs", self.rs, LogicMode::TwoValue, size));
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        operands.push(RegInfo::heap("rd", self.rd, LogicMode::TwoValue, size));
     }
 
     #[inline(always)]

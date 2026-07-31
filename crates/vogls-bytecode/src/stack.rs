@@ -1,9 +1,10 @@
 use vogls_codegen::HeapAlignment;
+use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
 
 use std::fmt;
 
-use super::reg::{Reg, Regs};
+use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
     Schedule, SignedImmediate, write_padded_mnemonic,
@@ -71,6 +72,11 @@ impl BytecodeInstruction for StackOffset {
         let offset = offset.0 << kind as u32;
         regs[rd] = regs.stack_offset.wrapping_add_signed(i64::from(offset));
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rd", self.rd, LogicMode::TwoValue, None));
+    }
 }
 
 impl BytecodeInstruction for StackOffsetReg {
@@ -122,6 +128,19 @@ impl BytecodeInstruction for StackOffsetReg {
         let Self { rd, kind, offset } = self;
         let offset = regs[offset] << kind as u32;
         regs[rd] = regs.stack_offset.wrapping_add(offset);
+    }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register(
+            "offset",
+            self.offset,
+            LogicMode::TwoValue,
+            None,
+        ));
+    }
+
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rd", self.rd, LogicMode::TwoValue, None));
     }
 }
 

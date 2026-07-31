@@ -13,7 +13,7 @@ use vogls_vcd::VcdScopeItem;
 
 use crate::{BytecodeOpcode, MNEMONIC_ALIGN, value_to_heap_ref, write_padded_mnemonic};
 
-use super::reg::{Reg, Regs};
+use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, ColdContext, InlineNBitSize,
     Schedule,
@@ -82,6 +82,20 @@ impl BytecodeInstruction for PushArgument {
         let Self { size, mode, rs } = self;
         write_padded_mnemonic(f, "push_argument")?;
         write!(f, "{rs}, {mode:?}, {size}")
+    }
+
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        if size <= VSIZE_64 {
+            operands.push(RegInfo::register("rs", self.rs, self.mode, Some(size)));
+        } else {
+            operands.push(RegInfo::heap("rs", self.rs, self.mode, size));
+        }
+    }
+
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        _ = operands;
     }
 
     #[inline(always)]
@@ -433,6 +447,9 @@ impl BytecodeInstruction for Intrinsic {
         cldctx.stack_args.clear();
         cldctx.stack.clear();
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
 impl BytecodeEncoder {

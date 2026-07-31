@@ -1,10 +1,11 @@
 use std::fmt;
 
+use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
 
 use crate::write_padded_mnemonic;
 
-use super::reg::{Reg, Regs};
+use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
     Schedule, SignedImmediate,
@@ -56,6 +57,9 @@ impl BytecodeInstruction for Jump {
         let Self(imm) = self;
         *pc = pc.wrapping_add_signed(i64::from(imm.0));
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
 impl BytecodeInstruction for RelJump {
@@ -95,6 +99,11 @@ impl BytecodeInstruction for RelJump {
         let Self { rs, imm } = self;
         *pc = regs[rs].wrapping_add_signed(i64::from(imm.0));
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rs", self.rs, LogicMode::TwoValue, None));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
 impl BytecodeInstruction for BranchTrue {
@@ -139,6 +148,16 @@ impl BytecodeInstruction for BranchTrue {
             *pc = next_pc;
         }
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register(
+            "rcond",
+            self.rcond,
+            LogicMode::TwoValue,
+            None,
+        ));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 impl BytecodeInstruction for BranchFalse {
     fn extract(v: Bytecode) -> Self {
@@ -182,6 +201,16 @@ impl BytecodeInstruction for BranchFalse {
             *pc = next_pc;
         }
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register(
+            "rcond",
+            self.rcond,
+            LogicMode::TwoValue,
+            None,
+        ));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
 impl BytecodeEncoder {

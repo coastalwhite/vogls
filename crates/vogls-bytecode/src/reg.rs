@@ -2,6 +2,7 @@ use std::fmt::{self, Write};
 use std::ops::{Index, IndexMut};
 
 use vogls_codegen::HeapOffset;
+use vogls_ir::{LogicMode, VectorSize};
 
 /// The register bank used by the bytecode interpreter for temporary results.
 pub struct Regs {
@@ -102,5 +103,79 @@ impl Reg {
     pub fn to_spc_and_val(self) -> (Self, Self) {
         debug_assert_ne!(self, Self::X15);
         (self, Self::new_masked(self as u32 + 1))
+    }
+}
+
+#[derive(Debug)]
+pub struct RegInfo {
+    name: &'static str,
+    reg: Reg,
+    mode: LogicMode,
+    /// The size of the operand in the register, if it is known.
+    size: Option<VectorSize>,
+
+    /// Whether the register is stored in the register or whether it is stored on the heap.
+    /// - If it is stored in a register, the size must be <= 64.
+    /// - If it is stored on the heap, the register contains an address into the heap.
+    storage: RegStorage,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum RegStorage {
+    Register,
+    Heap,
+}
+
+impl RegInfo {
+    #[inline]
+    pub fn new(
+        name: &'static str,
+        reg: Reg,
+        mode: LogicMode,
+        size: Option<VectorSize>,
+        storage: RegStorage,
+    ) -> Self {
+        Self {
+            name,
+            reg,
+            mode,
+            size,
+            storage,
+        }
+    }
+
+    #[inline]
+    pub fn register(name: &'static str, reg: Reg, mode: LogicMode, size: Option<VectorSize>) -> Self {
+        Self::new(name, reg, mode, size, RegStorage::Register)
+    }
+
+    #[inline]
+    pub fn heap(name: &'static str, reg: Reg, mode: LogicMode, size: VectorSize) -> Self {
+        Self::new(name, reg, mode, Some(size), RegStorage::Heap)
+    }
+
+    #[inline]
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    #[inline]
+    pub fn reg(&self) -> Reg {
+        self.reg
+    }
+
+    #[inline]
+    pub fn mode(&self) -> LogicMode {
+        self.mode
+    }
+
+    #[inline]
+    pub fn size(&self) -> Option<VectorSize> {
+        self.size
+    }
+
+    #[inline]
+    pub fn storage(&self) -> RegStorage {
+        self.storage
     }
 }

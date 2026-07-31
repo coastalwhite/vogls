@@ -5,10 +5,10 @@ use vogls_runtime::RuntimeState;
 
 use crate::MNEMONIC_ALIGN;
 
-use super::reg::{Reg, Regs};
+use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    EXEC_ITRACE_INDENT, Schedule, write_register,
+    Schedule,
 };
 
 pub struct LoadImm {
@@ -42,20 +42,6 @@ impl BytecodeInstruction for LoadImm {
                 | ((self.segment as u32) << 14)
                 | ((self.imm as u16 as u32) << 16),
         )
-    }
-
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rd", self.rd, LogicMode::TwoValue)?;
-        writeln!(f)?;
-        Ok(())
     }
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -100,6 +86,11 @@ impl BytecodeInstruction for LoadImm {
             imm as u16 as u64
         };
         regs[rd] |= imm << (segment * 16);
+    }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rd", self.rd, LogicMode::TwoValue, None));
     }
 }
 

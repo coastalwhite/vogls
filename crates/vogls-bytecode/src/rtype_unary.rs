@@ -2,11 +2,12 @@ use std::fmt;
 
 use vogls_bits::arithmetic::fv_bitwise_inv_elem;
 use vogls_bits::reduce::{fv_reduce_and_elem, fv_reduce_or_elem, fv_reduce_xor_elem};
+use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
 
 use crate::MNEMONIC_ALIGN;
 
-use super::reg::{Reg, Regs};
+use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
     Schedule, SixBitSize,
@@ -74,7 +75,7 @@ impl SbsBitwiseRUType {
 }
 
 macro_rules! impl_bitwise {
-    ($variant:ident, $mnemonic:literal) => {
+    ($variant:ident, $mnemonic:literal, $rd_mode:ident, $rs_mode:ident) => {
         #[inline(always)]
         fn extract(v: Bytecode) -> Self {
             debug_assert_eq!(v.opcode(), BytecodeOpcode::$variant as u8);
@@ -83,6 +84,12 @@ macro_rules! impl_bitwise {
         fn encode(&self) -> Bytecode {
             self.0.encode(BytecodeOpcode::$variant)
         }
+        fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.push(RegInfo::register("rs", self.0.rs, LogicMode::$rs_mode, None));
+        }
+        fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.push(RegInfo::register("rd", self.0.rd, LogicMode::$rd_mode, None));
+        }
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "{:<1$}", $mnemonic, MNEMONIC_ALIGN)?;
             self.0.fmt(f)
@@ -90,7 +97,7 @@ macro_rules! impl_bitwise {
     };
 }
 macro_rules! impl_sbs_bitwise {
-    ($variant:ident, $mnemonic:literal) => {
+    ($variant:ident, $mnemonic:literal, $rd_mode:ident, $rs_mode:ident) => {
         #[inline(always)]
         fn extract(v: Bytecode) -> Self {
             debug_assert_eq!(v.opcode(), BytecodeOpcode::$variant as u8);
@@ -98,6 +105,12 @@ macro_rules! impl_sbs_bitwise {
         }
         fn encode(&self) -> Bytecode {
             self.0.encode(BytecodeOpcode::$variant)
+        }
+        fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.push(RegInfo::register("rs", self.0.rs, LogicMode::$rs_mode, Some(self.0.size.into())));
+        }
+        fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.push(RegInfo::register("rd", self.0.rd, LogicMode::$rd_mode, Some(self.0.size.into())));
         }
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write!(f, "{:<1$}", $mnemonic, MNEMONIC_ALIGN)?;
@@ -107,7 +120,7 @@ macro_rules! impl_sbs_bitwise {
 }
 
 impl BytecodeInstruction for TvCountOnes {
-    impl_bitwise!(TvCountOnes, "tv.count_ones");
+    impl_bitwise!(TvCountOnes, "tv.count_ones", TwoValue, TwoValue);
 
     #[inline(always)]
     fn execute(
@@ -126,7 +139,7 @@ impl BytecodeInstruction for TvCountOnes {
 }
 
 impl BytecodeInstruction for TvLeadingZeros {
-    impl_sbs_bitwise!(TvLeadingZeros, "tv.leading_zeros");
+    impl_sbs_bitwise!(TvLeadingZeros, "tv.leading_zeros", TwoValue, TwoValue);
 
     #[inline(always)]
     fn execute(
@@ -145,7 +158,7 @@ impl BytecodeInstruction for TvLeadingZeros {
 }
 
 impl BytecodeInstruction for FvNot {
-    impl_bitwise!(FvNot, "fv.not");
+    impl_bitwise!(FvNot, "fv.not", FourValue, FourValue);
 
     #[inline(always)]
     fn execute(
@@ -165,7 +178,7 @@ impl BytecodeInstruction for FvNot {
     }
 }
 impl BytecodeInstruction for FvReduceAnd {
-    impl_sbs_bitwise!(FvReduceAnd, "fv.reduce_and");
+    impl_sbs_bitwise!(FvReduceAnd, "fv.reduce_and", FourValue, FourValue);
 
     #[inline(always)]
     fn execute(
@@ -186,7 +199,7 @@ impl BytecodeInstruction for FvReduceAnd {
     }
 }
 impl BytecodeInstruction for FvReduceOr {
-    impl_sbs_bitwise!(FvReduceOr, "fv.reduce_or");
+    impl_sbs_bitwise!(FvReduceOr, "fv.reduce_or", FourValue, FourValue);
 
     #[inline(always)]
     fn execute(
@@ -207,7 +220,7 @@ impl BytecodeInstruction for FvReduceOr {
     }
 }
 impl BytecodeInstruction for FvReduceXor {
-    impl_sbs_bitwise!(FvReduceXor, "fv.reduce_xor");
+    impl_sbs_bitwise!(FvReduceXor, "fv.reduce_xor", FourValue, FourValue);
 
     #[inline(always)]
     fn execute(
@@ -229,7 +242,7 @@ impl BytecodeInstruction for FvReduceXor {
 }
 
 impl BytecodeInstruction for FvLeadingZeros {
-    impl_sbs_bitwise!(FvLeadingZeros, "fv.leading_zeros");
+    impl_sbs_bitwise!(FvLeadingZeros, "fv.leading_zeros", FourValue, FourValue);
 
     #[inline(always)]
     fn execute(

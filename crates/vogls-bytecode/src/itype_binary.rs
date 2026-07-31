@@ -5,11 +5,10 @@ use vogls_bits::shift::{fv_logical_shift_left, fv_logical_shift_right, fv_shift_
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
-use super::reg::{Reg, Regs};
+use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    EXEC_ITRACE_INDENT, Schedule, SignedImmediate, SixBitSize, write_padded_mnemonic,
-    write_register,
+    Schedule, SignedImmediate, SixBitSize, write_padded_mnemonic,
 };
 
 pub struct IType {
@@ -104,31 +103,11 @@ macro_rules! impl_bitwise {
             write_padded_mnemonic(f, $mnemonic)?;
             self.0.fmt(f)
         }
-        fn pre_exec_itrace(
-            &self,
-            f: &mut fmt::Formatter<'_>,
-            _code: &[Bytecode],
-            _pc: u64,
-            regs: &Regs,
-            _state: &RuntimeState,
-        ) -> fmt::Result {
-            f.write_str(EXEC_ITRACE_INDENT)?;
-            write_register(f, regs, "rs", self.0.rs, LogicMode::$rs_mode)?;
-            writeln!(f)?;
-            Ok(())
+        fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.push(RegInfo::register("rs", self.0.rs, LogicMode::$rs_mode, Some(self.0.size.into())));
         }
-        fn post_exec_itrace(
-            &self,
-            f: &mut fmt::Formatter<'_>,
-            _code: &[Bytecode],
-            _pc: u64,
-            regs: &Regs,
-            _state: &RuntimeState,
-        ) -> fmt::Result {
-            f.write_str(EXEC_ITRACE_INDENT)?;
-            write_register(f, regs, "rd", self.0.rd, LogicMode::$rd_mode)?;
-            writeln!(f)?;
-            Ok(())
+        fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.push(RegInfo::register("rd", self.0.rd, LogicMode::$rd_mode, Some(self.0.size.into())));
         }
     };
 }

@@ -25,12 +25,12 @@ use vogls_codegen::HeapOffset;
 use vogls_ir::{LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 
-use crate::{write_padded_mnemonic, write_register};
+use crate::write_padded_mnemonic;
 
-use super::reg::{Reg, Regs};
+use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    EXEC_ITRACE_INDENT, InlineNBitSize, Schedule,
+    InlineNBitSize, Schedule,
 };
 pub struct HeapBinaryBitwise {
     rd: Reg,
@@ -116,6 +116,27 @@ pub struct HeapUnary {
 }
 
 impl BytecodeInstruction for HeapBinaryBitwise {
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rs1", self.rs1, mode, size));
+        operands.push(RegInfo::heap("rs2", self.rs2, mode, size));
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.op.is_four_value() && !matches!(self.op, BitwiseOp::FvBitwiseCeq) {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rd", self.rd, mode, size));
+    }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryBitwise as u8);
@@ -263,6 +284,27 @@ impl BytecodeInstruction for HeapBinaryBitwise {
 }
 
 impl BytecodeInstruction for HeapBinaryArithmetic {
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rs1", self.rs1, mode, size));
+        operands.push(RegInfo::heap("rs2", self.rs2, mode, size));
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rd", self.rd, mode, size));
+    }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryArithmetic as u8);
@@ -358,6 +400,27 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
 }
 
 impl BytecodeInstruction for HeapBinaryDivMod {
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.src_fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rs1", self.rs1, mode, size));
+        operands.push(RegInfo::heap("rs2", self.rs2, mode, size));
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.src_fv || self.fill_x {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rd", self.rd, mode, size));
+    }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryArithmetic as u8);
@@ -469,6 +532,25 @@ impl BytecodeInstruction for HeapBinaryDivMod {
 }
 
 impl BytecodeInstruction for HeapBinaryCmp {
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rs1", self.rs1, mode, size));
+        operands.push(RegInfo::heap("rs2", self.rs2, mode, size));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::register("rd", self.rd, mode, None));
+    }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryCmp as u8);
@@ -557,6 +639,27 @@ impl BytecodeInstruction for HeapBinaryCmp {
 }
 
 impl BytecodeInstruction for HeapBinaryShift {
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rs1", self.rs1, mode, size));
+        operands.push(RegInfo::register("rs2", self.rs2, mode, None));
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rd", self.rd, mode, size));
+    }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryShift as u8);
@@ -662,6 +765,27 @@ impl BytecodeInstruction for HeapBinaryShift {
 }
 
 impl BytecodeInstruction for HeapBinaryMinMax {
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.is_fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rs1", self.rs1, mode, size));
+        operands.push(RegInfo::heap("rs2", self.rs2, mode, size));
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.is_fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rd", self.rd, mode, size));
+    }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryMinMax as u8);
@@ -760,6 +884,20 @@ impl BytecodeInstruction for HeapBinaryMinMax {
 }
 
 impl BytecodeInstruction for HeapCaseEq {
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rs1", self.rs1, mode, size));
+        operands.push(RegInfo::heap("rs2", self.rs2, mode, size));
+    }
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register("rd", self.rd, LogicMode::TwoValue, None));
+    }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapCaseEq as u8);
@@ -803,19 +941,6 @@ impl BytecodeInstruction for HeapCaseEq {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}")
     }
-    fn post_exec_itrace(
-        &self,
-        f: &mut fmt::Formatter<'_>,
-        _code: &[Bytecode],
-        _pc: u64,
-        regs: &Regs,
-        _state: &RuntimeState,
-    ) -> fmt::Result {
-        f.write_str(EXEC_ITRACE_INDENT)?;
-        write_register(f, regs, "rd", self.rd, LogicMode::TwoValue)?;
-        writeln!(f)
-    }
-
     #[inline(always)]
     fn execute(
         self,
@@ -860,6 +985,41 @@ impl BytecodeInstruction for HeapCaseEq {
 }
 
 impl BytecodeInstruction for HeapConcat {
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let rs1_size = VectorSize::new(code[pc as usize].0).expect("Expected non-zero size");
+        pc += 1;
+        let rs2_size = self.rs2_size.get(&mut pc, code);
+        let mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        if rs1_size <= VSIZE_64 {
+            operands.push(RegInfo::register("rs1", self.rs1, mode, Some(rs1_size)));
+        } else {
+            operands.push(RegInfo::heap("rs1", self.rs1, mode, rs1_size));
+        }
+        if rs2_size <= VSIZE_64 {
+            operands.push(RegInfo::register("rs2", self.rs2, mode, Some(rs2_size)));
+        } else {
+            operands.push(RegInfo::heap("rs2", self.rs2, mode, rs2_size));
+        }
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let rs1_size = VectorSize::new(code[pc as usize].0).expect("Expected non-zero size");
+        pc += 1;
+        let rs2_size = self.rs2_size.get(&mut pc, code);
+        let dst_size =
+            VectorSize::new(rs1_size.get() + rs2_size.get()).expect("Expected non-zero size");
+        let mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rd", self.rd, mode, dst_size));
+    }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapConcat as u8);
@@ -984,6 +1144,32 @@ impl BytecodeInstruction for HeapConcat {
 }
 
 impl BytecodeInstruction for HeapSlice {
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let src_size = VectorSize::new(code[pc as usize].0).expect("Expected non-zero size");
+        let src_mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        let offset_mode = if self.offset_is_fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rs", self.rs, src_mode, src_size));
+        operands.push(RegInfo::register("roff", self.roff, offset_mode, None));
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        pc += 1;
+        let dst_size = self.dst_size.get(&mut pc, code);
+        let mode = if self.fv || self.fill_with_x {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rd", self.rd, mode, dst_size));
+    }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapSlice as u8);
@@ -1198,9 +1384,48 @@ impl BytecodeInstruction for HeapFill {
             *dst.last_mut().unwrap() &= (1u64 << (size.get() % 64)) - 1;
         }
     }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rd", self.rd, mode, size));
+    }
 }
 
 impl BytecodeInstruction for HeapUnary {
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rs", self.rs, mode, size));
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mode = if self.op.is_four_value() {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        match self.op {
+            UnaryOp::TvNeg | UnaryOp::TvCopy | UnaryOp::FvNeg | UnaryOp::FvCopy => {
+                let mut pc = pc;
+                let size = self.size.get(&mut pc, code);
+                operands.push(RegInfo::heap("rd", self.rd, mode, size));
+            }
+            _ => {
+                operands.push(RegInfo::register("rd", self.rd, mode, None));
+            }
+        }
+    }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapUnary as u8);
