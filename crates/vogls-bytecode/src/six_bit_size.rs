@@ -98,18 +98,41 @@ impl SixBitSize {
         self as u32 - 1
     }
 
-    /// Create a value from six bits.
+    /// # Safety
     ///
-    /// Note that logical 0 corresponds to size 1.
+    /// `v` should be in `1..=64`.
     #[inline(always)]
-    pub fn new_masked(v: u32) -> Self {
-        let v = ((v & 0x3F) + 1) as u8;
+    pub unsafe fn new_unchecked(v: u8) -> Self {
         debug_assert!((1..=64).contains(&v));
         // @NOTE: I observed this not being optimized, when it was a match statement. Therefore,
         // this unsafe here.
         //
         // SAFETY: SixBitSize is defined between 1 - 64 and that is the only range that `v` can be.
         unsafe { std::mem::transmute::<u8, Self>(v) }
+    }
+
+    /// Create a value from six bits.
+    #[inline(always)]
+    pub fn new(v: u8) -> Option<Self> {
+        if !(1..=64).contains(&v) {
+            return None;
+        }
+
+        // SAFETY: `v` is checked to be in 1..=64.
+        Some(unsafe { Self::new_unchecked(v) })
+    }
+
+    /// Create a value from six bits.
+    ///
+    /// Note that logical 0 corresponds to size 1.
+    #[inline(always)]
+    pub fn new_masked(v: u32) -> Self {
+        let v = ((v & 0x3F) + 1) as u8;
+
+        // SAFETY:
+        // 1. Mask with 0x3F produces value in 0..=63
+        // 2. +1 shifts this to 1..=64
+        unsafe { Self::new_unchecked(v) }
     }
 
     /// Mask a value to only keep the lower N bits.

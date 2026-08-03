@@ -2181,15 +2181,24 @@ fn lower_instruction(
 
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T3);
         }
-        I::Drive(_dst, signal, src, partial) => {
+        I::Drive(dst, signal, src, partial) => {
             // Temporary Register Allocation:
             // T0:    RS       (ADDR / VAL / SPC)
             // T1:    RS       (VAL)
             // T2:    ROFF     (ADDR / VAL / SPC)
-            // T3:    RPOKE    (BOOL)
+            // T3:    RPOKE    (ADDR / VAL)
             // T4:    RPARTIAL (ADDR / VAL / SPC)
             // T5:    RPARTIAL (VAL)
 
+            let rd = to_reg(
+                bce,
+                *dst,
+                &gl.vars,
+                assignment[dst],
+                stack_offsets,
+                T3,
+                true,
+            );
             let rs = to_reg(
                 bce,
                 *src,
@@ -2203,7 +2212,6 @@ fn lower_instruction(
             let signal_size = gl.signals[*signal].size;
             let src_size = gl.vars.size(*src);
 
-            let rpoke = T3;
             let signal_addr = signal_address(*signal, signals, io_signals);
 
             if *partial != 0 || signal_size != src_size {
@@ -2306,7 +2314,7 @@ fn lower_instruction(
                 options,
             );
         }
-        I::DriveSlice(_dst, signal, src, partial) => {
+        I::DriveSlice(dst, signal, src, partial) => {
             // Temporary Register Allocation:
             // T0:    RS       (ADDR / VAL / SPC)
             // T1:    RS       (VAL)
@@ -2315,6 +2323,15 @@ fn lower_instruction(
             // T4:    RPARTIAL (ADDR / VAL / SPC)
             // T5:    RPARTIAL (VAL)
 
+            let rd = to_reg(
+                bce,
+                *dst,
+                &gl.vars,
+                assignment[dst],
+                stack_offsets,
+                T3,
+                true,
+            );
             let rs = to_reg(
                 bce,
                 *src,
@@ -2329,7 +2346,6 @@ fn lower_instruction(
             let src_size = gl.vars.size(*src);
 
             let roff = T2;
-            let rpoke = T3;
             let signal_addr = signal_address(*signal, signals, io_signals);
 
             let mut branch_offset: Option<usize> = None;

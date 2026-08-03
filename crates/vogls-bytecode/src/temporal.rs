@@ -10,11 +10,13 @@ use super::{
     InlineIndex, InstructionPtr, Schedule, SignedImmediate, TimedEvent, write_padded_mnemonic,
 };
 
+/// Wake the listener at the given index if the condition is non-zero.
 pub struct Wake {
     rcond: Reg,
     index: InlineIndex<20>,
 }
 
+/// Wake the listeners at the given index if the condition is non-zero.
 pub struct WakeMultiple {
     rcond: Reg,
     index: InlineIndex<20>,

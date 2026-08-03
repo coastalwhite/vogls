@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{cmp, fmt};
 
 use vogls_bits::set_subslice::tv_cell_set;
 use vogls_codegen::{HeapAlignment, HeapOffset};
@@ -195,7 +195,7 @@ macro_rules! impl_set_heap_args {
 }
 
 #[inline(always)]
-fn tv_set_aligned(heap: &mut [u64], offset: u64, value: u64, size: SixBitSize) -> bool {
+fn tv_set_aligned(heap: &mut [u64], offset: u64, value: u64, size: SixBitSize) -> u64 {
     debug_assert!(HeapAlignment::new(size.into(), LogicMode::TwoValue).is_aligned(offset));
     let mask = size.mask(u64::MAX);
     let word = &mut heap[(offset / 64) as usize];
@@ -203,10 +203,10 @@ fn tv_set_aligned(heap: &mut [u64], offset: u64, value: u64, size: SixBitSize) -
     let prev_value = mask & (*word >> boff);
     *word &= !(mask << boff);
     *word |= value << boff;
-    value != prev_value
+    prev_value ^ value
 }
 #[inline(always)]
-fn fv_set_aligned(heap: &mut [u64], offset: u64, spc: u64, val: u64, size: SixBitSize) -> bool {
+fn fv_set_aligned(heap: &mut [u64], offset: u64, spc: u64, val: u64, size: SixBitSize) -> u64 {
     debug_assert!(HeapAlignment::new(size.into(), LogicMode::TwoValue).is_aligned(offset));
 
     let spc_offset = offset;
@@ -226,11 +226,71 @@ fn fv_set_aligned(heap: &mut [u64], offset: u64, spc: u64, val: u64, size: SixBi
     *heap_val_word &= !(mask << val_boff);
     *heap_val_word |= val << val_boff;
 
-    (prev_spc != spc) | (prev_val != val)
+    (prev_spc ^ spc) | (prev_val ^ val)
+}
+
+/// Set a word on the heap at a specific offset.
+///
+/// This overwrites all the bits in `offset..offset + size` with `value` and returns a mask of
+/// which bits in value changed bits on the heap. If an addressed bit falls outside of
+/// `base..base + base_size`, it cannot be changed and any write is considered a no-op.
+///
+/// # Invariants
+///
+/// - `value` should be premasked according to `size`.
+/// - `base..base + base_size` should be a valid u64 range.
+#[inline(always)]
+fn set_unaligned(
+    heap: &mut [u64],
+    offset: u64,
+    value: u64,
+    size: SixBitSize,
+    base: u64,
+    base_size: VectorSize,
+) -> u64 {
+    debug_assert_eq!(value, size.mask(value));
+
+    let base_min = base;
+    let base_max = base + base_size.get() as u64;
+    if (offset < base_min) | (offset.saturating_add(size as u64) > base_max) {
+        return set_unaligned_oob(heap, offset, value, size, base, base_size);
+    }
+
+    set_unaligned_bounded(heap, offset, value, size)
+}
+
+#[cold]
+#[inline(never)]
+fn set_unaligned_oob(
+    heap: &mut [u64],
+    offset: u64,
+    value: u64,
+    size: SixBitSize,
+    base: u64,
+    base_size: VectorSize,
+) -> u64 {
+    let base_min = base;
+    let base_max = base + base_size.get() as u64;
+    let write_min = offset;
+    let write_max = offset + size as u64;
+
+    let trim_min = cmp::max(base_min, write_min);
+    let trim_max = cmp::min(base_max, write_max);
+
+    let trim_size = trim_max.saturating_sub(trim_min);
+    debug_assert!(trim_size < size as u64);
+    let Some(trim_size) = SixBitSize::new(trim_size as u8) else {
+        return 0;
+    };
+
+    let min_shift = trim_min - offset;
+    let trim_value = trim_size.mask(value >> min_shift);
+
+    set_unaligned_bounded(heap, trim_min, trim_value, trim_size) << min_shift
 }
 
 #[inline(always)]
-fn set_unaligned(heap: &mut [u64], offset: u64, value: u64, size: SixBitSize) -> bool {
+fn set_unaligned_bounded(heap: &mut [u64], offset: u64, value: u64, size: SixBitSize) -> u64 {
     let mask = size.mask(u64::MAX);
     let end_offset = offset + size as u64 - 1;
 
@@ -243,16 +303,20 @@ fn set_unaligned(heap: &mut [u64], offset: u64, value: u64, size: SixBitSize) ->
         let prev = mask & (*word >> boff);
         *word &= !(mask << boff);
         *word |= value << boff;
-        return prev != value;
+        return prev ^ value;
     }
 
-    assert!(!heap.is_empty() && word < heap.len() - 1);
-    let prev = mask & ((heap[word] >> boff) | (heap[word + 1] << (64 - boff)));
-    heap[word] &= !(mask << boff);
-    heap[word] |= value << boff;
-    heap[word + 1] &= !(mask >> (64 - boff));
-    heap[word + 1] |= value >> (64 - boff);
-    prev != value
+    // Since word == endword, boff should never be 0.
+    debug_assert_ne!(boff, 0);
+    let tgt: &mut [u64; 2] = (&mut heap[word..word + 2])
+        .try_into()
+        .expect("Unable to take heap words");
+    let prev = mask & ((tgt[0] >> boff) | (tgt[1] << (64 - boff)));
+    tgt[0] &= !(mask << boff);
+    tgt[0] |= value << boff;
+    tgt[1] &= !(mask >> (64 - boff));
+    tgt[1] |= value >> (64 - boff);
+    prev ^ value
 }
 
 impl BytecodeInstruction for TvSetAligned {
@@ -260,13 +324,19 @@ impl BytecodeInstruction for TvSetAligned {
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rs", self.0.rs,
+            "rs",
+            self.0.rs,
             LogicMode::TwoValue,
             Some(self.0.size.into()),
         ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rd", self.0.rd, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rd",
+            self.0.rd,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
 
     fn num_slots(&self) -> u8 {
@@ -295,8 +365,9 @@ impl BytecodeInstruction for TvSetAligned {
         *pc += 1;
         let offset = ((code_offset as u64) << 10) | (imm10 as u64);
         let value = regs[rs];
-        let updated = tv_set_aligned(state.heap.0.as_mut(), offset, value, size);
-        regs[rd] = u64::from(updated);
+        let heap = state.heap.0.as_mut();
+        let update_mask = tv_set_aligned(heap, offset, value, size);
+        regs[rd] = update_mask;
     }
 }
 
@@ -305,13 +376,19 @@ impl BytecodeInstruction for FvSetAligned {
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rs", self.0.rs,
+            "rs",
+            self.0.rs,
             LogicMode::FourValue,
             Some(self.0.size.into()),
         ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rd", self.0.rd, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rd",
+            self.0.rd,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
 
     fn num_slots(&self) -> u8 {
@@ -343,9 +420,9 @@ impl BytecodeInstruction for FvSetAligned {
         let (spc, val) = rs.to_spc_and_val();
         let spc = regs[spc];
         let val = regs[val];
-
-        let updated = fv_set_aligned(state.heap.0.as_mut(), offset, spc, val, size);
-        regs[rd] = u64::from(updated);
+        let heap = state.heap.0.as_mut();
+        let update_mask = fv_set_aligned(heap, offset, spc, val, size);
+        regs[rd] = update_mask;
     }
 }
 
@@ -354,14 +431,25 @@ impl BytecodeInstruction for TvRelSetAligned {
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rs", self.0.rs,
+            "rs",
+            self.0.rs,
             LogicMode::TwoValue,
             Some(self.0.size.into()),
         ));
-        operands.push(RegInfo::register("roff", self.0.roff, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "roff",
+            self.0.roff,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rd", self.0.rd, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rd",
+            self.0.rd,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
 
     #[inline(always)]
@@ -384,8 +472,9 @@ impl BytecodeInstruction for TvRelSetAligned {
         }) = self;
         let offset = imm6.get(regs[roff]);
         let value = regs[rs];
-        let updated = tv_set_aligned(state.heap.0.as_mut(), offset, value, size);
-        regs[rd] = u64::from(updated);
+        let heap = state.heap.0.as_mut();
+        let update_mask = tv_set_aligned(heap, offset, value, size);
+        regs[rd] = update_mask;
     }
 }
 
@@ -394,14 +483,25 @@ impl BytecodeInstruction for FvRelSetAligned {
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rs", self.0.rs,
+            "rs",
+            self.0.rs,
             LogicMode::FourValue,
             Some(self.0.size.into()),
         ));
-        operands.push(RegInfo::register("roff", self.0.roff, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "roff",
+            self.0.roff,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rd", self.0.rd, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rd",
+            self.0.rd,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
 
     #[inline(always)]
@@ -428,7 +528,8 @@ impl BytecodeInstruction for FvRelSetAligned {
         let spc = regs[spc];
         let val = regs[val];
 
-        let updated = fv_set_aligned(state.heap.0.as_mut(), offset, spc, val, size);
+        let heap = state.heap.0.as_mut();
+        let updated = fv_set_aligned(heap, offset, spc, val, size);
         regs[rd] = u64::from(updated);
     }
 }
@@ -438,13 +539,19 @@ impl BytecodeInstruction for SetUnaligned {
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rs", self.0.rs,
+            "rs",
+            self.0.rs,
             LogicMode::TwoValue,
             Some(self.0.size.into()),
         ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rd", self.0.rd, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rd",
+            self.0.rd,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
 
     fn num_slots(&self) -> u8 {
@@ -473,7 +580,8 @@ impl BytecodeInstruction for SetUnaligned {
         *pc += 1;
         let offset = ((code_offset as u64) << 10) | (imm10 as u64);
         let val = regs[rs];
-        let updated = set_unaligned(state.heap.0.as_mut(), offset, val, size);
+        let heap = state.heap.0.as_mut();
+        let updated = set_unaligned(heap, offset, val, size);
         regs[rd] = u64::from(updated);
     }
 }
@@ -483,14 +591,25 @@ impl BytecodeInstruction for SetRelUnaligned {
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rs", self.0.rs,
+            "rs",
+            self.0.rs,
             LogicMode::TwoValue,
             Some(self.0.size.into()),
         ));
-        operands.push(RegInfo::register("roff", self.0.roff, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "roff",
+            self.0.roff,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rd", self.0.rd, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rd",
+            self.0.rd,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
 
     #[inline(always)]
@@ -525,10 +644,20 @@ impl BytecodeInstruction for SetHeapUnaligned {
         let mut pc = pc;
         let size = self.0.size.get(&mut pc, code);
         operands.push(RegInfo::heap("rs", self.0.rs, LogicMode::TwoValue, size));
-        operands.push(RegInfo::heap("roff", self.0.roff, LogicMode::TwoValue, size));
+        operands.push(RegInfo::heap(
+            "roff",
+            self.0.roff,
+            LogicMode::TwoValue,
+            size,
+        ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rd", self.0.rd, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rd",
+            self.0.rd,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
 
     #[inline(always)]
@@ -590,10 +719,20 @@ impl BytecodeInstruction for TvSetHeapAligned {
         let mut pc = pc;
         let size = self.0.size.get(&mut pc, code);
         operands.push(RegInfo::heap("rs", self.0.rs, LogicMode::TwoValue, size));
-        operands.push(RegInfo::heap("roff", self.0.roff, LogicMode::TwoValue, size));
+        operands.push(RegInfo::heap(
+            "roff",
+            self.0.roff,
+            LogicMode::TwoValue,
+            size,
+        ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rd", self.0.rd, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rd",
+            self.0.rd,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
 
     #[inline(always)]
@@ -653,10 +792,20 @@ impl BytecodeInstruction for FvSetHeapAligned {
         let mut pc = pc;
         let size = self.0.size.get(&mut pc, code);
         operands.push(RegInfo::heap("rs", self.0.rs, LogicMode::FourValue, size));
-        operands.push(RegInfo::heap("roff", self.0.roff, LogicMode::FourValue, size));
+        operands.push(RegInfo::heap(
+            "roff",
+            self.0.roff,
+            LogicMode::FourValue,
+            size,
+        ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rd", self.0.rd, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rd",
+            self.0.rd,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
 
     #[inline(always)]
