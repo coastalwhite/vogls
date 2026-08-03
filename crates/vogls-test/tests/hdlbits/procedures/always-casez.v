@@ -4,7 +4,7 @@ module top_module (
 );
     always @(*) begin
         casez (in)
-			8'bzzzz_zzz1: pos = 0;
+			8'b?zzz_zzz1: pos = 0;
 			8'bzzzz_zz10: pos = 1;
 			8'bzzzz_z100: pos = 2;
 			8'bzzzz_1000: pos = 3;

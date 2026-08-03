@@ -30,21 +30,21 @@ pub fn skip_decimal(s: &[u8], i: &mut usize) {
 }
 pub fn skip_binary(s: &[u8], i: &mut usize) {
     while let Some(b) = s.get(*i)
-        && matches!(b, b'0'..=b'1' | b'x' | b'z' | b'X' | b'Z' | b'_')
+        && matches!(b, b'0'..=b'1' | b'x' | b'z' | b'X' | b'Z' | b'?' | b'_')
     {
         *i += 1;
     }
 }
 pub fn skip_octal(s: &[u8], i: &mut usize) {
     while let Some(b) = s.get(*i)
-        && matches!(b, b'0'..=b'7' | b'x' | b'z' | b'X' | b'Z' | b'_')
+        && matches!(b, b'0'..=b'7' | b'x' | b'z' | b'X' | b'Z' | b'?' | b'_')
     {
         *i += 1;
     }
 }
 pub fn skip_hexadecimal(s: &[u8], i: &mut usize) {
     while let Some(b) = s.get(*i)
-        && matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'x' | b'z' | b'X' | b'Z' | b'_')
+        && matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'x' | b'z' | b'Z' | b'?' | b'X' | b'_')
     {
         *i += 1;
     }

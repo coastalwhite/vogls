@@ -21,7 +21,7 @@ fn take_bits<const NBITS_PER_VALUE: usize>(
     let mut contains_value = false;
     let mut has_invalid_digit = false;
     for b in s.as_bytes() {
-        has_four_value_logic |= matches!(b, b'x' | b'X' | b'z' | b'Z');
+        has_four_value_logic |= matches!(b, b'x' | b'X' | b'z' | b'Z' | b'?');
         contains_value |= is_value(*b);
         has_invalid_digit |= !(is_value(*b) || *b == b'_');
     }
@@ -89,7 +89,7 @@ fn take_bits<const NBITS_PER_VALUE: usize>(
 
             let (spc, val) = match b {
                 b'x' | b'X' => (0u8, 0u8),
-                b'z' | b'Z' => (0u8, (1u8 << NBITS_PER_VALUE) - 1),
+                b'z' | b'Z' | b'?' => (0u8, (1u8 << NBITS_PER_VALUE) - 1),
                 _ => ((1u8 << NBITS_PER_VALUE) - 1, to_value(b)),
             };
             res_spc |= u32::from(spc) << i;
@@ -119,7 +119,7 @@ fn take_bits<const NBITS_PER_VALUE: usize>(
 
         let (spc, val) = match b {
             b'x' | b'X' => (0, 0),
-            b'z' | b'Z' => (0, (1u8 << NBITS_PER_VALUE) - 1),
+            b'z' | b'Z' | b'?' => (0, (1u8 << NBITS_PER_VALUE) - 1),
             _ => ((1u8 << NBITS_PER_VALUE) - 1, to_value(b)),
         };
 
@@ -135,7 +135,7 @@ pub fn parse_bits_binary(s: &str, size: VectorSize) -> Result<Bits, BitsParseErr
         s,
         size,
         |b| b.wrapping_sub(b'0'),
-        |b| matches!(b, b'0' | b'1' | b'x' | b'X' | b'z' | b'Z'),
+        |b| matches!(b, b'0' | b'1' | b'x' | b'X' | b'z' | b'Z' | b'?'),
     )
 }
 pub fn parse_bits_hexadecimal(s: &str, size: VectorSize) -> Result<Bits, BitsParseError> {
@@ -147,7 +147,7 @@ pub fn parse_bits_hexadecimal(s: &str, size: VectorSize) -> Result<Bits, BitsPar
             b'A'..=b'F' => b - b'A' + 10,
             _ => b - b'0',
         },
-        |b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'x' | b'X' | b'z' | b'Z'),
+        |b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' | b'x' | b'X' | b'z' | b'Z' | b'?'),
     )
 }
 pub fn parse_bits_octal(s: &str, size: VectorSize) -> Result<Bits, BitsParseError> {
@@ -155,9 +155,9 @@ pub fn parse_bits_octal(s: &str, size: VectorSize) -> Result<Bits, BitsParseErro
     let mut contains_value = false;
     let mut has_invalid_digit = false;
     for b in s.as_bytes() {
-        has_four_value_logic |= matches!(b, b'x' | b'X' | b'z' | b'Z');
+        has_four_value_logic |= matches!(b, b'x' | b'X' | b'z' | b'Z' | b'?');
         contains_value |= matches!(b, b'0'..b'8');
-        has_invalid_digit |= !matches!(b, b'0'..b'8' | b'_' | b'x' | b'X' | b'z' | b'Z');
+        has_invalid_digit |= !matches!(b, b'0'..b'8' | b'_' | b'x' | b'X' | b'z' | b'Z' | b'?');
     }
 
     let has_at_least_one_digit = !has_four_value_logic && !contains_value;
@@ -216,7 +216,7 @@ pub fn parse_bits_octal(s: &str, size: VectorSize) -> Result<Bits, BitsParseErro
 
             let (spc, val) = match b {
                 b'x' | b'X' => (0u8, 0u8),
-                b'z' | b'Z' => (0u8, 0b111u8),
+                b'z' | b'Z' | b'?' => (0u8, 0b111u8),
                 _ => (0b111u8, b - b'0'),
             };
 
@@ -228,7 +228,7 @@ pub fn parse_bits_octal(s: &str, size: VectorSize) -> Result<Bits, BitsParseErro
             let fst = s.as_bytes().iter().find(|b| **b != b'_').unwrap();
             let (spc, val) = match fst {
                 b'x' | b'X' => (0, 0),
-                b'z' | b'Z' => (0, 0b111),
+                b'z' | b'Z' | b'?' => (0, 0b111),
                 _ => (0b111u8, fst - b'0'),
             };
             while i < size.get() {
@@ -260,7 +260,7 @@ pub fn parse_bits_octal(s: &str, size: VectorSize) -> Result<Bits, BitsParseErro
 
         let (spc, val) = match b {
             b'x' | b'X' => (0u8, 0u8),
-            b'z' | b'Z' => (0u8, 0b111u8),
+            b'z' | b'Z' | b'?' => (0u8, 0b111u8),
             _ => (0b111u8, b - b'0'),
         };
         value[(i as usize) / 64] |= (spc as u64) << (i % 64);
@@ -303,6 +303,7 @@ mod tests {
 
         assert_tv!("x", 4, BitsDataRef::InlineFv(0o00, 0o00));
         assert_tv!("z", 4, BitsDataRef::InlineFv(0o00, 0o17));
+        assert_tv!("?", 4, BitsDataRef::InlineFv(0o00, 0o17));
         assert_tv!("0", 4, BitsDataRef::InlineTv(0o00));
         assert_tv!("1", 4, BitsDataRef::InlineTv(0o01));
         assert_tv!("2", 4, !);
