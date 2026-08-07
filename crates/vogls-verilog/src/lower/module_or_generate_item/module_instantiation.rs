@@ -310,8 +310,8 @@ fn assign_port_output<'a>(
                 exprs.iter().map(|e| e.into_constant()),
                 range,
             ) && let Some(offset) = address.signal_offset_as_u32()
-            // Don't fuse if the width don't match.
-            && address.output_width == output.ty.force_net_width()
+            // Don't fuse if the widths don't match.
+            && expr_slice.map_or(address.output_width, |s| s.width()) == output.ty.force_net_width()
         {
             mctx.connections.push(InputEdge {
                 driver: Driver::Signal(driver, None),
