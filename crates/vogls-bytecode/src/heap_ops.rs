@@ -116,6 +116,9 @@ pub struct HeapUnary {
 }
 
 impl BytecodeInstruction for HeapBinaryBitwise {
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.size.0.is_none())
+    }
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc + 1;
         let size = self.size.get(&mut pc, code);
@@ -284,6 +287,9 @@ impl BytecodeInstruction for HeapBinaryBitwise {
 }
 
 impl BytecodeInstruction for HeapBinaryArithmetic {
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.size.0.is_none())
+    }
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc + 1;
         let size = self.size.get(&mut pc, code);
@@ -400,6 +406,9 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
 }
 
 impl BytecodeInstruction for HeapBinaryDivMod {
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.size.0.is_none())
+    }
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc;
         let size = self.size.get(&mut pc, code);
@@ -532,6 +541,9 @@ impl BytecodeInstruction for HeapBinaryDivMod {
 }
 
 impl BytecodeInstruction for HeapBinaryCmp {
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.size.0.is_none())
+    }
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc + 1;
         let size = self.size.get(&mut pc, code);
@@ -639,6 +651,9 @@ impl BytecodeInstruction for HeapBinaryCmp {
 }
 
 impl BytecodeInstruction for HeapBinaryShift {
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.size.0.is_none())
+    }
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc + 1;
         let size = self.size.get(&mut pc, code);
@@ -765,6 +780,9 @@ impl BytecodeInstruction for HeapBinaryShift {
 }
 
 impl BytecodeInstruction for HeapBinaryMinMax {
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.size.0.is_none())
+    }
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc + 1;
         let size = self.size.get(&mut pc, code);
@@ -884,6 +902,9 @@ impl BytecodeInstruction for HeapBinaryMinMax {
 }
 
 impl BytecodeInstruction for HeapCaseEq {
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.size.0.is_none())
+    }
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc + 1;
         let size = self.size.get(&mut pc, code);
@@ -985,6 +1006,9 @@ impl BytecodeInstruction for HeapCaseEq {
 }
 
 impl BytecodeInstruction for HeapConcat {
+    fn num_additional_slots(&self) -> u8 {
+        1 + u8::from(self.rs2_size.0.is_none())
+    }
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc + 1;
         let rs1_size = VectorSize::new(code[pc as usize].0).expect("Expected non-zero size");
@@ -1307,6 +1331,9 @@ impl BytecodeInstruction for HeapSlice {
 }
 
 impl BytecodeInstruction for HeapFill {
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.size.0.is_none())
+    }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
         debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapFill as u8);
@@ -1403,6 +1430,9 @@ impl BytecodeInstruction for HeapFill {
 }
 
 impl BytecodeInstruction for HeapUnary {
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.size.0.is_none())
+    }
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc + 1;
         let size = self.size.get(&mut pc, code);

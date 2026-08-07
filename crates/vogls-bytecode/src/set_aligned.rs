@@ -443,6 +443,10 @@ impl BytecodeInstruction for FvRelSetAligned {
 impl BytecodeInstruction for TvSetHeapAligned {
     impl_set_heap_args!(TvSetHeapAligned, "tv.set_heap_aligned");
 
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.0.size.0.is_none())
+    }
+
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc + 1;
         let size = self.0.size.get(&mut pc, code);
@@ -515,6 +519,10 @@ impl BytecodeInstruction for TvSetHeapAligned {
 
 impl BytecodeInstruction for FvSetHeapAligned {
     impl_set_heap_args!(FvSetHeapAligned, "fv.set_heap_aligned");
+
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.0.size.0.is_none())
+    }
 
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc + 1;

@@ -72,6 +72,9 @@ impl ExtendOp {
 }
 
 impl BytecodeInstruction for HeapHeapExtend {
+    fn num_additional_slots(&self) -> u8 {
+        1 + u8::from(self.src_size.0.is_none())
+    }
     fn extract(v: Bytecode) -> Self {
         debug_assert_eq!(v.opcode(), BytecodeOpcode::HeapHeapExtend as u8);
         let v = v.0;
@@ -188,6 +191,9 @@ impl BytecodeInstruction for HeapHeapExtend {
 }
 
 impl BytecodeInstruction for HeapHeapTruncate {
+    fn num_additional_slots(&self) -> u8 {
+        1 + u8::from(self.dst_size.0.is_none())
+    }
     fn extract(v: Bytecode) -> Self {
         debug_assert_eq!(v.opcode(), BytecodeOpcode::HeapHeapTruncate as u8);
         let v = v.0;
@@ -291,6 +297,9 @@ impl BytecodeInstruction for HeapHeapTruncate {
 }
 
 impl BytecodeInstruction for HeapRegExtend {
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.dst_size.0.is_none())
+    }
     fn extract(v: Bytecode) -> Self {
         debug_assert_eq!(v.opcode(), BytecodeOpcode::HeapRegExtend as u8);
         let v = v.0;
