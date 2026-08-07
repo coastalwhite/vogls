@@ -186,8 +186,8 @@ impl BytecodeInstruction for TvLoadRelAligned {
 impl BytecodeInstruction for TvLoadAligned {
     impl_load_args!(TvLoadAligned, "tv.load_aligned");
 
-    fn num_slots(&self) -> u8 {
-        2
+    fn num_additional_slots(&self) -> u8 {
+        1
     }
 
     #[inline(always)]
@@ -267,7 +267,7 @@ impl BytecodeInstruction for FvLoadAligned {
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::heap(
             "rs", self.0.rs,
-            LogicMode::TwoValue,
+            LogicMode::FourValue,
             self.0.size.into(),
         ));
     }
@@ -340,8 +340,8 @@ impl BytecodeInstruction for LoadRelUnaligned {
 impl BytecodeInstruction for LoadUnaligned {
     impl_load_args!(LoadUnaligned, "load_unaligned");
 
-    fn num_slots(&self) -> u8 {
-        2
+    fn num_additional_slots(&self) -> u8 {
+        1
     }
 
     #[inline(always)]
@@ -419,17 +419,17 @@ impl BytecodeInstruction for LoadHeapAligned {
         }
     }
 
-    fn num_slots(&self) -> u8 {
+    fn num_additional_slots(&self) -> u8 {
         match self.num_words {
-            Some(_) => 1,
-            None => 2,
+            Some(_) => 0,
+            None => 1,
         }
     }
 
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let num_words = match self.num_words {
             Some(n) => n.get() as u32,
-            None => code[pc as usize].0,
+            None => code[pc as usize + 1].0,
         };
         operands.push(RegInfo::heap(
             "rs", self.rs,
@@ -440,7 +440,7 @@ impl BytecodeInstruction for LoadHeapAligned {
     fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let num_words = match self.num_words {
             Some(n) => n.get() as u32,
-            None => code[pc as usize].0,
+            None => code[pc as usize + 1].0,
         };
         operands.push(RegInfo::heap(
             "rd", self.rd,
@@ -532,12 +532,12 @@ impl BytecodeInstruction for LoadHeapUnaligned {
     }
 
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
-        let mut pc = pc;
+        let mut pc = pc + 1;
         let size = self.size.get(&mut pc, code);
         operands.push(RegInfo::heap("rs", self.rs, LogicMode::TwoValue, size));
     }
     fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
-        let mut pc = pc;
+        let mut pc = pc + 1;
         let size = self.size.get(&mut pc, code);
         operands.push(RegInfo::heap("rd", self.rd, LogicMode::TwoValue, size));
     }

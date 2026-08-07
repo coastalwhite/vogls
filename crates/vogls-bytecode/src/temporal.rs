@@ -43,15 +43,15 @@ pub struct NextEvent;
 
 pub struct LastUpdateTime {
     rd: Reg,
-    idx: InlineIndex<20>,
+    index: InlineIndex<20>,
 }
 pub struct SetLupdt {
     rcond: Reg,
-    idx: InlineIndex<20>,
+    index: InlineIndex<20>,
 }
 pub struct TvCorrectFirst {
     rcond: Reg,
-    idx: InlineIndex<20>,
+    index: InlineIndex<20>,
 }
 
 #[inline(always)]
@@ -88,26 +88,35 @@ impl BytecodeInstruction for Wake {
         write!(f, "{rcond}, {index}")
     }
 
+    fn num_additional_slots(&self) -> u8 {
+        if self.index.is_inline() { 0 } else { 2 }
+    }
+
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         _state: &mut RuntimeState,
         schedule: &mut Schedule,
         listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
         let Self { rcond, index } = self;
+        let index = index.get(pc, code);
         if regs[rcond] != 0 {
-            let index = index.get(regs, Reg::X15);
             wake(index, schedule, listeners);
         }
     }
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rcond", self.rcond, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rcond",
+            self.rcond,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
@@ -135,20 +144,24 @@ impl BytecodeInstruction for WakeMultiple {
         write!(f, "{rcond}, {index}")
     }
 
+    fn num_additional_slots(&self) -> u8 {
+        if self.index.is_inline() { 0 } else { 2 }
+    }
+
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         _state: &mut RuntimeState,
         schedule: &mut Schedule,
         listeners: &mut BytecodeListeners,
         cldctx: &mut ColdContext,
     ) {
         let Self { rcond, index } = self;
+        let signal_key = index.get(pc, code);
         if regs[rcond] != 0 {
-            let signal_key = index.get(regs, Reg::X15);
             let watchers = cldctx.watchers.get(signal_key as usize);
             for &index in watchers {
                 wake(index, schedule, listeners);
@@ -157,7 +170,12 @@ impl BytecodeInstruction for WakeMultiple {
     }
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rcond", self.rcond, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rcond",
+            self.rcond,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
@@ -186,20 +204,24 @@ impl BytecodeInstruction for PluginPoke {
         write!(f, "{rcond}, {index}")
     }
 
+    fn num_additional_slots(&self) -> u8 {
+        if self.index.is_inline() { 0 } else { 2 }
+    }
+
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         _state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
         cldctx: &mut ColdContext,
     ) {
         let Self { rcond, index } = self;
+        let i = index.get(pc, code) as usize;
         if regs[rcond] != 0 {
-            let i = index.get(regs, Reg::X15) as usize;
             let i = RtSignalKey::from_usize(i).unwrap();
             for plugin in cldctx.plugins.iter_mut() {
                 plugin.poke_signal(i);
@@ -208,7 +230,12 @@ impl BytecodeInstruction for PluginPoke {
     }
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rcond", self.rcond, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rcond",
+            self.rcond,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
@@ -273,7 +300,12 @@ impl BytecodeInstruction for RescheduleWait {
     }
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rtime", self.rtime, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rtime",
+            self.rtime,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
@@ -415,7 +447,7 @@ impl BytecodeInstruction for LastUpdateTime {
         let v = v.0;
         Self {
             rd: Reg::new_masked(v >> 8),
-            idx: InlineIndex::new_shifted(v, 12),
+            index: InlineIndex::new_shifted(v, 12),
         }
     }
 
@@ -423,12 +455,16 @@ impl BytecodeInstruction for LastUpdateTime {
         Bytecode(
             BytecodeOpcode::LastUpdateTime as u32
                 | ((self.rd as u32) << 8)
-                | (self.idx.encode() << 12),
+                | (self.index.encode() << 12),
         )
     }
 
+    fn num_additional_slots(&self) -> u8 {
+        if self.index.is_inline() { 0 } else { 2 }
+    }
+
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { rd, idx } = self;
+        let Self { rd, index: idx } = self;
         write_padded_mnemonic(f, "lupdt")?;
         write!(f, "{rd}, {idx}")
     }
@@ -436,15 +472,15 @@ impl BytecodeInstruction for LastUpdateTime {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let i = self.idx.get(regs, Reg::X15);
+        let i = self.index.get(pc, code);
         regs[self.rd] = state.last_active_time[i as usize];
     }
 
@@ -460,7 +496,7 @@ impl BytecodeInstruction for SetLupdt {
         let v = v.0;
         Self {
             rcond: Reg::new_masked(v >> 8),
-            idx: InlineIndex::new_shifted(v, 12),
+            index: InlineIndex::new_shifted(v, 12),
         }
     }
 
@@ -468,28 +504,32 @@ impl BytecodeInstruction for SetLupdt {
         Bytecode(
             BytecodeOpcode::SetLupdt as u32
                 | ((self.rcond as u32) << 8)
-                | (self.idx.encode() << 12),
+                | (self.index.encode() << 12),
         )
     }
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { rcond, idx } = self;
+        let Self { rcond, index: idx } = self;
         write_padded_mnemonic(f, "set_lupdt")?;
         write!(f, "{rcond}, {idx}")
+    }
+
+    fn num_additional_slots(&self) -> u8 {
+        if self.index.is_inline() { 0 } else { 2 }
     }
 
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let i = self.idx.get(regs, Reg::X15);
+        let i = self.index.get(pc, code);
         let i = &mut state.last_active_time[i as usize];
         if regs[self.rcond] != 0 {
             *i = state.time;
@@ -497,7 +537,12 @@ impl BytecodeInstruction for SetLupdt {
     }
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rcond", self.rcond, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rcond",
+            self.rcond,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
@@ -508,7 +553,7 @@ impl BytecodeInstruction for TvCorrectFirst {
         let v = v.0;
         Self {
             rcond: Reg::new_masked(v >> 8),
-            idx: InlineIndex::new_shifted(v, 12),
+            index: InlineIndex::new_shifted(v, 12),
         }
     }
 
@@ -516,12 +561,16 @@ impl BytecodeInstruction for TvCorrectFirst {
         Bytecode(
             BytecodeOpcode::TvCorrectFirst as u32
                 | ((self.rcond as u32) << 8)
-                | (self.idx.encode() << 12),
+                | (self.index.encode() << 12),
         )
     }
 
+    fn num_additional_slots(&self) -> u8 {
+        if self.index.is_inline() { 0 } else { 2 }
+    }
+
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { rcond, idx } = self;
+        let Self { rcond, index: idx } = self;
         write_padded_mnemonic(f, "tv.correct_first")?;
         write!(f, "{rcond}, {idx}")
     }
@@ -529,15 +578,15 @@ impl BytecodeInstruction for TvCorrectFirst {
     #[inline(always)]
     fn execute(
         self,
-        _code: &[Bytecode],
+        code: &[Bytecode],
         regs: &mut Regs,
-        _pc: &mut u64,
+        pc: &mut u64,
         state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let i = self.idx.get(regs, Reg::X15);
+        let i = self.index.get(pc, code);
         let word = (i / 64) as usize;
         let boff = (i % 64) as usize;
         let i = &mut state.tvl_first_write[word];
@@ -546,23 +595,65 @@ impl BytecodeInstruction for TvCorrectFirst {
     }
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rcond", self.rcond, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rcond",
+            self.rcond,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register("rcond", self.rcond, LogicMode::TwoValue, None));
+        operands.push(RegInfo::register(
+            "rcond",
+            self.rcond,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
 }
 
 impl BytecodeEncoder {
-    pub fn wake(&mut self, rcond: Reg, index: InlineIndex<20>) {
-        self.data.push(Wake { rcond, index }.encode());
+    pub fn wake(&mut self, rcond: Reg, index: u64) {
+        let inline_index = InlineIndex::new(index);
+        self.data.push(
+            Wake {
+                rcond,
+                index: inline_index,
+            }
+            .encode(),
+        );
+        if inline_index.0.is_none() {
+            self.data.push(Bytecode((index >> 32) as u32));
+            self.data.push(Bytecode((index & 0xFFFF_FFFF) as u32));
+        }
     }
-    pub fn wake_multiple(&mut self, rcond: Reg, index: InlineIndex<20>) {
-        self.data.push(WakeMultiple { rcond, index }.encode());
+    pub fn wake_multiple(&mut self, rcond: Reg, index: u64) {
+        let inline_index = InlineIndex::new(index);
+        self.data.push(
+            WakeMultiple {
+                rcond,
+                index: inline_index,
+            }
+            .encode(),
+        );
+        if inline_index.0.is_none() {
+            self.data.push(Bytecode((index >> 32) as u32));
+            self.data.push(Bytecode((index & 0xFFFF_FFFF) as u32));
+        }
     }
     pub fn plugin_poke(&mut self, rcond: Reg, index: u64) {
-        let index = InlineIndex::new(index, self, Reg::X15);
-        self.data.push(PluginPoke { rcond, index }.encode());
+        let inline_index = InlineIndex::new(index);
+        self.data.push(
+            PluginPoke {
+                rcond,
+                index: inline_index,
+            }
+            .encode(),
+        );
+        if inline_index.0.is_none() {
+            self.data.push(Bytecode((index >> 32) as u32));
+            self.data.push(Bytecode((index & 0xFFFF_FFFF) as u32));
+        }
     }
 
     pub fn wait(&mut self, rtime: Reg, offset: i64) {
@@ -583,15 +674,48 @@ impl BytecodeEncoder {
         self.data.push(RescheduleListen { index }.encode());
     }
 
-    pub fn set_lupdt(&mut self, rcond: Reg, idx: InlineIndex<20>) {
-        self.data.push(SetLupdt { rcond, idx }.encode());
+    pub fn set_lupdt(&mut self, rcond: Reg, index: u64) {
+        let inline_index = InlineIndex::new(index);
+        self.data.push(
+            SetLupdt {
+                rcond,
+                index: inline_index,
+            }
+            .encode(),
+        );
+        if inline_index.0.is_none() {
+            self.data.push(Bytecode((index >> 32) as u32));
+            self.data.push(Bytecode((index & 0xFFFF_FFFF) as u32));
+        }
     }
 
-    pub fn tv_correct_first(&mut self, rcond: Reg, idx: InlineIndex<20>) {
-        self.data.push(TvCorrectFirst { rcond, idx }.encode());
+    pub fn tv_correct_first(&mut self, rcond: Reg, index: u64) {
+        let inline_index = InlineIndex::new(index);
+        self.data.push(
+            TvCorrectFirst {
+                rcond,
+                index: inline_index,
+            }
+            .encode(),
+        );
+        if inline_index.0.is_none() {
+            self.data.push(Bytecode((index >> 32) as u32));
+            self.data.push(Bytecode((index & 0xFFFF_FFFF) as u32));
+        }
     }
 
-    pub fn last_update_time(&mut self, rd: Reg, idx: InlineIndex<20>) {
-        self.data.push(LastUpdateTime { rd, idx }.encode());
+    pub fn last_update_time(&mut self, rd: Reg, index: u64) {
+        let inline_index = InlineIndex::new(index);
+        self.data.push(
+            LastUpdateTime {
+                rd,
+                index: inline_index,
+            }
+            .encode(),
+        );
+        if inline_index.0.is_none() {
+            self.data.push(Bytecode((index >> 32) as u32));
+            self.data.push(Bytecode((index & 0xFFFF_FFFF) as u32));
+        }
     }
 }

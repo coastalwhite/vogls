@@ -12,8 +12,8 @@ use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::profile::BytecodeDebugInfo;
 use crate::{
-    BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InlineAddrOffset, InlineIndex,
-    InstructionPtr, IntrinsicOpEqWrap, Jump, Reg, Schedule, SignedImmediate, SixBitSize,
+    BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InlineAddrOffset, InstructionPtr,
+    IntrinsicOpEqWrap, Jump, Reg, Schedule, SignedImmediate, SixBitSize,
 };
 
 use super::{BranchFalse, BranchTrue, RescheduleListen, RescheduleRegion, RescheduleWait};
@@ -417,7 +417,7 @@ pub fn lower_process_to_bytecode(
                     eprintln!("  {}", c);
                     k += 1;
 
-                    for _ in 1..c.num_slots() {
+                    for _ in 0..c.num_additional_slots() {
                         eprintln!("  <data 0x{:08X}>", bytecode.data[offset + k].0);
                         k += 1;
                     }
@@ -1992,8 +1992,7 @@ fn lower_instruction(
             let dslot = assignment[dst];
             let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0, true);
             let rt_key = io_signals[signal];
-            let idx = InlineIndex::new(lupdt_indexes[&rt_key], bce, T5);
-            bce.last_update_time(rd, idx);
+            bce.last_update_time(rd, lupdt_indexes[&rt_key]);
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T2);
         }
         I::Probe(dst, signal, offset) => {
@@ -2441,24 +2440,20 @@ fn poke_signal(
     if gl.signals[signal].mode == LogicMode::TwoValue
         && (options.has_plugins || lupdt_index.is_some() || num_watchers > 0)
     {
-        let index = InlineIndex::new(rt_signal.as_u64(), bce, T5);
-        bce.tv_correct_first(rpoke, index);
+        bce.tv_correct_first(rpoke, rt_signal.as_u64());
     }
     if options.has_plugins {
         let index = rt_signal.as_u64();
         bce.plugin_poke(rpoke, index);
     }
     if let Some(lupdt_index) = lupdt_index {
-        let index = InlineIndex::new(*lupdt_index, bce, T5);
-        bce.set_lupdt(rpoke, index);
+        bce.set_lupdt(rpoke, *lupdt_index);
     }
     if num_watchers == 1 {
         let index = watch_map.watch_indices(signal).next().unwrap();
-        let index = InlineIndex::new(index as u64, bce, T5);
-        bce.wake(rpoke, index);
+        bce.wake(rpoke, index as u64);
     } else if num_watchers > 1 {
-        let index = InlineIndex::new(rt_signal.as_u64(), bce, T5);
-        bce.wake_multiple(rpoke, index);
+        bce.wake_multiple(rpoke, rt_signal.as_u64());
     }
 }
 

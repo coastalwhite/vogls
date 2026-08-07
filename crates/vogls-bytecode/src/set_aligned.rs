@@ -245,8 +245,8 @@ impl BytecodeInstruction for TvSetAligned {
         ));
     }
 
-    fn num_slots(&self) -> u8 {
-        2
+    fn num_additional_slots(&self) -> u8 {
+        1
     }
 
     #[inline(always)]
@@ -297,8 +297,8 @@ impl BytecodeInstruction for FvSetAligned {
         ));
     }
 
-    fn num_slots(&self) -> u8 {
-        2
+    fn num_additional_slots(&self) -> u8 {
+        1
     }
 
     #[inline(always)]
@@ -444,7 +444,7 @@ impl BytecodeInstruction for TvSetHeapAligned {
     impl_set_heap_args!(TvSetHeapAligned, "tv.set_heap_aligned");
 
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
-        let mut pc = pc;
+        let mut pc = pc + 1;
         let size = self.0.size.get(&mut pc, code);
         operands.push(RegInfo::heap("rs", self.0.rs, LogicMode::TwoValue, size));
         operands.push(RegInfo::heap(
@@ -517,7 +517,7 @@ impl BytecodeInstruction for FvSetHeapAligned {
     impl_set_heap_args!(FvSetHeapAligned, "fv.set_heap_aligned");
 
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
-        let mut pc = pc;
+        let mut pc = pc + 1;
         let size = self.0.size.get(&mut pc, code);
         operands.push(RegInfo::heap("rs", self.0.rs, LogicMode::FourValue, size));
         operands.push(RegInfo::heap(

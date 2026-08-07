@@ -187,17 +187,17 @@ macro_rules! impl_op {
                 write!(f, "{rd}, {rs}, {roff}, {dst_size}, {src_size}")
             }
 
-            fn num_slots(&self) -> u8 {
-                1 + u8::from(self.0.src_size.0.is_none())
+            fn num_additional_slots(&self) -> u8 {
+                u8::from(self.0.src_size.0.is_none())
             }
 
             fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
-                let mut pc = pc;
-                operands.push(RegInfo::heap("rs", self.0.rs, LogicMode::TwoValue, self.0.src_size.get(&mut pc, code)));
+                let mut pc = pc + 1;
+                operands.push(RegInfo::heap("rs", self.0.rs, if $src_fv { LogicMode::FourValue } else { LogicMode::TwoValue }, self.0.src_size.get(&mut pc, code)));
                 operands.push(RegInfo::register("roff", self.0.roff, if $offset_is_fv { LogicMode::FourValue } else { LogicMode::TwoValue }, None));
             }
             fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-                operands.push(RegInfo::heap("rd", self.0.rd, if $src_fv | $fill_with_x | $offset_is_fv { LogicMode::FourValue } else { LogicMode::TwoValue }, self.0.dst_size.into()));
+                operands.push(RegInfo::register("rd", self.0.rd, if $src_fv | $fill_with_x | $offset_is_fv { LogicMode::FourValue } else { LogicMode::TwoValue }, Some(self.0.dst_size.into())));
             }
 
             #[inline(always)]

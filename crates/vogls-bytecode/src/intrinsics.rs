@@ -85,7 +85,7 @@ impl BytecodeInstruction for PushArgument {
     }
 
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
-        let mut pc = pc;
+        let mut pc = pc + 1;
         let size = self.size.get(&mut pc, code);
         if size <= VSIZE_64 {
             operands.push(RegInfo::register("rs", self.rs, self.mode, Some(size)));

@@ -1,5 +1,5 @@
 #![cfg_attr(
-    feature = "tailcall",
+    all(nightly, feature = "tailcall"),
     feature(rust_preserve_none_cc, explicit_tail_calls)
 )]
 
@@ -24,7 +24,7 @@ mod set_aligned;
 mod set_unaligned;
 mod six_bit_size;
 mod stack;
-#[cfg(feature = "tailcall")]
+#[cfg(all(nightly, feature = "tailcall"))]
 mod tailcall;
 mod temporal;
 
@@ -155,21 +155,34 @@ impl Bytecode {
         (self.0 & 0xFF) as u8
     }
 
-    fn num_slots(self) -> u8 {
-        (NUM_SLOTS_FNS[self.opcode() as usize])(self)
+    fn num_additional_slots(self) -> u8 {
+        (NUM_ADDITIONAL_SLOTS_FNS[self.opcode() as usize])(self)
     }
 }
 
 pub trait BytecodeInstruction: Sized {
+    /// Extract operands for the encoded bytecode instruction.
     fn extract(v: Bytecode) -> Self;
+    /// Encode the operands into a bytecode instruction.
     fn encode(&self) -> Bytecode;
+
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
 
+    /// Get all the operands that are used as a source in the instruction.
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>);
+    /// Get all the operands that are used as a destination in the instruction.
     fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>);
-    fn num_slots(&self) -> u8 {
-        1
+
+    /// Get the number additional bytecode slots that are used by the instruction.
+    ///
+    /// Generally, hot instructions only use 1 slot per instruction. However, certain complex
+    /// instructions use more than 1 slot to store operand information such as operand sizes,
+    /// limiting ranges or offsets.
+    fn num_additional_slots(&self) -> u8 {
+        0
     }
+
+    /// Perform the instruction on the given state.
     fn execute(
         self,
         code: &[Bytecode],
@@ -218,8 +231,8 @@ fn extract_and_dest_regs<I: BytecodeInstruction>(
     I::extract(c).dest_operands(code, pc, operands);
 }
 
-fn extract_and_num_slots<I: BytecodeInstruction>(c: Bytecode) -> u8 {
-    I::extract(c).num_slots()
+fn extract_and_num_additional_slots<I: BytecodeInstruction>(c: Bytecode) -> u8 {
+    I::extract(c).num_additional_slots()
 }
 
 type LoopFn = fn(
@@ -259,7 +272,7 @@ macro_rules! opcodes {
             }
             arr
         };
-        #[cfg(feature = "tailcall")]
+        #[cfg(all(nightly, feature = "tailcall"))]
         static TAILCALL_INSTR_FNS: [tailcall::TailcallFn; 256] = const {
             // @NOTE: We pad here to 256 such that indexing into it with an u8, does not need a
             // bounds check.
@@ -272,10 +285,7 @@ macro_rules! opcodes {
             arr
         };
 
-        static NUM_SLOTS_FNS: [
-            fn(c: Bytecode) -> u8;
-            NUM_INSTRUCTIONS
-        ] = [$(extract_and_num_slots::<$name>),+];
+        static NUM_ADDITIONAL_SLOTS_FNS: [fn(c: Bytecode) -> u8; NUM_INSTRUCTIONS] = [$(extract_and_num_additional_slots::<$name>),+];
         static SRC_REGS_FNS: [RegFn; NUM_INSTRUCTIONS] = [$(extract_and_source_regs::<$name>),+];
         static DST_REGS_FNS: [RegFn; NUM_INSTRUCTIONS] = [$(extract_and_dest_regs::<$name>),+];
 
@@ -631,18 +641,32 @@ impl<const NBITS: usize> InlineIndex<NBITS> {
             })
     }
 
-    pub fn new(value: u64, bce: &mut BytecodeEncoder, reg: Reg) -> Self {
+    pub fn new(value: u64) -> Self {
         const { assert!(NBITS >= 1 && NBITS <= 32) };
         if value < ((1 << NBITS) - 1) {
             Self(Some(NonMaxU32::new(value as u32).unwrap()))
         } else {
-            bce.load_u64(reg, value);
             Self(None)
         }
     }
 
-    pub fn get(self, regs: &Regs, reg: Reg) -> u64 {
-        self.0.map_or_else(|| regs[reg], |v| v.get() as u64)
+    #[inline(always)]
+    pub fn get(self, pc: &mut u64, code: &[Bytecode]) -> u64 {
+        self.0.map_or_else(
+            || {
+                let items: &[Bytecode; 2] = code[*pc as usize..*pc as usize + 2]
+                    .try_into()
+                    .expect("Expected more bytecode slots");
+                let v = ((items[0].0 as u64) << 32) | (items[1].0 as u64);
+                *pc += 2;
+                v
+            },
+            |v| v.get() as u64,
+        )
+    }
+
+    fn is_inline(&self) -> bool {
+        self.0.is_some()
     }
 }
 
@@ -1205,44 +1229,52 @@ impl Design {
         stdout: &mut (dyn std::io::Write + Send + Sync),
         stderr: &mut (dyn std::io::Write + Send + Sync),
     ) -> Result<(), ()> {
-        let code = &self.bytecode;
-        let Some(entry) = state
-            .schedule
-            .pop(&mut state.runtime, state.plugins.as_mut())
-        else {
-            return Ok(());
-        };
-
-        let pc = entry.0;
-        let mut cldctx = ColdContext::new(
-            &self.intrinsics,
-            &self.watchers,
-            state.plugins.as_mut(),
-            stdout,
-            stderr,
-        );
-        let mut regs = Regs::new(self.stack_offset);
-        let Some(c) = code.get(pc as usize) else {
-            return Ok(());
-        };
-        let opcode = c.opcode();
-        let f = TAILCALL_INSTR_FNS[opcode as usize];
-        (f)(
-            *c,
-            code,
-            &mut regs,
-            pc,
-            &mut state.runtime,
-            &mut state.schedule,
-            &mut state.listeners,
-            &mut cldctx,
-        );
-
-        if cldctx.return_value != 0 {
-            return Err(());
+        #[cfg(not(nightly))]
+        {
+            return self.execute(state, stdout, stderr);
         }
 
-        Ok(())
+        #[cfg(nightly)]
+        {
+            let code = &self.bytecode;
+            let Some(entry) = state
+                .schedule
+                .pop(&mut state.runtime, state.plugins.as_mut())
+            else {
+                return Ok(());
+            };
+
+            let pc = entry.0;
+            let mut cldctx = ColdContext::new(
+                &self.intrinsics,
+                &self.watchers,
+                state.plugins.as_mut(),
+                stdout,
+                stderr,
+            );
+            let mut regs = Regs::new(self.stack_offset);
+            let Some(c) = code.get(pc as usize) else {
+                return Ok(());
+            };
+            let opcode = c.opcode();
+            let f = TAILCALL_INSTR_FNS[opcode as usize];
+            (f)(
+                *c,
+                code,
+                &mut regs,
+                pc,
+                &mut state.runtime,
+                &mut state.schedule,
+                &mut state.listeners,
+                &mut cldctx,
+            );
+
+            if cldctx.return_value != 0 {
+                return Err(());
+            }
+
+            Ok(())
+        }
     }
 
     pub fn poke_signal(&self, state: &mut State, key: RtSignalKey) {

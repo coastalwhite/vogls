@@ -207,8 +207,8 @@ impl BytecodeInstruction for SetUnaligned {
         ));
     }
 
-    fn num_slots(&self) -> u8 {
-        2
+    fn num_additional_slots(&self) -> u8 {
+        1
     }
 
     #[inline(always)]
@@ -299,8 +299,8 @@ impl BytecodeInstruction for RelSetUnaligned {
         ));
     }
 
-    fn num_slots(&self) -> u8 {
-        3 + u8::from(self.base_size.0.is_none())
+    fn num_additional_slots(&self) -> u8 {
+        2 + u8::from(self.base_size.0.is_none())
     }
 
     #[inline(always)]
@@ -376,19 +376,28 @@ impl BytecodeInstruction for SetHeapUnaligned {
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs}, {raddr}, {size}")
     }
-    fn num_slots(&self) -> u8 {
-        4 + if self.fv { 2 } else { 0 } + u8::from(self.size.0.is_none())
+    fn num_additional_slots(&self) -> u8 {
+        3 + if self.fv { 2 } else { 0 } + u8::from(self.size.0.is_none())
     }
 
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc;
         if self.fv {
-            pc += 5;
+            pc += 6;
         } else {
-            pc += 3;
+            pc += 4;
         };
         let size = self.size.get(&mut pc, code);
-        operands.push(RegInfo::heap("rs", self.rs, LogicMode::TwoValue, size));
+        operands.push(RegInfo::heap(
+            "rs",
+            self.rs,
+            if self.fv {
+                LogicMode::FourValue
+            } else {
+                LogicMode::TwoValue
+            },
+            size,
+        ));
         operands.push(RegInfo::heap(
             "raddr",
             self.raddr,
@@ -399,9 +408,9 @@ impl BytecodeInstruction for SetHeapUnaligned {
     fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc;
         if self.fv {
-            pc += 5;
+            pc += 6;
         } else {
-            pc += 3;
+            pc += 4;
         };
         let size = self.size.get(&mut pc, code);
         operands.push(RegInfo::heap("rd", self.rd, LogicMode::TwoValue, size));

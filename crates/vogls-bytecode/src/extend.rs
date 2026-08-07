@@ -342,7 +342,7 @@ impl BytecodeInstruction for HeapRegExtend {
     }
 
     fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
-        let mut pc = pc;
+        let mut pc = pc + 1;
         let dst_size = self.dst_size.get(&mut pc, code);
         let mode = if self.op.is_four_value() {
             LogicMode::FourValue

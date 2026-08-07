@@ -88,7 +88,11 @@ impl BytecodeInstruction for LoadImm {
         regs[rd] |= imm << (segment * 16);
     }
 
-    fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        if !self.clear {
+            operands.push(RegInfo::register("rd", self.rd, LogicMode::TwoValue, None));
+        }
+    }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register("rd", self.rd, LogicMode::TwoValue, None));
     }
