@@ -1189,6 +1189,15 @@ impl BasicBlockBuilder {
         dst
     }
 
+    pub fn blackbox(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+        let dst = gl.vars.insert(src.mode(), gl.vars.size(src));
+        self.instrs.push(Instruction::Intrinsic(
+            dst,
+            Box::new(IntrinsicOp::BlackBox),
+            [src].into(),
+        ));
+        dst
+    }
     pub fn time(&mut self, gl: &mut GlobalContext) -> VariableKey {
         let dst = gl.vars.insert(LogicMode::TwoValue, TIME_VSIZE);
         self.instrs.push(Instruction::Intrinsic(
