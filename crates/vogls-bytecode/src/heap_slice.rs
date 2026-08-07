@@ -187,6 +187,10 @@ macro_rules! impl_op {
                 write!(f, "{rd}, {rs}, {roff}, {dst_size}, {src_size}")
             }
 
+            fn num_slots(&self) -> u8 {
+                1 + u8::from(self.0.src_size.0.is_none())
+            }
+
             fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
                 let mut pc = pc;
                 operands.push(RegInfo::heap("rs", self.0.rs, LogicMode::TwoValue, self.0.src_size.get(&mut pc, code)));

@@ -1,6 +1,7 @@
 use std::cell::Cell;
 
 use crate::VectorSize;
+use crate::util::mask_size_1to64;
 
 pub fn set_subslice(
     mut dst: &mut [u8],
@@ -216,4 +217,69 @@ pub fn tv_cell_set(
     }
 
     updated
+}
+
+/// Update dst[offset +: src_size] to src[0 +: src_size] and keep a mask of which bits were
+/// updated.
+///
+/// Bit `i` in `update_mask` is OR-ed with `1` i.f.f. the bit `offset+i` in `dst` was changed by
+/// bit `i` in the `src`.
+///
+/// The `base_offset` and `base_size` serve as a limiting range and any bits in `dst` outside
+/// `base_offset..base_offset + base_size` are never changed. If `offset..offset + src_size`
+/// includes bits outside of the base range, this writes are no-ops and the `update_mask` is
+/// uneffected for those bits.
+///
+/// The `src` argument may contains any bit-pattern and are not necessarily masked according to
+/// `src_size`. The `dst` should fit `base_offset..base_offset + base_size`.
+pub fn set_with_mask(
+    update_mask: &mut [u64],
+    dst: &mut [u64],
+    src: &[u64],
+    offset: u64,
+    src_size: VectorSize,
+    base_offset: u64,
+    base_size: VectorSize,
+) {
+    assert_eq!(update_mask.len(), src.len());
+    assert_eq!(src.len(), src_size.get().div_ceil(64) as usize);
+
+    let src_size = src_size.get() as u64;
+    let base_end = base_offset + base_size.get() as u64;
+    let boff = (offset % 64) as u32;
+
+    // Iterate over source words and write them into the destination.
+    for (wi, w) in src.iter().enumerate() {
+        let word_start_bit = offset + (wi as u64) * 64;
+
+        // Calculate an effective mask for this word, taking into account the base offset and size.
+        let lo = base_offset.saturating_sub(word_start_bit).min(64);
+        let hi = base_end
+            .saturating_sub(word_start_bit)
+            .min(src_size.saturating_sub((wi as u64) * 64))
+            .min(64);
+        if lo >= hi {
+            continue;
+        }
+        let eff_mask = mask_size_1to64((hi - lo) as u32) << lo;
+
+        let word_dst_idx = (word_start_bit / 64) as usize;
+
+        // Gather the old value.
+        let mut old = dst[word_dst_idx] >> boff;
+        if boff > 0 && word_dst_idx + 1 < dst.len() {
+            old |= dst[word_dst_idx + 1] << (64 - boff);
+        }
+        update_mask[wi] |= (w ^ old) & eff_mask;
+
+        // Update the destination.
+        dst[word_dst_idx] = (dst[word_dst_idx] & !(eff_mask << boff)) | ((w & eff_mask) << boff);
+        if boff > 0 {
+            let clear_hi = eff_mask >> (64 - boff);
+            if clear_hi != 0 {
+                dst[word_dst_idx + 1] =
+                    (dst[word_dst_idx + 1] & !clear_hi) | ((w & eff_mask) >> (64 - boff));
+            }
+        }
+    }
 }

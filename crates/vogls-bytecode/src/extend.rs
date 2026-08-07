@@ -111,7 +111,7 @@ impl BytecodeInstruction for HeapHeapExtend {
     }
 
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
-        let mut pc = pc + 1;
+        let mut pc = pc + 2;
         let src_size = self.src_size.get(&mut pc, code);
         let mode = if self.op.is_four_value() {
             LogicMode::FourValue
@@ -122,6 +122,7 @@ impl BytecodeInstruction for HeapHeapExtend {
     }
 
     fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let pc = pc + 1;
         let dst_size = VectorSize::new(code[pc as usize].0).expect("Expected non-zero size");
         let mode = if self.op.is_four_value() {
             LogicMode::FourValue
@@ -225,6 +226,7 @@ impl BytecodeInstruction for HeapHeapTruncate {
     }
 
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let pc = pc + 1;
         let src_size = VectorSize::new(code[pc as usize].0).expect("Expected non-zero size");
         let mode = if self.fv {
             LogicMode::FourValue
@@ -235,7 +237,7 @@ impl BytecodeInstruction for HeapHeapTruncate {
     }
 
     fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
-        let mut pc = pc + 1;
+        let mut pc = pc + 2;
         let dst_size = self.dst_size.get(&mut pc, code);
         let mode = if self.fv {
             LogicMode::FourValue

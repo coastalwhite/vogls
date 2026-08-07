@@ -1145,6 +1145,7 @@ impl BytecodeInstruction for HeapConcat {
 
 impl BytecodeInstruction for HeapSlice {
     fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let pc = pc + 1;
         let src_size = VectorSize::new(code[pc as usize].0).expect("Expected non-zero size");
         let src_mode = if self.fv {
             LogicMode::FourValue
@@ -1160,8 +1161,7 @@ impl BytecodeInstruction for HeapSlice {
         operands.push(RegInfo::register("roff", self.roff, offset_mode, None));
     }
     fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
-        let mut pc = pc;
-        pc += 1;
+        let mut pc = pc + 2;
         let dst_size = self.dst_size.get(&mut pc, code);
         let mode = if self.fv || self.fill_with_x {
             LogicMode::FourValue
@@ -1215,6 +1215,10 @@ impl BytecodeInstruction for HeapSlice {
         };
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs}, {roff}, {dst_size}")
+    }
+
+    fn num_slots(&self) -> u8 {
+        2 + u8::from(self.dst_size.0.is_none())
     }
 
     #[inline(always)]

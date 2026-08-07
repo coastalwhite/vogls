@@ -20,7 +20,8 @@ pub mod profile;
 mod reg;
 mod rtype_binary;
 mod rtype_unary;
-mod set;
+mod set_aligned;
+mod set_unaligned;
 mod six_bit_size;
 mod stack;
 #[cfg(feature = "tailcall")]
@@ -29,7 +30,7 @@ mod temporal;
 
 use reg::{Reg, Regs};
 use vogls_bits::BitsDataRef;
-use vogls_codegen::{HeapOffset, HeapRef};
+use vogls_codegen::{Heap, HeapOffset, HeapRef};
 
 use vogls_ir::{Bits, LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
@@ -47,7 +48,8 @@ pub use load::*;
 pub use load_imm::*;
 pub use rtype_binary::*;
 pub use rtype_unary::*;
-pub use set::*;
+pub use set_aligned::*;
+pub use set_unaligned::*;
 pub use six_bit_size::SixBitSize;
 pub use stack::*;
 pub use temporal::*;
@@ -431,7 +433,7 @@ opcodes![
     FvRelSetAligned,
     FvSetHeapAligned,
     SetUnaligned,
-    SetRelUnaligned,
+    RelSetUnaligned,
     SetHeapUnaligned,
     TvLoadAligned,
     TvLoadRelAligned,
@@ -553,15 +555,7 @@ impl<const NBITS: usize> InlineAddrOffset<NBITS> {
             return (addr, Self(offset as i16));
         }
 
-        // @Performance: There are quite a few tricks that we can pull here to make a more
-        // efficient lowering.
-        match SignedImmediate::new(offset) {
-            None => {
-                bce.load_u64(scratch, offset as u64);
-                bce.add(scratch, addr, scratch, SixBitSize::N64);
-            }
-            Some(imm) => bce.addi(scratch, addr, imm, SixBitSize::N64),
-        }
+        bce.add_immediate(scratch, addr, offset, scratch);
         (scratch, Self(0))
     }
 }
@@ -912,6 +906,16 @@ impl BytecodeEncoder {
     pub fn mask(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
         self.andi(rd, rs, SignedImmediate::MINUS_ONE, size)
     }
+
+    fn add_immediate(&mut self, rd: Reg, rs: Reg, offset: i64, scratch: Reg) {
+        match SignedImmediate::new(offset) {
+            None => {
+                self.load_u64(scratch, offset as u64);
+                self.add(rd, rs, scratch, SixBitSize::N64);
+            }
+            Some(imm) => self.addi(rd, rs, imm, SixBitSize::N64),
+        }
+    }
 }
 
 pub trait Tracer {
@@ -967,10 +971,10 @@ pub trait Tracer {
 
 impl Tracer for () {}
 
-struct DisplayWith<'a>(&'a Regs, &'a [RegInfo]);
+struct DisplayWith<'a>(&'a Regs, &'a Heap, &'a [RegInfo]);
 impl<'a> fmt::Display for DisplayWith<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_operands(f, self.0, self.1)
+        write_operands(f, self.0, self.1, self.2)
     }
 }
 
@@ -997,14 +1001,19 @@ impl Tracer for InstructionTracer {
         code: &[Bytecode],
         regs: &Regs,
         pc: u64,
-        _state: &RuntimeState,
+        state: &RuntimeState,
         _schedule: &Schedule,
         _listeners: &BytecodeListeners,
     ) {
         self.pc = pc;
         writeln!(&mut self.io, "[PC={pc:4}]: {i}").unwrap();
         (SRC_REGS_FNS[i.opcode() as usize])(i, code, self.pc, &mut self.scratch);
-        write!(&mut self.io, "{}", DisplayWith(regs, &self.scratch)).unwrap();
+        write!(
+            &mut self.io,
+            "{}",
+            DisplayWith(regs, &state.heap, &self.scratch)
+        )
+        .unwrap();
     }
 
     fn post_exec(
@@ -1013,13 +1022,18 @@ impl Tracer for InstructionTracer {
         code: &[Bytecode],
         regs: &Regs,
         pc: u64,
-        _state: &RuntimeState,
+        state: &RuntimeState,
         _schedule: &Schedule,
         _listeners: &BytecodeListeners,
     ) {
         _ = pc;
         (DST_REGS_FNS[i.opcode() as usize])(i, code, self.pc, &mut self.scratch);
-        write!(&mut self.io, "{}", DisplayWith(regs, &self.scratch)).unwrap();
+        write!(
+            &mut self.io,
+            "{}",
+            DisplayWith(regs, &state.heap, &self.scratch)
+        )
+        .unwrap();
     }
 }
 
@@ -1281,7 +1295,12 @@ fn write_register(
     Ok(())
 }
 
-fn write_operands(f: &mut fmt::Formatter<'_>, regs: &Regs, operands: &[RegInfo]) -> fmt::Result {
+fn write_operands(
+    f: &mut fmt::Formatter<'_>,
+    regs: &Regs,
+    heap: &Heap,
+    operands: &[RegInfo],
+) -> fmt::Result {
     if operands.is_empty() {
         return Ok(());
     }
@@ -1295,7 +1314,31 @@ fn write_operands(f: &mut fmt::Formatter<'_>, regs: &Regs, operands: &[RegInfo])
         let reg = operand.reg();
         match operand.storage() {
             RegStorage::Register => write_register(f, regs, operand.name(), reg, operand.mode())?,
-            RegStorage::Heap => write!(f, "{} = heap[0x{:x}]", operand.name(), regs[reg])?,
+            RegStorage::Heap => {
+                write!(f, "{} = heap[0x{:x}]", operand.name(), regs[reg],)?;
+                if let Some(size) = operand.size() {
+                    let value = heap.load_bits(
+                        HeapOffset {
+                            bit_offset: regs[reg] as usize,
+                        }
+                        .to_ref(size),
+                        operand.mode(),
+                    );
+                    write!(
+                        f,
+                        ": {}",
+                        value.display(&vogls_bits::format::BitsFormatOptions {
+                            prefix: true,
+                            base: vogls_bits::format::BitsFormatBase::UpperHex,
+                            separator: Some('_'),
+                            signed: false,
+                            align: None,
+                            fill: '0',
+                            width: vogls_bits::format::BitsFormatWidth::Shrink
+                        })
+                    )?;
+                }
+            }
         }
     }
     writeln!(f)
