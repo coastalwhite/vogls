@@ -202,7 +202,7 @@ impl Design {
 
     pub fn resolve_handle_width(&self, signal: SignalHandle) -> VectorSize {
         let (net, _) = self.resolve_handle_sym(signal);
-        net.ty.force_net_width()
+        net.ty.bit_length()
     }
 
     fn get_heap_ref(&self, signal: RtSignalKey) -> HeapRef {
@@ -326,7 +326,7 @@ fn extend_symbol_table_to_vcd_scope(
 
                 // @TODO: Property implement this.
                 let lsb = 0;
-                let msb = i.ty.force_net_width().get() - 1;
+                let msb = i.ty.bit_length().get() - 1;
                 let msb_lsb = (msb > 0).then_some((msb, lsb));
 
                 let (value, signal) = match net {

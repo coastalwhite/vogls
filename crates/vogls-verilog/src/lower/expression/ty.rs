@@ -51,7 +51,7 @@ pub fn get_expr_type<'a>(
 
                 use UnaryOperator as O;
                 let ty = VType::net(
-                    op.output_size(child.force_net_width()),
+                    op.output_size(child.bit_length()),
                     child.is_signed() && matches!(op, O::SignPlus | O::SignMinus),
                 );
                 result_stack.push(Some(ty));
@@ -131,7 +131,7 @@ pub fn get_expr_type<'a>(
                         break;
                     };
                     // @TODO: Overflow check.
-                    size += ty.force_net_width().get();
+                    size += ty.bit_length().get();
                 }
                 if child_error {
                     result_stack.push(None);
@@ -204,14 +204,14 @@ pub fn get_expr_type<'a>(
                     result_stack.push(None);
                     continue;
                 };
-                let mut width = ty.force_net_width().get();
+                let mut width = ty.bit_length().get();
                 for _ in 1..exprs.len() {
                     let Some(next_ty) = result_stack.pop().unwrap() else {
                         result_stack.truncate(end_stack_size);
                         result_stack.push(None);
                         continue;
                     };
-                    let next_width = next_ty.force_net_width();
+                    let next_width = next_ty.bit_length();
                     width += next_width.get();
                 }
 

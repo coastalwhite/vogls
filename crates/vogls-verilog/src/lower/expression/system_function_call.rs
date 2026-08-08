@@ -59,7 +59,7 @@ pub fn lower_system_function_call(
         "clog2" => {
             ensure_num_args_equal!(1);
             let (e, e_ty) = arguments[0].ok_or(())?;
-            let size = e_ty.force_net_width();
+            let size = e_ty.bit_length();
 
             // @Performance. Maybe this should get a special instruction
             let e_m_1 = builder.minus_constant(
@@ -71,7 +71,7 @@ pub fn lower_system_function_call(
             let clog2 = builder.revminus_constant(
                 mctx.gl(),
                 lz,
-                Bits::new_u32(e_ty.force_net_width().get()),
+                Bits::new_u32(e_ty.bit_length().get()),
             );
             let is_zero = builder.case_equals_constant(mctx.gl(), e, Bits::new_zeroed(size));
             let contains_spc = builder.reduce_xor(mctx.gl(), e);
@@ -113,8 +113,8 @@ pub fn lower_system_function_call(
             let (r, r_ty) = arguments[0].ok_or(())?;
 
             let ty = coerce_to_max_size_ty(l_ty, r_ty);
-            let l = sign_or_zero_extend(mctx.gl(), builder, l, l_ty, ty.force_net_width());
-            let r = sign_or_zero_extend(mctx.gl(), builder, r, r_ty, ty.force_net_width());
+            let l = sign_or_zero_extend(mctx.gl(), builder, l, l_ty, ty.bit_length());
+            let r = sign_or_zero_extend(mctx.gl(), builder, r, r_ty, ty.bit_length());
             let e = builder.copy_x(mctx.gl(), l, r);
             Ok((e, ty))
         }
@@ -124,8 +124,8 @@ pub fn lower_system_function_call(
             let (r, r_ty) = arguments[0].ok_or(())?;
 
             let ty = coerce_to_max_size_ty(l_ty, r_ty);
-            let l = sign_or_zero_extend(mctx.gl(), builder, l, l_ty, ty.force_net_width());
-            let r = sign_or_zero_extend(mctx.gl(), builder, r, r_ty, ty.force_net_width());
+            let l = sign_or_zero_extend(mctx.gl(), builder, l, l_ty, ty.bit_length());
+            let r = sign_or_zero_extend(mctx.gl(), builder, r, r_ty, ty.bit_length());
             let e = builder.copy_z(mctx.gl(), l, r);
             Ok((e, ty))
         }
@@ -135,8 +135,8 @@ pub fn lower_system_function_call(
             let (r, r_ty) = arguments[0].ok_or(())?;
 
             let ty = coerce_to_max_size_ty(l_ty, r_ty);
-            let l = sign_or_zero_extend(mctx.gl(), builder, l, l_ty, ty.force_net_width());
-            let r = sign_or_zero_extend(mctx.gl(), builder, r, r_ty, ty.force_net_width());
+            let l = sign_or_zero_extend(mctx.gl(), builder, l, l_ty, ty.bit_length());
+            let r = sign_or_zero_extend(mctx.gl(), builder, r, r_ty, ty.bit_length());
             let e = builder.min(mctx.gl(), l, r);
             Ok((e, ty))
         }
@@ -146,8 +146,8 @@ pub fn lower_system_function_call(
             let (r, r_ty) = arguments[0].ok_or(())?;
 
             let ty = coerce_to_max_size_ty(l_ty, r_ty);
-            let l = sign_or_zero_extend(mctx.gl(), builder, l, l_ty, ty.force_net_width());
-            let r = sign_or_zero_extend(mctx.gl(), builder, r, r_ty, ty.force_net_width());
+            let l = sign_or_zero_extend(mctx.gl(), builder, l, l_ty, ty.bit_length());
+            let r = sign_or_zero_extend(mctx.gl(), builder, r, r_ty, ty.bit_length());
             let e = builder.max(mctx.gl(), l, r);
             Ok((e, ty))
         }
@@ -177,7 +177,7 @@ pub fn lower_system_function_call(
             let (truthy, truthy_ty) = arguments[1].ok_or(())?;
             let (falsy, falsy_ty) = arguments[0].ok_or(())?;
 
-            if cond_ty.force_net_width() != SCALAR_VSIZE {
+            if cond_ty.bit_length() != SCALAR_VSIZE {
                 mctx.diagnostics.not_yet_implemented(
                     arenas.get_span(expr),
                     "select condition has to be scalar",
@@ -187,9 +187,9 @@ pub fn lower_system_function_call(
 
             let ty = coerce_to_max_size_ty(truthy_ty, falsy_ty);
             let truthy =
-                sign_or_zero_extend(mctx.gl(), builder, truthy, truthy_ty, ty.force_net_width());
+                sign_or_zero_extend(mctx.gl(), builder, truthy, truthy_ty, ty.bit_length());
             let falsy =
-                sign_or_zero_extend(mctx.gl(), builder, falsy, falsy_ty, ty.force_net_width());
+                sign_or_zero_extend(mctx.gl(), builder, falsy, falsy_ty, ty.bit_length());
             let e = builder.select(mctx.gl(), cond, truthy, falsy);
             Ok((e, ty))
         }
@@ -265,7 +265,7 @@ pub fn get_system_function_call_output_ty(
             let cond_ty = arguments[2].ok_or(())?;
             let l_ty = arguments[1].ok_or(())?;
             let r_ty = arguments[0].ok_or(())?;
-            if cond_ty.force_net_width() != SCALAR_VSIZE {
+            if cond_ty.bit_length() != SCALAR_VSIZE {
                 diagnostics.not_yet_implemented(
                     arenas.get_span(expr),
                     "select condition has to be scalar",
@@ -308,7 +308,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 &mut mctx.diagnostics,
                 expr,
             )?;
-            let variable = builder.constant_u32(mctx.gl(), ty.force_net_width().get());
+            let variable = builder.constant_u32(mctx.gl(), ty.bit_length().get());
             Ok(Some((variable, VType::net(INTEGER_VSIZE, false))))
         }
 
@@ -336,7 +336,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 builder,
                 new_seed,
                 VType::UnsignedNet(VSIZE_32),
-                signal_ty.force_net_width(),
+                signal_ty.bit_length(),
             );
             builder.drive(mctx.gl(), drv_signal, new_seed_trunc);
             Ok(Some((result, VType::SignedNet(VSIZE_32))))
@@ -388,7 +388,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 builder,
                 new_seed,
                 VType::UnsignedNet(VSIZE_32),
-                signal_ty.force_net_width(),
+                signal_ty.bit_length(),
             );
             builder.drive(mctx.gl(), drv_signal, new_seed_trunc);
             Ok(Some((result, VType::SignedNet(VSIZE_32))))

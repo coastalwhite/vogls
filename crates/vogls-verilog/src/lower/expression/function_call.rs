@@ -46,7 +46,7 @@ pub fn lower_function_call<'a>(
             builder,
             arg_variable,
             arg_ty,
-            input_ty.force_net_width(),
+            input_ty.bit_length(),
         );
         builder.drive(mctx.gl(), input_signal, arg_variable);
     }
@@ -143,14 +143,14 @@ pub fn lower_task_enable<'a>(
             scope,
             &mut builder,
             arg,
-            Some(input_ty.force_net_width()),
+            Some(input_ty.bit_length()),
         )?;
         let arg_variable = truncate_or_extend(
             mctx.gl(),
             &mut builder,
             arg_variable,
             arg_ty,
-            input_ty.force_net_width(),
+            input_ty.bit_length(),
         );
         builder.drive(mctx.gl(), signal, arg_variable);
     }

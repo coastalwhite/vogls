@@ -174,8 +174,8 @@ impl<'a> ElaboratedDesign<'a> {
                                         if s.ty.is_signed() {
                                             f.write_str(" signed")?;
                                         }
-                                        if s.ty.force_net_width().get() > 1 {
-                                            write!(f, "[{}]", s.ty.force_net_width().get())?;
+                                        if s.ty.bit_length().get() > 1 {
+                                            write!(f, "[{}]", s.ty.bit_length().get())?;
                                         }
                                         Ok(())
                                     }

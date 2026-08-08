@@ -590,7 +590,7 @@ pub fn lower_specify<'a>(
                 let output = output_net.net.blocking_drive_signal();
 
                 if matches!(variant, PathDeclarationVariant::Full)
-                    && input_net.ty.force_net_width() != output_net.ty.force_net_width()
+                    && input_net.ty.bit_length() != output_net.ty.bit_length()
                 {
                     mctx.diagnostics.not_yet_implemented(
                         ctx.arenas.get_span(item),
@@ -599,7 +599,7 @@ pub fn lower_specify<'a>(
                     return Err(());
                 }
                 if matches!(variant, PathDeclarationVariant::Parallel)
-                    && input_net.ty.force_net_width().get() != 1
+                    && input_net.ty.bit_length().get() != 1
                 {
                     mctx.diagnostics.not_yet_implemented(
                         ctx.arenas.get_span(item),
@@ -612,7 +612,7 @@ pub fn lower_specify<'a>(
                         .not_yet_implemented(ctx.arenas.get_span(item), "input or output is array");
                     return Err(());
                 }
-                if input_net.ty.force_net_width() != SCALAR_VSIZE {
+                if input_net.ty.bit_length() != SCALAR_VSIZE {
                     mctx.diagnostics.not_yet_implemented(
                         ctx.arenas.get_span(item),
                         "specify for non-scalar net",

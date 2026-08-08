@@ -1,3 +1,4 @@
+use std::cmp;
 use std::num::NonZeroU32;
 
 use vogls_frontend::symbol_table::SymbolId;
@@ -89,7 +90,7 @@ pub fn lower_expr<'a>(
 
                 if let Some(context_width) = item.context_width
                     && !op.is_self_determined()
-                    && context_width > ty.force_net_width()
+                    && context_width > ty.bit_length()
                 {
                     child = zero_or_sign_extend(mctx.gl(), builder, child, ty, context_width);
                     ty = ty.zero_or_sign_extend(context_width);
@@ -115,7 +116,7 @@ pub fn lower_expr<'a>(
                         builder.revminus_constant(
                             mctx.gl(),
                             child,
-                            Bits::new_zeroed(ty.force_net_width()),
+                            Bits::new_zeroed(ty.bit_length()),
                         ),
                         ty,
                     ),
@@ -151,7 +152,7 @@ pub fn lower_expr<'a>(
                     };
 
                     let mut child_context_width =
-                        op.context_width(l_ty.force_net_width(), r_ty.force_net_width());
+                        op.context_width(l_ty.bit_length(), r_ty.bit_length());
                     let (l_is_self_det, r_is_self_det) = op.is_self_determined();
                     if let Some(context_width) = item.context_width {
                         child_context_width = child_context_width.max(context_width);
@@ -179,11 +180,11 @@ pub fn lower_expr<'a>(
 
                 let (l_is_self_det, r_is_self_det) = op.is_self_determined();
                 if let Some(context_width) = item.context_width {
-                    if !l_is_self_det && context_width > l_ty.force_net_width() {
+                    if !l_is_self_det && context_width > l_ty.bit_length() {
                         l = zero_or_sign_extend(mctx.gl(), builder, l, l_ty, context_width);
                         l_ty = l_ty.zero_or_sign_extend(context_width);
                     }
-                    if !r_is_self_det && context_width > r_ty.force_net_width() {
+                    if !r_is_self_det && context_width > r_ty.bit_length() {
                         r = zero_or_sign_extend(mctx.gl(), builder, r, r_ty, context_width);
                         r_ty = r_ty.zero_or_sign_extend(context_width);
                     }
@@ -265,14 +266,14 @@ pub fn lower_expr<'a>(
                     result_stack.push(None);
                     continue;
                 };
-                let mut width = ty.force_net_width().get();
+                let mut width = ty.bit_length().get();
                 for _ in 1..num_exprs {
                     let Some((next, next_ty)) = result_stack.pop().unwrap() else {
                         result_stack.truncate(end_stack_size);
                         result_stack.push(None);
                         continue;
                     };
-                    let next_width = next_ty.force_net_width();
+                    let next_width = next_ty.bit_length();
                     output = builder.concat(&mut mctx.gl, next, output);
                     width += next_width.get();
                 }
@@ -344,14 +345,14 @@ pub fn lower_expr<'a>(
                     result_stack.push(None);
                     continue;
                 };
-                let mut width = ty.force_net_width().get();
+                let mut width = ty.bit_length().get();
                 for _ in 1..exprs.len() {
                     let Some((next, next_ty)) = result_stack.pop().unwrap() else {
                         result_stack.truncate(end_stack_size);
                         result_stack.push(None);
                         continue;
                     };
-                    let next_width = next_ty.force_net_width();
+                    let next_width = next_ty.bit_length();
                     output = builder.concat(mctx.gl(), next, output);
                     width += next_width.get();
                 }
@@ -403,7 +404,7 @@ pub fn lower_expr<'a>(
                     };
 
                     let mut child_context_width =
-                        VectorSize::max(l_ty.force_net_width(), r_ty.force_net_width());
+                        VectorSize::max(l_ty.bit_length(), r_ty.bit_length());
                     if let Some(context_width) = item.context_width {
                         child_context_width = child_context_width.max(context_width);
                     }
@@ -429,22 +430,22 @@ pub fn lower_expr<'a>(
                     continue;
                 };
 
-                let size = t_ty.force_net_width().max(f_ty.force_net_width());
-                if size > t_ty.force_net_width() {
+                let size = t_ty.bit_length().max(f_ty.bit_length());
+                if size > t_ty.bit_length() {
                     t = zero_or_sign_extend(mctx.gl(), builder, t, t_ty, size);
                     t_ty = t_ty.zero_or_sign_extend(size);
                 }
-                if size > f_ty.force_net_width() {
+                if size > f_ty.bit_length() {
                     f = zero_or_sign_extend(mctx.gl(), builder, f, f_ty, size);
                     f_ty = f_ty.zero_or_sign_extend(size);
                 }
 
                 if let Some(context_width) = item.context_width {
-                    if context_width > t_ty.force_net_width() {
+                    if context_width > t_ty.bit_length() {
                         t = zero_or_sign_extend(mctx.gl(), builder, t, t_ty, context_width);
                         t_ty = t_ty.zero_or_sign_extend(context_width);
                     }
-                    if context_width > f_ty.force_net_width() {
+                    if context_width > f_ty.bit_length() {
                         f = zero_or_sign_extend(mctx.gl(), builder, f, f_ty, context_width);
                     }
                 }
@@ -684,7 +685,7 @@ pub fn lower_expr<'a>(
                         ctx,
                         mctx,
                     },
-                    ty.force_net_width(),
+                    ty.bit_length(),
                     dims,
                     transform,
                     (result_stack.len() - exprs.len()..result_stack.len()).rev(),
@@ -761,7 +762,7 @@ pub fn lower_expr<'a>(
                         exprs
                             .iter()
                             .zip(&fn_symbol.inputs)
-                            .map(|(e, (_, ty))| StackItem::new(e, Some(ty.force_net_width()))),
+                            .map(|(e, (_, ty))| StackItem::new(e, Some(ty.bit_length()))),
                     );
                     continue;
                 }
@@ -904,8 +905,8 @@ pub fn coerce_bin_arithmetic(
 
     let ty = coerce_to_max_size_ty(l_ty, r_ty);
 
-    let l = sign_or_zero_extend(gl, builder, l, l_ty, ty.force_net_width());
-    let r = sign_or_zero_extend(gl, builder, r, r_ty, ty.force_net_width());
+    let l = sign_or_zero_extend(gl, builder, l, l_ty, ty.bit_length());
+    let r = sign_or_zero_extend(gl, builder, r, r_ty, ty.bit_length());
 
     (l, ty, r, ty)
 }
@@ -917,14 +918,10 @@ pub fn coerce_to_max_size_ty(l_ty: VType, r_ty: VType) -> VType {
         return l_ty;
     }
 
-    let l_size = l_ty.net_size();
-    let r_size = r_ty.net_size();
+    let l_size = l_ty.bit_length();
+    let r_size = r_ty.bit_length();
 
-    let size = match (l_size, r_size) {
-        (Some(l), Some(r)) => l.max(r),
-        (Some(s), _) | (_, Some(s)) => s,
-        (None, None) => unreachable!(),
-    };
+    let size = cmp::max(l_size, r_size);
 
     VType::net(size, l_ty.is_signed() & r_ty.is_signed())
 }
@@ -1120,7 +1117,7 @@ pub fn sign_or_zero_extend(
     from: VType,
     to: VectorSize,
 ) -> VariableKey {
-    let from_width = from.force_net_width();
+    let from_width = from.bit_length();
     if from_width == to {
         src
     } else if from_width > to {
@@ -1139,7 +1136,7 @@ pub fn truncate_or_extend(
     from: VType,
     to: VectorSize,
 ) -> VariableKey {
-    let from_width = from.force_net_width();
+    let from_width = from.bit_length();
     if from_width == to {
         src
     } else if from_width > to {
@@ -1158,8 +1155,8 @@ pub fn zero_or_sign_extend(
     from: VType,
     to: VectorSize,
 ) -> VariableKey {
-    let from_width = from.force_net_width();
-    assert!(from.force_net_width() <= to);
+    let from_width = from.bit_length();
+    assert!(from.bit_length() <= to);
     if from_width == to {
         src
     } else if from.is_signed() {

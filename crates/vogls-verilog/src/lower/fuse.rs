@@ -68,7 +68,7 @@ pub fn try_lower_fuse_driver_ident<'a>(
 
     let Ok(address) = lower_addressing(
         &mut actx,
-        net.ty.force_net_width(),
+        net.ty.bit_length(),
         &net.dims,
         net.transform,
         exprs.iter().map(|e| e.into_constant()),

@@ -119,7 +119,7 @@ pub fn lower_case_statement<'a>(
                     scope,
                     &mut builder,
                     fst,
-                    Some(expr_var_ty.force_net_width()),
+                    Some(expr_var_ty.bit_length()),
                 )?;
                 let (expr_var, _, v, _) =
                     coerce_bin_arithmetic(mctx.gl(), &mut builder, expr_var, expr_var_ty, v, v_ty);
@@ -140,7 +140,7 @@ pub fn lower_case_statement<'a>(
                         scope,
                         &mut builder,
                         e,
-                        Some(expr_var_ty.force_net_width()),
+                        Some(expr_var_ty.bit_length()),
                     )?;
                     let expr_var_adj = match variant {
                         CaseStatementVariant::Case => expr_var,

@@ -9,17 +9,10 @@ pub enum VType {
 impl VType {
     pub const SCALAR_NET: Self = Self::UnsignedNet(SCALAR_VSIZE);
 
-    pub const fn net_size(self) -> Option<VectorSize> {
+    pub const fn bit_length(&self) -> VectorSize {
         match self {
-            Self::SignedNet(n) => Some(n),
-            Self::UnsignedNet(n) => Some(n),
-        }
-    }
-
-    pub fn force_net_width(&self) -> VectorSize {
-        match self {
-            VType::SignedNet(size) => *size,
-            VType::UnsignedNet(size) => *size,
+            Self::SignedNet(size) => *size,
+            Self::UnsignedNet(size) => *size,
         }
     }
 
@@ -56,11 +49,11 @@ impl VType {
         Self::net(width, self.is_signed())
     }
     pub fn zero_or_sign_extend(self, width: VectorSize) -> VType {
-        assert!(width >= self.force_net_width());
+        assert!(width >= self.bit_length());
         self.truncate_or_extend(width)
     }
     pub fn truncate(self, width: VectorSize) -> VType {
-        assert!(width <= self.force_net_width());
+        assert!(width <= self.bit_length());
         self.truncate_or_extend(width)
     }
 }

@@ -330,7 +330,7 @@ fn new_net(
     name: AstItem<Identifier>,
     initialize: Option<VValue>,
 ) -> Net {
-    let mut size = ty.force_net_width();
+    let mut size = ty.bit_length();
     for dim in dims {
         size = size.checked_mul(*dim).unwrap();
     }

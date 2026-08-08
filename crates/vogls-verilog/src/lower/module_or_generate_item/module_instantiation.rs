@@ -164,8 +164,8 @@ fn assign_port<'a>(
         &mut mctx.diagnostics,
         value,
     )?
-    .force_net_width();
-    let assigned_bit_length = port_net.ty.force_net_width();
+    .bit_length();
+    let assigned_bit_length = port_net.ty.bit_length();
 
     let module_instances = ctx.table[modules_sid].children();
 
@@ -218,7 +218,7 @@ fn assign_input_port<'a>(
             let drivee = port.net.blocking_drive_signal();
 
             let mut offset = 0;
-            let drivee_width = port.ty.force_net_width();
+            let drivee_width = port.ty.bit_length();
             for driver in &mctx.fuse_scratch {
                 let driver_width = driver.size(&mctx.gl.signals);
 
@@ -248,7 +248,7 @@ fn assign_input_port<'a>(
     expression::get_used_signals(ctx, mctx, scope, &mut sensitivity_list, expr)?;
     let sensitivity_list = sensitivity_list.items;
 
-    let port_bit_length = port.ty.force_net_width();
+    let port_bit_length = port.ty.bit_length();
 
     let (process, mut bb_builder) =
         ProcessBuilder::new(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
@@ -304,14 +304,14 @@ fn assign_port_output<'a>(
 
         if let Ok(address) = lower_addressing(
                 &mut actx,
-                to_signal.ty.force_net_width(),
+                to_signal.ty.bit_length(),
                 &to_signal.dims,
                 to_signal.transform,
                 exprs.iter().map(|e| e.into_constant()),
                 range,
             ) && let Some(offset) = address.signal_offset_as_u32()
             // Don't fuse if the widths don't match.
-            && expr_slice.map_or(address.output_width, |s| s.width()) == output.ty.force_net_width()
+            && expr_slice.map_or(address.output_width, |s| s.width()) == output.ty.bit_length()
         {
             mctx.connections.push(InputEdge {
                 driver: Driver::Signal(driver, None),
@@ -363,7 +363,7 @@ fn assign_port_output<'a>(
                         &mut mctx.diagnostics,
                         e,
                     )?;
-                    let e_width = e_ty.force_net_width();
+                    let e_width = e_ty.bit_length();
                     let subvar = bb_builder.slice_constant(mctx.gl(), var, shift, e_width);
                     driving.push((subvar, e_ty, e));
                     shift += e_width.get();
@@ -399,7 +399,7 @@ fn assign_port_output<'a>(
                     is_unsigned: _,
                 } = lower_addressing(
                     &mut actx,
-                    s.ty.force_net_width(),
+                    s.ty.bit_length(),
                     &s.dims,
                     s.transform,
                     exprs.iter(),

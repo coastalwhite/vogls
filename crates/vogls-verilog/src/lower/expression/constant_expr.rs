@@ -57,7 +57,7 @@ pub fn eval_constant_expr<'a>(
 
                 if let Some(context_width) = item.context_width
                     && !op.is_self_determined()
-                    && context_width > child.ty().force_net_width()
+                    && context_width > child.ty().bit_length()
                 {
                     child = child.zero_or_sign_extend(context_width);
                 }
@@ -91,7 +91,7 @@ pub fn eval_constant_expr<'a>(
                     };
 
                     let mut child_context_width =
-                        op.context_width(l_ty.force_net_width(), r_ty.force_net_width());
+                        op.context_width(l_ty.bit_length(), r_ty.bit_length());
                     let (l_is_self_det, r_is_self_det) = op.is_self_determined();
                     if let Some(context_width) = item.context_width {
                         child_context_width = child_context_width.max(context_width);
@@ -119,10 +119,10 @@ pub fn eval_constant_expr<'a>(
 
                 let (l_is_self_det, r_is_self_det) = op.is_self_determined();
                 if let Some(context_width) = item.context_width {
-                    if !l_is_self_det && context_width > lhs.ty().force_net_width() {
+                    if !l_is_self_det && context_width > lhs.ty().bit_length() {
                         lhs = lhs.zero_or_sign_extend(context_width);
                     }
-                    if !r_is_self_det && context_width > rhs.ty().force_net_width() {
+                    if !r_is_self_det && context_width > rhs.ty().bit_length() {
                         rhs = rhs.zero_or_sign_extend(context_width);
                     }
                 }
@@ -305,7 +305,7 @@ pub fn eval_constant_expr<'a>(
 
                 let result = lower_addressing(
                     &mut actx,
-                    value.ty().force_net_width(),
+                    value.ty().bit_length(),
                     &[],
                     VectorTransform::default(),
                     exprs,
@@ -362,7 +362,7 @@ pub fn eval_constant_expr<'a>(
                         continue;
                     };
                     let mut child_context_width =
-                        l_ty.force_net_width().max(r_ty.force_net_width());
+                        l_ty.bit_length().max(r_ty.bit_length());
                     if let Some(context_width) = item.context_width {
                         child_context_width = child_context_width.max(context_width);
                     }
@@ -493,7 +493,7 @@ pub fn eval_constant_expr<'a>(
                             .iter()
                             .zip(&fn_symbol.inputs)
                             .map(|(expr, (_, ty))| {
-                                StackItem::new(expr, Some(ty.force_net_width()))
+                                StackItem::new(expr, Some(ty.bit_length()))
                             }),
                     );
                     continue;
@@ -551,7 +551,7 @@ pub fn eval_constant_expr<'a>(
                     };
                     esignals.insert(
                         *sig,
-                        value.truncate_or_extend(ty.force_net_width()).into_bits(),
+                        value.truncate_or_extend(ty.bit_length()).into_bits(),
                     );
                 }
                 if inputs_error {
@@ -561,7 +561,7 @@ pub fn eval_constant_expr<'a>(
                 }
                 esignals.insert(
                     fn_symbol.output,
-                    Bits::new_unknown(fn_symbol.output_ty.force_net_width()),
+                    Bits::new_unknown(fn_symbol.output_ty.bit_length()),
                 );
 
                 vogls_ir::evaluation::evaluate(gl, lowered.entry, &mut esignals, &mut evars);

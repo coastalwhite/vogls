@@ -60,7 +60,7 @@ impl VValue {
                 (V::SignedNet(l), V::SignedNet(r))
             }
             (l @ V::SignedNet(_), r @ V::SignedNet(_)) => {
-                let max_size = l.ty().force_net_width().max(r.ty().force_net_width());
+                let max_size = l.ty().bit_length().max(r.ty().bit_length());
 
                 (l.sign_extend(max_size), r.sign_extend(max_size))
             }
@@ -89,7 +89,7 @@ impl VValue {
                 l @ (V::UnsignedNet(_) | V::SignedNet(_)),
                 r @ (V::UnsignedNet(_) | V::SignedNet(_)),
             ) => {
-                let max_size = l.ty().force_net_width().max(r.ty().force_net_width());
+                let max_size = l.ty().bit_length().max(r.ty().bit_length());
 
                 (l.sign_extend(max_size), r.sign_extend(max_size))
             }
@@ -254,7 +254,7 @@ impl VValue {
     }
 
     fn sign_extend(self, extended_size: VectorSize) -> VValue {
-        if self.ty().force_net_width() == extended_size {
+        if self.ty().bit_length() == extended_size {
             return self;
         }
 

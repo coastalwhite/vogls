@@ -80,7 +80,7 @@ pub fn lower_system_task_enable<'a>(
                 rhs,
             )?;
 
-            let context_width = l_ty.force_net_width().max(r_ty.force_net_width());
+            let context_width = l_ty.bit_length().max(r_ty.bit_length());
 
             let (lhs, lhs_ty) =
                 lower_expr(ctx, mctx, scope, &mut builder, lhs, Some(context_width))?;
@@ -233,7 +233,7 @@ pub fn lower_system_task_enable<'a>(
                         ));
                         return Ok(builder);
                     };
-                    if v.clone().into_bits().count_zeros() != v.ty().force_net_width().get() {
+                    if v.clone().into_bits().count_zeros() != v.ty().bit_length().get() {
                         mctx.diagnostics.warnings.push((
                             ctx.arenas.get_span(system_task_enable),
                             "ignored: not yet supported path".to_string(),
@@ -285,7 +285,7 @@ pub fn lower_system_task_enable<'a>(
                 );
             }
 
-            let stride = net.ty.force_net_width();
+            let stride = net.ty.bit_length();
             let offset = 0;
             let limit = net.dims[0].get();
             let signal = net.net.blocking_drive_signal();

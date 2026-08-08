@@ -564,9 +564,9 @@ fn extend_generate_case_sids<'a, 'b>(
                         scope,
                         diagnostics,
                         expr,
-                        Some(value.ty().force_net_width()),
+                        Some(value.ty().bit_length()),
                     )?;
-                    let expr_value = expr_value.truncate_or_extend(value.ty().force_net_width());
+                    let expr_value = expr_value.truncate_or_extend(value.ty().bit_length());
                     if value.clone().case_equal(expr_value) {
                         is_selected = true;
                     }
@@ -1917,7 +1917,7 @@ pub fn finalize_symbol<'a>(
                             scope,
                             diagnostics,
                             *expr,
-                            Some(ty.force_net_width()),
+                            Some(ty.bit_length()),
                         )?
                         .coerce(&ty),
                     ),
@@ -2009,7 +2009,7 @@ pub fn finalize_symbol<'a>(
                             scope,
                             diagnostics,
                             *expr,
-                            Some(ty.force_net_width()),
+                            Some(ty.bit_length()),
                         )?
                         .coerce(&ty),
                     ),

@@ -97,7 +97,7 @@ fn assign_net<'a>(
     get_used_signals(ctx, mctx, scope, &mut sensitivity_list, rvalue)?;
     let sensitivity_list = sensitivity_list.items;
 
-    let net_bit_length = net_symbol.ty.force_net_width();
+    let net_bit_length = net_symbol.ty.bit_length();
 
     let (process, mut bb_builder) = ProcessBuilder::new(
         &mut mctx.gl,

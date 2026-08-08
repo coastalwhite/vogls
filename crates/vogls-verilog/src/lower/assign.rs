@@ -45,7 +45,7 @@ pub fn assign_variable_lvalue<'a>(
     let mut total_width = 0u32;
     for lvf in ast_lvalue.0.iter() {
         let ty = variable_lvalue_flat_ty(ctx, mctx, scope, lvf)?;
-        total_width += ty.force_net_width().get();
+        total_width += ty.bit_length().get();
     }
     let variable = truncate_or_extend(
         mctx.gl(),
@@ -58,7 +58,7 @@ pub fn assign_variable_lvalue<'a>(
     let mut offset = 0u32;
     for lvf in ast_lvalue.0.iter().rev() {
         let ty = variable_lvalue_flat_ty(ctx, mctx, scope, lvf)?;
-        let width = ty.force_net_width();
+        let width = ty.bit_length();
         let variable = builder.slice_constant(mctx.gl(), variable, offset, width);
         assign_variable_lvalue_flat(ctx, mctx, scope, builder, lvf, variable, ty, nba)?;
         offset += width.get();
@@ -76,7 +76,7 @@ pub fn variable_lvalue_size<'a>(
     let mut size = 0;
     for lvalue_flat in ast_lvalue.0.iter() {
         size += variable_lvalue_flat_ty(ctx, mctx, scope, lvalue_flat)?
-            .force_net_width()
+            .bit_length()
             .get();
     }
     Ok(VectorSize::new(size).unwrap())
@@ -119,7 +119,7 @@ pub fn variable_lvalue_flat_ty<'a>(
     });
     let address = lower_addressing(
         &mut actx,
-        ty.force_net_width(),
+        ty.bit_length(),
         array_dims,
         transform,
         std::iter::repeat_n((), exprs.len()),
@@ -174,7 +174,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         is_unsigned: _,
     } = lower_addressing(
         &mut actx,
-        ty.force_net_width(),
+        ty.bit_length(),
         array_dims,
         transform,
         exprs.iter(),
@@ -235,7 +235,7 @@ pub fn assign_net_lvalue<'a>(
     let mut total_width = 0u32;
     for lvf in lvalue.0.iter() {
         let ty = net_lvalue_flat_ty(ctx, mctx, scope, lvf)?;
-        total_width += ty.force_net_width().get();
+        total_width += ty.bit_length().get();
     }
     let variable = truncate_or_extend(
         mctx.gl(),
@@ -248,7 +248,7 @@ pub fn assign_net_lvalue<'a>(
     let mut offset = 0u32;
     for lvf in lvalue.0.iter().rev() {
         let ty = net_lvalue_flat_ty(ctx, mctx, scope, lvf)?;
-        let width = ty.force_net_width();
+        let width = ty.bit_length();
         let variable = builder.slice_constant(mctx.gl(), variable, offset, width);
         assign_net_lvalue_flat(ctx, mctx, scope, builder, lvf, variable, ty)?;
         offset += width.get();
@@ -266,7 +266,7 @@ pub fn net_lvalue_size<'a>(
     let mut size = 0;
     for lvalue_flat in ast_lvalue.0.iter() {
         size += net_lvalue_flat_ty(ctx, mctx, scope, lvalue_flat)?
-            .force_net_width()
+            .bit_length()
             .get();
     }
     Ok(VectorSize::new(size).unwrap())
@@ -317,7 +317,7 @@ pub fn net_lvalue_flat_ty<'a>(
         is_unsigned,
     } = lower_addressing(
         &mut actx,
-        ty.force_net_width(),
+        ty.bit_length(),
         dims,
         transform,
         std::iter::repeat_n((), constant_exprs.len()),
@@ -371,7 +371,7 @@ fn assign_net_lvalue_flat<'a>(
         is_unsigned: _,
     } = lower_addressing(
         &mut actx,
-        s.ty.force_net_width(),
+        s.ty.bit_length(),
         &s.dims,
         s.transform,
         constant_exprs.iter(),
@@ -418,10 +418,10 @@ pub fn net_lvalue_bit_length<'a>(
         .0
         .first()
         .expect("Concatenation should have at least one value");
-    let mut size = net_lvalue_flat_ty(ctx, mctx, scope, lvalue_flat)?.force_net_width();
+    let mut size = net_lvalue_flat_ty(ctx, mctx, scope, lvalue_flat)?.bit_length();
 
     for lvalue_flat in lvalue.0.iter().skip(1) {
-        let lvalue_size = net_lvalue_flat_ty(ctx, mctx, scope, lvalue_flat)?.force_net_width();
+        let lvalue_size = net_lvalue_flat_ty(ctx, mctx, scope, lvalue_flat)?.bit_length();
         size = size.checked_add(lvalue_size.get()).ok_or_else(|| {
             mctx.diagnostics
                 .net_width_overflow(ctx.arenas.get_span(output_terminal));

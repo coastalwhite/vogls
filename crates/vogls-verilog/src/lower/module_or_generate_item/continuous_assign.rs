@@ -103,7 +103,7 @@ fn try_fuse_assign<'a>(
 
     let Ok(address) = lower_addressing(
         &mut actx,
-        to_net.ty.force_net_width(),
+        to_net.ty.bit_length(),
         &to_net.dims,
         to_net.transform,
         lvalue.constant_exprs.iter(),

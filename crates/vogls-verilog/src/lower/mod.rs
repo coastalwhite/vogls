@@ -81,7 +81,7 @@ fn extend_symbol_table_to_vcd_scope(
 
                 // @TODO: Property implement this.
                 let lsb = 0;
-                let msb = i.ty.force_net_width().get() - 1;
+                let msb = i.ty.bit_length().get() - 1;
                 let msb_lsb = (msb > 0).then_some((msb, lsb));
 
                 let signal = net.probe_signal();
@@ -537,7 +537,7 @@ fn assign_task_output<'a>(
                     is_unsigned: _,
                 } = lower_addressing(
                     &mut actx,
-                    s.ty.force_net_width(),
+                    s.ty.bit_length(),
                     &s.dims,
                     s.transform,
                     exprs.iter(),
