@@ -343,6 +343,13 @@ pub fn lower_write_arguments<'a>(
                 let mut remaining = &str_literal[at + next + 1..];
                 at += next + 1;
 
+                if remaining.starts_with(&['m', 'M']) {
+                    at += 1;
+                    let scope_name = ctx.table[scope].name();
+                    format_string_content.push_str(&ctx.arenas.ident_table[scope_name]);
+                    continue;
+                }
+
                 if remaining.starts_with('%') {
                     format_string_content.push('%');
                     at += 1;
@@ -388,20 +395,20 @@ pub fn lower_write_arguments<'a>(
                             b'c' | b'C' |
                             b'l' | b'L' |
                             b'v' | b'V' |
-                            b'm' | b'M' |
                             b's' | b'S' |
                             b't' | b'T' |
                             b'u' | b'U' |
                             b'z' | b'Z'
                 ));
 
-                // @TODO: Make this actually impact formatting.
                 let base = match b {
                     b'h' | b'H' => Base::Hexadecimal,
                     b'x' | b'X' => Base::Hexadecimal, // @NOTE: Not in spec: but used by Icarus Verilog
                     b'd' | b'D' => Base::Decimal,
                     b'o' | b'O' => Base::Octal,
                     b'b' | b'B' => Base::Binary,
+                    b'c' | b'C' => Base::Ascii,
+                    b's' | b'S' => Base::Ascii,
                     b't' | b'T' => {
                         mctx.diagnostics.warn_not_yet_implemented(
                             ctx.arenas.get_span(expr),
@@ -409,8 +416,7 @@ pub fn lower_write_arguments<'a>(
                         );
                         Base::Decimal
                     }
-                    b'c' | b'C' | b'l' | b'L' | b'v' | b'V' | b'm' | b'M' | b's' | b'S' | b'u'
-                    | b'U' | b'z' | b'Z' => {
+                    b'l' | b'L' | b'v' | b'V' | b'u' | b'U' | b'z' | b'Z' => {
                         mctx.diagnostics.not_yet_implemented(
                             ctx.arenas.get_span(expr),
                             "format specifier not yet supported",

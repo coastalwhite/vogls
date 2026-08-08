@@ -850,6 +850,7 @@ pub fn lower_expr<'a>(
                     .iter()
                     .copied()
                     .chain(std::iter::once(b'\0'))
+                    .rev()
                     .collect::<Box<[u8]>>();
                 let value =
                     Bits::load_from_slice(&s, VectorSize::new((s.len() * 8) as u32).unwrap());

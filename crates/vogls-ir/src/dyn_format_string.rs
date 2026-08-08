@@ -26,6 +26,7 @@ pub enum Base {
     Octal,
     Hexadecimal,
     Decimal,
+    Ascii,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -112,6 +113,33 @@ pub fn format_bits(
         Base::Octal => BitsFormatBase::Octal,
         Base::Hexadecimal => BitsFormatBase::LowerHex,
         Base::Decimal => BitsFormatBase::Decimal,
+        Base::Ascii => {
+            #[inline(always)]
+            fn to_hex(b: u8) -> u8 {
+                static TABLE: [u8; 16] = [
+                    b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'A', b'B', b'C',
+                    b'D', b'E', b'F',
+                ];
+                TABLE[b as usize]
+            }
+            for b in bits.be_bytes_iter() {
+                match b {
+                    None => f.write_all(b" ")?,
+                    Some(b) => {
+                        if b == 0 {
+                            break;
+                        }
+
+                        if b.is_ascii() {
+                            write!(f, "{}", char::from(b))?;
+                        } else {
+                            f.write_all(&[b'\\', b'x', to_hex(b >> 4), to_hex(b & 0xF)])?;
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
     };
     let mut options = BitsFormatOptions {
         base,

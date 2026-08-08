@@ -1925,9 +1925,9 @@ fn lower_instruction(
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T2);
         }
         I::Intrinsic(dst, op, items) if matches!(op.as_ref(), IntrinsicOp::BlackBox) => {
+            let size = gl.vars.size(*dst);
             let dslot = assignment[dst];
             let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0, true);
-
             let rs = to_reg(
                 bce,
                 items[0],
@@ -1937,11 +1937,12 @@ fn lower_instruction(
                 T2,
                 false,
             );
-            if dst.mode().is_four_value() {
-                bce.fv_copy(rd, rs);
-            } else {
-                bce.copy(rd, rs);
-            }
+            match (dst.mode(), SixBitSize::from_vector_size(size)) {
+                (LogicMode::TwoValue, Some(_)) => bce.copy(rd, rs),
+                (LogicMode::FourValue, Some(_)) => bce.fv_copy(rd, rs),
+                (LogicMode::TwoValue, None) => bce.heap_tv_copy(rd, rs, size),
+                (LogicMode::FourValue, None) => bce.heap_fv_copy(rd, rs, size),
+            };
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T2);
         }
         I::Intrinsic(dst, op, items) => {

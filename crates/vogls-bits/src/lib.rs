@@ -1815,6 +1815,16 @@ impl Bits {
         }
         middle
     }
+
+    pub fn be_bytes_iter(&self) -> impl ExactSizeIterator<Item = Option<u8>> {
+        // @Performance
+        let size = self.size().get();
+        (0..size.div_ceil(8)).map(move |i| {
+            self.slicez(size - (i + 1) * 8, VectorSize::new(8).unwrap())
+                .as_u64()
+                .map(|v| v as u8)
+        })
+    }
 }
 
 macro_rules! impl_shift {
