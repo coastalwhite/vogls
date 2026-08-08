@@ -7,7 +7,6 @@ use super::VType;
 pub enum VValue {
     SignedNet(Bits),
     UnsignedNet(Bits),
-    String(Box<str>),
 }
 
 impl VValue {
@@ -16,14 +15,12 @@ impl VValue {
         match ty {
             VType::SignedNet(n) => Self::SignedNet(Bits::new_zeroed(n)),
             VType::UnsignedNet(n) => Self::UnsignedNet(Bits::new_zeroed(n)),
-            VType::String(n) => Self::String(std::iter::repeat_n('\0', n as usize).collect()),
         }
     }
 
     pub fn as_integer(&self) -> Option<i64> {
         match self {
             Self::SignedNet(bits) | Self::UnsignedNet(bits) => bits.as_i64(),
-            Self::String(_) => None,
         }
     }
 
@@ -31,7 +28,6 @@ impl VValue {
         match self {
             VValue::SignedNet(bits) => VType::SignedNet(bits.size()),
             VValue::UnsignedNet(bits) => VType::UnsignedNet(bits.size()),
-            VValue::String(s) => VType::String(s.len() as u32),
         }
     }
 
@@ -49,8 +45,6 @@ impl VValue {
             (V::UnsignedNet(v), T::UnsignedNet(size)) => {
                 V::UnsignedNet(v.truncate_or_zero_extend(*size))
             }
-
-            (V::String(_), _) | (_, T::String(_)) => todo!(),
         }
     }
 
@@ -99,7 +93,6 @@ impl VValue {
 
                 (l.sign_extend(max_size), r.sign_extend(max_size))
             }
-            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
 
@@ -110,7 +103,6 @@ impl VValue {
             (V::SignedNet(l) | V::UnsignedNet(l), V::SignedNet(r) | V::UnsignedNet(r)) => {
                 l.logical_equal(&r)
             }
-            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
     pub fn logical_not_equal(self, rhs: VValue) -> FvLogicValue {
@@ -122,7 +114,6 @@ impl VValue {
         let (slf, rhs) = Self::coerce_max_size(self, rhs);
         match (slf, rhs) {
             (V::SignedNet(l) | V::UnsignedNet(l), V::SignedNet(r) | V::UnsignedNet(r)) => l == r,
-            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
     pub fn case_not_equal(self, rhs: VValue) -> bool {
@@ -140,7 +131,6 @@ impl VValue {
                     Some(r) => Bits::logical_shift_left(lb, r),
                 };
             }
-            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
         lhs
     }
@@ -155,7 +145,6 @@ impl VValue {
                     Some(r) => Bits::logical_shift_right(lb, r),
                 };
             }
-            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
         lhs
     }
@@ -180,7 +169,6 @@ impl VValue {
         match self {
             V::SignedNet(v) => V::SignedNet(v.bitwise_negate()),
             V::UnsignedNet(v) => V::UnsignedNet(v.bitwise_negate()),
-            V::String(_) => todo!(),
         }
     }
 
@@ -189,7 +177,6 @@ impl VValue {
         match self {
             V::SignedNet(v) => V::SignedNet(v.sign_invert()),
             V::UnsignedNet(v) => V::UnsignedNet(v.sign_invert()),
-            V::String(_) => todo!(),
         }
     }
 
@@ -200,7 +187,6 @@ impl VValue {
             (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
                 *lb = Bits::bitwise_or(lb, &r).bitwise_negate();
             }
-            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
         lhs
     }
@@ -217,7 +203,6 @@ impl VValue {
             (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(rb) | V::SignedNet(rb)) => {
                 Bits::is_signed_leq(&lb, &rb)
             }
-            (V::String(_), _) | (_, V::String(_)) => todo!(),
         }
     }
     pub fn greater_than(lhs: VValue, rhs: VValue) -> FvLogicValue {
@@ -236,7 +221,6 @@ impl VValue {
         match self {
             V::SignedNet(v) => v.not_eq_zero(),
             V::UnsignedNet(v) => v.not_eq_zero(),
-            V::String(v) => v.as_bytes().iter().any(|b| *b != 0),
         }
     }
 
@@ -251,9 +235,6 @@ impl VValue {
         match self {
             VValue::SignedNet(bits) => bits,
             VValue::UnsignedNet(bits) => bits,
-            VValue::String(v) => {
-                Bits::load_from_slice(v.as_bytes(), VectorSize::new((v.len() * 8) as u32).unwrap())
-            }
         }
     }
 
@@ -281,7 +262,6 @@ impl VValue {
         match self {
             V::SignedNet(bits) => Self::SignedNet(bits.sign_extend(extended_size)),
             V::UnsignedNet(bits) => Self::UnsignedNet(bits.sign_extend(extended_size)),
-            V::String(_) => todo!(),
         }
     }
 
@@ -289,7 +269,6 @@ impl VValue {
         match self {
             Self::SignedNet(bits) => Self::SignedNet(bits.truncate_or_sign_extend(new_size)),
             Self::UnsignedNet(bits) => Self::SignedNet(bits.truncate_or_zero_extend(new_size)),
-            Self::String(_) => todo!(),
         }
     }
 
@@ -297,7 +276,6 @@ impl VValue {
         match self {
             Self::SignedNet(bits) => bits.clog2(),
             Self::UnsignedNet(bits) => bits.clog2(),
-            Self::String(_) => todo!(),
         }
     }
 
@@ -305,7 +283,6 @@ impl VValue {
         match self {
             Self::SignedNet(bits) => Self::SignedNet(bits.zero_extend(new_size)),
             Self::UnsignedNet(bits) => Self::SignedNet(bits.sign_extend(new_size)),
-            Self::String(_) => todo!(),
         }
     }
 }
@@ -328,8 +305,8 @@ macro_rules! impl_arithmetic {
                 (V::UnsignedNet(lb) | V::SignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
                     *lb = Bits::$op(lb, &r);
                 }
-                (V::String(_), _) | (_, V::String(_)) => todo!(),
             }
+
             lhs
         }
         )+

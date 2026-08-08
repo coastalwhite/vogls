@@ -327,6 +327,8 @@ impl Signal {
 }
 
 pub const SCALAR_VSIZE: VectorSize = NonZeroU32::new(1).unwrap();
+pub const VSIZE_8: VectorSize = NonZeroU32::new(8).unwrap();
+pub const VSIZE_16: VectorSize = NonZeroU32::new(16).unwrap();
 pub const VSIZE_32: VectorSize = NonZeroU32::new(32).unwrap();
 pub const VSIZE_64: VectorSize = NonZeroU32::new(64).unwrap();
 

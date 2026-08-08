@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{GlobalContext, INTEGER_VSIZE, VectorSize};
+use vogls_ir::{GlobalContext, VectorSize, INTEGER_VSIZE, SCALAR_VSIZE, VSIZE_8};
 
 use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
@@ -396,8 +396,17 @@ pub fn get_expr_type<'a>(
             }
             Expr::String(string_ref) => {
                 let s = arenas.get_ident(string_ref.0);
-                let s = s.len() + 1;
-                result_stack.push(Some(VType::String(s as u32)));
+                let Some(size) = u32::try_from(s.len())
+                    .ok()
+                    .map(|v| VectorSize::new(v).unwrap_or(SCALAR_VSIZE))
+                    .and_then(|v| v.checked_mul(VSIZE_8))
+                else {
+                    error = true;
+                    diagnostics.not_yet_implemented(arenas.get_span(expr), "string size overflow");
+                    result_stack.push(None);
+                    continue;
+                };
+                result_stack.push(Some(VType::UnsignedNet(size)));
             }
         }
     }
