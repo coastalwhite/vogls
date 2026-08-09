@@ -1165,13 +1165,13 @@ impl Bits {
         Self::bitwise_op(lhs, rhs, |l, r| l ^ r, arithmetic::fv_bitwise_xor_elem)
     }
     pub fn bitwise_andnot(lhs: &Self, rhs: &Self) -> Self {
-        Self::bitwise_op(lhs, rhs, |l, r| l & r, arithmetic::fv_bitwise_andnot_elem)
+        Self::bitwise_op(lhs, rhs, |l, r| l & !r, arithmetic::fv_bitwise_andnot_elem)
     }
     pub fn bitwise_ornot(lhs: &Self, rhs: &Self) -> Self {
-        Self::bitwise_op(lhs, rhs, |l, r| l | r, arithmetic::fv_bitwise_ornot_elem)
+        Self::bitwise_op(lhs, rhs, |l, r| l | !r, arithmetic::fv_bitwise_ornot_elem)
     }
     pub fn bitwise_xnor(lhs: &Self, rhs: &Self) -> Self {
-        Self::bitwise_op(lhs, rhs, |l, r| l ^ r, arithmetic::fv_bitwise_xnor_elem)
+        Self::bitwise_op(lhs, rhs, |l, r| l ^ !r, arithmetic::fv_bitwise_xnor_elem)
     }
     pub fn is_unsigned_leq(lhs: &Self, rhs: &Self) -> FvLogicValue {
         assert_eq!(lhs.size(), rhs.size());
