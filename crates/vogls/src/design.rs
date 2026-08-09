@@ -183,6 +183,10 @@ impl Design {
         &self.initial_state
     }
 
+    pub fn initial_state_mut(&mut self) -> &mut DesignState {
+        &mut self.initial_state
+    }
+
     pub fn resolve_handle_sym(&self, signal: SignalHandle) -> (&NetSymbol, &NetSignal) {
         let Symbol::Net(net) = &self.elab_table[signal.symbol].content else {
             unreachable!();
