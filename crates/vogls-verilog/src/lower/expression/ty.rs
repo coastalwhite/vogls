@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{GlobalContext, VectorSize, INTEGER_VSIZE, SCALAR_VSIZE, VSIZE_8};
+use vogls_ir::{GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VSIZE_8, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
@@ -385,9 +385,8 @@ pub fn get_expr_type<'a>(
                 error |= result.is_err();
                 result_stack.push(result.ok());
             }
-            Expr::Decimal(_) => {
-                result_stack.push(Some(VType::SignedNet(INTEGER_VSIZE)));
-            }
+            Expr::Real(_) => result_stack.push(Some(VType::Real)),
+            Expr::Decimal(_) => result_stack.push(Some(VType::SignedNet(INTEGER_VSIZE))),
             Expr::Sized(sized) => {
                 let sized = &arenas.sized_numbers[sized.item.at];
                 let signed = matches!(sized.sign, Sign::Signed);

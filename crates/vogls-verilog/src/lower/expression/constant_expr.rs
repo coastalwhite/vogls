@@ -10,7 +10,7 @@ use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperato
 use crate::elaborate::{VSymbol, VSymbolTable, VectorTransform};
 use crate::lower::addressing::{Address, AddressingContext, RangeExpr, lower_addressing};
 use crate::lower::expression::{StackItem, get_expr_type};
-use crate::lower::vvalue::VValue;
+use crate::lower::vvalue::{Real, VValue};
 use crate::lower::{hident_span, try_resolve_constant, try_resolve_hident};
 use crate::number::Sign;
 use crate::parser::AstArenas;
@@ -40,6 +40,7 @@ pub fn eval_constant_expr<'a>(
                 let decimal = &arenas.decimals[decimal.at];
                 result_stack.push(Some(VValue::SignedNet(decimal.clone())));
             }
+            Expr::Real(v) => result_stack.push(Some(VValue::Real(Real::from_f64(v)))),
             Expr::Unary(op, child) => {
                 if !item.dispatched {
                     item.dispatched = true;
@@ -62,10 +63,27 @@ pub fn eval_constant_expr<'a>(
                     child = child.zero_or_sign_extend(context_width);
                 }
 
+                macro_rules! maybe_unsupported {
+                    ($expr:expr) => {{
+                        match $expr {
+                            Ok(v) => v,
+                            Err(()) => {
+                                error = true;
+                                result_stack.push(None);
+                                diagnostics.not_yet_implemented(
+                                    arenas.get_span(item.expr),
+                                    "operation not supported on these operand types",
+                                );
+                                continue;
+                            }
+                        }
+                    }};
+                }
+
                 use UnaryOperator as O;
                 let result = match op {
                     O::LogicalNegation => VValue::scalar_from_bool(!child.to_logical()),
-                    O::BitwiseNegation => child.bitwise_invert(),
+                    O::BitwiseNegation => maybe_unsupported!(child.bitwise_invert()),
                     O::ReductionAnd => VValue::from(child.into_bits().reduce_and()),
                     O::ReductionOr => VValue::from(child.into_bits().reduce_or()),
                     O::ReductionNand => VValue::from(child.into_bits().reduce_nand()),
@@ -127,21 +145,42 @@ pub fn eval_constant_expr<'a>(
                     }
                 }
 
+                macro_rules! maybe_unsupported {
+                    ($expr:expr) => {{
+                        match $expr {
+                            Ok(v) => v,
+                            Err(()) => {
+                                error = true;
+                                result_stack.push(None);
+                                diagnostics.not_yet_implemented(
+                                    arenas.get_span(item.expr),
+                                    "operation not supported on these operand types",
+                                );
+                                continue;
+                            }
+                        }
+                    }};
+                }
+
                 use BinaryOperator as O;
                 let result = match op {
                     O::Power => VValue::power(lhs, rhs),
-                    O::Multiply => VValue::multiply(lhs, rhs),
-                    O::Divide => VValue::divide(lhs, rhs),
-                    O::Modulus => VValue::remainder(lhs, rhs),
-                    O::BinaryPlus => VValue::add(lhs, rhs),
-                    O::BinaryMinus => VValue::sub(lhs, rhs),
-                    O::ArithmeticLeftShift | O::ShiftLeft => VValue::logical_shift_left(lhs, rhs),
-                    O::ShiftRight => VValue::logical_shift_right(lhs, rhs),
-                    O::ArithmeticRightShift => VValue::arithmetic_shift_right(lhs, rhs),
-                    O::BitwiseAnd => VValue::bitwise_and(lhs, rhs),
-                    O::BitwiseXor => VValue::bitwise_xor(lhs, rhs),
-                    O::BitwiseXnor => VValue::bitwise_xnor(lhs, rhs),
-                    O::BitwiseOr => VValue::bitwise_or(lhs, rhs),
+                    O::Multiply => std::ops::Mul::mul(lhs, rhs),
+                    O::Divide => std::ops::Div::div(lhs, rhs),
+                    O::Modulus => maybe_unsupported!(std::ops::Rem::rem(lhs, rhs)),
+                    O::BinaryPlus => std::ops::Add::add(lhs, rhs),
+                    O::BinaryMinus => std::ops::Sub::sub(lhs, rhs),
+                    O::ArithmeticLeftShift | O::ShiftLeft => {
+                        maybe_unsupported!(VValue::logical_shift_left(lhs, rhs))
+                    }
+                    O::ShiftRight => maybe_unsupported!(VValue::logical_shift_right(lhs, rhs)),
+                    O::ArithmeticRightShift => {
+                        maybe_unsupported!(VValue::arithmetic_shift_right(lhs, rhs))
+                    }
+                    O::BitwiseAnd => maybe_unsupported!(VValue::bitwise_and(lhs, rhs)),
+                    O::BitwiseXor => maybe_unsupported!(VValue::bitwise_xor(lhs, rhs)),
+                    O::BitwiseXnor => maybe_unsupported!(VValue::bitwise_xnor(lhs, rhs)),
+                    O::BitwiseOr => maybe_unsupported!(VValue::bitwise_or(lhs, rhs)),
                     O::LessThan => VValue::from(VValue::less_than(lhs, rhs)),
                     O::LessThanEqual => VValue::from(VValue::less_than_equal(lhs, rhs)),
                     O::GreaterThan => VValue::from(VValue::greater_than(lhs, rhs)),
@@ -150,8 +189,12 @@ pub fn eval_constant_expr<'a>(
                     O::LogicalOr => VValue::scalar_from_bool(VValue::logical_or(lhs, rhs)),
                     O::LogicalEquality => VValue::from(lhs.logical_equal(rhs)),
                     O::LogicalInequality => VValue::from(lhs.logical_not_equal(rhs)),
-                    O::CaseEquality => VValue::scalar_from_bool(lhs.case_equal(rhs)),
-                    O::CaseInequality => VValue::scalar_from_bool(lhs.case_not_equal(rhs)),
+                    O::CaseEquality => {
+                        VValue::scalar_from_bool(maybe_unsupported!(lhs.case_equal(rhs)))
+                    }
+                    O::CaseInequality => {
+                        VValue::scalar_from_bool(maybe_unsupported!(lhs.case_not_equal(rhs)))
+                    }
                 };
                 result_stack.push(Some(result));
             }
@@ -361,8 +404,7 @@ pub fn eval_constant_expr<'a>(
                         error = true;
                         continue;
                     };
-                    let mut child_context_width =
-                        l_ty.bit_length().max(r_ty.bit_length());
+                    let mut child_context_width = l_ty.bit_length().max(r_ty.bit_length());
                     if let Some(context_width) = item.context_width {
                         child_context_width = child_context_width.max(context_width);
                     }
@@ -389,7 +431,7 @@ pub fn eval_constant_expr<'a>(
 
                 let (truthy, falsy) = VValue::coerce_max_size(truthy, falsy);
 
-                if condition.case_equal(VValue::UnsignedNet(Bits::from(true))) {
+                if condition.to_logical() {
                     result_stack.push(Some(truthy));
                 } else {
                     result_stack.push(Some(falsy));
@@ -492,9 +534,7 @@ pub fn eval_constant_expr<'a>(
                         arguments
                             .iter()
                             .zip(&fn_symbol.inputs)
-                            .map(|(expr, (_, ty))| {
-                                StackItem::new(expr, Some(ty.bit_length()))
-                            }),
+                            .map(|(expr, (_, ty))| StackItem::new(expr, Some(ty.bit_length()))),
                     );
                     continue;
                 }
@@ -549,10 +589,7 @@ pub fn eval_constant_expr<'a>(
                         inputs_error = true;
                         break;
                     };
-                    esignals.insert(
-                        *sig,
-                        value.truncate_or_extend(ty.bit_length()).into_bits(),
-                    );
+                    esignals.insert(*sig, value.truncate_or_extend(ty.bit_length()).into_bits());
                 }
                 if inputs_error {
                     result_stack.push(None);

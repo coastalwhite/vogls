@@ -5,7 +5,8 @@ use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalFlags, SignalKey,
+    ConnectionDirection, GlobalContext, INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, SignalFlags,
+    SignalKey,
 };
 use vogls_utils::{IndexMap, VgHashMap, VgHashSet};
 
@@ -20,8 +21,8 @@ use crate::ast::module::{
     ModulePorts, NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
     NetIdent, NetType, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
     ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
-    PortReference, Range, RegDeclaration, TaskDeclaration, TaskPortItem, TaskPortItemContent,
-    TfType, TimeScale, VariableType, VariableTypeVariant,
+    PortReference, Range, RealDeclaration, RegDeclaration, TaskDeclaration, TaskPortItem,
+    TaskPortItemContent, TfType, TimeScale, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{
     Block, BlockingAssignment, CaseStatement, ConditionalStatement, LoopStatement,
@@ -63,6 +64,7 @@ pub enum InLevelSymbol<'a> {
         AstId<'a, Module<'a>>,
     ),
     Integer(AstId<'a, VariableType<'a>>),
+    Real(AstId<'a, VariableType<'a>>),
     Reg(RegInLevelSymbol<'a>),
     Net(NetInLevelSymbol<'a>),
     Port(PortInLevelSymbol<'a>),
@@ -567,7 +569,7 @@ fn extend_generate_case_sids<'a, 'b>(
                         Some(value.ty().bit_length()),
                     )?;
                     let expr_value = expr_value.truncate_or_extend(value.ty().bit_length());
-                    if value.clone().case_equal(expr_value) {
+                    if value.clone().case_equal(expr_value).unwrap_or(false) {
                         is_selected = true;
                     }
                 }
@@ -1019,6 +1021,17 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                     diagnostics,
                 )
             }
+            ModuleOrGenerateItemDeclaration::Real(id) => {
+                let RealDeclaration { variable_types } = &**id;
+                extend_variable_type_sids(
+                    *variable_types,
+                    InLevelSymbol::Real,
+                    scope,
+                    ctx,
+                    st,
+                    diagnostics,
+                )
+            }
             ModuleOrGenerateItemDeclaration::Genvar(id) => {
                 let GenvarDeclaration { identifiers } = &**id;
                 let mut error = false;
@@ -1337,6 +1350,9 @@ fn extend_block_item_decl_sid<'a, 'b>(
             st,
             diagnostics,
         ),
+        BlockItemDeclaration::Real(var_types) => {
+            extend_variable_type_sids(*var_types, InLevelSymbol::Real, scope, ctx, st, diagnostics)
+        }
         BlockItemDeclaration::LocalParameterDeclaration(id) => {
             let LocalParameterDeclaration {
                 typing,
@@ -1369,7 +1385,6 @@ fn extend_block_item_decl_sid<'a, 'b>(
         }
 
         BlockItemDeclaration::Time
-        | BlockItemDeclaration::Real
         | BlockItemDeclaration::Realtime
         | BlockItemDeclaration::Event => todo!(),
     }
@@ -1526,6 +1541,7 @@ impl<'a> InLevelSymbol<'a> {
                 extend_var_type_needs(scope, table, st, *variable_type)
             }
             InLevelSymbol::Integer(var_type) => extend_var_type_needs(scope, table, st, *var_type),
+            InLevelSymbol::Real(var_type) => extend_var_type_needs(scope, table, st, *var_type),
             InLevelSymbol::Port(PortInLevelSymbol { decl, ident: _ }) => {
                 let range = match &**decl {
                     PortDeclaration::Inout(id) => id.range,
@@ -1685,7 +1701,7 @@ pub fn extend_expr_needs<'a, 'b>(
             Expr::SystemFunctionCall(_, exprs) => {
                 _ = exprs.map(|exprs| dispatch_stack.extend(exprs.iter()))
             }
-            Expr::Decimal(..) | Expr::Sized(..) | Expr::String(..) => {}
+            Expr::Real(..) | Expr::Decimal(..) | Expr::Sized(..) | Expr::String(..) => {}
         }
     }
 }
@@ -2027,6 +2043,54 @@ pub fn finalize_symbol<'a>(
             );
             net.dims = dims;
             net.ty = VType::SignedNet(INTEGER_VSIZE);
+        }
+        InLevelSymbol::Real(id) => {
+            let VariableType {
+                identifier,
+                variant,
+            } = &**id;
+            let parent = ctx.table[sid].parent().unwrap();
+            let ty = VType::Real;
+            let (dims, initialize) = match variant {
+                VariableTypeVariant::Dimensions(dimensions) => (
+                    super::dims_to_array_elab(
+                        gl,
+                        ctx.arenas,
+                        parent,
+                        &ctx.table,
+                        diagnostics,
+                        *dimensions,
+                    )?,
+                    None,
+                ),
+                VariableTypeVariant::ConstantExpr(expr) => (
+                    Vec::new(),
+                    Some(
+                        eval_constant_expr(
+                            gl,
+                            ctx.arenas,
+                            &ctx.table,
+                            scope,
+                            diagnostics,
+                            *expr,
+                            Some(ty.bit_length()),
+                        )?
+                        .coerce(&ty),
+                    ),
+                ),
+            };
+            let net = unwrap_get_net_mut(&mut ctx.table, sid);
+            net.net = super::new_net(
+                gl,
+                LogicMode::TwoValue,
+                ctx.arenas,
+                &ty,
+                &dims,
+                *identifier,
+                initialize,
+            );
+            net.dims = dims;
+            net.ty = VType::Real;
         }
         InLevelSymbol::Port(PortInLevelSymbol { decl, ident }) => {
             let (ty, transform, _, _) =

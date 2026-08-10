@@ -1,9 +1,10 @@
-use vogls_ir::{SCALAR_VSIZE, VectorSize};
+use vogls_ir::{VectorSize, SCALAR_VSIZE, VSIZE_64};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VType {
     SignedNet(VectorSize),
     UnsignedNet(VectorSize),
+    Real,
 }
 
 impl VType {
@@ -13,6 +14,7 @@ impl VType {
         match self {
             Self::SignedNet(size) => *size,
             Self::UnsignedNet(size) => *size,
+            Self::Real => VSIZE_64,
         }
     }
 
@@ -26,21 +28,21 @@ impl VType {
 
     pub fn is_signed(self) -> bool {
         match self {
-            VType::SignedNet(_) => true,
+            VType::SignedNet(_) | VType::Real => true,
             VType::UnsignedNet(_) => false,
         }
     }
 
     pub fn to_signed(self) -> VType {
         match self {
-            VType::SignedNet(_) => self,
+            VType::SignedNet(_) | VType::Real => self,
             VType::UnsignedNet(width) => VType::SignedNet(width),
         }
     }
 
     pub fn to_unsigned(self) -> VType {
         match self {
-            VType::UnsignedNet(_) => self,
+            VType::UnsignedNet(_) | VType::Real => self,
             VType::SignedNet(width) => VType::UnsignedNet(width),
         }
     }
@@ -55,5 +57,9 @@ impl VType {
     pub fn truncate(self, width: VectorSize) -> VType {
         assert!(width <= self.bit_length());
         self.truncate_or_extend(width)
+    }
+
+    pub fn is_real(&self) -> bool {
+        matches!(self, Self::Real)
     }
 }

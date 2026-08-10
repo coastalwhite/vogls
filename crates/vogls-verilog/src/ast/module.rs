@@ -506,7 +506,7 @@ pub enum ModuleOrGenerateItemDeclaration<'a> {
     Net(AstId<'a, NetDeclaration<'a>>),
     Reg(AstId<'a, RegDeclaration<'a>>),
     Integer(AstId<'a, IntegerDeclaration<'a>>),
-    // Real(AstId<RealDeclaration>),
+    Real(AstId<'a, RealDeclaration<'a>>),
     // Time(AstId<TimeDeclaration>),
     // Realtime(AstId<RealtimeDeclaration>),
     // Event(AstId<EventDeclaration>),
@@ -584,6 +584,13 @@ pub enum VariableTypeVariant<'a> {
 // integer_declaration ::= integer list_of_variable_identifiers ;
 #[derive(Clone, Copy)]
 pub struct IntegerDeclaration<'a> {
+    pub variable_types: AstIdRange<'a, VariableType<'a>>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
+// real_declaration ::= real list_of_real_identifiers ;
+#[derive(Clone, Copy)]
+pub struct RealDeclaration<'a> {
     pub variable_types: AstIdRange<'a, VariableType<'a>>,
 }
 
@@ -726,7 +733,7 @@ pub enum BlockItemDeclaration<'a> {
     Integer(AstIdRange<'a, VariableType<'a>>),
     // @Incomplete
     Time,
-    Real,
+    Real(AstIdRange<'a, VariableType<'a>>),
     Realtime,
     Event,
     LocalParameterDeclaration(AstId<'a, LocalParameterDeclaration<'a>>),

@@ -4,21 +4,7 @@ use crate::ast::constant_expr::{
 };
 use crate::ast::expr::Expr;
 use crate::ast::module::{
-    AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem,
-    CaseGeneratePattern, ContinousAssign, Dimension, FunctionDeclaration, FunctionRangeOrType,
-    GateInstantiation, GenerateBlock, GenerateRegion, GenvarAssignment, GenvarDeclaration,
-    IfGenerateConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, IntegerDeclaration,
-    ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct, Module,
-    ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem,
-    ModuleOrGenerateItemContent, ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance,
-    NInputGateInstantiation, NInputGateType, NOutputGateInstance, NOutputGateInstantiation,
-    NOutputGateType, NameOfGateInstance, NamedParameterAssignment, NamedPortConnection,
-    NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent, NetType,
-    NonPortModuleItem, OutputDeclaration, OutputNet, ParamAssignment, ParameterDeclaration,
-    ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
-    PortReference, Range, RegDeclaration, TaskDeclaration, TaskPortItem, TaskPortItemContent,
-    TfInoutDeclaration, TfInputDeclaration, TfOutputDeclaration, TfType, TimeScale, VariableType,
-    VariableTypeVariant,
+    AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem, CaseGeneratePattern, ContinousAssign, Dimension, FunctionDeclaration, FunctionRangeOrType, GateInstantiation, GenerateBlock, GenerateRegion, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, IntegerDeclaration, ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemContent, ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance, NInputGateInstantiation, NInputGateType, NOutputGateInstance, NOutputGateInstantiation, NOutputGateType, NameOfGateInstance, NamedParameterAssignment, NamedPortConnection, NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, OutputDeclaration, OutputNet, ParamAssignment, ParameterDeclaration, ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression, PortReference, Range, RealDeclaration, RegDeclaration, TaskDeclaration, TaskPortItem, TaskPortItemContent, TfInoutDeclaration, TfInputDeclaration, TfOutputDeclaration, TfType, TimeScale, VariableType, VariableTypeVariant
 };
 use crate::ast::specify::{
     EdgeIdentifier, ModulePathExpr, PathDeclaration, PathDeclarationVariant, PathDelayValue,
@@ -1866,6 +1852,11 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration<'a> {
                     parse::<IntegerDeclaration>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
                 Ok(Self::Integer(integer_declaration))
             }
+            T::KeywordReal => {
+                let real_declaration =
+                    parse::<RealDeclaration>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+                Ok(Self::Real(real_declaration))
+            }
             T::KeywordGenvar => {
                 let genvar_declaration =
                     parse::<GenvarDeclaration>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
@@ -2362,6 +2353,34 @@ impl<'a> Consumable<'a> for IntegerDeclaration<'a> {
     }
 }
 
+impl<'a> Consumable<'a> for RealDeclaration<'a> {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
+        arenas: &mut AstArenas,
+        ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
+        // real_declaration ::= real list_of_real_identifiers ;
+
+        tkw.next_expect(T::KeywordReal, diagnostics.as_deref_mut())?;
+        let variable_types = parse_one_or_more_delimited::<VariableType>(
+            tkw,
+            sc,
+            arenas,
+            ast,
+            T::Comma,
+            diagnostics.as_deref_mut(),
+        )?;
+        tkw.next_expect(T::Semicolon, diagnostics)?;
+
+        Ok(Self { variable_types })
+    }
+}
+
 impl<'a> Consumable<'a> for LocalParameterDeclaration<'a> {
     fn consume(
         tkw: &mut TokenWalker<'_>,
@@ -2835,6 +2854,19 @@ impl<'a> Consumable<'a> for BlockItemDeclaration<'a> {
                 tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                 Ok(Self::Integer(identifiers))
             }
+            T::KeywordReal => {
+                tkw.offset += 1;
+                let identifiers = parse_one_or_more_delimited::<VariableType>(
+                    tkw,
+                    sc,
+                    arenas,
+                    ast,
+                    T::Comma,
+                    diagnostics.as_deref_mut(),
+                )?;
+                tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
+                Ok(Self::Real(identifiers))
+            }
             T::KeywordLocalParam => {
                 let local_parameter_declaration = parse::<LocalParameterDeclaration>(
                     tkw,
@@ -2857,7 +2889,7 @@ impl<'a> Consumable<'a> for BlockItemDeclaration<'a> {
                 tkw.next_expect(T::Semicolon, diagnostics.as_deref_mut())?;
                 Ok(Self::ParameterDeclaration(parameter_declaration))
             }
-            T::KeywordTime | T::KeywordReal | T::KeywordRealtime | T::KeywordEvent => {
+            T::KeywordTime | T::KeywordRealtime | T::KeywordEvent => {
                 if let Some(d) = diagnostics {
                     d.incomplete(tkw.offset, "block_item_declaration");
                 }

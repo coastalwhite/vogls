@@ -49,6 +49,30 @@ pub fn skip_hexadecimal(s: &[u8], i: &mut usize) {
         *i += 1;
     }
 }
+pub fn skip_scientific_exp(s: &[u8], i: &mut usize) -> bool {
+    let start_offset = *i;
+
+    // E
+    if s.get(*i).is_none_or(|b| !matches!(b, b'e' | b'E')) {
+        return false;
+    }
+    *i += 1;
+
+    // Sign
+    if matches!(s.get(*i), Some(b'-' | b'+')) {
+        *i += 1;
+    }
+
+    // Exponent decimal
+    let pre = *i;
+    skip_decimal(s, i);
+    if *i == pre {
+        *i = start_offset;
+        return false;
+    }
+
+    true
+}
 
 pub fn skip_sign(s: &[u8], i: &mut usize) -> bool {
     let has_sign = matches!(s.get(*i), Some(b's' | b'S'));

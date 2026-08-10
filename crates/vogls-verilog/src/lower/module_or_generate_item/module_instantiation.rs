@@ -434,6 +434,7 @@ fn assign_port_output<'a>(
 
             Expr::FunctionCall(..)
             | Expr::SystemFunctionCall(..)
+            | Expr::Real(..)
             | Expr::Decimal(..)
             | Expr::Sized(..)
             | Expr::Ternary(..)

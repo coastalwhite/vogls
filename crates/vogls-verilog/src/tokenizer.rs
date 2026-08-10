@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::number::{
-    Base, skip_binary, skip_decimal, skip_hexadecimal, skip_octal, skip_sign, take_base,
+    Base, skip_binary, skip_decimal, skip_hexadecimal, skip_octal, skip_scientific_exp, skip_sign,
+    take_base,
 };
 
 use crate::span::Span;
@@ -299,9 +300,23 @@ impl Tokenized {
                                 }
                         }
 
-                        // @TODO: Do without materializing
                         if bytes[i] == b'0' || !is_valid_prefix(&content[offset..]) {
-                            (T::Decimal, offset - i)
+                            match bytes.get(offset) {
+                                Some(b'e' | b'E') if skip_scientific_exp(bytes, &mut offset) => {
+                                    (T::Real, offset - i)
+                                }
+                                Some(b'.')
+                                    if bytes
+                                        .get(offset + 1)
+                                        .is_some_and(|b| b.is_ascii_digit() || *b == b'_') =>
+                                {
+                                    offset += 1;
+                                    skip_decimal(bytes, &mut offset);
+                                    skip_scientific_exp(bytes, &mut offset);
+                                    (T::Real, offset - i)
+                                }
+                                _ => (T::Decimal, offset - i),
+                            }
                         } else {
                             offset += 1;
                             skip_sign(bytes, &mut offset);
@@ -731,7 +746,7 @@ impl Tokenized {
                             // Preprocessor directives that need to be passed to the parser.
                             "celldefine" | "endcelldefine" => todo!(),
                             "default_nettype" => {}
-                            "resetall" => {},
+                            "resetall" => {}
                             "line" => todo!(),
                             "timescale" => {}
                             "unconnected_drive" | "nounconnected_drive" => todo!(),
@@ -879,6 +894,7 @@ define_tokens! {
     String = "\"this is a string\"",
     Number = "50'd50",
     Decimal = "50",
+    Real = "1.5",
 
     /// `(`
     LeftParen = "(",

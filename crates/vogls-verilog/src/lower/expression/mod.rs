@@ -831,6 +831,12 @@ pub fn lower_expr<'a>(
                     }
                 }
             }
+            Expr::Real(v) => {
+                result_stack.push(Some((
+                    builder.constant_u64(&mut mctx.gl, v.to_bits()),
+                    VType::Real,
+                )));
+            }
             Expr::Decimal(decimal) => {
                 let decimal = &ctx.arenas.decimals[decimal.at];
                 result_stack.push(Some((
@@ -1216,7 +1222,7 @@ pub fn get_used_signals<'a>(
                     }
                 }
             }
-            Expr::Decimal(_) | Expr::Sized(_) | Expr::String(_) => {}
+            Expr::Real(_) | Expr::Decimal(_) | Expr::Sized(_) | Expr::String(_) => {}
         }
     }
 

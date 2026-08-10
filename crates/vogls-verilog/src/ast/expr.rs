@@ -191,6 +191,7 @@ pub enum Expr<'a> {
         AstItem<SystemTaskIdentifier>,
         Option<AstIdRange<'a, Expr<'a>>>,
     ),
+    Real(f64),
     Decimal(DecimalRef),
     Sized(AstItem<SizedNumberRef>),
     String(StringRef),
@@ -420,6 +421,9 @@ impl<'a> Expr<'a> {
                         e.tree_fmt_impl(arenas, f, depth + 1)?;
                     }
                 }
+            }
+            Expr::Real(v) => {
+                writeln!(f, "real: {v}")?;
             }
             Expr::Decimal(decimal) => {
                 writeln!(f, "decimal: {}", arenas.decimals[decimal.at])?;

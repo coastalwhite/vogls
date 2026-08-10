@@ -43,6 +43,7 @@ pub fn lower<'a>(
         },
         ModuleOrGenerateItemDeclaration::Reg(_) => {}
         ModuleOrGenerateItemDeclaration::Integer(_) => {}
+        ModuleOrGenerateItemDeclaration::Real(_) => {}
         ModuleOrGenerateItemDeclaration::Genvar(_) => {}
         ModuleOrGenerateItemDeclaration::Task(_) => {}
         ModuleOrGenerateItemDeclaration::Function(_) => {}

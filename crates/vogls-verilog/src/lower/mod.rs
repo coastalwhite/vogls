@@ -565,6 +565,7 @@ fn assign_task_output<'a>(
 
             Expr::FunctionCall(..)
             | Expr::SystemFunctionCall(..)
+            | Expr::Real(..)
             | Expr::Decimal(..)
             | Expr::Sized(..)
             | Expr::Ternary(..)
