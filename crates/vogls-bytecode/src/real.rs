@@ -398,8 +398,8 @@ impl BytecodeInstruction for RealInstr {
             O::Geq => regs[rd] = u64::from(f64::from_bits(regs[rs1]) >= f64::from_bits(regs[rs2])),
 
             O::ToLogical => regs[rd] = u64::from(f64::from_bits(regs[rs1]) != 0.0),
-            O::ToU64 => regs[rd] = f64::from_bits(regs[rs1]) as u64,
-            O::ToI64 => regs[rd] = f64::from_bits(regs[rs1]) as i64 as u64,
+            O::ToU64 => regs[rd] = f64::from_bits(regs[rs1]).round() as u64,
+            O::ToI64 => regs[rd] = f64::from_bits(regs[rs1]).round() as i64 as u64,
             O::FromTvSigned => {
                 let size = code[*pc as usize].unwrap_size();
                 *pc += 1;
