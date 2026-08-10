@@ -424,12 +424,14 @@ pub fn lower_expr<'a>(
                     continue;
                 }
 
+                let mut has_real = false;
                 let end_stack_size = result_stack.len() - num_exprs;
                 let Some((mut output, ty)) = result_stack.pop().unwrap() else {
                     result_stack.truncate(end_stack_size);
                     result_stack.push(None);
                     continue;
                 };
+                has_real |= ty.is_real();
                 let mut width = ty.bit_length().get();
                 for _ in 1..num_exprs {
                     let Some((next, next_ty)) = result_stack.pop().unwrap() else {
@@ -437,10 +439,22 @@ pub fn lower_expr<'a>(
                         result_stack.push(None);
                         continue;
                     };
+                    has_real |= next_ty.is_real();
                     let next_width = next_ty.bit_length();
                     output = builder.concat(&mut mctx.gl, next, output);
                     width += next_width.get();
                 }
+
+                if has_real {
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(item.expr),
+                        "real is not allowed in concatenation.",
+                    );
+                    error = true;
+                    result_stack.push(None);
+                    continue;
+                }
+
                 result_stack.push(Some((
                     output,
                     VType::UnsignedNet(VectorSize::new(width).unwrap()),
@@ -509,6 +523,17 @@ pub fn lower_expr<'a>(
                     result_stack.push(None);
                     continue;
                 };
+
+                if ty.is_real() {
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(item.expr),
+                        "real is not allowed in replication",
+                    );
+                    error = true;
+                    result_stack.push(None);
+                    continue;
+                }
+
                 let mut width = ty.bit_length().get();
                 for _ in 1..exprs.len() {
                     let Some((next, next_ty)) = result_stack.pop().unwrap() else {

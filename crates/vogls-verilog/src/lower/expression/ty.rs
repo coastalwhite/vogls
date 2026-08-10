@@ -124,16 +124,28 @@ pub fn get_expr_type<'a>(
                     .filter(|e| !is_zero_sized_replication(gl, arenas, table, scope, e))
                     .count();
                 let mut size = 0;
+                let mut has_real = false;
                 let mut child_error = false;
                 for ty in result_stack.drain(..num_exprs) {
                     let Some(ty) = ty else {
                         child_error = true;
                         break;
                     };
+                    has_real |= ty.is_real();
+
                     // @TODO: Overflow check.
                     size += ty.bit_length().get();
                 }
                 if child_error {
+                    result_stack.push(None);
+                    continue;
+                }
+                if has_real {
+                    diagnostics.not_yet_implemented(
+                        arenas.get_span(item.expr),
+                        "real is not allowed in concatenation",
+                    );
+                    error = true;
                     result_stack.push(None);
                     continue;
                 }
@@ -204,6 +216,15 @@ pub fn get_expr_type<'a>(
                     result_stack.push(None);
                     continue;
                 };
+                if ty.is_real() {
+                    diagnostics.not_yet_implemented(
+                        arenas.get_span(item.expr),
+                        "real is not allowed in replication",
+                    );
+                    error = true;
+                    result_stack.push(None);
+                    continue;
+                }
                 let mut width = ty.bit_length().get();
                 for _ in 1..exprs.len() {
                     let Some(next_ty) = result_stack.pop().unwrap() else {
