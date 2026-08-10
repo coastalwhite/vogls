@@ -104,7 +104,7 @@ macro_rules! as_u64_value_slice {
                 &$x[..]
             }
             BitsDataRef::SeparateTv(v) => v,
-            BitsDataRef::SeparateFv(v) => &v[v.len()..],
+            BitsDataRef::SeparateFv(v) => &v[v.len() / 2..],
         }
     }};
 }
