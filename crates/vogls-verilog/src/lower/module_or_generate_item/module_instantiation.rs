@@ -213,6 +213,22 @@ fn assign_input_port<'a>(
 
     mctx.fuse_scratch.clear();
     'try_fuse: {
+        // Fusing does not deal with sign-extension or conversion to/from reals. Therefore, we stop
+        // fusing them here.
+        if get_expr_type(
+            &mut mctx.gl,
+            ctx.arenas,
+            &ctx.table,
+            scope,
+            &mut Diagnostics::default(),
+            expr,
+        )
+        .map_or(true, |v| {
+            v.bit_length() != port.ty.bit_length() && (!v.is_unsigned_net() || !port.ty.is_unsigned_net())
+        }) {
+            break 'try_fuse;
+        }
+
         // @TODO: Implement expr_slice.is_some()
         if expr_slice.is_none() && try_lower_fuse_driver_expr(ctx, mctx, scope, expr)? {
             let drivee = port.net.blocking_drive_signal();

@@ -1,16 +1,16 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_fuse_signals::InputEdge;
-use vogls_ir::{ProcessBuilder, ProcessKind, SignalSlice, VectorSize};
+use vogls_ir::{ProcessBuilder, ProcessKind};
 use vogls_utils::OrderedSet;
 
-use crate::ast::AstId;
 use crate::ast::expr::Expr;
 use crate::ast::module::{ModuleOrGenerateItemDeclaration, NetDeclAssignment, NetDeclarationNets};
+use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::VSymbol;
 use crate::lower::expression::{self, get_used_signals, lower_expr};
-use crate::lower::fuse::try_lower_fuse_driver_expr;
 use crate::lower::resolve_hident;
 use crate::lower::{LowerContext, MutLowerContext};
+
+use super::continuous_assign::try_fuse_flat_assign;
 
 /// Lower a Verilog net assignment construct to Vogls IR.
 ///
@@ -72,25 +72,16 @@ fn assign_net<'a>(
     // Optimization: Try to alias LValue and RValue. This allows a future pass to eliminate the
     // marshalling process.
     mctx.fuse_scratch.clear();
-    if try_lower_fuse_driver_expr(ctx, mctx, scope, rvalue)? {
-        let drivee = net_symbol.net.blocking_drive_signal();
-
-        let mut offset = 0;
-        let drivee_width = mctx.gl.signals[drivee].size;
-        for driver in &mctx.fuse_scratch {
-            let bit_length = driver.size(&mctx.gl.signals);
-            let Some(bit_length) =
-                VectorSize::new((drivee_width.get() - offset).min(bit_length.get()))
-            else {
-                break;
-            };
-            mctx.connections.push(InputEdge {
-                driver: driver.clone(),
-                drivee,
-                drivee_slice: Some(SignalSlice::from_width(offset, bit_length).unwrap()),
-            });
-            offset += bit_length.get();
-        }
+    if try_fuse_flat_assign(
+        ctx,
+        mctx,
+        scope,
+        net,
+        rvalue,
+        rvalue.loc,
+        AstIdRange::empty(),
+        None,
+    )? {
         return Ok(());
     }
 
