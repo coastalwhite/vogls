@@ -17,6 +17,7 @@ mod load;
 mod load_imm;
 pub mod lower;
 pub mod profile;
+mod real;
 mod reg;
 mod rtype_binary;
 mod rtype_unary;
@@ -46,6 +47,7 @@ pub use intrinsics::*;
 pub use itype_binary::*;
 pub use load::*;
 pub use load_imm::*;
+pub use real::*;
 pub use rtype_binary::*;
 pub use rtype_unary::*;
 pub use set_aligned::*;
@@ -157,6 +159,10 @@ impl Bytecode {
 
     fn num_additional_slots(self) -> u8 {
         (NUM_ADDITIONAL_SLOTS_FNS[self.opcode() as usize])(self)
+    }
+
+    fn unwrap_size(self) -> VectorSize {
+        VectorSize::new(self.0).expect("Expected non-zero size")
     }
 }
 
@@ -483,6 +489,7 @@ opcodes![
     FvFvHeapSlice0,
     FvFvHeapSliceX,
     PluginPoke,
+    RealInstr,
 ];
 
 #[derive(Clone)]

@@ -417,7 +417,7 @@ use crate::tokenizer::Tokenized;
 
 use self::addressing::{Address, LValueAddressingContext, lower_addressing};
 pub use self::expression::eval_constant_expr;
-use self::expression::{lower_expr, truncate_or_extend};
+use self::expression::lower_expr;
 pub use self::vtype::VType;
 pub use self::vvalue::VValue;
 pub use diagnostics::{Diagnostics, LowerErrorReason};
@@ -553,7 +553,13 @@ fn assign_task_output<'a>(
                     (None, None) => None,
                 };
 
-                let src = truncate_or_extend(mctx.gl(), builder, variable, ty, output_width);
+                let src = expression::coerce_to(
+                    mctx.gl(),
+                    builder,
+                    variable,
+                    ty,
+                    s.ty.resize_net_to(output_width),
+                );
                 s.net.drive_blocking(mctx.gl(), builder, src, partial);
             }
 

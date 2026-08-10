@@ -241,6 +241,20 @@ impl BinaryOp {
 
             Self::Posedge => "posedge",
             Self::Negedge => "negedge",
+
+            Self::RealAdd => "real.add",
+            Self::RealSub => "real.sub",
+            Self::RealMul => "real.mul",
+            Self::RealDiv => "real.div",
+            Self::RealPow => "real.pow",
+            Self::RealEq => "real.eq",
+            Self::RealNe => "real.ne",
+            Self::RealLt => "real.lt",
+            Self::RealLeq => "real.leq",
+            Self::RealGt => "real.gt",
+            Self::RealGeq => "real.geq",
+            Self::RealATan2 => "real.atan2",
+            Self::RealHypot => "real.hypot",
         }
     }
 }
@@ -288,6 +302,33 @@ impl UnaryOp {
             Self::LeadingZeros => "leading_zeros",
             Self::TvToFv => "tvtofv",
             Self::FvToTv => "fvtotv",
+
+            Self::RealToI64 => "real.to_i64",
+            Self::RealToU64 => "real.to_u64",
+            Self::RealFromUnsignedDecimal => "real.from_unsigned_decimal",
+            Self::RealFromSignedDecimal => "real.from_signed_decimal",
+
+            Self::RealToLogical => "real.to_logical",
+            Self::RealNeg => "real.neg",
+            Self::RealTruncate => "real.truncate",
+            Self::RealLn => "real.ln",
+            Self::RealLog10 => "real.log10",
+            Self::RealExp => "real.exp",
+            Self::RealSqrt => "real.sqrt",
+            Self::RealFloor => "real.floor",
+            Self::RealCeil => "real.ceil",
+            Self::RealSin => "real.sin",
+            Self::RealCos => "real.cos",
+            Self::RealTan => "real.tan",
+            Self::RealASin => "real.asin",
+            Self::RealACos => "real.acos",
+            Self::RealATan => "real.atan",
+            Self::RealSinH => "real.sinh",
+            Self::RealCosH => "real.cosh",
+            Self::RealTanH => "real.tanh",
+            Self::RealASinH => "real.asinh",
+            Self::RealACosH => "real.acosh",
+            Self::RealATanH => "real.atanh",
         }
     }
 }

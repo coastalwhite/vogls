@@ -196,8 +196,17 @@ pub fn assign_variable_lvalue_flat<'a>(
         (None, Some((array_offset, _array_overflow))) => Some(array_offset),
         (None, None) => None,
     };
-    let variable =
-        expression::truncate_or_extend(mctx.gl(), builder, variable, variable_ty, output_width);
+    let variable = expression::coerce_to(
+        mctx.gl(),
+        builder,
+        variable,
+        variable_ty,
+        match net.ty {
+            VType::SignedNet(_) => VType::SignedNet(output_width),
+            VType::UnsignedNet(_) => VType::UnsignedNet(output_width),
+            VType::Real => VType::Real,
+        },
+    );
     if nba {
         net.net
             .drive_non_blocking(&mut mctx.gl, &mut mctx.nbas, builder, variable, partial);
@@ -401,8 +410,13 @@ fn assign_net_lvalue_flat<'a>(
             })?,
         )),
     };
-    let var =
-        expression::truncate_or_extend(mctx.gl(), builder, variable, variable_ty, output_width);
+    let var = expression::coerce_to(
+        mctx.gl(),
+        builder,
+        variable,
+        variable_ty,
+        s.ty.resize_net_to(output_width),
+    );
     s.net.drive_blocking(mctx.gl(), builder, var, partial);
     Ok(())
 }

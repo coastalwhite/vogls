@@ -516,6 +516,31 @@ impl BasicBlockBuilder {
         (count_leading_zeros, LeadingZeros)
         (tv_to_fv, TvToFv)
         (fv_to_tv, FvToTv)
+        (real_to_logical, RealToLogical)
+        (real_to_u64, RealToU64)
+        (real_to_i64, RealToI64)
+        (real_from_unsigned_decimal, RealFromUnsignedDecimal)
+        (real_from_signed_decimal, RealFromSignedDecimal)
+        (real_neg, RealNeg)
+        (real_truncate, RealTruncate)
+        (real_ln, RealLn)
+        (real_log10, RealLog10)
+        (real_exp, RealExp)
+        (real_sqrt, RealSqrt)
+        (real_floor, RealFloor)
+        (real_ceil, RealCeil)
+        (real_sin, RealSin)
+        (real_cos, RealCos)
+        (real_tan, RealTan)
+        (real_asin, RealASin)
+        (real_acos, RealACos)
+        (real_atan, RealATan)
+        (real_sinh, RealSinH)
+        (real_cosh, RealCosH)
+        (real_tanh, RealTanH)
+        (real_asinh, RealASinH)
+        (real_acosh, RealACosH)
+        (real_atanh, RealATanH)
     }
 
     resize_ops! {
@@ -549,6 +574,19 @@ impl BasicBlockBuilder {
         (logical_shift_left, LogicalShiftLeft)
         (logical_shift_right, LogicalShiftRight)
         (arithmetic_shift_right, ArithmeticShiftRight)
+        (real_add, RealAdd)
+        (real_sub, RealSub)
+        (real_mul, RealMul)
+        (real_div, RealDiv)
+        (real_pow, RealPow)
+        (real_eq, RealEq)
+        (real_ne, RealNe)
+        (real_gt, RealGt)
+        (real_geq, RealGeq)
+        (real_lt, RealLt)
+        (real_leq, RealLeq)
+        (real_atan2, RealATan2)
+        (real_hypot, RealHypot)
     }
 
     bin_imm_ops! {
@@ -852,6 +890,26 @@ impl BasicBlockBuilder {
         let lhs = self.reduce_or(gl, lhs);
         let rhs = self.reduce_or(gl, rhs);
         self.and(gl, lhs, rhs)
+    }
+    pub fn real_logical_and(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let lhs = self.real_to_logical(gl, lhs);
+        let rhs = self.real_to_logical(gl, rhs);
+        self.and(gl, lhs, rhs)
+    }
+    pub fn real_logical_or(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
+        let lhs = self.real_to_logical(gl, lhs);
+        let rhs = self.real_to_logical(gl, rhs);
+        self.or(gl, lhs, rhs)
     }
 
     pub fn equals(

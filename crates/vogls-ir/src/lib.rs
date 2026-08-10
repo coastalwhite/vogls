@@ -385,6 +385,32 @@ pub enum UnaryOp {
 
     TvToFv,
     FvToTv,
+
+    RealToLogical,
+    RealToU64,
+    RealToI64,
+    RealFromSignedDecimal,
+    RealFromUnsignedDecimal,
+    RealNeg,
+    RealTruncate,
+    RealLn,
+    RealLog10,
+    RealExp,
+    RealSqrt,
+    RealFloor,
+    RealCeil,
+    RealSin,
+    RealCos,
+    RealTan,
+    RealASin,
+    RealACos,
+    RealATan,
+    RealSinH,
+    RealCosH,
+    RealTanH,
+    RealASinH,
+    RealACosH,
+    RealATanH,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -548,6 +574,23 @@ pub enum BinaryOp {
     OrNot,
     /// XNOR(a, b) = XOR(a, NOT(b)) = NOT(XOR(a, b))
     Xnor,
+
+    RealAdd,
+    RealSub,
+    RealMul,
+    RealDiv,
+    RealPow,
+
+    RealEq,
+    RealNe,
+
+    RealLt,
+    RealLeq,
+    RealGt,
+    RealGeq,
+
+    RealATan2,
+    RealHypot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -969,6 +1012,111 @@ impl UnaryOp {
             O::TvToFv => src.clone(),
             O::FvToTv => src.special_to_zero(),
             O::LeadingZeros => Bits::from_u64(INTEGER_VSIZE, src.leading_zeroes().into()),
+            O::RealToLogical => Bits::from(f64::from_bits(src.extract_exact_u64().unwrap()) != 0.0),
+            O::RealToU64 => Bits::new_u64(f64::from_bits(src.extract_exact_u64().unwrap()) as u64),
+            O::RealToI64 => {
+                Bits::new_u64(f64::from_bits(src.extract_exact_u64().unwrap()) as i64 as u64)
+            }
+            O::RealFromSignedDecimal => Bits::new_u64(src.as_signed_f64().to_bits()),
+            O::RealFromUnsignedDecimal => Bits::new_u64(src.as_unsigned_f64().to_bits()),
+            O::RealNeg => {
+                Bits::new_u64((-f64::from_bits(src.extract_exact_u64().unwrap())).to_bits())
+            }
+            O::RealTruncate => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .trunc()
+                    .to_bits(),
+            ),
+            O::RealLn => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .ln()
+                    .to_bits(),
+            ),
+            O::RealLog10 => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .log10()
+                    .to_bits(),
+            ),
+            O::RealExp => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .exp()
+                    .to_bits(),
+            ),
+            O::RealSqrt => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .sqrt()
+                    .to_bits(),
+            ),
+            O::RealFloor => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .floor()
+                    .to_bits(),
+            ),
+            O::RealCeil => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .ceil()
+                    .to_bits(),
+            ),
+            O::RealSin => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .sin()
+                    .to_bits(),
+            ),
+            O::RealCos => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .cos()
+                    .to_bits(),
+            ),
+            O::RealTan => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .tan()
+                    .to_bits(),
+            ),
+            O::RealASin => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .asin()
+                    .to_bits(),
+            ),
+            O::RealACos => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .acos()
+                    .to_bits(),
+            ),
+            O::RealATan => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .atan()
+                    .to_bits(),
+            ),
+            O::RealSinH => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .sinh()
+                    .to_bits(),
+            ),
+            O::RealCosH => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .cosh()
+                    .to_bits(),
+            ),
+            O::RealTanH => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .tanh()
+                    .to_bits(),
+            ),
+            O::RealASinH => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .asinh()
+                    .to_bits(),
+            ),
+            O::RealACosH => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .acosh()
+                    .to_bits(),
+            ),
+            O::RealATanH => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap())
+                    .atanh()
+                    .to_bits(),
+            ),
         }
     }
 
@@ -986,15 +1134,67 @@ impl UnaryOp {
             | O::ReduceXor
             | O::LeadingZeros
             | O::TvToFv
-            | O::FvToTv => UnaryOpSimplification::Keep,
+            | O::FvToTv
+            | O::RealToU64
+            | O::RealToI64
+            | O::RealFromSignedDecimal
+            | O::RealFromUnsignedDecimal
+            | O::RealToLogical
+            | O::RealNeg
+            | O::RealTruncate
+            | O::RealLn
+            | O::RealLog10
+            | O::RealExp
+            | O::RealSqrt
+            | O::RealFloor
+            | O::RealCeil
+            | O::RealSin
+            | O::RealCos
+            | O::RealTan
+            | O::RealASin
+            | O::RealACos
+            | O::RealATan
+            | O::RealSinH
+            | O::RealCosH
+            | O::RealTanH
+            | O::RealASinH
+            | O::RealACosH
+            | O::RealATanH => UnaryOpSimplification::Keep,
         }
     }
 
     fn output_size(self, size: VectorSize) -> VectorSize {
         match self {
             UnaryOp::Neg | UnaryOp::TvToFv | UnaryOp::FvToTv => size,
-            UnaryOp::ReduceOr | UnaryOp::ReduceAnd | UnaryOp::ReduceXor => SCALAR_VSIZE,
+            UnaryOp::RealToLogical
+            | UnaryOp::ReduceOr
+            | UnaryOp::ReduceAnd
+            | UnaryOp::ReduceXor => SCALAR_VSIZE,
             UnaryOp::LeadingZeros => VSIZE_32,
+            UnaryOp::RealToU64
+            | UnaryOp::RealToI64
+            | UnaryOp::RealFromSignedDecimal
+            | UnaryOp::RealFromUnsignedDecimal
+            | UnaryOp::RealNeg
+            | UnaryOp::RealTruncate
+            | UnaryOp::RealLn
+            | UnaryOp::RealLog10
+            | UnaryOp::RealExp
+            | UnaryOp::RealSqrt
+            | UnaryOp::RealFloor
+            | UnaryOp::RealCeil
+            | UnaryOp::RealSin
+            | UnaryOp::RealCos
+            | UnaryOp::RealTan
+            | UnaryOp::RealASin
+            | UnaryOp::RealACos
+            | UnaryOp::RealATan
+            | UnaryOp::RealSinH
+            | UnaryOp::RealCosH
+            | UnaryOp::RealTanH
+            | UnaryOp::RealASinH
+            | UnaryOp::RealACosH
+            | UnaryOp::RealATanH => VSIZE_64,
         }
     }
 
@@ -1002,12 +1202,35 @@ impl UnaryOp {
         use UnaryOp as O;
         match self {
             O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor => Some(src),
-
             O::TvToFv if src == LogicMode::TwoValue => Some(LogicMode::FourValue),
             O::FvToTv if src == LogicMode::FourValue => Some(LogicMode::TwoValue),
             O::TvToFv | O::FvToTv => None,
-
             O::LeadingZeros => Some(LogicMode::TwoValue),
+            O::RealToLogical
+            | O::RealToU64
+            | O::RealToI64
+            | O::RealFromSignedDecimal
+            | O::RealFromUnsignedDecimal
+            | O::RealNeg
+            | O::RealTruncate
+            | O::RealLn
+            | O::RealLog10
+            | O::RealExp
+            | O::RealSqrt
+            | O::RealFloor
+            | O::RealCeil
+            | O::RealSin
+            | O::RealCos
+            | O::RealTan
+            | O::RealASin
+            | O::RealACos
+            | O::RealATan
+            | O::RealSinH
+            | O::RealCosH
+            | O::RealTanH
+            | O::RealASinH
+            | O::RealACosH
+            | O::RealATanH => Some(LogicMode::TwoValue),
         }
     }
 
@@ -1016,6 +1239,31 @@ impl UnaryOp {
         match self {
             O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::LeadingZeros => true,
             O::TvToFv | O::FvToTv => false,
+            O::RealToLogical
+            | O::RealToU64
+            | O::RealToI64
+            | O::RealFromSignedDecimal
+            | O::RealFromUnsignedDecimal
+            | O::RealNeg
+            | O::RealTruncate
+            | O::RealLn
+            | O::RealLog10
+            | O::RealExp
+            | O::RealSqrt
+            | O::RealFloor
+            | O::RealCeil
+            | O::RealSin
+            | O::RealCos
+            | O::RealTan
+            | O::RealASin
+            | O::RealACos
+            | O::RealATan
+            | O::RealSinH
+            | O::RealCosH
+            | O::RealTanH
+            | O::RealASinH
+            | O::RealACosH
+            | O::RealATanH => false,
         }
     }
 }
@@ -1097,6 +1345,72 @@ impl BinaryOp {
                 lhs.select_value(0),
                 rhs.select_value(0),
             )),
+
+            O::RealAdd => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::new_u64((lhs + rhs).to_bits())
+            }
+            O::RealSub => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::new_u64((lhs - rhs).to_bits())
+            }
+            O::RealMul => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::new_u64((lhs * rhs).to_bits())
+            }
+            O::RealDiv => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::new_u64((lhs / rhs).to_bits())
+            }
+            O::RealPow => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::new_u64(lhs.powf(rhs).to_bits())
+            }
+            O::RealEq => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::from(lhs == rhs)
+            }
+            O::RealNe => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::from(lhs != rhs)
+            }
+            O::RealLt => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::from(lhs < rhs)
+            }
+            O::RealLeq => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::from(lhs <= rhs)
+            }
+            O::RealGt => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::from(lhs > rhs)
+            }
+            O::RealGeq => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::from(lhs >= rhs)
+            }
+            O::RealATan2 => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::new_u64(lhs.atan2(rhs).to_bits())
+            }
+            O::RealHypot => {
+                let lhs = f64::from_bits(lhs.extract_exact_u64().expect("Should be 64 bits"));
+                let rhs = f64::from_bits(rhs.extract_exact_u64().expect("Should be 64 bits"));
+                Bits::new_u64(lhs.hypot(rhs).to_bits())
+            }
         }
     }
 
@@ -1154,6 +1468,24 @@ impl BinaryOp {
                 }
                 Some(SCALAR_VSIZE)
             }
+            O::RealAdd
+            | O::RealSub
+            | O::RealMul
+            | O::RealDiv
+            | O::RealPow
+            | O::RealATan2
+            | O::RealHypot => {
+                if lhs != VSIZE_64 || rhs != VSIZE_64 {
+                    return None;
+                }
+                Some(VSIZE_64)
+            }
+            O::RealEq | O::RealNe | O::RealLt | O::RealLeq | O::RealGt | O::RealGeq => {
+                if lhs != VSIZE_64 || rhs != VSIZE_64 {
+                    return None;
+                }
+                Some(SCALAR_VSIZE)
+            }
         }
     }
 
@@ -1204,6 +1536,23 @@ impl BinaryOp {
                     rhs: convert_mode,
                 }
             }
+            O::RealAdd
+            | O::RealSub
+            | O::RealMul
+            | O::RealDiv
+            | O::RealPow
+            | O::RealEq
+            | O::RealNe
+            | O::RealLt
+            | O::RealLeq
+            | O::RealGt
+            | O::RealGeq
+            | O::RealATan2
+            | O::RealHypot => BinaryOutputMode {
+                dst: LogicMode::TwoValue,
+                lhs: LogicMode::TwoValue,
+                rhs: LogicMode::TwoValue,
+            },
         }
     }
 
@@ -1234,6 +1583,20 @@ impl BinaryOp {
 
             Self::DivideX | Self::ModulusX => None,
             Self::LogicalShiftLeft | Self::LogicalShiftRight | Self::ArithmeticShiftRight => None,
+
+            Self::RealAdd
+            | Self::RealSub
+            | Self::RealMul
+            | Self::RealDiv
+            | Self::RealPow
+            | Self::RealEq
+            | Self::RealNe
+            | Self::RealLt
+            | Self::RealLeq
+            | Self::RealGt
+            | Self::RealGeq
+            | Self::RealATan2
+            | Self::RealHypot => Some(TvPushdownVariant::TvOnly),
         }
     }
 }
@@ -1241,6 +1604,7 @@ impl BinaryOp {
 enum TvPushdownVariant {
     KeepOutput,
     CastOutput,
+    TvOnly,
 }
 
 pub struct BinaryOutputMode {

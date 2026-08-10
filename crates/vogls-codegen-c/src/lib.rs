@@ -500,6 +500,31 @@ pub fn lower_process(
                             O::LeadingZeros => todo!(),
                             O::TvToFv => unary::cgc_tv_to_fv(&mut buffer, dst_t, t)?,
                             O::FvToTv => unary::cgc_fv_to_tv(&mut buffer, dst_t, t)?,
+                            O::RealToU64 => todo!(),
+                            O::RealToI64 => todo!(),
+                            O::RealFromSignedDecimal => todo!(),
+                            O::RealFromUnsignedDecimal => todo!(),
+                            O::RealToLogical => todo!(),
+                            O::RealNeg => todo!(),
+                            O::RealTruncate => todo!(),
+                            O::RealLn => todo!(),
+                            O::RealLog10 => todo!(),
+                            O::RealExp => todo!(),
+                            O::RealSqrt => todo!(),
+                            O::RealFloor => todo!(),
+                            O::RealCeil => todo!(),
+                            O::RealSin => todo!(),
+                            O::RealCos => todo!(),
+                            O::RealTan => todo!(),
+                            O::RealASin => todo!(),
+                            O::RealACos => todo!(),
+                            O::RealATan => todo!(),
+                            O::RealSinH => todo!(),
+                            O::RealCosH => todo!(),
+                            O::RealTanH => todo!(),
+                            O::RealASinH => todo!(),
+                            O::RealACosH => todo!(),
+                            O::RealATanH => todo!(),
                         }
                     }
                     I::Resize(dst, op, src) => {
@@ -622,7 +647,6 @@ pub fn lower_process(
                             O::UnsignedLessEqual => {
                                 binary::cgc_bin_ule(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
                             }
-
                             O::LogicalShiftLeft => {
                                 binary::cgc_lsl(&mut buffer, dst_t, lhs_t, rhs_t)?
                             }
@@ -646,6 +670,19 @@ pub fn lower_process(
                             O::Negedge => {
                                 binary::cgc_negedge(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
                             }
+                            O::RealAdd => todo!(),
+                            O::RealSub => todo!(),
+                            O::RealMul => todo!(),
+                            O::RealDiv => todo!(),
+                            O::RealPow => todo!(),
+                            O::RealEq => todo!(),
+                            O::RealNe => todo!(),
+                            O::RealLt => todo!(),
+                            O::RealLeq => todo!(),
+                            O::RealGt => todo!(),
+                            O::RealGeq => todo!(),
+                            O::RealATan2 => todo!(),
+                            O::RealHypot => todo!(),
                         }
                     }
                     I::Intrinsic(dst, op, items) => match op.as_ref() {

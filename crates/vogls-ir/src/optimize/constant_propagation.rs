@@ -345,6 +345,8 @@ fn constant_propagate_instruction(
                 (O::Posedge, _, Some(_)) => {}
                 (O::Negedge, Some(_), _) => {}
                 (O::Negedge, _, Some(_)) => {}
+
+                (O::RealAdd | O::RealSub | O::RealMul | O::RealDiv | O::RealPow | O::RealEq | O::RealNe | O::RealLt | O::RealLeq | O::RealGt | O::RealGeq | O::RealATan2 | O::RealHypot, _, _) => {}
             };
 
             // If we managed to convert it to a immediate based operation, we should try to

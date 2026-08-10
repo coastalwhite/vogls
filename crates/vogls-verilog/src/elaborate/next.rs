@@ -1834,11 +1834,11 @@ pub fn finalize_symbol<'a>(
         InLevelSymbol::Param(typing, constant_expr, module_sid) => {
             let (typing, constant_expr) = (*typing, *constant_expr);
             use ParameterDeclarationTyping as T;
-            let (_, _, ty) = match &*typing {
+            let ty = match &*typing {
                 T::None(signed, range) => match range {
-                    None => (0, 0, None),
+                    None => None,
                     Some(ast_range) => {
-                        let (msb, lsb, width) = super::eval_constant_range(
+                        let (_, _, width) = super::eval_constant_range(
                             gl,
                             ctx.arenas,
                             scope,
@@ -1846,11 +1846,12 @@ pub fn finalize_symbol<'a>(
                             diagnostics,
                             *ast_range,
                         )?;
-                        (msb, lsb, Some(VType::net(width, *signed)))
+                        Some(VType::net(width, *signed))
                     }
                 },
-                T::Integer => (31, 0, Some(VType::SignedNet(INTEGER_VSIZE))),
-                T::Real | T::Realtime | T::Time => {
+                T::Integer => Some(VType::SignedNet(INTEGER_VSIZE)),
+                T::Real => Some(VType::Real),
+                T::Realtime | T::Time => {
                     diagnostics.not_yet_implemented(
                         ctx.arenas.get_span(typing),
                         "real / realtime / time parameter",

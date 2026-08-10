@@ -3,16 +3,16 @@ use vogls_ir::dyn_format_string::{DynFormatArgument, DynFormatString};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
     BasicBlockBuilder, Bits, INTEGER_VSIZE, IntrinsicOp, LogicMode, RandomKind, SCALAR_VSIZE,
-    Signal, SignalFlags, SignalKey, TIME_VSIZE, VSIZE_32, VariableKey, VectorSize,
+    Signal, SignalFlags, SignalKey, TIME_VSIZE, VSIZE_32, VSIZE_64, VariableKey, VectorSize,
 };
 
 use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskIdentifier;
 use crate::ast::{AstId, AstIdRange, AstItem};
 use crate::lower::expression::{
-    coerce_to_max_size_ty, lower_expr, sign_or_zero_extend, truncate_or_extend,
+    coerce_to_max_size_ty, lower_expr, sign_or_zero_extend, to_real, truncate_or_extend,
 };
-use crate::lower::vvalue::VValue;
+use crate::lower::vvalue::{Real, VValue};
 use crate::lower::{Diagnostics, LowerContext, MutLowerContext, VType, try_resolve_net};
 use crate::parser::AstArenas;
 
@@ -36,6 +36,29 @@ pub fn lower_system_function_call(
                 return Err(());
             }
         };
+    }
+    // Math functions accept any numeric argument; non-real operands are coerced
+    // to real via `to_real` before the operation is applied.
+    macro_rules! real_unary_fn {
+        ($builder_method:ident) => {{
+            ensure_num_args_equal!(1);
+            let (e, e_ty) = arguments[0].ok_or(())?;
+            let e = to_real(mctx.gl(), builder, e, e_ty);
+            let e = builder.$builder_method(mctx.gl(), e);
+            Ok((e, VType::Real))
+        }};
+    }
+    macro_rules! real_binary_fn {
+        ($builder_method:ident) => {{
+            ensure_num_args_equal!(2);
+            // Arguments are in reverse order.
+            let (lhs, lhs_ty) = arguments[1].ok_or(())?;
+            let (rhs, rhs_ty) = arguments[0].ok_or(())?;
+            let lhs = to_real(mctx.gl(), builder, lhs, lhs_ty);
+            let rhs = to_real(mctx.gl(), builder, rhs, rhs_ty);
+            let e = builder.$builder_method(mctx.gl(), lhs, rhs);
+            Ok((e, VType::Real))
+        }};
     }
 
     // @Performance: Use a perfect hashmap here.
@@ -68,11 +91,8 @@ pub fn lower_system_function_call(
                 Bits::new_u32(1).truncate_or_zero_extend(size),
             );
             let lz = builder.count_leading_zeros(mctx.gl(), e_m_1);
-            let clog2 = builder.revminus_constant(
-                mctx.gl(),
-                lz,
-                Bits::new_u32(e_ty.bit_length().get()),
-            );
+            let clog2 =
+                builder.revminus_constant(mctx.gl(), lz, Bits::new_u32(e_ty.bit_length().get()));
             let is_zero = builder.case_equals_constant(mctx.gl(), e, Bits::new_zeroed(size));
             let contains_spc = builder.reduce_xor(mctx.gl(), e);
             let contains_spc = builder.case_equals_constant(
@@ -86,6 +106,65 @@ pub fn lower_system_function_call(
             let clog2 = builder.select(mctx.gl(), contains_spc, x, clog2);
 
             Ok((clog2, VType::UnsignedNet(VSIZE_32)))
+        }
+
+        // Math Functions
+        "ln" => real_unary_fn!(real_ln),
+        "log10" => real_unary_fn!(real_log10),
+        "exp" => real_unary_fn!(real_exp),
+        "sqrt" => real_unary_fn!(real_sqrt),
+        "floor" => real_unary_fn!(real_floor),
+        "ceil" => real_unary_fn!(real_ceil),
+        "sin" => real_unary_fn!(real_sin),
+        "cos" => real_unary_fn!(real_cos),
+        "tan" => real_unary_fn!(real_tan),
+        "asin" => real_unary_fn!(real_asin),
+        "acos" => real_unary_fn!(real_acos),
+        "atan" => real_unary_fn!(real_atan),
+        "sinh" => real_unary_fn!(real_sinh),
+        "cosh" => real_unary_fn!(real_cosh),
+        "tanh" => real_unary_fn!(real_tanh),
+        "asinh" => real_unary_fn!(real_asinh),
+        "acosh" => real_unary_fn!(real_acosh),
+        "atanh" => real_unary_fn!(real_atanh),
+        "atan2" => real_binary_fn!(real_atan2),
+        "hypot" => real_binary_fn!(real_hypot),
+
+        "bitstoreal" => {
+            ensure_num_args_equal!(1);
+            let (e, e_ty) = arguments[0].ok_or(())?;
+            if e_ty.is_real() {
+                mctx.diagnostics
+                    .not_yet_implemented(arenas.get_span(expr), "cannot call on real");
+                return Err(());
+            }
+            let e = truncate_or_extend(mctx.gl(), builder, e, e_ty, VSIZE_64);
+            Ok((e, VType::Real))
+        }
+        "realtobits" => {
+            ensure_num_args_equal!(1);
+            let (e, e_ty) = arguments[0].ok_or(())?;
+            let e = super::coerce_to(mctx.gl(), builder, e, e_ty, VType::Real);
+            Ok((e, VType::UnsignedNet(VSIZE_64)))
+        }
+        "itor" => {
+            ensure_num_args_equal!(1);
+            let (e, e_ty) = arguments[0].ok_or(())?;
+            let e = match e_ty {
+                VType::SignedNet(_) => builder.real_from_signed_decimal(mctx.gl(), e),
+                VType::UnsignedNet(_) => builder.real_from_unsigned_decimal(mctx.gl(), e),
+                VType::Real => e,
+            };
+            Ok((e, VType::Real))
+        }
+        "rtoi" => {
+            ensure_num_args_equal!(1);
+            let (e, e_ty) = arguments[0].ok_or(())?;
+            let e = super::coerce_to(mctx.gl(), builder, e, e_ty, VType::Real);
+            let e = builder.real_truncate(mctx.gl(), e);
+            let e = builder.real_to_i64(mctx.gl(), e);
+            let e = builder.truncate(mctx.gl(), e, INTEGER_VSIZE);
+            Ok((e, VType::SignedNet(INTEGER_VSIZE)))
         }
 
         // VoGLS specific system function calls
@@ -188,8 +267,7 @@ pub fn lower_system_function_call(
             let ty = coerce_to_max_size_ty(truthy_ty, falsy_ty);
             let truthy =
                 sign_or_zero_extend(mctx.gl(), builder, truthy, truthy_ty, ty.bit_length());
-            let falsy =
-                sign_or_zero_extend(mctx.gl(), builder, falsy, falsy_ty, ty.bit_length());
+            let falsy = sign_or_zero_extend(mctx.gl(), builder, falsy, falsy_ty, ty.bit_length());
             let e = builder.select(mctx.gl(), cond, truthy, falsy);
             Ok((e, ty))
         }
@@ -220,7 +298,6 @@ pub fn get_system_function_call_output_ty(
             }
         };
     }
-
     // @Performance: Use a perfect hashmap here.
     match &arenas.ident_table[ident.item.0] {
         "signed" => {
@@ -237,7 +314,37 @@ pub fn get_system_function_call_output_ty(
             ensure_num_args_equal!(0);
             Ok(VType::UnsignedNet(TIME_VSIZE))
         }
-        "clog2" => Ok(VType::UnsignedNet(VSIZE_32)),
+        "clog2" => {
+            ensure_num_args_equal!(1);
+            Ok(VType::UnsignedNet(VSIZE_32))
+        }
+
+        // Math functions
+        "ln" | "log10" | "exp" | "sqrt" | "floor" | "ceil" | "sin" | "cos" | "tan" | "asin"
+        | "acos" | "atan" | "sinh" | "cosh" | "tanh" | "asinh" | "acosh" | "atanh" => {
+            ensure_num_args_equal!(1);
+            Ok(VType::Real)
+        }
+        "atan2" | "hypot" => {
+            ensure_num_args_equal!(2);
+            Ok(VType::Real)
+        }
+        "bitstoreal" => {
+            ensure_num_args_equal!(1);
+            Ok(VType::Real)
+        }
+        "realtobits" => {
+            ensure_num_args_equal!(1);
+            Ok(VType::UnsignedNet(VSIZE_64))
+        }
+        "itor" => {
+            ensure_num_args_equal!(1);
+            Ok(VType::Real)
+        }
+        "rtoi" => {
+            ensure_num_args_equal!(1);
+            Ok(VType::SignedNet(INTEGER_VSIZE))
+        }
 
         // VoGLS specific system function calls
         "vogls_dbg" => {
@@ -588,6 +695,25 @@ pub fn eval_constant(
             }
         };
     }
+    // Math functions accept any numeric argument; non-real operands are coerced
+    // to real before the operation is applied.
+    macro_rules! real_unary_const {
+        ($method:ident) => {{
+            ensure_num_args_equal!(1);
+            let v = arguments[0].clone().ok_or(())?;
+            let r = v.into_real().as_f64().$method();
+            Ok(VValue::Real(Real::from_f64(r)))
+        }};
+    }
+    macro_rules! real_binary_const {
+        ($method:ident) => {{
+            ensure_num_args_equal!(2);
+            // Arguments are in reverse order.
+            let lhs = arguments[1].clone().ok_or(())?.into_real().as_f64();
+            let rhs = arguments[0].clone().ok_or(())?.into_real().as_f64();
+            Ok(VValue::Real(Real::from_f64(lhs.$method(rhs))))
+        }};
+    }
 
     // @Performance: Use a perfect hashmap here.
     match &arenas.ident_table[ident.item.0] {
@@ -623,6 +749,55 @@ pub fn eval_constant(
                 Some(value) => Bits::new_u32(value),
             };
             Ok(VValue::SignedNet(clog2))
+        }
+
+        // Math Functions
+        "ln" => real_unary_const!(ln),
+        "log10" => real_unary_const!(log10),
+        "exp" => real_unary_const!(exp),
+        "sqrt" => real_unary_const!(sqrt),
+        "floor" => real_unary_const!(floor),
+        "ceil" => real_unary_const!(ceil),
+        "sin" => real_unary_const!(sin),
+        "cos" => real_unary_const!(cos),
+        "tan" => real_unary_const!(tan),
+        "asin" => real_unary_const!(asin),
+        "acos" => real_unary_const!(acos),
+        "atan" => real_unary_const!(atan),
+        "sinh" => real_unary_const!(sinh),
+        "cosh" => real_unary_const!(cosh),
+        "tanh" => real_unary_const!(tanh),
+        "asinh" => real_unary_const!(asinh),
+        "acosh" => real_unary_const!(acosh),
+        "atanh" => real_unary_const!(atanh),
+        "atan2" => real_binary_const!(atan2),
+        "hypot" => real_binary_const!(hypot),
+
+        "bitstoreal" => {
+            ensure_num_args_equal!(1);
+            let e = arguments[0].as_ref().ok_or(())?.clone();
+            let e = e.coerce(&VType::UnsignedNet(VSIZE_64));
+            let e = e.into_bits().extract_exact_u64().unwrap();
+            Ok(VValue::Real(Real::from_f64(f64::from_bits(e))))
+        }
+        "realtobits" => {
+            ensure_num_args_equal!(1);
+            let e = arguments[0].as_ref().ok_or(())?.clone();
+            let e = e.into_real();
+            Ok(VValue::UnsignedNet(Bits::new_u64(e.0.to_bits())))
+        }
+        "itor" => {
+            ensure_num_args_equal!(1);
+            let e = arguments[0].as_ref().ok_or(())?.clone();
+            Ok(VValue::Real(e.into_real()))
+        }
+        "rtoi" => {
+            ensure_num_args_equal!(1);
+            let e = arguments[0].as_ref().ok_or(())?.clone();
+            let e = e.into_real();
+            Ok(VValue::SignedNet(
+                Bits::new_u64(e.0.trunc() as i64 as u64).truncate(INTEGER_VSIZE),
+            ))
         }
 
         // VoGLS specific system function calls

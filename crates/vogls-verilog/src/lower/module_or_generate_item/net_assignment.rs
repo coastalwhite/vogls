@@ -115,13 +115,8 @@ fn assign_net<'a>(
         rvalue,
         Some(net_bit_length),
     )?;
-    let v = expression::truncate_or_extend(
-        &mut mctx.gl,
-        &mut bb_builder,
-        rvalue,
-        rvalue_ty,
-        net_bit_length,
-    );
+
+    let v = expression::coerce_to(mctx.gl(), &mut bb_builder, rvalue, rvalue_ty, net_symbol.ty);
     net_symbol
         .net
         .drive_blocking(mctx.gl(), &mut bb_builder, v, None);

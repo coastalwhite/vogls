@@ -629,6 +629,42 @@ fn lower_instruction(
                     }
                     bce.heap_tv_and(rd, spc, val, src_size);
                 }
+
+                (O::RealToI64, _, _, _) => bce.real_to_i64(rd, rs),
+                (O::RealToU64, _, _, _) => bce.real_to_u64(rd, rs),
+                (O::RealFromUnsignedDecimal, _, M::TwoValue, _) => {
+                    bce.real_from_tv_unsigned(rd, rs, src_size)
+                }
+                (O::RealFromUnsignedDecimal, _, M::FourValue, _) => {
+                    bce.real_from_fv_unsigned(rd, rs, src_size)
+                }
+                (O::RealFromSignedDecimal, _, M::TwoValue, _) => {
+                    bce.real_from_tv_signed(rd, rs, src_size)
+                }
+                (O::RealFromSignedDecimal, _, M::FourValue, _) => {
+                    bce.real_from_fv_signed(rd, rs, src_size)
+                }
+                (O::RealToLogical, _, _, _) => bce.real_to_logical(rd, rs),
+                (O::RealNeg, _, _, _) => bce.real_neg(rd, rs),
+                (O::RealTruncate, _, _, _) => bce.real_truncate(rd, rs),
+                (O::RealLn, _, _, _) => bce.real_ln(rd, rs),
+                (O::RealLog10, _, _, _) => bce.real_log10(rd, rs),
+                (O::RealExp, _, _, _) => bce.real_exp(rd, rs),
+                (O::RealSqrt, _, _, _) => bce.real_sqrt(rd, rs),
+                (O::RealFloor, _, _, _) => bce.real_floor(rd, rs),
+                (O::RealCeil, _, _, _) => bce.real_ceil(rd, rs),
+                (O::RealSin, _, _, _) => bce.real_sin(rd, rs),
+                (O::RealCos, _, _, _) => bce.real_cos(rd, rs),
+                (O::RealTan, _, _, _) => bce.real_tan(rd, rs),
+                (O::RealASin, _, _, _) => bce.real_asin(rd, rs),
+                (O::RealACos, _, _, _) => bce.real_acos(rd, rs),
+                (O::RealATan, _, _, _) => bce.real_atan(rd, rs),
+                (O::RealSinH, _, _, _) => bce.real_sinh(rd, rs),
+                (O::RealCosH, _, _, _) => bce.real_cosh(rd, rs),
+                (O::RealTanH, _, _, _) => bce.real_tanh(rd, rs),
+                (O::RealASinH, _, _, _) => bce.real_asinh(rd, rs),
+                (O::RealACosH, _, _, _) => bce.real_acosh(rd, rs),
+                (O::RealATanH, _, _, _) => bce.real_atanh(rd, rs),
             }
 
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T4);
@@ -954,6 +990,20 @@ fn lower_instruction(
                 (O::Posedge, _, _, M::FourValue, _) => bce.fv_posedge(rd, rs1, rs2),
                 (O::Negedge, _, _, M::TwoValue, _) => bce.andnot(rd, rs1, rs2, SixBitSize::N1),
                 (O::Negedge, _, _, M::FourValue, _) => bce.fv_negedge(rd, rs1, rs2),
+
+                (O::RealAdd, _, _, _, _) => bce.real_add(rd, rs1, rs2),
+                (O::RealSub, _, _, _, _) => bce.real_sub(rd, rs1, rs2),
+                (O::RealMul, _, _, _, _) => bce.real_mul(rd, rs1, rs2),
+                (O::RealDiv, _, _, _, _) => bce.real_div(rd, rs1, rs2),
+                (O::RealPow, _, _, _, _) => bce.real_pow(rd, rs1, rs2),
+                (O::RealEq, _, _, _, _) => bce.real_eq(rd, rs1, rs2),
+                (O::RealNe, _, _, _, _) => bce.real_ne(rd, rs1, rs2),
+                (O::RealLt, _, _, _, _) => bce.real_lt(rd, rs1, rs2),
+                (O::RealLeq, _, _, _, _) => bce.real_leq(rd, rs1, rs2),
+                (O::RealGt, _, _, _, _) => bce.real_gt(rd, rs1, rs2),
+                (O::RealGeq, _, _, _, _) => bce.real_geq(rd, rs1, rs2),
+                (O::RealATan2, _, _, _, _) => bce.real_atan2(rd, rs1, rs2),
+                (O::RealHypot, _, _, _, _) => bce.real_hypot(rd, rs1, rs2),
             }
 
             // At this point, T2 - T4 are no longer used. We can use any of them.

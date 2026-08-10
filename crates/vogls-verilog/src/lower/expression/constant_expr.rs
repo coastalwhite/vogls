@@ -57,6 +57,7 @@ pub fn eval_constant_expr<'a>(
                 };
 
                 if let Some(context_width) = item.context_width
+                    && !child.is_real()
                     && !op.is_self_determined()
                     && context_width > child.ty().bit_length()
                 {
@@ -137,10 +138,10 @@ pub fn eval_constant_expr<'a>(
 
                 let (l_is_self_det, r_is_self_det) = op.is_self_determined();
                 if let Some(context_width) = item.context_width {
-                    if !l_is_self_det && context_width > lhs.ty().bit_length() {
+                    if !l_is_self_det && !lhs.is_real() && context_width > lhs.ty().bit_length() {
                         lhs = lhs.zero_or_sign_extend(context_width);
                     }
-                    if !r_is_self_det && context_width > rhs.ty().bit_length() {
+                    if !r_is_self_det && !rhs.is_real() && context_width > rhs.ty().bit_length() {
                         rhs = rhs.zero_or_sign_extend(context_width);
                     }
                 }
@@ -225,6 +226,21 @@ pub fn eval_constant_expr<'a>(
                     error = true;
                     continue;
                 };
+
+                if value.is_real() {
+                    if !exprs.is_empty() || range_expression.is_some() {
+                        diagnostics.not_yet_implemented(
+                            arenas.get_span(item.expr),
+                            "bit and part selects are not allowed on reals",
+                        );
+                        result_stack.push(None);
+                        error = true;
+                        continue;
+                    }
+
+                    result_stack.push(Some(value.clone()));
+                    continue;
+                }
 
                 pub struct ConstantRValueAddressingContext<'a, 'b> {
                     pub arenas: &'b AstArenas,

@@ -304,6 +304,10 @@ impl VValue {
             }
         }
     }
+
+    pub fn is_real(&self) -> bool {
+        matches!(self, Self::Real(_))
+    }
 }
 
 impl From<FvLogicValue> for VValue {
@@ -451,41 +455,11 @@ impl Real {
     }
 
     pub fn from_unsigned_bits(bits: &Bits) -> Self {
-        let bits = bits.special_to_zero();
-        if let Some(v) = bits.as_u64() {
-            return Self::from_f64(v as f64);
-        }
-
-        // @Performance. This is horrendous but who is watching.
-        let s = bits.display(&vogls_ir::bits::format::BitsFormatOptions {
-            prefix: false,
-            base: vogls_ir::bits::format::BitsFormatBase::Decimal,
-            separator: None,
-            signed: false,
-            align: None,
-            fill: '_',
-            width: vogls_ir::bits::format::BitsFormatWidth::Shrink,
-        }).to_string();
-        Real::from_f64(s.parse().unwrap_or(0.0))
+        Real::from_f64(bits.as_unsigned_f64())
     }
 
     pub fn from_signed_bits(bits: &Bits) -> Self {
-        let bits = bits.special_to_zero();
-        if let Some(v) = bits.as_i64() {
-            return Self::from_f64(v as f64);
-        }
-
-        // @Performance. This is horrendous but who is watching.
-        let s = bits.display(&vogls_ir::bits::format::BitsFormatOptions {
-            prefix: false,
-            base: vogls_ir::bits::format::BitsFormatBase::Decimal,
-            separator: None,
-            signed: true,
-            align: None,
-            fill: '_',
-            width: vogls_ir::bits::format::BitsFormatWidth::Shrink,
-        }).to_string();
-        Real::from_f64(s.parse().unwrap_or(0.0))
+        Real::from_f64(bits.as_signed_f64())
     }
 
     pub fn to_bits(self, size: VectorSize) -> Bits {

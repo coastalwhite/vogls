@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
     BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalKey, VSIZE_8,
-    VariableKey, VectorSize,
+    VSIZE_64, VariableKey, VectorSize,
 };
 use vogls_utils::OrderedSet;
 
@@ -89,6 +89,7 @@ pub fn lower_expr<'a>(
                 };
 
                 if let Some(context_width) = item.context_width
+                    && !ty.is_real()
                     && !op.is_self_determined()
                     && context_width > ty.bit_length()
                 {
@@ -97,8 +98,30 @@ pub fn lower_expr<'a>(
                 }
 
                 let (variable, ty) = match op {
+                    O::LogicalNegation if ty.is_real() => {
+                        let v = builder.real_to_logical(mctx.gl(), child);
+                        let v = builder.logical_neg(mctx.gl(), v);
+                        (v, VType::SCALAR_NET)
+                    }
                     O::LogicalNegation => {
                         (builder.logical_neg(&mut mctx.gl, child), VType::SCALAR_NET)
+                    }
+                    O::BitwiseNegation
+                    | O::ReductionAnd
+                    | O::ReductionOr
+                    | O::ReductionNand
+                    | O::ReductionNor
+                    | O::ReductionXor
+                    | O::ReductionXnor
+                        if ty.is_real() =>
+                    {
+                        error = true;
+                        mctx.diagnostics.not_yet_implemented(
+                            ctx.arenas.get_span(item.expr),
+                            "operation does not support reals",
+                        );
+                        result_stack.push(None);
+                        continue;
                     }
                     O::BitwiseNegation => (builder.binary_neg(&mut mctx.gl, child), ty),
                     O::ReductionAnd => (builder.reduce_and(&mut mctx.gl, child), VType::SCALAR_NET),
@@ -111,7 +134,11 @@ pub fn lower_expr<'a>(
                     O::ReductionXnor => {
                         (builder.reduce_xnor(&mut mctx.gl, child), VType::SCALAR_NET)
                     }
+
                     O::SignPlus => (child, ty),
+                    O::SignMinus if ty.is_real() => {
+                        (builder.real_neg(mctx.gl(), child), VType::Real)
+                    }
                     O::SignMinus => (
                         builder.revminus_constant(
                             mctx.gl(),
@@ -161,11 +188,11 @@ pub fn lower_expr<'a>(
                     dispatch_stack.push(item);
                     dispatch_stack.push(StackItem::new(
                         r,
-                        (!r_is_self_det).then_some(child_context_width),
+                        (!r_is_self_det & !r_ty.is_real()).then_some(child_context_width),
                     ));
                     dispatch_stack.push(StackItem::new(
                         l,
-                        (!l_is_self_det).then_some(child_context_width),
+                        (!l_is_self_det & !l_ty.is_real()).then_some(child_context_width),
                     ));
                     continue;
                 }
@@ -180,43 +207,180 @@ pub fn lower_expr<'a>(
 
                 let (l_is_self_det, r_is_self_det) = op.is_self_determined();
                 if let Some(context_width) = item.context_width {
-                    if !l_is_self_det && context_width > l_ty.bit_length() {
+                    if !l_is_self_det && !l_ty.is_real() && context_width > l_ty.bit_length() {
                         l = zero_or_sign_extend(mctx.gl(), builder, l, l_ty, context_width);
                         l_ty = l_ty.zero_or_sign_extend(context_width);
                     }
-                    if !r_is_self_det && context_width > r_ty.bit_length() {
+                    if !r_is_self_det && !r_ty.is_real() && context_width > r_ty.bit_length() {
                         r = zero_or_sign_extend(mctx.gl(), builder, r, r_ty, context_width);
                         r_ty = r_ty.zero_or_sign_extend(context_width);
                     }
                 }
 
-                let op = match op {
-                    O::Power => bin_power,
-                    O::Multiply => bin_multiply,
-                    O::Divide => bin_divide,
-                    O::Modulus => bin_modulus,
-                    O::BinaryPlus => bin_plus,
-                    O::BinaryMinus => bin_minus,
-                    O::ShiftLeft => bin_logical_shift_left,
-                    O::ShiftRight => bin_logical_shift_right,
-                    O::GreaterThan => bin_greater_than,
-                    O::GreaterThanEqual => bin_greater_than_equal,
-                    O::LessThan => bin_less_than,
-                    O::LessThanEqual => bin_less_than_equal,
-                    O::ArithmeticLeftShift => bin_logical_shift_left,
-                    O::ArithmeticRightShift => bin_arithmetic_shift_right,
-                    O::LogicalEquality => bin_logical_equality,
-                    O::LogicalInequality => bin_logical_inequality,
-                    O::CaseEquality => bin_case_equality,
-                    O::CaseInequality => bin_case_inequality,
-                    O::BitwiseAnd => bin_bitwise_and,
-                    O::BitwiseXor => bin_bitwise_xor,
-                    O::BitwiseXnor => bin_bitwise_xnor,
-                    O::BitwiseOr => bin_bitwise_or,
-                    O::LogicalAnd => bin_logical_and,
-                    O::LogicalOr => bin_logical_or,
+                macro_rules! arithmetic_op {
+                    ($integer:ident, $real:ident) => {{
+                        let (l, l_ty, r, _) =
+                            coerce_bin_arithmetic(mctx.gl(), builder, l, l_ty, r, r_ty);
+                        if l_ty.is_real() {
+                            (builder.$real(mctx.gl(), l, r), VType::Real)
+                        } else {
+                            (builder.$integer(mctx.gl(), l, r), l_ty)
+                        }
+                    }};
+                }
+                macro_rules! comparison_op {
+                    ($signed:ident, $unsigned:ident, $real:ident) => {{
+                        let (l, l_ty, r, r_ty) =
+                            coerce_bin_arithmetic(mctx.gl(), builder, l, l_ty, r, r_ty);
+                        if l_ty.is_real() {
+                            (builder.$real(mctx.gl(), l, r), VType::SCALAR_NET)
+                        } else if l_ty.is_signed() || r_ty.is_signed() {
+                            (builder.$signed(mctx.gl(), l, r), VType::SCALAR_NET)
+                        } else {
+                            (builder.$unsigned(mctx.gl(), l, r), VType::SCALAR_NET)
+                        }
+                    }};
+                }
+                macro_rules! logical_op {
+                    ($integer:ident, $real:ident) => {{
+                        let (l, l_ty, r, _) =
+                            coerce_bin_arithmetic(mctx.gl(), builder, l, l_ty, r, r_ty);
+                        if l_ty.is_real() {
+                            (builder.$real(mctx.gl(), l, r), VType::SCALAR_NET)
+                        } else {
+                            (builder.$integer(mctx.gl(), l, r), VType::SCALAR_NET)
+                        }
+                    }};
+                }
+                macro_rules! case_equality {
+                    ($f:ident) => {{
+                        let (l, l_ty, r, _) =
+                            coerce_bin_arithmetic(mctx.gl(), builder, l, l_ty, r, r_ty);
+                        if l_ty.is_real() {
+                            error = true;
+                            mctx.diagnostics.not_yet_implemented(
+                                ctx.arenas.get_span(item.expr),
+                                "operand does not support reals",
+                            );
+                            result_stack.push(None);
+                            continue;
+                        } else {
+                            (builder.$f(mctx.gl(), l, r), VType::SCALAR_NET)
+                        }
+                    }};
+                }
+                macro_rules! bitwise_op {
+                    ($f:ident) => {{
+                        let (l, l_ty, r, _) =
+                            coerce_bin_arithmetic(mctx.gl(), builder, l, l_ty, r, r_ty);
+                        if l_ty.is_real() {
+                            error = true;
+                            mctx.diagnostics.not_yet_implemented(
+                                ctx.arenas.get_span(item.expr),
+                                "operand does not support reals",
+                            );
+                            result_stack.push(None);
+                            continue;
+                        } else {
+                            (builder.$f(mctx.gl(), l, r), l_ty)
+                        }
+                    }};
+                }
+                macro_rules! shift_op {
+                    ($f:ident) => {{
+                        if l_ty.is_real() | r_ty.is_real() {
+                            error = true;
+                            mctx.diagnostics.not_yet_implemented(
+                                ctx.arenas.get_span(item.expr),
+                                "operand does not support reals",
+                            );
+                            result_stack.push(None);
+                            continue;
+                        }
+
+                        // From LRM: 5.1.12 Shift operators
+                        // > The right operand is always treated as an unsigned number and has no effect on the
+                        // > signedness of the result.
+                        let r_ty = r_ty.to_unsigned();
+
+                        let r = sign_or_zero_extend(mctx.gl(), builder, r, r_ty, INTEGER_VSIZE);
+                        (builder.$f(mctx.gl(), l, r), l_ty)
+                    }};
+                }
+
+                let result = match op {
+                    O::Power => arithmetic_op!(power, real_pow),
+                    O::Multiply => arithmetic_op!(multiply, real_mul),
+                    O::BinaryPlus => arithmetic_op!(plus, real_add),
+                    O::BinaryMinus => arithmetic_op!(minus, real_sub),
+                    O::Divide => {
+                        let (l, l_ty, r, r_ty) =
+                            coerce_bin_arithmetic(mctx.gl(), builder, l, l_ty, r, r_ty);
+                        if l_ty.is_real() {
+                            (builder.real_div(mctx.gl(), l, r), VType::Real)
+                        } else if l_ty.is_signed() || r_ty.is_signed() {
+                            (builder.signed_divide(mctx.gl(), l, r), l_ty)
+                        } else {
+                            (builder.divide(mctx.gl(), l, r), l_ty)
+                        }
+                    }
+                    O::Modulus => {
+                        let (l, l_ty, r, r_ty) =
+                            coerce_bin_arithmetic(mctx.gl(), builder, l, l_ty, r, r_ty);
+                        if l_ty.is_real() {
+                            error = true;
+                            mctx.diagnostics.not_yet_implemented(
+                                ctx.arenas.get_span(item.expr),
+                                "operand does not support reals",
+                            );
+                            result_stack.push(None);
+                            continue;
+                        } else if l_ty.is_signed() || r_ty.is_signed() {
+                            (builder.signed_modulus(mctx.gl(), l, r), l_ty)
+                        } else {
+                            (builder.modulus(mctx.gl(), l, r), l_ty)
+                        }
+                    }
+                    O::ShiftLeft => shift_op!(logical_shift_left),
+                    O::ShiftRight => shift_op!(logical_shift_right),
+                    O::GreaterThan => comparison_op!(signed_gt, unsigned_gt, real_gt),
+                    O::GreaterThanEqual => comparison_op!(signed_ge, unsigned_ge, real_geq),
+                    O::LessThan => comparison_op!(signed_lt, unsigned_lt, real_lt),
+                    O::LessThanEqual => comparison_op!(signed_le, unsigned_le, real_leq),
+                    O::ArithmeticLeftShift => shift_op!(logical_shift_left),
+                    O::ArithmeticRightShift => {
+                        if l_ty.is_real() | r_ty.is_real() {
+                            error = true;
+                            mctx.diagnostics.not_yet_implemented(
+                                ctx.arenas.get_span(item.expr),
+                                "operand does not support reals",
+                            );
+                            result_stack.push(None);
+                            continue;
+                        }
+
+                        // From LRM: 5.1.12 Shift operators
+                        // > The right operand is always treated as an unsigned number and has no effect on the
+                        // > signedness of the result.
+                        let r_ty = r_ty.to_unsigned();
+                        let r = sign_or_zero_extend(mctx.gl(), builder, r, r_ty, INTEGER_VSIZE);
+                        if l_ty.is_signed() {
+                            (builder.arithmetic_shift_right(mctx.gl(), l, r), l_ty)
+                        } else {
+                            (builder.logical_shift_right(mctx.gl(), l, r), l_ty)
+                        }
+                    }
+                    O::LogicalEquality => logical_op!(equals, real_eq),
+                    O::LogicalInequality => logical_op!(not_equals, real_ne),
+                    O::CaseEquality => case_equality!(case_equals),
+                    O::CaseInequality => case_equality!(not_case_equals),
+                    O::BitwiseAnd => bitwise_op!(and),
+                    O::BitwiseXor => bitwise_op!(xor),
+                    O::BitwiseXnor => bitwise_op!(xnor),
+                    O::BitwiseOr => bitwise_op!(or),
+                    O::LogicalAnd => logical_op!(logical_and, real_logical_and),
+                    O::LogicalOr => logical_op!(logical_or, real_logical_or),
                 };
-                let result = (op)(&mut mctx.gl, builder, l, l_ty, r, r_ty);
                 result_stack.push(Some(result));
             }
             Expr::Concatenation(exprs) => {
@@ -423,34 +587,40 @@ pub fn lower_expr<'a>(
                 let truthy = result_stack.pop().unwrap();
                 let falsy = result_stack.pop().unwrap();
 
-                let (Some((c, _)), Some((mut t, mut t_ty)), Some((mut f, mut f_ty))) =
+                let (Some((c, c_ty)), Some((mut t, mut t_ty)), Some((mut f, mut f_ty))) =
                     (condition, truthy, falsy)
                 else {
                     result_stack.push(None);
                     continue;
                 };
 
-                let size = t_ty.bit_length().max(f_ty.bit_length());
-                if size > t_ty.bit_length() {
-                    t = zero_or_sign_extend(mctx.gl(), builder, t, t_ty, size);
-                    t_ty = t_ty.zero_or_sign_extend(size);
-                }
-                if size > f_ty.bit_length() {
-                    f = zero_or_sign_extend(mctx.gl(), builder, f, f_ty, size);
-                    f_ty = f_ty.zero_or_sign_extend(size);
+                if t_ty.is_real() || f_ty.is_real() {
+                    t = to_real(mctx.gl(), builder, t, t_ty);
+                    f = to_real(mctx.gl(), builder, f, f_ty);
+                    t_ty = VType::Real;
+                } else {
+                    let size = t_ty.bit_length().max(f_ty.bit_length());
+                    if size > t_ty.bit_length() {
+                        t = zero_or_sign_extend(mctx.gl(), builder, t, t_ty, size);
+                        t_ty = t_ty.zero_or_sign_extend(size);
+                    }
+                    if size > f_ty.bit_length() {
+                        f = zero_or_sign_extend(mctx.gl(), builder, f, f_ty, size);
+                        f_ty = f_ty.zero_or_sign_extend(size);
+                    }
+
+                    if let Some(context_width) = item.context_width {
+                        if context_width > t_ty.bit_length() {
+                            t = zero_or_sign_extend(mctx.gl(), builder, t, t_ty, context_width);
+                            t_ty = t_ty.zero_or_sign_extend(context_width);
+                        }
+                        if context_width > f_ty.bit_length() {
+                            f = zero_or_sign_extend(mctx.gl(), builder, f, f_ty, context_width);
+                        }
+                    }
                 }
 
-                if let Some(context_width) = item.context_width {
-                    if context_width > t_ty.bit_length() {
-                        t = zero_or_sign_extend(mctx.gl(), builder, t, t_ty, context_width);
-                        t_ty = t_ty.zero_or_sign_extend(context_width);
-                    }
-                    if context_width > f_ty.bit_length() {
-                        f = zero_or_sign_extend(mctx.gl(), builder, f, f_ty, context_width);
-                    }
-                }
-
-                let c = builder.reduce_or(mctx.gl(), c);
+                let c = to_logical(mctx.gl(), builder, c, c_ty);
                 let result = builder.select(mctx.gl(), c, t, f);
                 result_stack.push(Some((result, t_ty)));
             }
@@ -528,6 +698,16 @@ pub fn lower_expr<'a>(
                         continue 'dispatch_loop;
                     }
                 };
+
+                if ty.is_real() && (exprs.len() > dims.len() || range_expression.is_some()) {
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(item.expr),
+                        "bit and part selects are not allowed on reals",
+                    );
+                    result_stack.push(None);
+                    error = true;
+                    continue;
+                }
 
                 struct LowerExprPartSelect<'a, 'b> {
                     builder: &'b mut BasicBlockBuilder,
@@ -726,7 +906,9 @@ pub fn lower_expr<'a>(
                     builder.truncate(&mut mctx.gl, var, output_width)
                 };
 
-                let output_ty = if is_unsigned {
+                let output_ty = if ty.is_real() {
+                    VType::Real
+                } else if is_unsigned {
                     VType::UnsignedNet(output_width)
                 } else {
                     ty.truncate(output_width)
@@ -894,6 +1076,18 @@ pub fn lower_expr<'a>(
     Ok((value, ty))
 }
 
+fn to_logical(
+    gl: &mut GlobalContext,
+    builder: &mut BasicBlockBuilder,
+    var: VariableKey,
+    ty: VType,
+) -> VariableKey {
+    match ty {
+        VType::SignedNet(_) | VType::UnsignedNet(_) => builder.reduce_or(gl, var),
+        VType::Real => builder.real_to_logical(gl, var),
+    }
+}
+
 // i op j, where op is: + - * / % & | ^ ^~ ~^
 pub fn coerce_bin_arithmetic(
     gl: &mut GlobalContext,
@@ -907,6 +1101,12 @@ pub fn coerce_bin_arithmetic(
 
     if l_ty == r_ty {
         return (l, l_ty, r, r_ty);
+    }
+
+    if l_ty.is_real() || r_ty.is_real() {
+        let l = to_real(gl, builder, l, l_ty);
+        let r = to_real(gl, builder, r, r_ty);
+        return (l, VType::Real, r, VType::Real);
     }
 
     let ty = coerce_to_max_size_ty(l_ty, r_ty);
@@ -932,187 +1132,16 @@ pub fn coerce_to_max_size_ty(l_ty: VType, r_ty: VType) -> VType {
     VType::net(size, l_ty.is_signed() & r_ty.is_signed())
 }
 
-macro_rules! impl_bin_arithmetic {
-    ($($f:ident => $builder_f:ident),+ $(,)?) => {
-        $(
-        fn $f(
-            gl: &mut GlobalContext,
-            builder: &mut BasicBlockBuilder,
-            l: VariableKey,
-            l_ty: VType,
-            r: VariableKey,
-            r_ty: VType,
-        ) -> (VariableKey, VType) {
-            let (l, l_ty, r, _) = coerce_bin_arithmetic(
-                gl,
-                builder,
-                l,
-                l_ty,
-                r,
-                r_ty,
-            );
-            (builder.$builder_f(gl, l, r), l_ty)
-        }
-        )+
-    };
-    ($($f:ident => ($signed_f:ident, $unsigned_f:ident)),+ $(,)?) => {
-        $(
-        fn $f(
-            gl: &mut GlobalContext,
-            builder: &mut BasicBlockBuilder,
-            l: VariableKey,
-            l_ty: VType,
-            r: VariableKey,
-            r_ty: VType,
-        ) -> (VariableKey, VType) {
-            let (l, l_ty, r, r_ty) = coerce_bin_arithmetic(
-                gl,
-                builder,
-                l,
-                l_ty,
-                r,
-                r_ty,
-            );
-            if l_ty.is_signed() {
-                (builder.$signed_f(gl, l, r), l_ty)
-            } else if r_ty.is_signed() {
-                (builder.$signed_f(gl, l, r), r_ty)
-            } else {
-                (builder.$unsigned_f(gl, l, r), l_ty)
-            }
-        }
-        )+
-    };
-}
-
-macro_rules! impl_bin_eq_ineq {
-    ($($f:ident => $builder_f:ident),+ $(,)?) => {
-        $(
-        fn $f(
-            gl: &mut GlobalContext,
-            builder: &mut BasicBlockBuilder,
-            l: VariableKey,
-            l_ty: VType,
-            r: VariableKey,
-            r_ty: VType,
-        ) -> (VariableKey, VType) {
-            let (l, _, r, _) = coerce_bin_arithmetic(
-                gl,
-                builder,
-                l,
-                l_ty,
-                r,
-                r_ty,
-            );
-            (builder.$builder_f(gl, l, r), VType::SCALAR_NET)
-        }
-        )+
-    };
-    ($($f:ident => ($signed_f:ident, $unsigned_f:ident)),+ $(,)?) => {
-        $(
-        fn $f(
-            gl: &mut GlobalContext,
-            builder: &mut BasicBlockBuilder,
-            l: VariableKey,
-            l_ty: VType,
-            r: VariableKey,
-            r_ty: VType,
-        ) -> (VariableKey, VType) {
-            let (l, l_ty, r, r_ty) = coerce_bin_arithmetic(
-                gl,
-                builder,
-                l,
-                l_ty,
-                r,
-                r_ty,
-            );
-            if l_ty.is_signed() || r_ty.is_signed() {
-                (builder.$signed_f(gl, l, r), VType::SCALAR_NET)
-            } else {
-                (builder.$unsigned_f(gl, l, r), VType::SCALAR_NET)
-            }
-        }
-        )+
-    };
-}
-
-macro_rules! impl_shift {
-    ($($f:ident => $builder_f:ident),+ $(,)?) => {
-        $(
-        fn $f(
-            gl: &mut GlobalContext,
-            builder: &mut BasicBlockBuilder,
-            l: VariableKey,
-            l_ty: VType,
-            r: VariableKey,
-            r_ty: VType,
-        ) -> (VariableKey, VType) {
-            // From LRM: 5.1.12 Shift operators
-            // > The right operand is always treated as an unsigned number and has no effect on the
-            // > signedness of the result.
-            let r_ty = r_ty.to_unsigned();
-
-            let r = sign_or_zero_extend(gl, builder, r, r_ty, INTEGER_VSIZE);
-            (builder.$builder_f(gl, l, r), l_ty)
-        }
-        )+
-    };
-}
-
-impl_bin_arithmetic! {
-    bin_power => power,
-    bin_multiply => multiply,
-    bin_plus => plus,
-    bin_minus => minus,
-    bin_bitwise_and => and,
-    bin_bitwise_xor => xor,
-    bin_bitwise_xnor => xnor,
-    bin_bitwise_or => or,
-}
-
-impl_bin_arithmetic! {
-    bin_divide => (signed_divide, divide),
-    bin_modulus => (signed_modulus, modulus),
-}
-
-impl_bin_eq_ineq! {
-    bin_greater_than => (signed_gt, unsigned_gt),
-    bin_greater_than_equal => (signed_ge, unsigned_ge),
-    bin_less_than => (signed_lt, unsigned_lt),
-    bin_less_than_equal => (signed_le, unsigned_le),
-}
-
-impl_bin_eq_ineq! {
-    bin_logical_equality => equals,
-    bin_logical_inequality => not_equals,
-    bin_case_equality => case_equals,
-    bin_case_inequality => not_case_equals,
-    bin_logical_and => logical_and,
-    bin_logical_or => logical_or,
-}
-
-impl_shift! {
-    bin_logical_shift_left => logical_shift_left,
-    bin_logical_shift_right => logical_shift_right,
-}
-
-fn bin_arithmetic_shift_right(
+pub fn to_real(
     gl: &mut GlobalContext,
     builder: &mut BasicBlockBuilder,
-    l: VariableKey,
-    l_ty: VType,
-    r: VariableKey,
-    r_ty: VType,
-) -> (VariableKey, VType) {
-    // From LRM: 5.1.12 Shift operators
-    // > The right operand is always treated as an unsigned number and has no effect on the
-    // > signedness of the result.
-    let r_ty = r_ty.to_unsigned();
-    let r = sign_or_zero_extend(gl, builder, r, r_ty, INTEGER_VSIZE);
-    if l_ty.is_signed() {
-        (builder.arithmetic_shift_right(gl, l, r), l_ty)
-    } else {
-        (builder.logical_shift_right(gl, l, r), l_ty)
+    src: VariableKey,
+    ty: VType,
+) -> VariableKey {
+    match ty {
+        VType::SignedNet(_) => builder.real_from_signed_decimal(gl, src),
+        VType::UnsignedNet(_) => builder.real_from_unsigned_decimal(gl, src),
+        VType::Real => src,
     }
 }
 
@@ -1151,6 +1180,30 @@ pub fn truncate_or_extend(
         builder.sign_extend(gl, src, to)
     } else {
         builder.zero_extend(gl, src, to)
+    }
+}
+
+pub fn coerce_to(
+    gl: &mut GlobalContext,
+    builder: &mut BasicBlockBuilder,
+    src: VariableKey,
+    from: VType,
+    to: VType,
+) -> VariableKey {
+    use VType as T;
+    match (from, to) {
+        (T::SignedNet(_) | T::UnsignedNet(_), T::SignedNet(_) | T::UnsignedNet(_)) => {
+            truncate_or_extend(gl, builder, src, from, to.bit_length())
+        }
+        (T::Real, T::SignedNet(to)) => {
+            let v = builder.real_to_i64(gl, src);
+            truncate_or_extend(gl, builder, v, T::SignedNet(VSIZE_64), to)
+        }
+        (T::Real, T::UnsignedNet(to)) => {
+            let v = builder.real_to_u64(gl, src);
+            truncate_or_extend(gl, builder, v, T::UnsignedNet(VSIZE_64), to)
+        }
+        (_, T::Real) => to_real(gl, builder, src, from),
     }
 }
 

@@ -7,7 +7,7 @@ use crate::ast::expr::Expr;
 use crate::ast::statement::TaskEnable;
 use crate::ast::{AstId, HIdent};
 use crate::elaborate::VSymbol;
-use crate::lower::expression::{lower_expr, truncate_or_extend};
+use crate::lower::expression::{self, lower_expr};
 use crate::lower::{LowerContext, assign_task_output};
 use crate::lower::{MutLowerContext, VType, hident_span, try_resolve_hident};
 
@@ -41,12 +41,12 @@ pub fn lower_function_call<'a>(
         let Some((arg_variable, arg_ty)) = arguments[i] else {
             return Err(());
         };
-        let arg_variable = truncate_or_extend(
+        let arg_variable = expression::coerce_to(
             mctx.gl(),
             builder,
             arg_variable,
             arg_ty,
-            input_ty.bit_length(),
+            input_ty.resize_net_to(input_ty.bit_length()),
         );
         builder.drive(mctx.gl(), input_signal, arg_variable);
     }
@@ -145,12 +145,12 @@ pub fn lower_task_enable<'a>(
             arg,
             Some(input_ty.bit_length()),
         )?;
-        let arg_variable = truncate_or_extend(
+        let arg_variable = expression::coerce_to(
             mctx.gl(),
             &mut builder,
             arg_variable,
             arg_ty,
-            input_ty.bit_length(),
+            input_ty,
         );
         builder.drive(mctx.gl(), signal, arg_variable);
     }

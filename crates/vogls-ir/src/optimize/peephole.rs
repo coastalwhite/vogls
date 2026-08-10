@@ -363,6 +363,7 @@ fn peephole_instruction(
                                 TvPushdownVariant::KeepOutput => {
                                     *instr = I::Binary(dst, op, lhs_tv, rhs_tv);
                                 }
+                                TvPushdownVariant::TvOnly => unreachable!("Source cannot be four-value"),
                             }
                             return PeepholeResult::Changed;
                         }
@@ -417,6 +418,7 @@ fn peephole_instruction(
                                     *instr =
                                         I::BinaryImm(dst, op, src_tv, imm.clone_lowering_mode());
                                 }
+                                TvPushdownVariant::TvOnly => unreachable!("Source cannot be four-value"),
                             }
                             return PeepholeResult::Changed;
                         }

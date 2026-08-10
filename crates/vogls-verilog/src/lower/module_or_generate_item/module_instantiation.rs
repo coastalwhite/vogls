@@ -262,9 +262,7 @@ fn assign_input_port<'a>(
         Some(port_bit_length),
     )?;
     let v = match expr_slice {
-        None => {
-            expression::sign_or_zero_extend(mctx.gl(), &mut bb_builder, v, v_ty, port_bit_length)
-        }
+        None => expression::coerce_to(mctx.gl(), &mut bb_builder, v, v_ty, port.ty),
         Some(slice) => bb_builder.slice_constant(mctx.gl(), v, slice.lsb(), slice.width()),
     };
     port.net.drive_blocking(mctx.gl(), &mut bb_builder, v, None);
@@ -415,12 +413,12 @@ fn assign_port_output<'a>(
                     (None, Some((array_offset, _array_overflow))) => Some(array_offset),
                     (None, None) => None,
                 };
-                let variable = expression::truncate_or_extend(
+                let variable = expression::coerce_to(
                     mctx.gl(),
                     &mut bb_builder,
                     var,
                     var_ty,
-                    output_width,
+                    s.ty.resize_net_to(output_width),
                 );
                 s.net
                     .drive_blocking(mctx.gl(), &mut bb_builder, variable, partial);

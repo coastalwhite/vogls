@@ -64,12 +64,11 @@ pub fn skip_scientific_exp(s: &[u8], i: &mut usize) -> bool {
     }
 
     // Exponent decimal
-    let pre = *i;
-    skip_decimal(s, i);
-    if *i == pre {
+    if s.get(*i).is_none_or(|b| !b.is_ascii_digit()) {
         *i = start_offset;
         return false;
     }
+    skip_decimal(s, i);
 
     true
 }

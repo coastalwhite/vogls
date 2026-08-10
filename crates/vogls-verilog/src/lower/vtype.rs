@@ -1,4 +1,4 @@
-use vogls_ir::{VectorSize, SCALAR_VSIZE, VSIZE_64};
+use vogls_ir::{SCALAR_VSIZE, VSIZE_64, VectorSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VType {
@@ -61,5 +61,13 @@ impl VType {
 
     pub fn is_real(&self) -> bool {
         matches!(self, Self::Real)
+    }
+
+    pub fn resize_net_to(&self, bit_length: VectorSize) -> VType {
+        match self {
+            Self::SignedNet(_) => Self::SignedNet(bit_length),
+            Self::UnsignedNet(_) => Self::UnsignedNet(bit_length),
+            Self::Real => Self::Real,
+        }
     }
 }

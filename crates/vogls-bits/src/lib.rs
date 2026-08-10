@@ -1,3 +1,4 @@
+use std::cmp;
 use std::fmt::{self};
 use std::hash::Hash;
 use std::num::NonZeroU32;
@@ -1784,6 +1785,52 @@ impl Bits {
             .unwrap()
             .try_into()
             .ok()
+    }
+
+    pub fn as_unsigned_f64(&self) -> f64 {
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(val) => return val as f64,
+            BitsDataRef::InlineFv(spc, val) => return (spc & val) as f64,
+            BitsDataRef::SeparateTv(_) | BitsDataRef::SeparateFv(_) => {}
+        }
+
+        // @Performance. This is horrendous but who is watching.
+        let s = self
+            .special_to_zero()
+            .display(&BitsFormatOptions {
+                prefix: false,
+                base: format::BitsFormatBase::Decimal,
+                separator: None,
+                signed: false,
+                align: None,
+                fill: '_',
+                width: format::BitsFormatWidth::Shrink,
+            })
+            .to_string();
+        s.parse().unwrap_or(0.0)
+    }
+    pub fn as_signed_f64(&self) -> f64 {
+        let slf = self.sign_extend(cmp::max(self.size(), VectorSize::new(64).unwrap()));
+        match slf.as_data_ref() {
+            BitsDataRef::InlineTv(val) => return val as i64 as f64,
+            BitsDataRef::InlineFv(spc, val) => return (spc & val) as i64 as f64,
+            BitsDataRef::SeparateTv(_) | BitsDataRef::SeparateFv(_) => {}
+        }
+
+        // @Performance. This is horrendous but who is watching.
+        let s = slf
+            .special_to_zero()
+            .display(&BitsFormatOptions {
+                prefix: false,
+                base: format::BitsFormatBase::Decimal,
+                separator: None,
+                signed: true,
+                align: None,
+                fill: '_',
+                width: format::BitsFormatWidth::Shrink,
+            })
+            .to_string();
+        s.parse().unwrap_or(0.0)
     }
 
     pub fn set_slice(&self, offset: u32, src: &Bits) -> Bits {
