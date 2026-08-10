@@ -1346,6 +1346,10 @@ impl Bits {
             _ => None,
         }
     }
+    pub fn extract_exact_f64(&self) -> Option<f64> {
+        assert_eq!(self.size().get(), 64);
+        self.extract_exact_u64().map(|v| f64::from_bits(v))
+    }
 
     pub fn contains_special(&self) -> bool {
         match self.as_data_ref() {

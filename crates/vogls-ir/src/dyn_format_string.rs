@@ -27,6 +27,14 @@ pub enum Base {
     Hexadecimal,
     Decimal,
     Ascii,
+    Exponential,
+    Float,
+    FloatAdaptive,
+}
+impl Base {
+    pub fn is_fp_representation(self) -> bool {
+        matches!(self, Self::Exponential | Self::Float | Self::FloatAdaptive)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -113,6 +121,15 @@ pub fn format_bits(
         Base::Octal => BitsFormatBase::Octal,
         Base::Hexadecimal => BitsFormatBase::LowerHex,
         Base::Decimal => BitsFormatBase::Decimal,
+        Base::Float => return write!(f, "{}", bits.extract_exact_f64().unwrap()),
+        Base::Exponential => return write!(f, "{:e}", bits.extract_exact_f64().unwrap()),
+        Base::FloatAdaptive => {
+            let v = bits.extract_exact_f64().unwrap();
+            let float = format!("{v}");
+            let exp = format!("{v:e}");
+            let min = if float.len() < exp.len() { float } else { exp };
+            return write!(f, "{min}");
+        }
         Base::Ascii => {
             #[inline(always)]
             fn to_hex(b: u8) -> u8 {

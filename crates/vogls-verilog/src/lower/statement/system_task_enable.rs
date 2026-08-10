@@ -6,7 +6,7 @@ use crate::ast::AstId;
 use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskEnable;
 use crate::elaborate::{VSymbol, determine_module_context};
-use crate::lower::expression::{get_expr_type, lower_expr};
+use crate::lower::expression::{get_expr_type, lower_expr, to_real};
 use crate::lower::{LowerContext, MutLowerContext, try_resolve_hident};
 use crate::lower::{expression, hident_span, try_resolve_net};
 
@@ -343,14 +343,15 @@ pub fn lower_write_arguments<'a>(
                 let mut remaining = &str_literal[at + next + 1..];
                 at += next + 1;
 
+                // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 279
+                // > For each % character (except %m and %%) that appears in a string, a
+                // > corresponding expression shall follow the string in the argument list.
                 if remaining.starts_with(&['m', 'M']) {
                     at += 1;
                     let scope_name = ctx.table[scope].name();
                     format_string_content.push_str(&ctx.arenas.ident_table[scope_name]);
                     continue;
-                }
-
-                if remaining.starts_with('%') {
+                } else if remaining.starts_with('%') {
                     format_string_content.push('%');
                     at += 1;
                     continue;
@@ -385,22 +386,7 @@ pub fn lower_write_arguments<'a>(
                     continue;
                 };
 
-                at += usize::from(matches!(
-                    b,
-                    b'h' | b'H' |
-                            b'x' | b'X' | // @NOTE: Not in spec: but used by Icarus Verilog
-                            b'd' | b'D' |
-                            b'o' | b'O' |
-                            b'b' | b'B' |
-                            b'c' | b'C' |
-                            b'l' | b'L' |
-                            b'v' | b'V' |
-                            b's' | b'S' |
-                            b't' | b'T' |
-                            b'u' | b'U' |
-                            b'z' | b'Z'
-                ));
-
+                at += 1;
                 let base = match b {
                     b'h' | b'H' => Base::Hexadecimal,
                     b'x' | b'X' => Base::Hexadecimal, // @NOTE: Not in spec: but used by Icarus Verilog
@@ -423,7 +409,16 @@ pub fn lower_write_arguments<'a>(
                         );
                         return Err(());
                     }
-                    _ => Base::Decimal,
+                    b'e' | b'E' => Base::Exponential,
+                    b'f' | b'F' => Base::Float,
+                    b'g' | b'G' => Base::FloatAdaptive,
+                    _ => {
+                        mctx.diagnostics.not_yet_implemented(
+                            ctx.arenas.get_span(expr),
+                            "unknown format specifier",
+                        );
+                        return Err(());
+                    }
                 };
 
                 format_string_arguments.push((
@@ -438,13 +433,17 @@ pub fn lower_write_arguments<'a>(
             }
             format_string_content.push_str(&str_literal[at..]);
         } else {
-            let (var, var_ty) = lower_expr(ctx, mctx, scope, builder, expr, None)?;
+            let (mut var, var_ty) = lower_expr(ctx, mctx, scope, builder, expr, None)?;
             if required_arguments_left == 0 {
                 format_string_arguments.push((
                     format_string_content.len(),
                     DynFormatArgument {
                         padding: Padding::default(),
-                        base: Base::Decimal,
+                        base: if var_ty.is_real() {
+                            Base::Float
+                        } else {
+                            Base::Decimal
+                        },
                         signed: var_ty.is_signed(),
                         prefix: false,
                     },
@@ -460,6 +459,9 @@ pub fn lower_write_arguments<'a>(
                     return Err(());
                 };
                 dyn_fmt.signed = var_ty.is_signed();
+                if dyn_fmt.base.is_fp_representation() {
+                    var = to_real(mctx.gl(), builder, var, var_ty);
+                }
             }
             format_string_args.push(var);
         }
