@@ -1,7 +1,9 @@
-use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+use vogls_frontend::ident_table::{IdentId, IdentTable};
+use vogls_utils::{TableMap, VgHashMap, new_table_key};
 
 use crate::number::{
     Base, skip_binary, skip_decimal, skip_hexadecimal, skip_octal, skip_scientific_exp, skip_sign,
@@ -21,11 +23,52 @@ pub struct Tokenized {
     pub file_line_offsets: Vec<Vec<usize>>,
 }
 
+new_table_key! { pub struct MacroKey; }
+
+#[derive(Default, Clone)]
+pub struct Macros {
+    idents: IdentTable,
+    macros: TableMap<MacroKey, IdentId, Macro>,
+}
+
+impl Macros {
+    pub fn define(&mut self, name: &str, item: Macro) -> Option<Macro> {
+        let name = self.idents.get_or_insert(name);
+        self.define_with_ident_id(name, item)
+    }
+
+    fn define_with_ident_id(&mut self, name: IdentId, item: Macro) -> Option<Macro> {
+        let (_, old_macro) = self.macros.insert(name, item);
+        old_macro
+    }
+
+    pub fn undefine(&mut self, name: &str) -> Option<Macro> {
+        let name = self.idents.get_or_insert(name);
+        self.macros.unlink(name).map(|(_, item)| item)
+    }
+
+    fn find(&self, name: &str) -> Option<(MacroKey, &Macro)> {
+        let name = self.idents.get(name)?;
+        self.find_by_ident_id(name)
+    }
+
+    fn find_by_ident_id(&self, name: IdentId) -> Option<(MacroKey, &Macro)> {
+        self.macros.get(name)
+    }
+
+    pub fn is_defined(&self, name: &str) -> bool {
+        self.idents
+            .get(name)
+            .is_some_and(|k| self.macros.contains_key(k))
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct Macro {
     tokens: Vec<Token>,
     spans: Vec<Span>,
     file: Vec<FileIdx>,
+    args: Option<(Vec<(usize, usize)>, usize)>,
 }
 
 #[derive(Debug)]
@@ -51,6 +94,47 @@ impl fmt::Display for TokenizeErrorReason {
             Self::FailedToOpenFile(path, err) => {
                 write!(f, "failed to open {}. Reason: {err}", path.display())
             }
+            Self::IncludeInMacro => {
+                f.write_str("Include preprocessor directive in a macro definition")
+            }
+            Self::NestedDefine => f.write_str("Nested preprocessor definition statement"),
+            Self::DefineWithoutName => f.write_str("Definition without name"),
+            Self::ExpectedConditionalIdent => {
+                f.write_str("Expected macro ident for ifdef/ifndef/elsif")
+            }
+            Self::UnclosedFunctionMacro(macro_name) => {
+                write!(f, "Function macro '{macro_name}' is unclosed")
+            }
+            Self::MalformedMacroArguments(macro_name) => {
+                write!(
+                    f,
+                    "Function macro '{macro_name}' has malformed argument definitions"
+                )
+            }
+            Self::MacroArgumentMismatch(macro_name) => {
+                write!(
+                    f,
+                    "Function macro '{macro_name}' has different number of arguments"
+                )
+            }
+            Self::FunctionMacroWithoutArgs(macro_name) => {
+                write!(
+                    f,
+                    "Function macro '{macro_name}' is called without arguments"
+                )
+            }
+            Self::ZeroArgMacroFunction(macro_name) => {
+                write!(
+                    f,
+                    "Function macro '{macro_name}' cannot have zero arguments"
+                )
+            }
+            Self::NestedFunctionMacro(macro_name, nested) => {
+                write!(
+                    f,
+                    "Function macro '{macro_name}' calls another function macro '{nested}', which is not currently allowed"
+                )
+            }
         }
     }
 }
@@ -60,6 +144,16 @@ impl std::error::Error for TokenizeError {}
 #[derive(Debug)]
 pub enum TokenizeErrorReason {
     FailedToOpenFile(PathBuf, std::io::Error),
+    IncludeInMacro,
+    NestedDefine,
+    DefineWithoutName,
+    ExpectedConditionalIdent,
+    MalformedMacroArguments(String),
+    UnclosedFunctionMacro(String),
+    MacroArgumentMismatch(String),
+    FunctionMacroWithoutArgs(String),
+    ZeroArgMacroFunction(String),
+    NestedFunctionMacro(String, String),
 }
 
 impl Tokenized {
@@ -67,13 +161,13 @@ impl Tokenized {
         content: Arc<str>,
         path: Option<Arc<Path>>,
     ) -> Result<Self, Box<TokenizeError>> {
-        Self::tokenize_with_macros(content, path, &mut HashMap::new())
+        Self::tokenize_with_macros(content, path, &mut Macros::default())
     }
 
     pub fn tokenize_with_macros(
         content: Arc<str>,
         path: Option<Arc<Path>>,
-        macros: &mut HashMap<String, Macro>,
+        macros: &mut Macros,
     ) -> Result<Self, Box<TokenizeError>> {
         let mut ts = Self {
             tokens: Vec::new(),
@@ -91,7 +185,7 @@ impl Tokenized {
         &mut self,
         content: Arc<str>,
         path: Option<Arc<Path>>,
-        macros: &mut HashMap<String, Macro>,
+        macros: &mut Macros,
     ) -> Result<(), Box<TokenizeError>> {
         let Self {
             tokens,
@@ -111,6 +205,17 @@ impl Tokenized {
             has_else: bool,
         }
 
+        struct MacroArgs {
+            name: IdentId,
+            depth: usize,
+        }
+
+        enum LexState {
+            Base,
+            Macro(MacroItem),
+            MacroArgs(MacroArgs),
+        }
+
         // Stack and depth for the preprocessor `ifdef`, `ifdef`, `elsif`, `else` and `endif.
         //
         // If `if_untaken_depth >= if_stack.len()`, it means the current tokens are being included
@@ -119,10 +224,17 @@ impl Tokenized {
         let mut if_stack = Vec::<IfState>::new();
         let mut if_untaken_depth = 0;
 
+        // Scratch buffers for function macros.
+        let mut scratch_funcmacro_tokens = Vec::new();
+        let mut scratch_funcmacro_spans = Vec::new();
+        let mut scratch_funcmacro_file_idxs = Vec::new();
+        let mut scratch_funcmacro_splits = Vec::new();
+
         struct MacroItem {
-            name: String,
-            arguments: HashMap<String, usize>,
+            name: IdentId,
+            arguments: VgHashMap<IdentId, usize>,
             argument_positions: Vec<(usize, usize)>,
+            has_args: bool,
         }
 
         struct LexItem {
@@ -132,7 +244,7 @@ impl Tokenized {
             i: usize,
             end_offset: usize,
 
-            preprocessor_macro: Option<MacroItem>,
+            state: LexState,
         }
 
         let mut lex_stack = Vec::new();
@@ -141,7 +253,7 @@ impl Tokenized {
             start: 0,
             i: 0,
             end_offset: content.len(),
-            preprocessor_macro: None,
+            state: LexState::Base,
         });
         contents.push(content);
         paths.push(path);
@@ -152,7 +264,7 @@ impl Tokenized {
             start,
             mut i,
             end_offset,
-            ref mut preprocessor_macro,
+            mut state,
         }) = lex_stack.pop()
         {
             let content = contents[file_idx as usize].clone();
@@ -174,9 +286,22 @@ impl Tokenized {
                             (T::LeftParenStarRightParen, 3)
                         }
                         Some(b'*') => (T::LeftParenStar, 2),
-                        _ => (T::LeftParen, 1),
+                        _ => {
+                            if let LexState::MacroArgs(a) = &mut state {
+                                a.depth += 1;
+                            }
+                            (T::LeftParen, 1)
+                        }
                     },
-                    b')' => (T::RightParen, 1),
+                    b')' => {
+                        if let LexState::MacroArgs(a) = &mut state {
+                            a.depth -= 1;
+                            if a.depth == 0 {
+                                break;
+                            }
+                        }
+                        (T::RightParen, 1)
+                    }
                     b'[' => (T::LeftBrace, 1),
                     b']' => (T::RightBrace, 1),
                     b'{' => (T::LeftBracket, 1),
@@ -478,9 +603,10 @@ impl Tokenized {
                             "xnor" => T::KeywordXnor,
                             "xor" => T::KeywordXor,
                             _ => {
-                                if let Some(preprocessor_macro) = preprocessor_macro
+                                if let LexState::Macro(preprocessor_macro) = &mut state
+                                    && let Some(arg_ident_id) = macros.idents.get(word)
                                     && let Some(arg_idx) =
-                                        preprocessor_macro.arguments.get_mut(word)
+                                        preprocessor_macro.arguments.get_mut(&arg_ident_id)
                                 {
                                     preprocessor_macro
                                         .argument_positions
@@ -506,156 +632,232 @@ impl Tokenized {
                         match directive {
                             // Preprocessor macro definition
                             "define" => {
-                                assert!(
-                                    preprocessor_macro.is_none(),
-                                    "nested preprocessor definition"
-                                );
+                                if !matches!(state, LexState::Base) {
+                                    return Err(Box::new(TokenizeError {
+                                        line: self.file_line_offsets[file_idx as usize].len()
+                                            as u64,
+                                        file: self.paths[file_idx as usize].clone(),
+                                        reason: TokenizeErrorReason::NestedDefine,
+                                    }));
+                                }
 
                                 let mut j = i + 1 + directive_length;
-                                // @TODO: If contains line break, it should probably take that into
-                                // account.
                                 skip_sameline_whitespace(&content, &mut j);
-                                if is_fst_ident_byte(bytes[j]) {
-                                    let name_length = ident_length(&content[j..]);
-                                    let name = &content[j..][..name_length];
-                                    // @TODO: Disallow overwriting compiler intrinsics.
-                                    j += name_length;
-
-                                    let mut arguments = HashMap::new();
-                                    'arg_parsing: {
-                                        if content[j..].starts_with("(") {
-                                            j += 1;
-
-                                            // @TODO: Handle EOF
-                                            loop {
-                                                skip_sameline_whitespace(&content, &mut j);
-                                                if bytes[j] == b')' {
-                                                    j += 1;
-                                                    break 'arg_parsing;
-                                                }
-
-                                                if !arguments.is_empty() {
-                                                    if bytes[j] != b',' {
-                                                        panic!("invalid argument");
-                                                    }
-                                                    j += 1;
-                                                    skip_sameline_whitespace(&content, &mut j);
-                                                }
-
-                                                let argument_length = ident_length(&content[j..]);
-                                                let argument =
-                                                    content[j..][..argument_length].to_string();
-                                                let argument_idx = arguments.len();
-                                                arguments.insert(argument, argument_idx);
-                                                j += argument_length;
-                                            }
-                                        }
-                                    }
-
-                                    let mut is_escaped = false;
-                                    let end = bytes[j..]
-                                        .iter()
-                                        .position(|&b| {
-                                            let is_unescaped_nl = b == b'\n' && !is_escaped;
-                                            is_escaped = b == b'\\';
-                                            is_unescaped_nl
-                                        })
-                                        .map_or(bytes.len(), |e| e + j);
-
-                                    if if_untaken_depth < if_stack.len() {
-                                        i = end;
-                                        continue;
-                                    }
-
-                                    lex_stack.push(LexItem {
-                                        file_idx,
-                                        start,
-                                        i: end,
-                                        end_offset,
-                                        preprocessor_macro: None,
-                                    });
-                                    lex_stack.push(LexItem {
-                                        file_idx,
-                                        start: tokens.len(),
-                                        i: j,
-                                        end_offset: end,
-                                        preprocessor_macro: Some(MacroItem {
-                                            name: name.into(),
-                                            arguments,
-                                            argument_positions: Vec::new(),
-                                        }),
-                                    });
-                                    continue 'lex_stack;
+                                if bytes.get(j).is_none_or(|&b| !is_fst_ident_byte(b)) {
+                                    return Err(Box::new(TokenizeError {
+                                        line: self.file_line_offsets[file_idx as usize].len()
+                                            as u64,
+                                        file: self.paths[file_idx as usize].clone(),
+                                        reason: TokenizeErrorReason::DefineWithoutName,
+                                    }));
                                 }
+
+                                let name_length = ident_length(&content[j..]);
+                                let name = &content[j..][..name_length];
+                                // @TODO: Disallow overwriting compiler intrinsics.
+                                j += name_length;
+
+                                let mut arguments = VgHashMap::default();
+                                let mut has_args = false;
+                                if content[j..].starts_with("(") {
+                                    has_args = true;
+                                    j += 1;
+
+                                    skip_sameline_whitespace(&content, &mut j);
+                                    loop {
+                                        let Some(&b) = bytes.get(j) else {
+                                            return Err(Box::new(TokenizeError {
+                                                line: self.file_line_offsets[file_idx as usize]
+                                                    .len()
+                                                    as u64,
+                                                file: self.paths[file_idx as usize].clone(),
+                                                reason:
+                                                    TokenizeErrorReason::MalformedMacroArguments(
+                                                        name.to_string(),
+                                                    ),
+                                            }));
+                                        };
+                                        if b == b')' {
+                                            break;
+                                        }
+
+                                        if !arguments.is_empty() {
+                                            if b != b',' {
+                                                return Err(Box::new(TokenizeError {
+                                                    line: self.file_line_offsets[file_idx as usize]
+                                                        .len()
+                                                        as u64,
+                                                    file: self.paths[file_idx as usize].clone(),
+                                                    reason:
+                                                        TokenizeErrorReason::MalformedMacroArguments(
+                                                            name.to_string(),
+                                                        ),
+                                                }));
+                                            }
+                                            j += 1;
+                                            skip_sameline_whitespace(&content, &mut j);
+                                        }
+                                        if bytes.get(j).is_none_or(|&b| !is_fst_ident_byte(b)) {
+                                            return Err(Box::new(TokenizeError {
+                                                line: self.file_line_offsets[file_idx as usize]
+                                                    .len()
+                                                    as u64,
+                                                file: self.paths[file_idx as usize].clone(),
+                                                reason:
+                                                    TokenizeErrorReason::MalformedMacroArguments(
+                                                        name.to_string(),
+                                                    ),
+                                            }));
+                                        }
+
+                                        let argument_length = ident_length(&content[j..]);
+                                        let argument = &content[j..][..argument_length];
+                                        let argument = macros.idents.get_or_insert(&argument);
+                                        let argument_idx = arguments.len();
+                                        arguments.insert(argument, argument_idx);
+                                        j += argument_length;
+                                        skip_sameline_whitespace(&content, &mut j);
+                                    }
+
+                                    j += 1;
+
+                                    if arguments.is_empty() {
+                                        return Err(Box::new(TokenizeError {
+                                            line: self.file_line_offsets[file_idx as usize].len()
+                                                as u64,
+                                            file: self.paths[file_idx as usize].clone(),
+                                            reason: TokenizeErrorReason::ZeroArgMacroFunction(
+                                                name.to_string(),
+                                            ),
+                                        }));
+                                    }
+                                }
+
+                                let mut is_escaped = false;
+                                let end = bytes[j..]
+                                    .iter()
+                                    .position(|&b| {
+                                        let is_unescaped_nl = b == b'\n' && !is_escaped;
+                                        is_escaped = b == b'\\';
+                                        is_unescaped_nl
+                                    })
+                                    .map_or(bytes.len(), |e| e + j);
+
+                                if if_untaken_depth < if_stack.len() {
+                                    i = end;
+                                    continue;
+                                }
+
+                                lex_stack.push(LexItem {
+                                    file_idx,
+                                    start,
+                                    i: end,
+                                    end_offset,
+                                    state: LexState::Base,
+                                });
+                                lex_stack.push(LexItem {
+                                    file_idx,
+                                    start: tokens.len(),
+                                    i: j,
+                                    end_offset: end,
+                                    state: LexState::Macro(MacroItem {
+                                        name: macros.idents.get_or_insert(name),
+                                        arguments,
+                                        argument_positions: Vec::new(),
+                                        has_args,
+                                    }),
+                                });
+                                continue 'lex_stack;
                             }
                             "undef" => {
                                 let mut j = i + 1 + directive_length;
                                 skip_sameline_whitespace(&content, &mut j);
-                                if is_fst_ident_byte(bytes[j]) {
-                                    let name_length = ident_length(&content[j..]);
-                                    let name = &content[j..][..name_length];
-                                    i = j + name_length;
-
-                                    // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 352
-                                    // An attempt to undefine a text macro that was not previously
-                                    // defined using a `define compiler directive can result in a
-                                    // warning.
-                                    if if_untaken_depth >= if_stack.len() {
-                                        _ = macros.remove(name);
-                                    }
-                                    continue;
+                                if bytes.get(j).is_none_or(|&b| !is_fst_ident_byte(b)) {
+                                    return Err(Box::new(TokenizeError {
+                                        line: self.file_line_offsets[file_idx as usize].len()
+                                            as u64,
+                                        file: self.paths[file_idx as usize].clone(),
+                                        reason: TokenizeErrorReason::DefineWithoutName,
+                                    }));
                                 }
+
+                                let name_length = ident_length(&content[j..]);
+                                let name = &content[j..][..name_length];
+                                i = j + name_length;
+
+                                // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 352
+                                // An attempt to undefine a text macro that was not previously
+                                // defined using a `define compiler directive can result in a
+                                // warning.
+                                if if_untaken_depth >= if_stack.len() {
+                                    _ = macros.undefine(name);
+                                }
+                                continue;
                             }
 
                             // Preprocessor control-flow
                             "ifdef" | "ifndef" => {
                                 let mut j = i + 1 + directive_length;
                                 skip_sameline_whitespace(&content, &mut j);
-                                if is_fst_ident_byte(bytes[j]) {
-                                    let name_length = ident_length(&content[j..]);
-                                    let name = &content[j..][..name_length];
-                                    i = j + name_length;
-
-                                    let mut if_item = IfState {
-                                        has_been_taken_before: false,
-                                        has_else: false,
-                                    };
-                                    if if_untaken_depth >= if_stack.len() {
-                                        let is_taken =
-                                            macros.contains_key(name) ^ (directive == "ifndef");
-                                        if_item.has_been_taken_before = is_taken;
-                                        if is_taken {
-                                            if_untaken_depth += 1;
-                                        } else {
-                                            if_untaken_depth = if_stack.len();
-                                        }
-                                    }
-                                    if_stack.push(if_item);
-                                    continue;
+                                if bytes.get(j).is_none_or(|&b| !is_fst_ident_byte(b)) {
+                                    return Err(Box::new(TokenizeError {
+                                        line: self.file_line_offsets[file_idx as usize].len()
+                                            as u64,
+                                        file: self.paths[file_idx as usize].clone(),
+                                        reason: TokenizeErrorReason::ExpectedConditionalIdent,
+                                    }));
                                 }
+
+                                let name_length = ident_length(&content[j..]);
+                                let name = &content[j..][..name_length];
+                                i = j + name_length;
+
+                                let mut if_item = IfState {
+                                    has_been_taken_before: false,
+                                    has_else: false,
+                                };
+                                if if_untaken_depth >= if_stack.len() {
+                                    let is_taken =
+                                        macros.is_defined(name) ^ (directive == "ifndef");
+                                    if_item.has_been_taken_before = is_taken;
+                                    if is_taken {
+                                        if_untaken_depth += 1;
+                                    } else {
+                                        if_untaken_depth = if_stack.len();
+                                    }
+                                }
+                                if_stack.push(if_item);
+                                continue;
                             }
                             "elsif" => {
                                 let mut j = i + 1 + directive_length;
                                 skip_sameline_whitespace(&content, &mut j);
-                                if is_fst_ident_byte(bytes[i]) {
-                                    let name_length = ident_length(&content[j..]);
-                                    let name = &content[j..][..name_length];
-                                    i = j + name_length;
-
-                                    if if_untaken_depth >= if_stack.len() {
-                                        let mut if_item = if_stack.pop().unwrap();
-                                        let is_taken = !if_item.has_been_taken_before
-                                            && macros.contains_key(name) ^ (directive == "ifndef");
-                                        if_item.has_been_taken_before = is_taken;
-                                        if is_taken {
-                                            if_untaken_depth += 1;
-                                        } else {
-                                            if_untaken_depth = if_stack.len();
-                                        }
-                                        if_stack.push(if_item);
-                                    }
-                                    continue;
+                                if bytes.get(j).is_none_or(|&b| !is_fst_ident_byte(b)) {
+                                    return Err(Box::new(TokenizeError {
+                                        line: self.file_line_offsets[file_idx as usize].len()
+                                            as u64,
+                                        file: self.paths[file_idx as usize].clone(),
+                                        reason: TokenizeErrorReason::ExpectedConditionalIdent,
+                                    }));
                                 }
+
+                                let name_length = ident_length(&content[j..]);
+                                let name = &content[j..][..name_length];
+                                i = j + name_length;
+
+                                if if_untaken_depth >= if_stack.len() {
+                                    let mut if_item = if_stack.pop().unwrap();
+                                    let is_taken = !if_item.has_been_taken_before
+                                        && macros.is_defined(name) ^ (directive == "ifndef");
+                                    if_item.has_been_taken_before = is_taken;
+                                    if is_taken {
+                                        if_untaken_depth += 1;
+                                    } else {
+                                        if_untaken_depth = if_stack.len();
+                                    }
+                                    if_stack.push(if_item);
+                                }
+                                continue;
                             }
                             "else" => {
                                 i += 1 + directive_length;
@@ -685,10 +887,14 @@ impl Tokenized {
                             }
 
                             "include" => {
-                                assert!(
-                                    preprocessor_macro.is_none(),
-                                    "nested preprocessor definition"
-                                );
+                                if !matches!(state, LexState::Base) {
+                                    return Err(Box::new(TokenizeError {
+                                        line: self.file_line_offsets[file_idx as usize].len()
+                                            as u64,
+                                        file: self.paths[file_idx as usize].clone(),
+                                        reason: TokenizeErrorReason::IncludeInMacro,
+                                    }));
+                                }
 
                                 let mut j = i + 1 + directive_length;
                                 skip_sameline_whitespace(&content, &mut j);
@@ -712,7 +918,9 @@ impl Tokenized {
                                         Ok(content) => content.into(),
                                         Err(err) => {
                                             return Err(Box::new(TokenizeError {
-                                                line: self.file_line_offsets.len() as u64,
+                                                line: self.file_line_offsets[file_idx as usize]
+                                                    .len()
+                                                    as u64,
                                                 file: self.paths[file_idx as usize].clone(),
                                                 reason: TokenizeErrorReason::FailedToOpenFile(
                                                     path.clone(),
@@ -727,14 +935,14 @@ impl Tokenized {
                                         start,
                                         i,
                                         end_offset,
-                                        preprocessor_macro: None,
+                                        state: LexState::Base,
                                     });
                                     lex_stack.push(LexItem {
                                         file_idx: contents.len() as u32,
                                         start: tokens.len(),
                                         i: 0,
                                         end_offset: content.len(),
-                                        preprocessor_macro: None,
+                                        state: LexState::Base,
                                     });
                                     contents.push(content);
                                     paths.push(Some(path.into()));
@@ -757,19 +965,72 @@ impl Tokenized {
                             _ => {
                                 i += 1 + directive_length;
                                 if if_untaken_depth >= if_stack.len()
-                                    && let Some(m) = macros.get(directive)
+                                    && let Some((_, m)) = macros.find(directive)
                                 {
-                                    // @TODO: Completely incorrect, but passes for now.
-                                    if bytes.get(i) == Some(&b'(') {
-                                        let mut depth = 1;
-                                        while i < bytes.len() && depth > 0 {
-                                            i += 1;
-                                            depth += usize::from(bytes.get(i) == Some(&b'('));
-                                            depth -= usize::from(bytes.get(i) == Some(&b')'));
+                                    if m.args.is_some() {
+                                        // Function macros.
+                                        //
+                                        // These work by pushing a LexItem that lexes until the
+                                        // function arguments are complete. Afterwards, they are
+                                        // drained and converted placed into the macro expansion.
+
+                                        skip_bytes_sameline_whitespace(bytes, &mut i);
+                                        if bytes.get(i) != Some(&b'(') {
+                                            return Err(Box::new(TokenizeError {
+                                                line: self.file_line_offsets[file_idx as usize]
+                                                    .len()
+                                                    as u64,
+                                                file: self.paths[file_idx as usize].clone(),
+                                                reason:
+                                                    TokenizeErrorReason::FunctionMacroWithoutArgs(
+                                                        directive.to_string(),
+                                                    ),
+                                            }));
                                         }
-                                        if i != bytes.len() {
-                                            i += 1;
+                                        i += 1;
+
+                                        lex_stack.push(LexItem {
+                                            file_idx,
+                                            start,
+                                            i: usize::MAX, // Intentionally push a problematic state.
+                                            end_offset,
+                                            state,
+                                        });
+
+                                        // @TODO: Support nested function macros
+                                        for lex_item in lex_stack.iter().rev() {
+                                            match &lex_item.state {
+                                                LexState::Base => break,
+                                                LexState::Macro(m) => {
+                                                    return Err(Box::new(TokenizeError {
+                                                        line: self.file_line_offsets
+                                                            [file_idx as usize]
+                                                            .len()
+                                                            as u64,
+                                                        file: self.paths[file_idx as usize].clone(),
+                                                        reason:
+                                                            TokenizeErrorReason::NestedFunctionMacro(
+                                                                macros.idents[m.name].to_string(),
+                                                                directive.to_string(),
+                                                            ),
+                                                    }));
+                                                }
+                                                LexState::MacroArgs(_) => continue,
+                                            }
                                         }
+
+                                        lex_stack.push(LexItem {
+                                            file_idx,
+                                            start: tokens.len(),
+                                            i,
+                                            end_offset,
+                                            state: LexState::MacroArgs(MacroArgs {
+                                                name: macros.idents.get_or_insert(directive),
+                                                depth: 1,
+                                            }),
+                                        });
+
+                                        continue 'lex_stack;
                                     }
 
                                     tokens.extend_from_slice(&m.tokens);
@@ -793,15 +1054,112 @@ impl Tokenized {
                 i += length;
             }
 
-            if let Some(preprocessor_macro) = preprocessor_macro.take() {
-                macros.insert(
-                    preprocessor_macro.name,
-                    Macro {
-                        tokens: tokens.drain(start..).collect(),
-                        spans: spans.drain(start..).collect(),
-                        file: file_idxs.drain(start..).collect(),
-                    },
-                );
+            match state {
+                LexState::Base => {}
+                LexState::Macro(preprocessor_macro) => {
+                    // Register a macro.
+
+                    macros.define_with_ident_id(
+                        preprocessor_macro.name,
+                        Macro {
+                            tokens: tokens.drain(start..).collect(),
+                            spans: spans.drain(start..).collect(),
+                            file: file_idxs.drain(start..).collect(),
+                            args: preprocessor_macro.has_args.then_some((
+                                preprocessor_macro.argument_positions,
+                                preprocessor_macro.arguments.len(),
+                            )),
+                        },
+                    );
+                }
+                LexState::MacroArgs(a) => {
+                    if a.depth > 0 {
+                        return Err(Box::new(TokenizeError {
+                            line: self.file_line_offsets[file_idx as usize].len() as u64,
+                            file: self.paths[file_idx as usize].clone(),
+                            reason: TokenizeErrorReason::UnclosedFunctionMacro(
+                                macros.idents[a.name].to_string(),
+                            ),
+                        }));
+                    }
+
+                    // Lexing afterwards should continue from this point.
+                    let parent = lex_stack.last_mut().unwrap();
+                    parent.i = i + 1;
+
+                    let m = &macros.find_by_ident_id(a.name).unwrap().1;
+                    let (argument_positions, num_args) = &m.args.as_ref().unwrap();
+
+                    scratch_funcmacro_tokens.clear();
+                    scratch_funcmacro_spans.clear();
+                    scratch_funcmacro_file_idxs.clear();
+                    scratch_funcmacro_splits.clear();
+
+                    scratch_funcmacro_tokens.extend(tokens.drain(start..));
+                    scratch_funcmacro_spans.extend(spans.drain(start..));
+                    scratch_funcmacro_file_idxs.extend(file_idxs.drain(start..));
+
+                    // Find all the separate arguments in the argument list.
+                    let mut paren_depth = 0;
+                    let mut brace_depth = 0;
+                    let mut bracket_depth = 0;
+                    for (i, &t) in scratch_funcmacro_tokens.iter().enumerate() {
+                        use Token as T;
+                        paren_depth += usize::from(t == T::LeftParen);
+                        paren_depth -= usize::from(t == T::RightParen);
+                        brace_depth += usize::from(t == T::LeftBrace);
+                        brace_depth -= usize::from(t == T::RightBrace);
+                        bracket_depth += usize::from(t == T::LeftBracket);
+                        bracket_depth -= usize::from(t == T::RightBracket);
+                        if t == T::Comma
+                            && paren_depth == 0
+                            && brace_depth == 0
+                            && bracket_depth == 0
+                        {
+                            scratch_funcmacro_splits.push(i);
+                        }
+                    }
+
+                    let num_found_args = scratch_funcmacro_splits.len() + 1;
+                    if num_found_args != *num_args {
+                        return Err(Box::new(TokenizeError {
+                            line: self.file_line_offsets[file_idx as usize].len() as u64,
+                            file: self.paths[file_idx as usize].clone(),
+                            reason: TokenizeErrorReason::MacroArgumentMismatch(
+                                macros.idents[a.name].to_string(),
+                            ),
+                        }));
+                    }
+
+                    // Expand the macro and replace all the argument references with the given
+                    // arguments.
+                    let mut prev = 0;
+                    for &(arg, offset) in argument_positions.iter() {
+                        tokens.extend_from_slice(&m.tokens[prev..offset]);
+                        spans.extend_from_slice(&m.spans[prev..offset]);
+                        file_idxs.extend_from_slice(&m.file[prev..offset]);
+                        prev = offset;
+
+                        let arg_start = if arg == 0 {
+                            0
+                        } else {
+                            scratch_funcmacro_splits[arg - 1] + 1
+                        };
+                        let arg_end = if arg >= scratch_funcmacro_splits.len() {
+                            scratch_funcmacro_tokens.len()
+                        } else {
+                            scratch_funcmacro_splits[arg]
+                        };
+
+                        tokens.extend_from_slice(&scratch_funcmacro_tokens[arg_start..arg_end]);
+                        spans.extend_from_slice(&scratch_funcmacro_spans[arg_start..arg_end]);
+                        file_idxs
+                            .extend_from_slice(&scratch_funcmacro_file_idxs[arg_start..arg_end]);
+                    }
+                    tokens.extend_from_slice(&m.tokens[prev..]);
+                    spans.extend_from_slice(&m.spans[prev..]);
+                    file_idxs.extend_from_slice(&m.file[prev..]);
+                }
             }
         }
 
@@ -833,6 +1191,9 @@ fn ident_length(s: &str) -> usize {
 
 fn skip_sameline_whitespace(s: &str, i: &mut usize) {
     let b = s.as_bytes();
+    skip_bytes_sameline_whitespace(b, i);
+}
+fn skip_bytes_sameline_whitespace(b: &[u8], i: &mut usize) {
     while b.get(*i).is_some_and(|b| matches!(b, b' ' | b'\r' | b'\t')) {
         *i += 1;
     }

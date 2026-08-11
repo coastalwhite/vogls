@@ -1,4 +1,4 @@
-// vogls: fail
+// vogls: fail=lex
 `define
 
 module x();

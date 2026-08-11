@@ -395,6 +395,38 @@ impl<KK: TableKey, K: Clone + Hash + Eq, V> TableMap<KK, K, V> {
         }
     }
 
+    pub fn insert(&mut self, key: K, value: V) -> (KK, Option<V>) {
+        let hash = self.random_state.hash_one(&key);
+        match self.set.entry(
+            hash,
+            |(_, k)| K::eq(k, &key),
+            |(_, k)| self.random_state.hash_one(k),
+        ) {
+            hashbrown::hash_table::Entry::Occupied(mut entry) => {
+                let entry = entry.get_mut();
+                let kk = entry.0;
+                let old_value = std::mem::replace(&mut self.table[kk], (key, value));
+                (kk, Some(old_value.1))
+            }
+            hashbrown::hash_table::Entry::Vacant(entry) => {
+                let kk = self.table.insert((key.clone(), value));
+                entry.insert((kk, key));
+                (kk, None)
+            }
+        }
+    }
+
+    pub fn get(&self, key: K) -> Option<(KK, &V)> {
+        let hash = self.random_state.hash_one(&key);
+        let &(kk, _) = self.set.find(hash, |(_, k)| K::eq(k, &key))?;
+        Some((kk, &self.table[kk].1))
+    }
+
+    pub fn contains_key(&self, key: K) -> bool {
+        let hash = self.random_state.hash_one(&key);
+        self.set.find(hash, |(_, k)| K::eq(k, &key)).is_some()
+    }
+
     pub fn get_or_insert_with(&mut self, key: K, f: impl FnOnce() -> V) -> KK {
         let hash = self.random_state.hash_one(&key);
         self.set
@@ -439,6 +471,21 @@ impl<KK: TableKey, K: Hash + Eq, V> TableMap<KK, K, V> {
 impl<KK: TableKey, K: Clone + Hash + Eq, V: Default> TableMap<KK, K, V> {
     pub fn get_or_default(&mut self, key: K) -> KK {
         self.get_or_insert_with(key, V::default)
+    }
+
+    pub fn unlink(&mut self, key: K) -> Option<(KK, V)> {
+        let hash = self.random_state.hash_one(&key);
+        match self.set.entry(
+            hash,
+            |(_, k)| K::eq(k, &key),
+            |(_, k)| self.random_state.hash_one(k),
+        ) {
+            hashbrown::hash_table::Entry::Occupied(entry) => {
+                let ((kk, _), _) = entry.remove();
+                Some((kk, std::mem::take(&mut self.table[kk].1)))
+            }
+            hashbrown::hash_table::Entry::Vacant(_) => None,
+        }
     }
 }
 

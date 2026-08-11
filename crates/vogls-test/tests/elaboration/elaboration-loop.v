@@ -1,4 +1,4 @@
-// vogls: fail
+// vogls: fail=elaborate
 module tb();
 	parameter X = Y;
 	parameter Y = Z;

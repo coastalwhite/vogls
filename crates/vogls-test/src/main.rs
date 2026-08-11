@@ -2,9 +2,11 @@ use std::cell::RefCell;
 use std::fmt;
 use std::fs::read_to_string;
 use std::io::{self, Write};
+use std::ops::BitOrAssign;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use backtrace::BacktraceFmt;
@@ -103,8 +105,81 @@ impl SelectBackend {
 }
 
 #[derive(Clone)]
+pub struct ExpectedFail {
+    phase: TestPhase,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct TestPhase(u8);
+
+impl TestPhase {
+    pub const EMPTY: Self = Self(0);
+    pub const LEXING: Self = Self(0b0000_0001u8);
+    pub const PARSING: Self = Self(0b0000_0010u8);
+    pub const ELABORATION: Self = Self(0b0000_0100u8);
+    pub const LOWERING: Self = Self(0b0000_1000u8);
+    pub const COMPILATION: Self = Self(0b0001_0000u8);
+    pub const EXECUTION: Self = Self(0b0010_0000u8);
+    pub const ALL: Self = Self(0b0011_1111u8);
+
+    pub fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+}
+
+impl BitOrAssign for TestPhase {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+impl fmt::Debug for TestPhase {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use fmt::Write;
+        let mut fst = true;
+        macro_rules! item {
+            ($name:ident, $display:literal) => {
+                if self.contains(Self::$name) {
+                    if !fst {
+                        f.write_char('|')?;
+                    }
+                    f.write_str($display)?;
+                    #[allow(unused_assignments)]
+                    {
+                        fst = false;
+                    }
+                }
+            };
+        }
+        item!(LEXING, "lex");
+        item!(PARSING, "parse");
+        item!(ELABORATION, "elaborate");
+        item!(LOWERING, "lower");
+        item!(COMPILATION, "compile");
+        item!(EXECUTION, "execute");
+        Ok(())
+    }
+}
+
+impl FromStr for TestPhase {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "lex" => Ok(Self::LEXING),
+            "parse" => Ok(Self::PARSING),
+            "elaborate" => Ok(Self::ELABORATION),
+            "lower" => Ok(Self::LOWERING),
+            "compile" => Ok(Self::COMPILATION),
+            "execute" => Ok(Self::EXECUTION),
+            "*" => Ok(Self::ALL),
+            _ => Err(()),
+        }
+    }
+}
+
+#[derive(Clone)]
 struct TestInfo {
-    fail: bool,
+    fail: Option<ExpectedFail>,
     verify_stdout: VerifyOutput,
     verify_ir: bool,
     annotate_sdf: bool,
@@ -130,7 +205,7 @@ fn parse_opts(s: &str) -> Option<OptFlags> {
 impl TestInfo {
     pub fn parse(content: &str) -> Result<Self, String> {
         let mut info = TestInfo {
-            fail: false,
+            fail: None,
             verify_stdout: VerifyOutput::No,
             verify_ir: false,
             annotate_sdf: false,
@@ -150,11 +225,30 @@ impl TestInfo {
             let line = line.trim();
 
             match line {
-                "fail" => info.fail = true,
                 "verify-stdout" => info.verify_stdout = VerifyOutput::Yes,
                 "verify-stdout[sort-lines]" => info.verify_stdout = VerifyOutput::SortLines,
                 "verify-ir" => info.verify_ir = true,
                 "annotate-sdf" => info.annotate_sdf = true,
+                _ if line.starts_with("fail") => {
+                    if line == "fail" {
+                        info.fail = Some(ExpectedFail {
+                            phase: TestPhase::ALL,
+                        });
+                    } else {
+                        assert!(line.starts_with("fail="));
+                        let mut phase = TestPhase::EMPTY;
+                        for kind in line["fail=".len()..].split(',') {
+                            let kind = kind.trim();
+                            let Ok(p) = TestPhase::from_str(kind) else {
+                                return Err(format!("unknown compile phase '{kind}'").into());
+                            };
+                            phase |= p;
+                        }
+                        info.fail = Some(ExpectedFail {
+                            phase,
+                        });
+                    }
+                }
                 _ if line.starts_with("tlm=") => {
                     info.top_level_module = Some(line[4..].trim().to_string());
                 }
@@ -196,11 +290,26 @@ impl TestInfo {
 
 enum FailureInfo {
     Panic(PanicInfo),
-    Error { stdout: String, stderr: String },
-    Mismatch { expected: String, gotten: String },
-    VirMismatch { expected: String, gotten: String },
-    VirOptMismatch { expected: String, gotten: String },
-    CompileFailure(Box<dyn std::error::Error + Send + Sync + 'static>),
+    Execution {
+        stdout: String,
+        stderr: String,
+    },
+    Mismatch {
+        expected: String,
+        gotten: String,
+    },
+    VirMismatch {
+        expected: String,
+        gotten: String,
+    },
+    VirOptMismatch {
+        expected: String,
+        gotten: String,
+    },
+    CompileFailure(
+        TestPhase,
+        Box<dyn std::error::Error + Send + Sync + 'static>,
+    ),
     IoFailure(io::Error),
 }
 
@@ -208,7 +317,7 @@ impl FailureInfo {
     pub fn as_char(&self) -> char {
         match self {
             Self::Panic(..) => '!',
-            Self::Error { .. } => 'E',
+            Self::Execution { .. } => 'E',
             Self::Mismatch { .. } => 'M',
             Self::VirMismatch { .. } => 'M',
             Self::VirOptMismatch { .. } => 'O',
@@ -507,7 +616,7 @@ fn report_fails(o: &mut io::Stdout, fails: Vec<Fail>, num_tests: usize) -> io::R
                     let output = X(message, backtrace).to_string();
                     display_section(o, "PANIC", &output)?;
                 }
-                FailureInfo::Error { stdout, stderr } => {
+                FailureInfo::Execution { stdout, stderr } => {
                     writeln!(o, ": Error")?;
                     writeln!(o)?;
                     display_section(o, "STDOUT", &stdout)?;
@@ -531,8 +640,8 @@ fn report_fails(o: &mut io::Stdout, fails: Vec<Fail>, num_tests: usize) -> io::R
                     display_section(o, "EXPECTED", &expected)?;
                     display_section(o, "GOTTEN", &gotten)?;
                 }
-                FailureInfo::CompileFailure(error) => {
-                    writeln!(o, ": Compilation failure")?;
+                FailureInfo::CompileFailure(phase, error) => {
+                    writeln!(o, ": Compilation failure during {phase:?}")?;
                     writeln!(o, "  {error}")?;
                 }
                 FailureInfo::IoFailure(error) => {
@@ -592,32 +701,44 @@ fn run_test(
             builder
                 .define_macro("__VOGLS_VERIFY_IR", Macro::default())
                 .add_source(path)
-                .map_err(|_| FailureInfo::CompileFailure("failed to tokenize".into()))?;
+                .map_err(|_| {
+                    FailureInfo::CompileFailure(TestPhase::LEXING, "failed to tokenize".into())
+                })?;
 
-            let parsed = builder
-                .parse(&arena)
-                .map_err(|_| FailureInfo::CompileFailure("failed to parse".into()))?;
+            let parsed = builder.parse(&arena).map_err(|_| {
+                FailureInfo::CompileFailure(TestPhase::PARSING, "failed to parse".into())
+            })?;
             let mut elab =
                 match parsed.elaborate(logic_mode, test_information.top_level_module.as_deref()) {
                     Ok(v) => v,
                     Err(_) => {
-                        return Err(FailureInfo::CompileFailure("failed to elaborate".into()));
+                        return Err(FailureInfo::CompileFailure(
+                            TestPhase::ELABORATION,
+                            "failed to elaborate".into(),
+                        ));
                     }
                 };
             if let Some(sdf) = sdf.as_deref() {
                 if elab.annotate_sdf(sdf).is_err() {
-                    return Err(FailureInfo::CompileFailure("failed to annotate sdf".into()));
+                    return Err(FailureInfo::CompileFailure(
+                        TestPhase::LOWERING,
+                        "failed to annotate sdf".into(),
+                    ));
                 }
             }
             if elab.annotate_specify().is_err() {
                 return Err(FailureInfo::CompileFailure(
+                    TestPhase::LOWERING,
                     "failed to annotate specify".into(),
                 ));
             }
             let mut lowered = match elab.lower(vec![]) {
                 Ok(l) => l,
                 Err(_) => {
-                    return Err(FailureInfo::CompileFailure("failed to lower".into()));
+                    return Err(FailureInfo::CompileFailure(
+                        TestPhase::LOWERING,
+                        "failed to lower".into(),
+                    ));
                 }
             };
             lowered.optimize(opts);
@@ -664,9 +785,9 @@ fn run_test(
                 let optimized = read_to_string(path.with_extension("vir.opt")).ok();
                 let mut design = VirDesignBuilder::new(&s);
                 design.with_logic_mode(logic_mode);
-                let mut design = design
-                    .parse()
-                    .map_err(|_| FailureInfo::CompileFailure("failed to parse VIR".into()))?;
+                let mut design = design.parse().map_err(|_| {
+                    FailureInfo::CompileFailure(TestPhase::PARSING, "failed to parse VIR".into())
+                })?;
                 design.optimize(opts);
 
                 if opts.rounds > 0
@@ -695,34 +816,46 @@ fn run_test(
                     }
                     LogicMode::FourValue => {}
                 }
-                builder
-                    .add_source(path)
-                    .map_err(|_| FailureInfo::CompileFailure("failed to tokenize".into()))?;
+                builder.add_source(path).map_err(|_| {
+                    FailureInfo::CompileFailure(TestPhase::LEXING, "failed to tokenize".into())
+                })?;
 
-                let parsed = builder
-                    .parse(&arena)
-                    .map_err(|_| FailureInfo::CompileFailure("failed to parse".into()))?;
+                let parsed = builder.parse(&arena).map_err(|_| {
+                    FailureInfo::CompileFailure(TestPhase::PARSING, "failed to parse".into())
+                })?;
                 let mut elab = match parsed
                     .elaborate(logic_mode, test_information.top_level_module.as_deref())
                 {
                     Ok(v) => v,
                     Err(_) => {
-                        return Err(FailureInfo::CompileFailure("failed to elaborate".into()));
+                        return Err(FailureInfo::CompileFailure(
+                            TestPhase::ELABORATION,
+                            "failed to elaborate".into(),
+                        ));
                     }
                 };
                 if let Some(sdf) = sdf.as_deref() {
                     if elab.annotate_sdf(sdf).is_err() {
-                        return Err(FailureInfo::CompileFailure("failed to annotate SDF".into()));
+                        return Err(FailureInfo::CompileFailure(
+                            TestPhase::LOWERING,
+                            "failed to annotate SDF".into(),
+                        ));
                     }
                 }
                 if elab.annotate_specify().is_err() {
                     return Err(FailureInfo::CompileFailure(
+                        TestPhase::LOWERING,
                         "failed to annotate specify".into(),
                     ));
                 }
                 let mut lowered = match elab.lower(vec![]) {
                     Ok(l) => l,
-                    Err(_) => return Err(FailureInfo::CompileFailure("failed to lower".into())),
+                    Err(_) => {
+                        return Err(FailureInfo::CompileFailure(
+                            TestPhase::LOWERING,
+                            "failed to lower".into(),
+                        ));
+                    }
                 };
                 lowered.optimize(opts);
                 Result::<_, FailureInfo>::Ok(lowered)
@@ -733,7 +866,10 @@ fn run_test(
                 Backend::Bytecode => design.to_bytecode(),
             }
             .map_err(|_| {
-                FailureInfo::CompileFailure("failed to convert to execution format".into())
+                FailureInfo::CompileFailure(
+                    TestPhase::COMPILATION,
+                    "failed to convert to execution format".into(),
+                )
             })?;
             design
                 .run(
@@ -748,7 +884,7 @@ fn run_test(
                     let stdout = std::str::from_utf8(&stdout).unwrap();
                     let stderr = stderr.0.lock().unwrap();
                     let stderr = std::str::from_utf8(&stderr).unwrap();
-                    FailureInfo::Error {
+                    FailureInfo::Execution {
                         stdout: stdout.to_string(),
                         stderr: stderr.to_string(),
                     }
@@ -764,10 +900,18 @@ fn run_test(
         }
     };
     match result {
-        Err(FailureInfo::CompileFailure(_)) if test_information.fail => {
-            return Ok(PassKind::Succeed);
-        }
-        Err(err) => return Err(err),
+        Err(err) => match &test_information.fail {
+            None => return Err(err),
+            Some(fail) => match err {
+                FailureInfo::CompileFailure(err_phase, _) if fail.phase.contains(err_phase) => {
+                    return Ok(PassKind::Succeed);
+                }
+                FailureInfo::Execution { .. } if fail.phase.contains(TestPhase::EXECUTION) => {
+                    return Ok(PassKind::Succeed);
+                }
+                err => return Err(err),
+            },
+        },
         Ok(_) => {}
     }
 

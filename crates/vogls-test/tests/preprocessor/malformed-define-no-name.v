@@ -1,0 +1,2 @@
+// vogls: fail=lex
+`define

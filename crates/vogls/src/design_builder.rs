@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::{fmt, io};
@@ -7,14 +6,14 @@ use vogls_verilog::arena::Arena;
 use vogls_verilog::parser::{
     AstArenas, Diagnostics, ParseContext, ParserScratches, TokenWalker, parse_file,
 };
-use vogls_verilog::tokenizer::{Macro, TokenizeError, Tokenized};
+use vogls_verilog::tokenizer::{Macro, Macros, TokenizeError, Tokenized};
 
 use crate::{ParseError, ParsedDesign};
 
 #[derive(Default, Clone)]
 pub struct DesignBuilder {
     pub(crate) token_buffer: Tokenized,
-    pub(crate) macros: HashMap<String, Macro>,
+    pub(crate) macros: Macros,
 }
 
 #[derive(Debug)]
@@ -85,8 +84,8 @@ impl DesignBuilder {
         Ok(self)
     }
 
-    pub fn define_macro(&mut self, name: impl Into<String>, value: Macro) -> &mut Self {
-        self.macros.insert(name.into(), value);
+    pub fn define_macro(&mut self, name: impl AsRef<str>, value: Macro) -> &mut Self {
+        self.macros.define(name.as_ref(), value);
         self
     }
 
