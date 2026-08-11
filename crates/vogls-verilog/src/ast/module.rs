@@ -1,4 +1,5 @@
-use crate::parser::{DefaultNettype, TimeSize, TimeUnit};
+use crate::parser::DefaultNettype;
+use vogls_ir::time::TimeResolution;
 
 use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantRangeExpression};
 use super::expr::Expr;
@@ -39,32 +40,22 @@ pub struct Module<'a> {
 
 #[derive(Clone, Copy)]
 pub struct TimeScale {
-    pub time_unit_size: TimeSize,
-    pub time_unit_unit: TimeUnit,
-
-    pub time_precision_size: TimeSize,
-    pub time_precision_unit: TimeUnit,
+    pub unit: TimeResolution,
+    pub precision: TimeResolution,
 }
 
 impl TimeScale {
-    pub fn time_unit_as_fs(self) -> u64 {
-        self.time_unit_unit
-            .convert_from_fs(self.time_unit_size.into_u64())
-    }
-    pub fn time_precision_as_fs(self) -> u64 {
-        self.time_unit_unit
-            .convert_from_fs(self.time_unit_size.into_u64())
+    pub const fn new() -> Self {
+        Self {
+            unit: TimeResolution::S1,
+            precision: TimeResolution::S1,
+        }
     }
 }
 
 impl Default for TimeScale {
     fn default() -> Self {
-        Self {
-            time_unit_size: TimeSize::N1,
-            time_unit_unit: TimeUnit::Seconds,
-            time_precision_size: TimeSize::N1,
-            time_precision_unit: TimeUnit::Seconds,
-        }
+        Self::new()
     }
 }
 

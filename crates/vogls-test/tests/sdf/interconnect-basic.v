@@ -11,7 +11,7 @@ module top();
     buffer u1 (.a(in),  .b(mid));
     buffer u2 (.a(mid), .b(out));
 
-	initial #9 forever @(out) $display("[T=%0dns] out = %b", $time / 1_000_000, out);
+	initial #9 forever @(out) $display("[T=%0dns] out = %b", $time, out);
     initial begin
 		#0   in = 0;
         #10; in = 1;

@@ -14,12 +14,14 @@ use vogls_frontend::symbol_table::FrozenSymbolTable;
 #[cfg(feature = "unstable")]
 use vogls_ir::ProcessKind;
 use vogls_ir::optimize::Optimizations;
+#[cfg(feature = "native")]
+use vogls_ir::time::TimeResolution;
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{GlobalContext, LogicMode, SCALAR_VSIZE, Signal, SignalKey};
 use vogls_runtime::plugins::RuntimePlugin;
 #[cfg(feature = "native")]
 use vogls_runtime::plugins::RuntimePluginState;
-use vogls_runtime::{RtSignalKey, RuntimeState};
+use vogls_runtime::{RtSignalKey, RuntimeState, TimeFormat};
 #[cfg(feature = "native")]
 use vogls_utils::TimerStack;
 use vogls_utils::{TableKey as _, VgHashMap};
@@ -50,6 +52,7 @@ pub struct LoweredDesign {
     pub output_source: Option<PathBuf>,
     pub print_vm_map: bool,
     pub profile: Option<PathBuf>,
+    pub time_resolution: TimeResolution,
 }
 
 impl Clone for Box<dyn VoglsPlugin> {
@@ -193,6 +196,7 @@ impl LoweredDesign {
             self.output_source.as_deref(),
             plugins,
             NUM_REGIONS,
+            self.time_resolution,
         )?;
 
         Ok(Design {
@@ -204,6 +208,7 @@ impl LoweredDesign {
             signal_to_heap,
             signal_mode,
             initial_state: DesignState::Compiled(initial_state),
+            time_resolution: self.time_resolution,
         })
     }
 
@@ -296,7 +301,8 @@ impl LoweredDesign {
             }
         }
 
-        let runtime = RuntimeState::new(&self.gl, heap, &updated, &lupdt_updated);
+        let time_format = TimeFormat::new(self.time_resolution);
+        let runtime = RuntimeState::new(&self.gl, heap, &updated, &lupdt_updated, time_format);
         let state = vogls_bytecode::State {
             runtime,
             plugins,
@@ -328,6 +334,7 @@ impl LoweredDesign {
             signal_to_heap,
             signal_mode,
             initial_state: DesignState::Bytecode(state),
+            time_resolution: self.time_resolution,
         })
     }
 
@@ -445,6 +452,7 @@ pub fn lower_to_shared_object(
     output_source: Option<&Path>,
     plugins: Vec<RuntimePluginState>,
     num_additional_regions: u8,
+    time_resolution: TimeResolution,
 ) -> Result<
     (
         vogls_codegen_c::runtime::CDesignState,
@@ -600,7 +608,8 @@ pub fn lower_to_shared_object(
         state_builder,
         num_additional_regions,
     );
-    let runtime = RuntimeState::new(gl, heap, &updated, &lupdt_updated);
+    let time_format = TimeFormat::new(time_resolution);
+    let runtime = RuntimeState::new(gl, heap, &updated, &lupdt_updated, time_format);
     let mut initial_state =
         design.new_state(listener_builder.top, num_additional_regions, runtime, gl);
     initial_state.plugins = plugins;

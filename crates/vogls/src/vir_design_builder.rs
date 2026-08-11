@@ -1,6 +1,7 @@
 use vogls_frontend::ident_table::IdentTable;
 use vogls_frontend::symbol_table::FrozenSymbolTable;
 use vogls_ir::parse::ParseError;
+use vogls_ir::time::{TimeResolution, TimeSize, TimeUnit};
 use vogls_ir::{GlobalContext, LogicMode};
 use vogls_verilog::tokenizer::Tokenized;
 
@@ -9,6 +10,7 @@ use crate::LoweredDesign;
 pub struct VirDesignBuilder<'a> {
     content: &'a str,
     logic_mode: LogicMode,
+    time_resolution: TimeResolution,
 }
 
 impl<'a> VirDesignBuilder<'a> {
@@ -16,6 +18,10 @@ impl<'a> VirDesignBuilder<'a> {
         Self {
             content,
             logic_mode: LogicMode::default(),
+            time_resolution: TimeResolution {
+                size: TimeSize::N1,
+                unit: TimeUnit::Seconds,
+            },
         }
     }
 
@@ -45,6 +51,7 @@ impl<'a> VirDesignBuilder<'a> {
             output_source: None,
             print_vm_map: false,
             profile: None,
+            time_resolution: self.time_resolution,
         })
     }
 }

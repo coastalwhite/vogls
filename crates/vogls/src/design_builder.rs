@@ -94,13 +94,14 @@ impl DesignBuilder {
         let mut arenas = AstArenas::default();
 
         let mut diagnostics = Diagnostics::default();
+        let mut ctx = ParseContext::new();
         let ast = parse_file(
             &mut tkw,
             &mut ParserScratches::default(),
             Some(&mut diagnostics),
             &mut arenas,
             arena,
-            &mut ParseContext::new(),
+            &mut ctx,
         );
         let Ok(ast) = ast else {
             return Err(Box::new(ParseError {
@@ -113,6 +114,7 @@ impl DesignBuilder {
             ast,
             token_buffer: self.token_buffer,
             arenas,
+            time_resolution: ctx.min_time_precision,
         })
     }
 }

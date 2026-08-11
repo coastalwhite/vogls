@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId, SymbolTable};
 use vogls_fuse_signals::{FuseGraph, FuseGraphOptimizer, FuseTarget};
+use vogls_ir::time::TimeResolution;
 use vogls_ir::{GlobalContext, LogicMode, ProcessKey, SignalFlags, SignalKey};
 use vogls_utils::{IndexMap, NonMaxU32, VgHashMap};
 use vogls_verilog::ast::AstId;
@@ -37,6 +38,7 @@ pub struct ElaboratedDesign<'a> {
     pub(crate) unoptimized_fgs: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>>,
     pub(crate) optimized_fgs: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>>,
     pub max_fuse_signals_rounds: usize,
+    pub time_resolution: TimeResolution,
 }
 
 pub struct ElaborationError<'a> {
@@ -214,6 +216,7 @@ impl<'a> ElaboratedDesign<'a> {
             arenas: &self.arenas,
             tokenized: &self.token_buffer,
             time_scale: TimeScale::default(),
+            time_resolution: self.time_resolution,
         };
         let mut mctx = MutLowerContext {
             gl: std::mem::take(&mut self.gl),
@@ -325,6 +328,7 @@ impl<'a> ElaboratedDesign<'a> {
             mut optimized_fgs,
 
             max_fuse_signals_rounds,
+            time_resolution,
         } = self;
 
         let mut ctx = LowerContext {
@@ -335,6 +339,7 @@ impl<'a> ElaboratedDesign<'a> {
             arenas: &arenas,
             tokenized: &token_buffer,
             time_scale: TimeScale::default(),
+            time_resolution,
         };
         let mut mctx = MutLowerContext {
             gl,
@@ -399,6 +404,7 @@ impl<'a> ElaboratedDesign<'a> {
                 arenas: _,
                 tokenized: _,
                 time_scale: _,
+                time_resolution,
             } = ctx;
             return Err(Box::new(LowerError {
                 design: Self {
@@ -417,6 +423,7 @@ impl<'a> ElaboratedDesign<'a> {
                     optimized_fgs,
 
                     max_fuse_signals_rounds,
+                    time_resolution,
                 },
                 diagnostics: mctx.diagnostics,
                 stage: LowerErrorStage::GlobalItems,
@@ -442,6 +449,7 @@ impl<'a> ElaboratedDesign<'a> {
                 arenas: _,
                 tokenized: _,
                 time_scale: _,
+                time_resolution,
             } = ctx;
             return Err(Box::new(LowerError {
                 design: Self {
@@ -460,6 +468,7 @@ impl<'a> ElaboratedDesign<'a> {
                     optimized_fgs,
 
                     max_fuse_signals_rounds,
+                    time_resolution,
                 },
                 diagnostics: mctx.diagnostics,
                 stage: LowerErrorStage::Modules,
@@ -538,6 +547,7 @@ impl<'a> ElaboratedDesign<'a> {
             output_source: None,
             print_vm_map: false,
             profile: None,
+            time_resolution,
         })
     }
 

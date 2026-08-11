@@ -16,6 +16,7 @@ module gate(
     endspecify
 endmodule
 
+`timescale 1fs / 1fs
 module tb();
     reg i, j;
     wire o1, o2, o3;
@@ -27,11 +28,11 @@ module tb();
 	initial #1 forever @(o3) $display("[T=%0d] o3 = %0x", $time(), o3);
 
     initial begin
-        #10 i = 1; j = 1;
-        #10 j = 0;
-        #10 i = 0;
-        #10 j = 1;
-        #10 ;
+        #10_000 i = 1; j = 1;
+        #10_000 j = 0;
+        #10_000 i = 0;
+        #10_000 j = 1;
+        #10_000 ;
     end
 endmodule
 

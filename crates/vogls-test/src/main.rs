@@ -15,6 +15,7 @@ use vogls::design::{Arena, Macro};
 use vogls::{DesignBuilder, SimulationIo, VirDesignBuilder};
 use vogls_ir::LogicMode;
 use vogls_ir::optimize::{OptFlags, Optimizations};
+use vogls_ir::time::{TimeResolution, TimeSize, TimeUnit};
 
 static ANSI_RED: &str = "\x1b[31m";
 static ANSI_GREEN: &str = "\x1b[32m";
@@ -183,7 +184,7 @@ struct TestInfo {
     verify_stdout: VerifyOutput,
     verify_ir: bool,
     annotate_sdf: bool,
-    timeout: u64,
+    timeout: Option<(u64, TimeUnit)>,
     top_level_module: Option<String>,
     mode: SelectLogicMode,
     backend: SelectBackend,
@@ -210,7 +211,7 @@ impl TestInfo {
             verify_ir: false,
             annotate_sdf: false,
             top_level_module: None,
-            timeout: u64::MAX,
+            timeout: None,
             mode: SelectLogicMode::All,
             backend: SelectBackend::All,
             opt_flags: OptFlags::ALL,
@@ -244,16 +245,21 @@ impl TestInfo {
                             };
                             phase |= p;
                         }
-                        info.fail = Some(ExpectedFail {
-                            phase,
-                        });
+                        info.fail = Some(ExpectedFail { phase });
                     }
                 }
                 _ if line.starts_with("tlm=") => {
                     info.top_level_module = Some(line[4..].trim().to_string());
                 }
                 _ if line.starts_with("timeout=") => {
-                    info.timeout = line[8..].parse().expect("failed to parse");
+                    let value = &line[8..];
+                    let at = value
+                        .find(|c: char| !c.is_ascii_digit())
+                        .unwrap_or(value.len());
+                    let (value, unit) = value.split_at(at);
+                    let value = value.parse().expect("failed to parse");
+                    let unit = TimeUnit::from_str(unit.trim()).expect("Invalid unit");
+                    info.timeout = Some((value, unit));
                 }
                 _ if line.starts_with("mode=") => match &line[5..] {
                     "two-value-logic" => info.mode = SelectLogicMode::Only(LogicMode::TwoValue),
@@ -871,13 +877,20 @@ fn run_test(
                     "failed to convert to execution format".into(),
                 )
             })?;
+            let timeout = test_information.timeout.map_or(u64::MAX, |(v, unit)| {
+                TimeResolution {
+                    unit,
+                    size: TimeSize::N1,
+                }
+                .truncate_or_multiply_to(v, design.time_resolution())
+            });
             design
                 .run(
                     &mut SimulationIo {
                         stdout: Box::new(stdout.clone()) as _,
                         stderr: Box::new(stderr.clone()) as _,
                     },
-                    test_information.timeout,
+                    timeout,
                 )
                 .map_err(|_| {
                     let stdout = stdout.0.lock().unwrap();

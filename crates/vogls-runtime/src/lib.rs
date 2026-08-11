@@ -2,6 +2,7 @@ use std::io;
 
 use vogls_codegen::Heap;
 use vogls_ir::GlobalContext;
+use vogls_ir::time::TimeResolution;
 use vogls_utils::{TableKey, new_table_key};
 
 pub mod plugins;
@@ -20,6 +21,26 @@ impl RtSignalKey {
     }
 }
 
+#[derive(Clone)]
+pub struct TimeFormat {
+    pub time_unit: TimeResolution,
+    pub precision_number: u8,
+    pub suffix_string: String,
+    pub minimum_field_width: u32,
+}
+
+impl TimeFormat {
+    pub fn new(time_unit: TimeResolution) -> Self {
+        Self {
+            time_unit,
+            precision_number: 0,
+            suffix_string: String::new(),
+            minimum_field_width: 20,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct RuntimeState {
     pub heap: Heap,
     pub time: u64,
@@ -27,23 +48,17 @@ pub struct RuntimeState {
     pub tvl_first_write: Vec<u64>,
     pub event_count: u64,
     pub instruction_count: u64,
-}
-
-impl Clone for RuntimeState {
-    fn clone(&self) -> Self {
-        Self {
-            heap: self.heap.clone(),
-            time: self.time,
-            last_active_time: self.last_active_time.clone(),
-            tvl_first_write: self.tvl_first_write.clone(),
-            event_count: self.event_count,
-            instruction_count: self.instruction_count,
-        }
-    }
+    pub time_format: TimeFormat,
 }
 
 impl RuntimeState {
-    pub fn new(gl: &GlobalContext, heap: Heap, updated: &[bool], lupdt_updated: &[bool]) -> Self {
+    pub fn new(
+        gl: &GlobalContext,
+        heap: Heap,
+        updated: &[bool],
+        lupdt_updated: &[bool],
+        time_format: TimeFormat,
+    ) -> Self {
         let mut tvl_first_write = vec![0u64; gl.signals.len().div_ceil(64)];
         let last_active_time = lupdt_updated
             .iter()
@@ -61,6 +76,7 @@ impl RuntimeState {
             tvl_first_write,
             event_count: 0,
             instruction_count: 0,
+            time_format,
         }
     }
 

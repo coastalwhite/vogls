@@ -3,6 +3,7 @@ use std::sync::Arc;
 use vogls_codegen::HeapRef;
 use vogls_frontend::ident_table::IdentTable;
 use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId};
+use vogls_ir::time::TimeResolution;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariableKey};
 use vogls_ir::{Bits, GlobalContext, LogicMode, SignalKey, SignalSlice, VectorSize};
 use vogls_runtime::SimulationIo;
@@ -36,6 +37,7 @@ pub struct Design {
     pub(crate) signal_mode: Arc<[LogicMode]>,
     pub(crate) signal_to_heap: Arc<[HeapRef]>,
     pub(crate) initial_state: DesignState,
+    pub(crate) time_resolution: TimeResolution,
 }
 
 #[derive(Clone)]
@@ -185,6 +187,10 @@ impl Design {
 
     pub fn initial_state_mut(&mut self) -> &mut DesignState {
         &mut self.initial_state
+    }
+
+    pub fn time_resolution(&self) -> TimeResolution {
+        self.time_resolution
     }
 
     pub fn resolve_handle_sym(&self, signal: SignalHandle) -> (&NetSymbol, &NetSignal) {
@@ -354,7 +360,8 @@ fn extend_symbol_table_to_vcd_scope(
                 }
             }
             Symbol::Parameter(value) => {
-                let msb_lsb = (value.size() > vogls_ir::SCALAR_VSIZE).then_some((value.size().get() - 1, 0));
+                let msb_lsb =
+                    (value.size() > vogls_ir::SCALAR_VSIZE).then_some((value.size().get() - 1, 0));
                 let value = VcdValue::Constant(value.clone());
                 let variable_key = variable_table.insert(vogls_ir::vcd::VcdVariable {
                     name: ident_table[table[*sid].name()].to_string(),

@@ -2,6 +2,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
+use vogls_ir::time::{TimeResolution, TimeSize, TimeUnit};
 use vogls_utils::VgHashSet;
 
 use crate::arena::Arena;
@@ -112,87 +113,6 @@ pub enum ParseErrorReason {
     LeftoverTokens,
 }
 
-#[derive(Clone, Copy)]
-pub enum TimeUnit {
-    Seconds,
-    Milliseconds,
-    Microseconds,
-    Nanoseconds,
-    Picoseconds,
-    Femtoseconds,
-}
-#[derive(Clone, Copy)]
-pub enum TimeSize {
-    N1,
-    N10,
-    N100,
-}
-impl TimeSize {
-    pub fn into_u64(self) -> u64 {
-        match self {
-            TimeSize::N1 => 1,
-            TimeSize::N10 => 10,
-            TimeSize::N100 => 100,
-        }
-    }
-    pub fn as_str(self) -> &'static str {
-        match self {
-            TimeSize::N1 => "1",
-            TimeSize::N10 => "10",
-            TimeSize::N100 => "100",
-        }
-    }
-}
-impl TimeUnit {
-    pub fn convert_from_fs(self, fs: u64) -> u64 {
-        match self {
-            TimeUnit::Seconds => fs * 10u64.pow(15),
-            TimeUnit::Milliseconds => fs * 10u64.pow(12),
-            TimeUnit::Microseconds => fs * 10u64.pow(9),
-            TimeUnit::Nanoseconds => fs * 10u64.pow(6),
-            TimeUnit::Picoseconds => fs * 10u64.pow(3),
-            TimeUnit::Femtoseconds => fs,
-        }
-    }
-    pub fn as_str(self) -> &'static str {
-        match self {
-            TimeUnit::Seconds => "s",
-            TimeUnit::Milliseconds => "ms",
-            TimeUnit::Microseconds => "us",
-            TimeUnit::Nanoseconds => "ns",
-            TimeUnit::Picoseconds => "ps",
-            TimeUnit::Femtoseconds => "fs",
-        }
-    }
-}
-
-impl FromStr for TimeSize {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "1" => Ok(Self::N1),
-            "10" => Ok(Self::N10),
-            "100" => Ok(Self::N100),
-            _ => Err(()),
-        }
-    }
-}
-
-impl FromStr for TimeUnit {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "s" => Ok(Self::Seconds),
-            "ms" => Ok(Self::Milliseconds),
-            "us" => Ok(Self::Microseconds),
-            "ns" => Ok(Self::Nanoseconds),
-            "ps" => Ok(Self::Picoseconds),
-            "fs" => Ok(Self::Femtoseconds),
-            _ => Err(()),
-        }
-    }
-}
-
 impl fmt::Display for ParseErrorReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -221,8 +141,9 @@ pub enum DefaultNettype {
 }
 
 pub struct ParseContext {
-    timescale: (TimeSize, TimeUnit, TimeSize, TimeUnit),
+    timescale: TimeScale,
     default_nettype: Option<DefaultNettype>,
+    pub min_time_precision: TimeResolution,
 }
 
 impl Default for ParseContext {
@@ -233,14 +154,12 @@ impl Default for ParseContext {
 
 impl ParseContext {
     pub const fn new() -> Self {
+        let timescale = TimeScale::new();
+        let minimum_time_precision = timescale.precision;
         Self {
-            timescale: (
-                TimeSize::N1,
-                TimeUnit::Seconds,
-                TimeSize::N1,
-                TimeUnit::Seconds,
-            ),
+            timescale,
             default_nettype: None,
+            min_time_precision: minimum_time_precision,
         }
     }
 }
@@ -299,13 +218,7 @@ pub fn parse_file<'a>(
 
                 module.attribute_instances = attr_instances;
                 module.default_nettype = ctx.default_nettype;
-                let (tu, tu_unit, tp, tp_unit) = ctx.timescale;
-                module.time_scale = TimeScale {
-                    time_unit_size: tu,
-                    time_unit_unit: tu_unit,
-                    time_precision_size: tp,
-                    time_precision_unit: tp_unit,
-                };
+                module.time_scale = ctx.timescale;
                 descriptions.push(Description::Module(utils::push(arenas, ast, module, tr)));
                 trs.push(tr);
             }
@@ -369,6 +282,11 @@ pub fn parse_file<'a>(
                             }
                             return Err(());
                         };
+                        let unit = TimeResolution {
+                            unit: unit_unit,
+                            size: unit_size,
+                        };
+
                         tkw.next_expect(T::Slash, diagnostics.as_deref_mut())?;
                         let TokenLoc { kind, span, file } =
                             tkw.next_expect(T::Decimal, diagnostics.as_deref_mut())?;
@@ -390,8 +308,13 @@ pub fn parse_file<'a>(
                             }
                             return Err(());
                         };
+                        let precision = TimeResolution {
+                            unit: prec_unit,
+                            size: prec_size,
+                        };
 
-                        ctx.timescale = (unit_size, unit_unit, prec_size, prec_unit);
+                        ctx.timescale = TimeScale { unit, precision };
+                        ctx.min_time_precision = ctx.min_time_precision.min(precision);
                     }
                     "default_nettype" => {
                         tkw.offset += 1;
@@ -421,7 +344,7 @@ pub fn parse_file<'a>(
                     "resetall" => {
                         tkw.offset += 1;
                         *ctx = ParseContext::new();
-                    },
+                    }
                     _ => {
                         if let Some(diagnostics) = diagnostics.as_deref_mut() {
                             diagnostics.incomplete(tkw.offset, "directive not-yet supported");

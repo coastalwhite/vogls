@@ -27,6 +27,7 @@ pub struct LowerContext<'a, 'b> {
     pub arenas: &'b AstArenas,
     pub tokenized: &'b Tokenized,
     pub time_scale: TimeScale,
+    pub time_resolution: TimeResolution,
 }
 
 pub struct MutLowerContext {
@@ -392,6 +393,7 @@ pub fn try_resolve_constant<'a, 's>(
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::time::TimeResolution;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariable, VcdVariableKey};
 use vogls_ir::{

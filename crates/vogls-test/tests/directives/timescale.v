@@ -1,4 +1,5 @@
 // vogls: verify-stdout
+`timescale 1fs / 1fs
 module top();
     a a();
     b b();

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use hashbrown::hash_map::Entry;
 use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::time::{TimeResolution, TimeSize, TimeUnit};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{SignalKey, Time};
 use vogls_sdf::{
@@ -90,16 +91,26 @@ fn parse_signed_real_number(s: &str) -> Result<f64, ()> {
     s.parse().map_err(|_| ())
 }
 
-fn parse_time_value(s: &str, timescale: Time) -> Result<Time, ()> {
+fn parse_time_value(
+    s: &str,
+    sdf_timescale: TimeResolution,
+    resolution: TimeResolution,
+) -> Result<Time, ()> {
     // @TODO: This is very lossy.
     let value = parse_signed_real_number(s)?;
-    let timescale = timescale.0 as f64;
-    let value = (value * timescale).round();
+    let value = sdf_timescale
+        .truncate_or_multiply_f64_to(value, resolution)
+        .round();
     let value = value as u64;
-    Ok(Time::from_fs(value))
+    Ok(Time(value))
 }
 
-fn push_delval(delval: &DelVal, delays: &mut Vec<Time>, timescale: Time) -> Result<(), ()> {
+fn push_delval(
+    delval: &DelVal,
+    delays: &mut Vec<Time>,
+    sdf_timescale: TimeResolution,
+    resolution: TimeResolution,
+) -> Result<(), ()> {
     // This should be represented as a no-override...
     let Some(value) = &delval.delay.0 else {
         todo!();
@@ -109,7 +120,7 @@ fn push_delval(delval: &DelVal, delays: &mut Vec<Time>, timescale: Time) -> Resu
 
     match value {
         R::SignedRealNumber(value) => {
-            delays.push(parse_time_value(value.0, timescale)?);
+            delays.push(parse_time_value(value.0, sdf_timescale, resolution)?);
         }
         R::RTriple(rtriple) => {
             // This should be represented as a no-override...
@@ -117,9 +128,9 @@ fn push_delval(delval: &DelVal, delays: &mut Vec<Time>, timescale: Time) -> Resu
                 todo!();
             };
 
-            delays.push(parse_time_value(min.0, timescale)?);
-            delays.push(parse_time_value(typ.0, timescale)?);
-            delays.push(parse_time_value(max.0, timescale)?);
+            delays.push(parse_time_value(min.0, sdf_timescale, resolution)?);
+            delays.push(parse_time_value(typ.0, sdf_timescale, resolution)?);
+            delays.push(parse_time_value(max.0, sdf_timescale, resolution)?);
         }
     }
 
@@ -129,7 +140,8 @@ fn push_delval(delval: &DelVal, delays: &mut Vec<Time>, timescale: Time) -> Resu
 fn parse_delvallist(
     list: &DelValList,
     delays: &mut Vec<Time>,
-    timescale: Time,
+    sdf_timescale: TimeResolution,
+    resolution: TimeResolution,
 ) -> Result<DelayPtr, ()> {
     let offset = delays.len() as u64;
     use DelValList as L;
@@ -153,7 +165,7 @@ fn parse_delvallist(
             }
         );
         triple_mask |= u16::from(is_triple) << i;
-        push_delval(dv, delays, timescale)?;
+        push_delval(dv, delays, sdf_timescale, resolution)?;
     }
 
     let delay_ptr = DelayPtr::new(offset, variant, triple_mask);
@@ -190,32 +202,31 @@ pub fn lower_sdf<'a>(
         // If the SDF file does not contain a timescale then all time values in the file shall be
         // assumed to be in nanoseconds. This has the same effect as a timescale of 1ns.
         // """
-        None => Time::from_u32_ns(1),
+        None => TimeResolution::NS1,
 
         Some(timescale) => {
             let Timescale { number, unit } = timescale;
             use TimescaleNumber as N;
-            let n = match number {
-                N::N1 | N::N1_0 => 1u64,
-                N::N10 | N::N10_0 => 10u64,
-                N::N100 | N::N100_0 => 100u64,
+            let sdf_time_size = match number {
+                N::N1 | N::N1_0 => TimeSize::N1,
+                N::N10 | N::N10_0 => TimeSize::N10,
+                N::N100 | N::N100_0 => TimeSize::N100,
             };
 
             use TimescaleUnit as U;
-            let n = match unit {
-                U::Seconds => Time::try_from_u64_s(n),
-                U::Milliseconds => Time::try_from_u64_ms(n),
-                U::Microseconds => Time::try_from_u64_us(n),
-                U::Nanoseconds => Time::try_from_u64_ns(n),
-                U::Picoseconds => Time::try_from_u64_ps(n),
-                U::Femtoseconds => Some(Time::from_fs(n)),
+            let sdf_time_unit = match unit {
+                U::Seconds => TimeUnit::Seconds,
+                U::Milliseconds => TimeUnit::Milliseconds,
+                U::Microseconds => TimeUnit::Microseconds,
+                U::Nanoseconds => TimeUnit::Nanoseconds,
+                U::Picoseconds => TimeUnit::Picoseconds,
+                U::Femtoseconds => TimeUnit::Femtoseconds,
             };
-            let Some(n) = n else {
-                mctx.diagnostics
-                    .not_yet_implemented(TokenRange::default(), "timescale overflow");
-                return Err(());
-            };
-            n
+
+            TimeResolution {
+                unit: sdf_time_unit,
+                size: sdf_time_size,
+            }
         }
     };
     let mut output_paths = VgHashMap::<SignalKey, SymbolId>::default();
@@ -322,6 +333,7 @@ pub fn lower_sdf<'a>(
                                                 delval_list,
                                                 &mut delays,
                                                 timescale,
+                                                ctx.time_resolution,
                                             )?;
                                             let content = TimingContent { delays };
 
@@ -391,6 +403,7 @@ pub fn lower_sdf<'a>(
                                                 delval_list,
                                                 &mut delays,
                                                 timescale,
+                                                ctx.time_resolution,
                                             )?;
                                             let content = TimingContent { delays };
 

@@ -1,4 +1,4 @@
-// vogls: timeout=100
+// vogls: timeout=100s
 module lfsr #(
     parameter WIDTH = 8
 ) (

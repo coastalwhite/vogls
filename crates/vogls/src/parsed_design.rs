@@ -3,6 +3,7 @@ use std::fmt;
 use hashbrown::HashSet;
 use vogls_frontend::diagnostic::Diagnostic;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
+use vogls_ir::time::TimeResolution;
 use vogls_ir::{GlobalContext, LogicMode};
 use vogls_utils::{IndexMap, VgHashMap};
 use vogls_verilog::ast::AstId;
@@ -24,6 +25,7 @@ pub struct ParsedDesign<'a> {
     pub(crate) ast: Ast<'a>,
     pub(crate) token_buffer: Tokenized,
     pub(crate) arenas: AstArenas,
+    pub(crate) time_resolution: TimeResolution,
 }
 
 pub struct ParseError {
@@ -183,6 +185,7 @@ impl<'a> ParsedDesign<'a> {
             arenas: &self.arenas,
             tokenized: &self.token_buffer,
             time_scale: TimeScale::default(),
+            time_resolution: self.time_resolution,
         };
         let mut gl = GlobalContext::default();
         let mut diagnostics = Diagnostics::default();
@@ -230,6 +233,7 @@ impl<'a> ParsedDesign<'a> {
 
             unoptimized_fgs: None,
             optimized_fgs: None,
+            time_resolution: self.time_resolution,
         })
     }
 

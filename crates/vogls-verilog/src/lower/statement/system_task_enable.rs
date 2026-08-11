@@ -178,10 +178,10 @@ pub fn lower_system_task_enable<'a>(
             let name = &ctx.arenas.ident_table[ctx.table[sid].name()];
             let fmt = DynFormatString::from_string(format!(
                 "Time scale of ({name}) is {}{} / {}{}\n",
-                module.time_scale.time_unit_size.as_str(),
-                module.time_scale.time_unit_unit.as_str(),
-                module.time_scale.time_precision_size.as_str(),
-                module.time_scale.time_precision_unit.as_str(),
+                module.time_scale.unit.size.as_str(),
+                module.time_scale.unit.unit.as_str(),
+                module.time_scale.precision.size.as_str(),
+                module.time_scale.precision.unit.as_str(),
             ));
             builder.intrinsic(mctx.gl(), IntrinsicOp::Display(Box::new(fmt)), [].into());
         }
