@@ -94,6 +94,7 @@ impl fmt::Display for TokenizeErrorReason {
             Self::FailedToOpenFile(path, err) => {
                 write!(f, "failed to open {}. Reason: {err}", path.display())
             }
+            Self::PreprocessorMismatch => f.write_str("else/endif/elsif without matching if"),
             Self::IncludeInMacro => {
                 f.write_str("Include preprocessor directive in a macro definition")
             }
@@ -148,6 +149,7 @@ pub enum TokenizeErrorReason {
     NestedDefine,
     DefineWithoutName,
     ExpectedConditionalIdent,
+    PreprocessorMismatch,
     MalformedMacroArguments(String),
     UnclosedFunctionMacro(String),
     MacroArgumentMismatch(String),
@@ -589,7 +591,7 @@ impl Tokenized {
                             "triand" => T::KeywordTriand,
                             "trior" => T::KeywordTrior,
                             "trireg" => T::KeywordTrireg,
-                            "unsigned1" => T::KeywordUnsigned1,
+                            "unsigned" => T::KeywordUnsigned,
                             "use" => T::KeywordUse,
                             "uwire" => T::KeywordUwire,
                             "vectored" => T::KeywordVectored,
@@ -846,7 +848,14 @@ impl Tokenized {
                                 i = j + name_length;
 
                                 if if_untaken_depth >= if_stack.len() {
-                                    let mut if_item = if_stack.pop().unwrap();
+                                    let Some(mut if_item) = if_stack.pop() else {
+                                        return Err(Box::new(TokenizeError {
+                                            line: self.file_line_offsets[file_idx as usize].len()
+                                                as u64,
+                                            file: self.paths[file_idx as usize].clone(),
+                                            reason: TokenizeErrorReason::PreprocessorMismatch,
+                                        }));
+                                    };
                                     let is_taken = !if_item.has_been_taken_before
                                         && macros.is_defined(name) ^ (directive == "ifndef");
                                     if_item.has_been_taken_before = is_taken;
@@ -865,7 +874,17 @@ impl Tokenized {
                                 // Take i.f.f. if_untaken_depth == if_stack - 1 && [no-branches-taken-before]
                                 // Untake i.f.f. if_untaken_depth > if_stack
 
-                                let mut if_item = if_stack.pop().unwrap();
+                                let Some(mut if_item) =
+                                    if_stack.pop().filter(|item| !item.has_else)
+                                else {
+                                    return Err(Box::new(TokenizeError {
+                                        line: self.file_line_offsets[file_idx as usize].len()
+                                            as u64,
+                                        file: self.paths[file_idx as usize].clone(),
+                                        reason: TokenizeErrorReason::PreprocessorMismatch,
+                                    }));
+                                };
+
                                 if if_untaken_depth > if_stack.len() {
                                     if_untaken_depth = if_stack.len();
                                 } else if if_untaken_depth == if_stack.len()
@@ -882,7 +901,14 @@ impl Tokenized {
                             }
                             "endif" => {
                                 i += 1 + directive_length;
-                                _ = if_stack.pop();
+                                let Some(_) = if_stack.pop() else {
+                                    return Err(Box::new(TokenizeError {
+                                        line: self.file_line_offsets[file_idx as usize].len()
+                                            as u64,
+                                        file: self.paths[file_idx as usize].clone(),
+                                        reason: TokenizeErrorReason::PreprocessorMismatch,
+                                    }));
+                                };
                                 continue;
                             }
 
@@ -909,11 +935,35 @@ impl Tokenized {
 
                                     // @TODO: escaping
                                     let s = &content[j + 1..][..l - 2];
-                                    let path = paths[file_idx as usize].as_deref().unwrap();
+                                    let path = match &paths[file_idx as usize] {
+                                        None => todo!(),
+                                        Some(path) => path.as_ref(),
+                                    };
                                     // @TODO: better error handling
-                                    let path = path.parent().unwrap();
-                                    let path = path.join(Path::new(s));
-                                    // @TODO: better error handling
+                                    let path = path
+                                        .parent()
+                                        .ok_or_else(|| {
+                                            std::io::Error::new(
+                                                std::io::ErrorKind::NotFound,
+                                                "parent directory not found".to_string(),
+                                            )
+                                        })
+                                        .map(|p| p.join(s));
+                                    let path = match path {
+                                        Err(err) => {
+                                            return Err(Box::new(TokenizeError {
+                                                line: self.file_line_offsets[file_idx as usize]
+                                                    .len()
+                                                    as u64,
+                                                file: self.paths[file_idx as usize].clone(),
+                                                reason: TokenizeErrorReason::FailedToOpenFile(
+                                                    PathBuf::default(),
+                                                    err,
+                                                ),
+                                            }));
+                                        }
+                                        Ok(path) => path,
+                                    };
                                     let content: Arc<str> = match std::fs::read_to_string(&path) {
                                         Ok(content) => content.into(),
                                         Err(err) => {
@@ -923,8 +973,7 @@ impl Tokenized {
                                                     as u64,
                                                 file: self.paths[file_idx as usize].clone(),
                                                 reason: TokenizeErrorReason::FailedToOpenFile(
-                                                    path.clone(),
-                                                    err,
+                                                    path, err,
                                                 ),
                                             }));
                                         }
@@ -1432,7 +1481,7 @@ define_tokens! {
     KeywordTriand = "triand",
     KeywordTrior = "trior",
     KeywordTrireg = "trireg",
-    KeywordUnsigned1 = "unsigned1",
+    KeywordUnsigned = "unsigned",
     KeywordUse = "use",
     KeywordUwire = "uwire",
     KeywordVectored = "vectored",

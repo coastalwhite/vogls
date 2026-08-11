@@ -111,12 +111,6 @@ pub fn take_size(s: &str) -> Result<(&str, VectorSize), ()> {
     Ok(("", size))
 }
 
-impl Base {
-    pub fn is_valid(c: char) -> bool {
-        matches!(c, 'D' | 'd' | 'B' | 'b' | 'O' | 'o' | 'X' | 'x')
-    }
-}
-
 pub fn parse_decimal_bits(s: &str, size: Option<VectorSize>) -> Result<Bits, BitsParseError> {
     let size = match size {
         Some(size) => size,
