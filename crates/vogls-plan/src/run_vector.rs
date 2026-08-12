@@ -5,7 +5,7 @@ use std::sync::Arc;
 use vogls::utils::{VgHashMap, new_table_key};
 
 use crate::CspAble;
-use crate::array::Array;
+use crate::array::{Array, DslLazyArray, LazyArrayKey};
 use crate::buffer::Buffer;
 use crate::compute::{
     CommonSubPlan, ComputeContext, ComputeDependencies, ComputeGraph, ComputeInputs, ComputeNode,
@@ -250,6 +250,64 @@ impl RunVectorNode for RunVectorExtractOutput {
             Output::Plan(_) => panic!("plan!"),
             Output::Array(_) => panic!("array!"),
             Output::Value(_) => panic!("value!"),
+        }
+    }
+}
+
+pub struct DslRunVectorRepeatArray(pub DslLazyArray, pub usize);
+#[derive(PartialEq, Eq, Hash)]
+pub struct RunVectorRepeatArray(pub LazyArrayKey, pub usize);
+impl DslRunVectorNode for DslRunVectorRepeatArray {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Repeat Array")
+    }
+    fn convert_one<'a>(&'a self, converted: &'a VgHashMap<DslPtr, Key>) -> Arc<dyn RunVectorNode> {
+        let output = converted[&DslPtr::from(&self.0 as &dyn DslNode)].as_array();
+        Arc::new(RunVectorRepeatArray(output, self.1)) as _
+    }
+    fn extend_inputs<'a>(&'a self, f: &mut Vec<&'a dyn DslNode>) {
+        f.push(&self.0);
+    }
+}
+impl RunVectorNode for RunVectorRepeatArray {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Repeat Array")
+    }
+    impl_dyn_eq_hash!(RunVectorNode);
+    fn extend_inputs(&self, deps: &mut ComputeDependencies) {
+        deps.arrays.push(self.0);
+    }
+
+    fn compute(&self, _ctx: &ComputeContext, inputs: &ComputeInputs) -> ComputeResult<RunVector> {
+        let Self(key, n) = self;
+        let array = &inputs.arrays[key];
+        let offsets = RunOffsets::Constant(*n as u64, array.len());
+        match array {
+            Array::Floats(buffer) => {
+                let mut data = Vec::with_capacity(buffer.len() * n);
+                for &v in buffer.iter() {
+                    data.extend(std::iter::repeat_n(v, *n));
+                }
+                let data = Array::Floats(Buffer::from_vec(data));
+                Ok(RunVector { offsets, data })
+            }
+            Array::Ints(buffer) => {
+                let mut data = Vec::with_capacity(buffer.len() * n);
+                for &v in buffer.iter() {
+                    data.extend(std::iter::repeat_n(v, *n));
+                }
+                let data = Array::Ints(Buffer::from_vec(data));
+                Ok(RunVector { offsets, data })
+            }
+            Array::UInts(buffer) => {
+                let mut data = Vec::with_capacity(buffer.len() * n);
+                for &v in buffer.iter() {
+                    data.extend(std::iter::repeat_n(v, *n));
+                }
+                let data = Array::UInts(Buffer::from_vec(data));
+                Ok(RunVector { offsets, data })
+            }
+            Array::Bits(..) => todo!(),
         }
     }
 }

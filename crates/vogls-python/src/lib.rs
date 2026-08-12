@@ -4,8 +4,9 @@ mod anonymous_map;
 mod vogls {
     use std::io::{stderr, stdout};
     use std::num::NonZeroU32;
+    use std::ops::Deref;
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, LazyLock, Mutex};
 
     use pyo3::exceptions::{PyException, PyTypeError, PyValueError};
     use pyo3::types::PyDict;
@@ -27,7 +28,7 @@ mod vogls {
     use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
     use vogls_plan::random::RandomBits;
     use vogls_plan::run::DslLazyStep;
-    use vogls_plan::run_vector::{DslRunVector, LazyRunVector, RunVector};
+    use vogls_plan::run_vector::{DslRunVector, DslRunVectorRepeatArray, LazyRunVector, RunVector};
     use vogls_plan::ttest::TTest;
     use vogls_plan::typing::{PlanType, Type, TypeKind};
     use vogls_plan::value::{DslLazyValue, LazyValue, Value};
@@ -197,6 +198,75 @@ mod vogls {
                     }
                 })
                 .map_err(|_| PyValueError::new_err("failed to compile"))
+        }
+    }
+
+    static CONFIG: LazyLock<Mutex<Config>> = LazyLock::new(|| Mutex::new(Config::load_initial()));
+
+    #[pyo3::pyclass(from_py_object)]
+    #[derive(Clone)]
+    pub struct Config {
+        pub num_threads: Option<usize>,
+    }
+    #[pyclass]
+    #[derive(Default)]
+    pub struct ConfigOverrides {
+        pub num_threads: Option<Option<usize>>,
+    }
+
+    impl Config {
+        pub fn load_initial() -> Self {
+            Self {
+                num_threads: Some(0),
+            }
+        }
+
+        pub fn with_overrides(&self, overrides: &ConfigOverrides) -> Config {
+            Self {
+                num_threads: overrides
+                    .num_threads
+                    .unwrap_or_else(|| self.num_threads.clone()),
+            }
+        }
+    }
+
+    #[pymethods]
+    impl Config {
+        #[staticmethod]
+        pub fn current() -> Self {
+            CONFIG.lock().unwrap().deref().clone()
+        }
+
+        fn __repr__(&self) -> String {
+            let Self { num_threads } = self;
+            format!("Config {{ num_threads: {num_threads:?} }}")
+        }
+    }
+
+    #[pymethods]
+    impl ConfigOverrides {
+        #[staticmethod]
+        pub fn empty() -> Self {
+            Self::default()
+        }
+
+        fn __repr__(&self) -> String {
+            use std::fmt::Write;
+            let Self { num_threads } = self;
+            let mut s = String::from("PartialConfig { ");
+            let mut fst = true;
+            if let Some(num_threads) = num_threads {
+                if !fst {
+                    write!(&mut s, ", ").unwrap();
+                }
+                write!(&mut s, "num_threads: {num_threads:?}").unwrap();
+                #[allow(unused_assignments)]
+                {
+                    fst = false;
+                }
+            }
+            s.push_str(" }");
+            s
         }
     }
 
@@ -479,9 +549,13 @@ mod vogls {
 
     fn lazy_compute<Dsl: DslNode, Lazy: ComputeNode + GraphItem>(
         dsl: &Dsl,
+        overrides: &ConfigOverrides,
     ) -> PyResult<Lazy::Output> {
         let (lazy_key, mut graph) = vogls_plan::dsl::convert(dsl)?;
-        let ctx = vogls_plan::compute::ComputeContext::new(None);
+        let gbl_cfg = CONFIG.lock().unwrap();
+        let cfg = gbl_cfg.with_overrides(&overrides);
+        drop(gbl_cfg);
+        let ctx = vogls_plan::compute::ComputeContext::new(cfg.num_threads);
         let result = vogls_plan::compute::compute::<Lazy>(lazy_key, &mut graph, &ctx)?;
         Ok(result)
     }
@@ -593,8 +667,8 @@ mod vogls {
 
     #[pymethods]
     impl PyLazyPlan {
-        pub fn compute(&self) -> PyResult<PyPlan> {
-            lazy_compute::<_, LazyPlan>(&self.0).map(PyPlan)
+        pub fn compute(&self, overrides: Bound<ConfigOverrides>) -> PyResult<PyPlan> {
+            lazy_compute::<_, LazyPlan>(&self.0, overrides.borrow().deref()).map(PyPlan)
         }
         pub fn to_dot_graph(&self) -> PyResult<String> {
             lazy_dot_string::<_>(&self.0)
@@ -641,8 +715,8 @@ mod vogls {
 
     #[pymethods]
     impl PyLazyArray {
-        pub fn compute(&self) -> PyResult<PyArray> {
-            lazy_compute::<_, LazyArray>(&self.0).map(PyArray)
+        pub fn compute(&self, overrides: Bound<ConfigOverrides>) -> PyResult<PyArray> {
+            lazy_compute::<_, LazyArray>(&self.0, overrides.borrow().deref()).map(PyArray)
         }
         pub fn to_dot_graph(&self) -> PyResult<String> {
             lazy_dot_string::<_>(&self.0)
@@ -726,6 +800,18 @@ mod vogls {
                 [self.0.clone()],
             )?))
         }
+
+        pub fn repeat(&self, n: usize) -> PyResult<PyLazyRunVector> {
+            let ty = self.0.ty();
+            Ok(PyLazyRunVector(DslRunVector {
+                ty: Arc::new(Type::RunVector(vogls_plan::typing::RunVectorType {
+                    data: ty.data,
+                    length: ty.length,
+                    width: vogls_plan::typing::RunWidth::Constant(n as u64),
+                })),
+                f: Arc::new(DslRunVectorRepeatArray(self.0.clone(), n)) as _,
+            }))
+        }
     }
     #[pymethods]
     impl PyArray {
@@ -765,8 +851,8 @@ mod vogls {
 
     #[pymethods]
     impl PyLazyValue {
-        pub fn compute(&self) -> PyResult<PyValue> {
-            lazy_compute::<_, LazyValue>(&self.0).map(PyValue)
+        pub fn compute(&self, overrides: Bound<ConfigOverrides>) -> PyResult<PyValue> {
+            lazy_compute::<_, LazyValue>(&self.0, overrides.borrow().deref()).map(PyValue)
         }
         pub fn to_dot_graph(&self) -> PyResult<String> {
             lazy_dot_string::<_>(&self.0)
@@ -848,8 +934,8 @@ mod vogls {
 
     #[pyo3::pymethods]
     impl PyLazyRunVector {
-        pub fn compute(&self) -> PyResult<PyRunVector> {
-            lazy_compute::<_, LazyRunVector>(&self.0).map(PyRunVector)
+        pub fn compute(&self, overrides: Bound<ConfigOverrides>) -> PyResult<PyRunVector> {
+            lazy_compute::<_, LazyRunVector>(&self.0, overrides.borrow().deref()).map(PyRunVector)
         }
         pub fn to_dot_graph(&self) -> PyResult<String> {
             lazy_dot_string::<_>(&self.0)

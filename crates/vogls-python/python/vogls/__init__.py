@@ -52,7 +52,9 @@ class Lazy(Generic[T]):
 
     def compute(self) -> T:
         """Collect the result of the computation."""
-        return self._value_type._from_py(self._producer.compute())
+        return self._value_type._from_py(
+            self._producer.compute(vgr.ConfigOverrides.empty())
+        )
 
     def to_dot_graph(self) -> str:
         """Get a DOT graph string of the computation."""
@@ -147,6 +149,9 @@ class LazyArray(Lazy[Array]):
     @staticmethod
     def random_bits(length: int, width: int, seed: int | None = None) -> Self:
         return LazyArray._from_py(vgr.PyLazyArray.random_bits(length, width, seed))
+
+    def repeat(self, n: int) -> "LazyRunVector":
+        return LazyRunVector._from_py(self._producer.repeat(n))
 
     def get(self, at: int) -> "LazyValue":
         return LazyValue._from_py(self._producer.get(at))
