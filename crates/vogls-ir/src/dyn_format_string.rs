@@ -2,6 +2,7 @@ use std::fmt::{self, Alignment, Write};
 use std::io;
 
 use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
+use vogls_utils::NonMaxU32;
 
 use crate::Bits;
 
@@ -41,6 +42,8 @@ impl Base {
 pub struct DynFormatArgument {
     pub padding: Padding,
     pub base: Base,
+    /// Precision for floating-point formatting. Ignored otherwise.
+    pub precision: Option<NonMaxU32>,
     pub signed: bool,
     pub prefix: bool,
 }
@@ -50,6 +53,7 @@ impl Default for DynFormatArgument {
         Self {
             padding: Default::default(),
             base: Default::default(),
+            precision: None,
             signed: false,
             prefix: true,
         }
@@ -85,6 +89,7 @@ impl DynFormatString {
                 &arg_bits,
                 arg_fmt.padding,
                 arg_fmt.base,
+                arg_fmt.precision,
                 arg_fmt.signed,
                 arg_fmt.prefix,
             )?;
@@ -101,11 +106,121 @@ impl DynFormatString {
     }
 }
 
+enum RealFormatKind {
+    /// `%f` / `%F`
+    Decimal,
+
+    /// `%e` / `%E`
+    Exponential,
+
+    /// `%g` / `%G`
+    Adaptive,
+}
+
+/// Formatting for the real format specifiers.
+struct FormatReal {
+    kind: RealFormatKind,
+    value: f64,
+    precision: Option<NonMaxU32>,
+    minimum_field_width: Option<u32>,
+}
+
+impl fmt::Display for FormatReal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            kind,
+            value,
+            precision,
+            minimum_field_width,
+        } = self;
+        let (v, p, w) = (*value, *precision, *minimum_field_width);
+        let p = p.map_or(6, |p| p.get() as usize);
+        let w = w.map(|w| w as usize);
+
+        if !v.is_finite() {
+            let lit = if v.is_nan() {
+                "nan"
+            } else if v.is_sign_positive() {
+                "inf"
+            } else {
+                "-inf"
+            };
+            return match w {
+                None => f.write_str(lit),
+                Some(w) => write!(f, "{lit:>w$}"),
+            };
+        }
+
+        match kind {
+            RealFormatKind::Decimal => match w {
+                None => write!(f, "{v:.p$}"),
+                Some(w) => write!(f, "{v:>w$.p$}"),
+            },
+            RealFormatKind::Exponential => {
+                let raw = format!("{v:.p$e}");
+                let (mant, exp) = raw
+                    .split_once('e')
+                    .expect("Format should always output and `e`");
+                let x: i32 = exp.parse().unwrap();
+                let v = format!(
+                    "{mant}e{}{:02}",
+                    if x < 0 { '-' } else { '+' },
+                    x.unsigned_abs()
+                );
+
+                match w {
+                    None => f.write_str(&v),
+                    Some(w) => write!(f, "{v:>w$}"),
+                }
+            }
+            RealFormatKind::Adaptive => {
+                let p = p.max(1);
+                let e = format!("{:.*e}", p - 1, v);
+                let (mant, exp) = e
+                    .split_once('e')
+                    .expect("`e` format should always contain `e`");
+                let x: i32 = exp.parse().unwrap();
+
+                fn strip_decimals(s: &mut String) {
+                    if s.contains('.') {
+                        while s.ends_with('0') {
+                            s.pop();
+                        }
+                        if s.ends_with('.') {
+                            s.pop();
+                        }
+                    }
+                }
+
+                let s = if x >= -4 && x < p as i32 {
+                    let mut s = format!("{:.*}", (p as i32 - 1 - x) as usize, v);
+                    strip_decimals(&mut s);
+                    s
+                } else {
+                    let mut m = mant.to_string();
+                    strip_decimals(&mut m);
+                    format!(
+                        "{m}e{}{:02}",
+                        if x.is_negative() { '-' } else { '+' },
+                        x.unsigned_abs()
+                    )
+                };
+
+                match w {
+                    Some(w) => write!(f, "{s:>w$}"),
+                    None => f.write_str(&s),
+                }
+            }
+        }
+    }
+}
+
 pub fn format_bits(
     f: &mut impl io::Write,
     bits: &Bits,
     padding: Padding,
     base: Base,
+    precision: Option<NonMaxU32>,
     signed: bool,
     prefix: bool,
 ) -> io::Result<()> {
@@ -121,14 +236,50 @@ pub fn format_bits(
         Base::Octal => BitsFormatBase::Octal,
         Base::Hexadecimal => BitsFormatBase::LowerHex,
         Base::Decimal => BitsFormatBase::Decimal,
-        Base::Float => return write!(f, "{}", bits.extract_exact_f64().unwrap()),
-        Base::Exponential => return write!(f, "{:e}", bits.extract_exact_f64().unwrap()),
+        Base::Float => {
+            return write!(
+                f,
+                "{}",
+                FormatReal {
+                    kind: RealFormatKind::Decimal,
+                    value: bits.extract_exact_f64().unwrap(),
+                    precision,
+                    minimum_field_width: match padding {
+                        Padding::NoPadding | Padding::ZeroPaddedToSize => None,
+                        Padding::ZeroPaddedTo(w) => Some(w),
+                    }
+                }
+            );
+        }
+        Base::Exponential => {
+            return write!(
+                f,
+                "{}",
+                FormatReal {
+                    kind: RealFormatKind::Exponential,
+                    value: bits.extract_exact_f64().unwrap(),
+                    precision,
+                    minimum_field_width: match padding {
+                        Padding::NoPadding | Padding::ZeroPaddedToSize => None,
+                        Padding::ZeroPaddedTo(w) => Some(w),
+                    }
+                }
+            );
+        }
         Base::FloatAdaptive => {
-            let v = bits.extract_exact_f64().unwrap();
-            let float = format!("{v}");
-            let exp = format!("{v:e}");
-            let min = if float.len() < exp.len() { float } else { exp };
-            return write!(f, "{min}");
+            return write!(
+                f,
+                "{}",
+                FormatReal {
+                    kind: RealFormatKind::Adaptive,
+                    value: bits.extract_exact_f64().unwrap(),
+                    precision,
+                    minimum_field_width: match padding {
+                        Padding::NoPadding | Padding::ZeroPaddedToSize => None,
+                        Padding::ZeroPaddedTo(w) => Some(w),
+                    }
+                }
+            );
         }
         Base::Ascii => {
             #[inline(always)]

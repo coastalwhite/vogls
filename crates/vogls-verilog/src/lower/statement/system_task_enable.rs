@@ -1,6 +1,7 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::dyn_format_string::{Base, DynFormatArgument, DynFormatString, Padding};
 use vogls_ir::{BasicBlockBuilder, IntrinsicOp, ReadMem, VariableKey};
+use vogls_utils::NonMaxU32;
 
 use crate::ast::AstId;
 use crate::ast::expr::Expr;
@@ -109,6 +110,7 @@ pub fn lower_system_task_enable<'a>(
                         DynFormatArgument {
                             padding: Padding::NoPadding,
                             base: Base::Decimal,
+                            precision: None,
                             signed: false,
                             prefix: false,
                         },
@@ -359,26 +361,56 @@ pub fn lower_write_arguments<'a>(
 
                 required_arguments_left += 1;
 
+                macro_rules! padding_overflow {
+                    () => {{
+                        mctx.diagnostics
+                            .not_yet_implemented(ctx.arenas.get_span(expr), "padding overflow");
+                    }};
+                }
+
                 let nums_start_with_zero = remaining.starts_with('0');
                 let mut pad_size = None;
-                while remaining.starts_with(|c: char| c.is_ascii_digit()) {
+                while let Some(&b) = remaining.as_bytes().first()
+                    && b.is_ascii_digit()
+                {
                     if pad_size.is_some() || !remaining.starts_with('0') {
-                        let p = pad_size.get_or_insert(0);
-                        *p *= 10u32;
-                        *p += (remaining.as_bytes()[0] - b'0') as u32;
+                        let p = pad_size.get_or_insert(0u32);
+                        *p = p.checked_mul(10u32).ok_or_else(|| padding_overflow!())?;
+                        *p = p
+                            .checked_add((b - b'0') as u32)
+                            .ok_or_else(|| padding_overflow!())?;
                     }
 
                     at += 1;
                     remaining = &remaining[1..];
                 }
 
-                let padding = if let Some(pad_size) = pad_size {
-                    Padding::ZeroPaddedTo(pad_size)
-                } else if nums_start_with_zero {
-                    Padding::NoPadding
-                } else {
-                    Padding::ZeroPaddedToSize
-                };
+                macro_rules! precision_overflow {
+                    () => {{
+                        mctx.diagnostics
+                            .not_yet_implemented(ctx.arenas.get_span(expr), "precision overflow");
+                    }};
+                }
+
+                let mut precision = None;
+                if remaining.starts_with('.') {
+                    at += 1;
+                    remaining = &remaining[1..];
+
+                    let mut p = 0u32;
+                    while let Some(&b) = remaining.as_bytes().first()
+                        && b.is_ascii_digit()
+                    {
+                        p = p.checked_mul(10u32).ok_or_else(|| precision_overflow!())?;
+                        p = p
+                            .checked_add((b - b'0') as u32)
+                            .ok_or_else(|| precision_overflow!())?;
+                        at += 1;
+                        remaining = &remaining[1..];
+                    }
+                    let p = NonMaxU32::new(p).ok_or_else(|| precision_overflow!())?;
+                    precision = Some(p);
+                }
 
                 let Some(b) = remaining.as_bytes().first() else {
                     format_string_arguments
@@ -421,11 +453,28 @@ pub fn lower_write_arguments<'a>(
                     }
                 };
 
+                let padding = if let Some(pad_size) = pad_size {
+                    Padding::ZeroPaddedTo(pad_size)
+                } else if nums_start_with_zero {
+                    Padding::NoPadding
+                } else {
+                    Padding::ZeroPaddedToSize
+                };
+
+                if precision.is_some() && !base.is_fp_representation() {
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(expr),
+                        "cannot have floating point precision for non-float",
+                    );
+                    return Err(());
+                }
+
                 format_string_arguments.push((
                     format_string_content.len(),
                     DynFormatArgument {
                         padding,
                         base,
+                        precision,
                         signed: false,
                         prefix: false,
                     },
@@ -445,6 +494,7 @@ pub fn lower_write_arguments<'a>(
                             Base::Decimal
                         },
                         signed: var_ty.is_signed(),
+                        precision: None,
                         prefix: false,
                     },
                 ));

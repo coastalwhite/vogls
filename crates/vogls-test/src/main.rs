@@ -181,6 +181,7 @@ impl FromStr for TestPhase {
 #[derive(Clone)]
 struct TestInfo {
     fail: Option<ExpectedFail>,
+    expect_panic: bool,
     verify_stdout: VerifyOutput,
     verify_ir: bool,
     annotate_sdf: bool,
@@ -207,6 +208,7 @@ impl TestInfo {
     pub fn parse(content: &str) -> Result<Self, String> {
         let mut info = TestInfo {
             fail: None,
+            expect_panic: false,
             verify_stdout: VerifyOutput::No,
             verify_ir: false,
             annotate_sdf: false,
@@ -230,6 +232,7 @@ impl TestInfo {
                 "verify-stdout[sort-lines]" => info.verify_stdout = VerifyOutput::SortLines,
                 "verify-ir" => info.verify_ir = true,
                 "annotate-sdf" => info.annotate_sdf = true,
+                "panic" => info.expect_panic = true,
                 _ if line.starts_with("fail") => {
                     if line == "fail" {
                         info.fail = Some(ExpectedFail {
@@ -317,6 +320,8 @@ enum FailureInfo {
         Box<dyn std::error::Error + Send + Sync + 'static>,
     ),
     IoFailure(io::Error),
+    ExpectPanic,
+    ExpectFail(ExpectedFail),
 }
 
 impl FailureInfo {
@@ -329,6 +334,8 @@ impl FailureInfo {
             Self::VirOptMismatch { .. } => 'O',
             Self::CompileFailure(..) => 'C',
             Self::IoFailure(..) => 'I',
+            Self::ExpectPanic => 'X',
+            Self::ExpectFail(_) => 'F',
         }
     }
 }
@@ -654,6 +661,13 @@ fn report_fails(o: &mut io::Stdout, fails: Vec<Fail>, num_tests: usize) -> io::R
                     writeln!(o, ": Io failure")?;
                     writeln!(o, "  {error}")?;
                 }
+                FailureInfo::ExpectPanic => {
+                    writeln!(o, ": Expected panic")?;
+                }
+                FailureInfo::ExpectFail(fail) => {
+                    writeln!(o, ": Expected panic")?;
+                    writeln!(o, "{:?}", fail.phase)?;
+                }
             }
             writeln!(o)?;
         }
@@ -752,6 +766,9 @@ fn run_test(
         }));
 
         match design {
+            Ok(_) if test_information.expect_panic => return Err(FailureInfo::ExpectPanic),
+            Err(_) if test_information.expect_panic => {}
+
             Ok(design) => match design {
                 Ok(design) => {
                     let mut asserted = std::fs::read_to_string(path.with_extension("v.ir"))?;
@@ -905,6 +922,9 @@ fn run_test(
         });
 
     let result = match result {
+        Ok(_) if test_information.expect_panic => return Err(FailureInfo::ExpectPanic),
+        Err(_) if test_information.expect_panic => return Ok(PassKind::Succeed),
+
         Ok(v) => v,
         Err(_) => {
             return Err(FailureInfo::Panic(
@@ -925,7 +945,10 @@ fn run_test(
                 err => return Err(err),
             },
         },
-        Ok(_) => {}
+        Ok(_) => match &test_information.fail {
+            None => {}
+            Some(fail) => return Err(FailureInfo::ExpectFail(fail.clone())),
+        },
     }
 
     if matches!(
