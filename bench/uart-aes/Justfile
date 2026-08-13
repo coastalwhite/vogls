@@ -1,0 +1,24 @@
+build-gtl:
+    mkdir -p build
+    yosys -p "read_verilog uart-hello.v; synth_ice40; write_verilog build/gtl.v"
+
+icarus-build:
+    iverilog tb.v -s tb -DGLS -DICE40_U -gspecify -o icarus
+
+run-icarus:
+    @time just icarus-build
+    @time ./icarus
+
+run-vogls-interpret:
+    vogls tb.v -m tb -DGLS -DICE40_U --timings --opt-rounds=1
+
+run-vogls-compile:
+    vogls tb.v -m tb -C --timings --opt-rounds=1 --vcd dump.vcd
+
+run-benchmark:
+    @./run_benchmarks.sh
+    @python3 convert_timings.py
+
+clean:
+    rm -rf ./build
+    rm -f ./icarus
