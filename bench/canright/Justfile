@@ -1,0 +1,27 @@
+verilator-build:
+    verilator ./aes_masked_sbox.v --binary --top-module tb --timing -Wno-UNOPTFLAT
+
+icarus-build:
+    iverilog ./aes_masked_sbox.v -s tb -o icarus
+
+run-verilator:
+    @time just verilator-build
+    @time ./obj_dir/Vtb
+
+run-icarus:
+    @time just icarus-build
+    @time ./icarus
+
+run-vogls-interpret:
+    @vogls ./aes_masked_sbox.v -m tb --timings --opt-rounds=10
+
+run-vogls-compile:
+    @vogls ./aes_masked_sbox.v -m tb -C --timings --opt-rounds=10
+
+run-benchmark:
+    @./run_benchmarks.sh
+    @python3 convert_timings.py
+
+clean:
+    rm -rf ./obj_dir
+    rm -f ./icarus
