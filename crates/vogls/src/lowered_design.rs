@@ -374,7 +374,7 @@ impl LoweredDesign {
             0
         };
         let compiled =
-            vogls_codegen_clif::lower::compile(&self.gl, &info, num_plugins, scratch_base_word)?;
+            vogls_codegen_clif::lower::compile(&self.gl, info, num_plugins, scratch_base_word)?;
         let num_listening = compiled.num_listening;
         let design = compiled.into_design(NUM_REGIONS);
 

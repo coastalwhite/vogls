@@ -14,6 +14,7 @@
 //! bytecode-only feature), which fails cleanly at compile time.
 
 mod terminator;
+mod tr;
 
 use std::mem::offset_of;
 
@@ -40,6 +41,8 @@ use vogls_utils::{TableKey, VgHashMap};
 
 use crate::ffi::FfiVec;
 use crate::runtime::{EventT, ScheduleT, layout};
+
+use self::tr::TrBuilder;
 
 #[repr(C)]
 pub struct Params {
@@ -361,7 +364,7 @@ pub fn max_scratch_words(gl: &GlobalContext) -> usize {
     max
 }
 
-struct Compiler {
+struct Compiler<'a> {
     module: JITModule,
     ptr: Type,
     fe: TargetFrontendConfig,
@@ -391,10 +394,20 @@ struct Compiler {
     /// Base u64-word offset into the runtime heap of the wide-value scratch
     /// region (for vars above `WIDE_HEAP_THRESHOLD_WORDS`).
     scratch_base: u32,
+
+    gl: &'a GlobalContext,
+    info: SignalInfo<'a>,
+
+    disassembly: bool,
 }
 
-impl Compiler {
-    fn new(num_signals: usize, num_plugins: usize) -> Self {
+impl<'a> Compiler<'a> {
+    fn new(
+        num_signals: usize,
+        num_plugins: usize,
+        gl: &'a GlobalContext,
+        info: SignalInfo<'a>,
+    ) -> Self {
         let mut fb = settings::builder();
         fb.set("opt_level", "speed").unwrap();
         // Cranelift's tail-call convention (used for temporal-region dispatch)
@@ -409,6 +422,7 @@ impl Compiler {
         let ptr = module.target_config().pointer_type();
         let fe = module.target_config();
         let sigs = Sigs::new(ptr);
+        let disassembly = std::env::var_os("VOGLS_DISASM").is_some();
         Self {
             module,
             ptr,
@@ -429,6 +443,9 @@ impl Compiler {
             standing_procs: vogls_utils::VgHashSet::default(),
             standing_arm_offsets: Vec::new(),
             scratch_base: 0,
+            gl,
+            info,
+            disassembly,
         }
     }
 
@@ -646,8 +663,6 @@ impl Compiler {
     /// lowering means drive sites can inline the complete listener wake set.
     fn collect_listeners(
         &mut self,
-        gl: &GlobalContext,
-        info: &SignalInfo,
         process_idx: usize,
         entry_bb: BasicBlockKey,
         regions: &[TemporalRegionKey],
@@ -658,7 +673,7 @@ impl Compiler {
         let mut order = vec![entry_bb];
         let mut stack = vec![entry_bb];
         while let Some(k) = stack.pop() {
-            gl.bbs[k].terminator.for_each_non_temporal_bb(|s| {
+            self.gl.bbs[k].terminator.for_each_non_temporal_bb(|s| {
                 if seen.insert(s) {
                     order.push(s);
                     stack.push(s);
@@ -666,12 +681,12 @@ impl Compiler {
             });
         }
         for &k in &order {
-            if let BasicBlockTerminator::Watch(tr, signals) = &gl.bbs[k].terminator {
+            if let BasicBlockTerminator::Watch(tr, signals) = &self.gl.bbs[k].terminator {
                 let target = self.tr_target(tr, process_idx, regions);
                 let offset = self.num_listening;
                 self.num_listening += 1;
                 for sig in signals.iter() {
-                    let rt = info.rt_signal_map[sig];
+                    let rt = self.info.rt_signal_map[sig];
                     self.listeners[rt.as_usize()].push(Listener { offset, target });
                 }
                 self.watch_offset.insert(k, offset);
@@ -694,8 +709,6 @@ impl Compiler {
     fn build_tr(
         &mut self,
         fb: &mut FunctionBuilderContext,
-        gl: &GlobalContext,
-        info: &SignalInfo,
         process_idx: usize,
         tr_idx: usize,
         entry_bb: BasicBlockKey,
@@ -704,145 +717,12 @@ impl Compiler {
     ) {
         let func_id = self.tr_funcs[process_idx][tr_idx];
         let mut ctx = self.module.make_context();
-        let dis = std::env::var_os("VOGLS_DISASM").is_some();
-        if dis {
-            ctx.set_disasm(true);
-        }
-        ctx.func.signature = self.sigs.event.clone();
-        ctx.func.name = UserFuncName::user(0, func_id.as_u32());
-        {
-            let mut b = FunctionBuilder::new(&mut ctx.func, fb);
-
-            // Discover reachable blocks in this TR.
-            let mut blocks: VgHashMap<BasicBlockKey, Block> = VgHashMap::default();
-            let cl_entry = b.create_block();
-            b.append_block_params_for_function_params(cl_entry);
-            blocks.insert(entry_bb, cl_entry);
-            let mut order = vec![entry_bb];
-            let mut stack = vec![entry_bb];
-            while let Some(k) = stack.pop() {
-                gl.bbs[k].terminator.for_each_non_temporal_bb(|s| {
-                    if !blocks.contains_key(&s) {
-                        blocks.insert(s, b.create_block());
-                        order.push(s);
-                        stack.push(s);
-                    }
-                });
-            }
-
-            // Narrow (<=64) dst vars get Cranelift Variables (value word + a
-            // `spc` word for four-value). Wide (>64) dst vars get a stack slot:
-            // TV = n words; FV = n spc-words then n val-words (heap layout).
-            let mut vmap: VgHashMap<VariableKey, Variable> = VgHashMap::default();
-            let mut spc_map: VgHashMap<VariableKey, Variable> = VgHashMap::default();
-            let mut wide_map: WideMap = WideMap::default();
-            let scratch_base = self.scratch_base;
-            // TR-local cursor into the heap scratch region; reset per TR (only one
-            // TR runs at a time so the region is reused).
-            let mut scratch_cursor: u32 = 0;
-            for &k in &order {
-                let _ = gl.bbs[k].try_for_each_dst_var(|v| {
-                    if vmap.contains_key(&v) || wide_map.contains_key(&v) {
-                        return Ok(());
-                    }
-                    let size = gl.vars.size(v).get();
-                    if size > 64 {
-                        let n = nwords(size);
-                        let words = if v.mode() == LogicMode::FourValue {
-                            2 * n
-                        } else {
-                            n
-                        };
-                        let loc = if words as usize > WIDE_HEAP_THRESHOLD_WORDS {
-                            // Too large for a stack slot: place in the heap scratch
-                            // region at a TR-local offset.
-                            let off = scratch_base + scratch_cursor;
-                            scratch_cursor += words;
-                            WideLoc::Heap(off)
-                        } else {
-                            let slot = b.create_sized_stack_slot(StackSlotData::new(
-                                StackSlotKind::ExplicitSlot,
-                                words * 8,
-                                3,
-                            ));
-                            WideLoc::Slot(slot)
-                        };
-                        wide_map.insert(v, loc);
-                    } else {
-                        vmap.insert(v, b.declare_var(I64));
-                        if v.mode() == LogicMode::FourValue {
-                            spc_map.insert(v, b.declare_var(I64));
-                        }
-                    }
-                    Ok::<(), ()>(())
-                });
-            }
-
-            let params = Params::from_block_params(&mut b, cl_entry);
-            for &k in &order {
-                b.switch_to_block(blocks[&k]);
-                let bb = &gl.bbs[k];
-                for instr in &bb.instrs {
-                    if matches!(instr, Instruction::Phi(..)) {
-                        continue;
-                    }
-                    if instr_is_wide(gl, instr) {
-                        self.lower_wide_instruction(
-                            &mut b, &params, gl, info, &vmap, &spc_map, &wide_map, instr,
-                        );
-                    } else {
-                        self.lower_instruction(
-                            &mut b, &params, gl, info, &vmap, &spc_map, &wide_map, instr,
-                        );
-                    }
-                }
-                // Phi copies for successors, emitted at the end of this
-                // (predecessor) block before the terminator.
-                if let Some(phis) = bb_phis.get(&k) {
-                    for (dst, src) in phis {
-                        if gl.vars.size(*dst).get() > 64 {
-                            let dloc = wide_map[dst];
-                            let sloc = wide_map[src];
-                            let n = nwords(gl.vars.size(*dst).get());
-                            let words = if dst.mode() == LogicMode::FourValue {
-                                2 * n
-                            } else {
-                                n
-                            };
-                            for i in 0..words {
-                                let w = wide_load(&mut b, self.ptr, params.heap_ptr, sloc, i);
-                                wide_store(&mut b, self.ptr, params.heap_ptr, dloc, i, w);
-                            }
-                        } else {
-                            let sv = b.use_var(vmap[src]);
-                            b.def_var(vmap[dst], sv);
-                            if dst.mode() == LogicMode::FourValue {
-                                let ss = b.use_var(spc_map[src]);
-                                b.def_var(spc_map[dst], ss);
-                            }
-                        }
-                    }
-                }
-                self.lower_terminator(
-                    &mut b,
-                    &params,
-                    &blocks,
-                    &vmap,
-                    &spc_map,
-                    gl,
-                    info,
-                    process_idx,
-                    regions,
-                    k,
-                    &bb.terminator,
-                );
-            }
-
-            b.seal_all_blocks();
-            b.finalize(self.fe);
-        }
+        let mut builder =
+            TrBuilder::new(&mut ctx, self, fb, func_id, entry_bb, process_idx, regions);
+        builder.lower(bb_phis);
+        builder.finalize();
         self.module.define_function(func_id, &mut ctx).unwrap();
-        if dis {
+        if self.disassembly {
             if let Some(cc) = ctx.compiled_code() {
                 if let Some(d) = cc.vcode.as_ref() {
                     eprintln!(
@@ -860,8 +740,6 @@ impl Compiler {
         &mut self,
         b: &mut FunctionBuilder,
         params: &Params,
-        gl: &GlobalContext,
-        info: &SignalInfo,
         vmap: &VgHashMap<VariableKey, Variable>,
         spc_map: &VgHashMap<VariableKey, Variable>,
         wide_map: &WideMap,
@@ -873,10 +751,10 @@ impl Compiler {
             if v.mode() == LogicMode::FourValue {
                 b.use_var(spc_map[&v])
             } else {
-                b.ins().iconst(I64, mask_of(gl.vars.size(v).get()))
+                b.ins().iconst(I64, mask_of(self.gl.vars.size(v).get()))
             }
         };
-        let sz = |v: VariableKey| gl.vars.size(v).get();
+        let sz = |v: VariableKey| self.gl.vars.size(v).get();
         let is_fv = |v: VariableKey| v.mode() == LogicMode::FourValue;
         match instr {
             // Phi nodes are realized by the per-block phi copies emitted at the
@@ -1025,7 +903,7 @@ impl Compiler {
                     b.def_var(vmap[dst], out);
                 } else if shim {
                     self.emit_wide_binop(
-                        b, params, gl, *op, *dst, *s1, *s2, vmap, spc_map, wide_map,
+                        b, params, *op, *dst, *s1, *s2, vmap, spc_map, wide_map,
                     );
                 } else if is_fv(*dst) {
                     let lv = get(b, *s1);
@@ -1107,7 +985,7 @@ impl Compiler {
                         | BinaryImmOp::RevModulusX
                 ) {
                     self.emit_wide_binop_imm(
-                        b, params, gl, *op, *dst, *src, imm, vmap, spc_map, wide_map,
+                        b, params, self.gl, *op, *dst, *src, imm, vmap, spc_map, wide_map,
                     );
                 } else if is_fv(*dst) {
                     let lv = get(b, *src);
@@ -1223,7 +1101,7 @@ impl Compiler {
                     if matches!(*op, ShiftImmOp::ArithmeticShiftRight) {
                         // Four-value ASR via the shim (correct sign/known handling).
                         self.emit_wide_shift_imm(
-                            b, params, gl, *op, *dst, *src, *amount, vmap, spc_map, wide_map,
+                            b, params, self.gl, *op, *dst, *src, *amount, vmap, spc_map, wide_map,
                         );
                     } else {
                         let v = get(b, *src);
@@ -1258,7 +1136,7 @@ impl Compiler {
                 }
             }
             Instruction::Probe(dst, signal, offset) => {
-                let (href, _rt, mode) = info.heap_ref(*signal);
+                let (href, _rt, mode) = self.info.heap_ref(*signal);
                 let heap = params.heap_ptr;
                 let size = sz(*dst);
                 if mode == LogicMode::TwoValue {
@@ -1273,7 +1151,7 @@ impl Compiler {
                     };
                     let r = maskv(b, shifted, size);
                     b.def_var(vmap[dst], r);
-                } else if *offset == 0 && size == gl.signals[*signal].size.get() {
+                } else if *offset == 0 && size == self.gl.signals[*signal].size.get() {
                     // Whole-signal probe: dst width matches the signal's storage.
                     let (val, spc) = fv_load(b, heap, href, size);
                     b.def_var(vmap[dst], val);
@@ -1282,7 +1160,7 @@ impl Compiler {
                     // Four-value probe at a constant bit offset. The heap layout
                     // depends on the signal's own size: packed (<=32), split
                     // spc/val words (33..=64), or separate spc/val regions (>64).
-                    let s_size = gl.signals[*signal].size.get();
+                    let s_size = self.gl.signals[*signal].size.get();
                     let d_mask = mask_of(size);
                     let off = *offset as usize;
                     let base = href.offset.bit_offset;
@@ -1327,9 +1205,9 @@ impl Compiler {
             // heap storage at runtime bit offset `offset`, x-filling out-of-range
             // bits. dst is always four-value.
             Instruction::ProbeSlice(dst, signal, offset) => {
-                let (href, _rt, mode) = info.heap_ref(*signal);
+                let (href, _rt, mode) = self.info.heap_ref(*signal);
                 let heap = params.heap_ptr;
-                let s_size = gl.signals[*signal].size.get();
+                let s_size = self.gl.signals[*signal].size.get();
                 let d_size = sz(*dst);
                 let src_nwords = nwords(s_size);
                 let base_word = href.offset.bit_offset / 64;
@@ -1400,48 +1278,37 @@ impl Compiler {
                 }
             }
             Instruction::LastUpdateTime(dst, signal) => {
-                let rt = info.rt_signal_map[signal];
-                let idx = info.lupdt_indexes.get(&rt).copied().unwrap_or(0);
+                let rt = self.info.rt_signal_map[signal];
+                let idx = self.info.lupdt_indexes.get(&rt).copied().unwrap_or(0);
                 let lat = params.last_active_time;
                 let t = b.ins().load(I64, mem(), lat, (idx * 8) as i32);
                 b.def_var(vmap[dst], t);
             }
             Instruction::Drive(dst, signal, src, offset) => {
-                let (_href, _rt, mode) = info.heap_ref(*signal);
+                let (_href, _rt, mode) = self.info.heap_ref(*signal);
                 let ssize = sz(*src);
-                let d_size = gl.signals[*signal].size.get();
+                let d_size = self.gl.signals[*signal].size.get();
                 if d_size > 64 && (mode == LogicMode::FourValue || ssize > 64) {
                     let offc = b.ins().iconst(I64, *offset as i64);
                     let one = b.ins().iconst(types::I8, 1);
                     self.emit_wide_drive(
-                        b, params, info, gl, *signal, *src, offc, one, vmap, spc_map, wide_map,
+                        b, params, *signal, *src, offc, one, vmap, spc_map, wide_map,
                     );
                 } else if mode == LogicMode::TwoValue {
                     // lower_drive_tv already handles two-value partial writes.
                     let sv = get(b, *src);
-                    self.lower_drive_tv(b, params, info, *signal, sv, ssize, *offset);
+                    self.lower_drive_tv(b, params, *signal, sv, ssize, *offset);
                 } else if *offset == 0 && ssize == d_size {
                     let sv = get(b, *src);
                     let ss = gets(b, *src);
-                    self.lower_drive_fv(b, params, info, *signal, sv, ss, ssize);
+                    self.lower_drive_fv(b, params, *signal, sv, ss, ssize);
                 } else {
                     // Four-value partial drive at a constant offset.
                     let sv = get(b, *src);
                     let ss = gets(b, *src);
                     let offc = b.ins().iconst(I64, *offset as i64);
                     let one = b.ins().iconst(types::I8, 1);
-                    self.drive_partial(
-                        b,
-                        params,
-                        info,
-                        gl,
-                        *signal,
-                        sv,
-                        Some(ss),
-                        ssize,
-                        offc,
-                        one,
-                    );
+                    self.drive_partial(b, params, *signal, sv, Some(ss), ssize, offc, one);
                 }
                 let zero = b.ins().iconst(I64, 0);
                 b.def_var(vmap[dst], zero);
@@ -1449,9 +1316,9 @@ impl Compiler {
             // Variable-offset drive: insert `src` bits at runtime bit offset
             // `index` into the signal (poke-if-changed).
             Instruction::DriveSlice(dst, signal, src, index) => {
-                let (_href, _rt, mode) = info.heap_ref(*signal);
+                let (_href, _rt, mode) = self.info.heap_ref(*signal);
                 let ssize = sz(*src);
-                let d_size = gl.signals[*signal].size.get();
+                let d_size = self.gl.signals[*signal].size.get();
                 let off = get(b, *index);
                 let off_known = if is_fv(*index) {
                     let os = gets(b, *index);
@@ -1461,7 +1328,7 @@ impl Compiler {
                 };
                 if d_size > 64 {
                     self.emit_wide_drive(
-                        b, params, info, gl, *signal, *src, off, off_known, vmap, spc_map, wide_map,
+                        b, params, *signal, *src, off, off_known, vmap, spc_map, wide_map,
                     );
                 } else {
                     let sv = get(b, *src);
@@ -1470,9 +1337,7 @@ impl Compiler {
                     } else {
                         None
                     };
-                    self.drive_partial(
-                        b, params, info, gl, *signal, sv, src_spc, ssize, off, off_known,
-                    );
+                    self.drive_partial(b, params, *signal, sv, src_spc, ssize, off, off_known);
                 }
                 let zero = b.ins().iconst(I64, 0);
                 b.def_var(vmap[dst], zero);
@@ -1491,7 +1356,7 @@ impl Compiler {
                 }
                 IntrinsicOp::Display(fmt) => {
                     let idx = self.intern_fmt(fmt);
-                    self.emit_fmt_call(b, params, gl, vmap, spc_map, wide_map, items, idx);
+                    self.emit_fmt_call(b, params, vmap, spc_map, wide_map, items, idx);
                     let z = b.ins().iconst(I64, 0);
                     b.def_var(vmap[dst], z);
                 }
@@ -1499,8 +1364,8 @@ impl Compiler {
                     // Assert condition truthiness: two-value nonzero, or the
                     // known-1 pattern (spc & val) for four-value; a wide operand
                     // is or-reduced word by word.
-                    let cond = if gl.vars.size(items[0]).get() > 64 {
-                        let n = nwords(gl.vars.size(items[0]).get());
+                    let cond = if self.gl.vars.size(items[0]).get() > 64 {
+                        let n = nwords(self.gl.vars.size(items[0]).get());
                         let fv = items[0].mode() == LogicMode::FourValue;
                         let mut acc = b.ins().iconst(I64, 0);
                         for i in 0..n {
@@ -1529,7 +1394,7 @@ impl Compiler {
                     b.ins().brif(cond, cont, &[], fail, &[]);
                     b.switch_to_block(fail);
                     let idx = self.intern_fmt(fmt);
-                    self.emit_fmt_call(b, params, gl, vmap, spc_map, wide_map, &items[1..], idx);
+                    self.emit_fmt_call(b, params, vmap, spc_map, wide_map, &items[1..], idx);
                     let two = b.ins().iconst(types::I32, 2);
                     b.ins().return_(&[two]);
                     b.switch_to_block(cont);
@@ -1579,7 +1444,7 @@ impl Compiler {
                     }
                 }
                 IntrinsicOp::ReadMem(rm) => {
-                    let (href, _rt, mode) = info.heap_ref(rm.signal);
+                    let (href, _rt, mode) = self.info.heap_ref(rm.signal);
                     let idx = self.read_mems.len();
                     self.read_mems.push((href, (**rm).clone()));
                     let cldctx = params.cldctx;
@@ -1645,7 +1510,6 @@ impl Compiler {
         &mut self,
         b: &mut FunctionBuilder,
         params: &Params,
-        gl: &GlobalContext,
         vmap: &VgHashMap<VariableKey, Variable>,
         spc_map: &VgHashMap<VariableKey, Variable>,
         wide_map: &WideMap,
@@ -1659,11 +1523,11 @@ impl Compiler {
         let mut total = 0usize;
         for item in items {
             offsets.push(total);
-            if gl.vars.size(*item).get() > 64 {
+            if self.gl.vars.size(*item).get() > 64 {
                 continue;
             }
             let fv = item.mode() == LogicMode::FourValue;
-            total += if fv && gl.vars.size(*item).get() > 32 {
+            total += if fv && self.gl.vars.size(*item).get() > 32 {
                 16
             } else {
                 8
@@ -1681,7 +1545,7 @@ impl Compiler {
         ));
         for (i, item) in items.iter().enumerate() {
             let off = offsets[i] as i32;
-            let size = gl.vars.size(*item).get();
+            let size = self.gl.vars.size(*item).get();
             let fv = item.mode() == LogicMode::FourValue;
             // Pointer to this arg's bits: the wide slot (already in heap layout)
             // for >64, otherwise a freshly packed word in `val_slot`.
@@ -1800,14 +1664,13 @@ impl Compiler {
     fn value_words_ptr(
         &mut self,
         b: &mut FunctionBuilder,
-        gl: &GlobalContext,
         key: VariableKey,
         vmap: &VgHashMap<VariableKey, Variable>,
         spc_map: &VgHashMap<VariableKey, Variable>,
         wide_map: &WideMap,
         heap: Value,
     ) -> Value {
-        let size = gl.vars.size(key).get();
+        let size = self.gl.vars.size(key).get();
         if size > 64 {
             return wide_addr(b, self.ptr, heap, wide_map[&key], 0);
         }
@@ -1862,7 +1725,6 @@ impl Compiler {
         &mut self,
         b: &mut FunctionBuilder,
         params: &Params,
-        gl: &GlobalContext,
         op: BinaryOp,
         dst: VariableKey,
         s1: VariableKey,
@@ -1892,17 +1754,17 @@ impl Compiler {
             }
         };
         let is_fv = dst.mode() == LogicMode::FourValue;
-        let dsize = gl.vars.size(dst).get();
-        let ssize = gl.vars.size(s1).get();
+        let dsize = self.gl.vars.size(dst).get();
+        let ssize = self.gl.vars.size(s1).get();
 
-        let lhs_ptr = self.value_words_ptr(b, gl, s1, vmap, spc_map, wide_map, params.heap_ptr);
+        let lhs_ptr = self.value_words_ptr(b, s1, vmap, spc_map, wide_map, params.heap_ptr);
         let rhs_ptr = if is_shift {
             // Pass [amt_known, amt_val]; a four-value amount that isn't fully
             // known makes the shim produce all-x.
-            let amt = self.first_val_word(b, gl, s2, vmap, wide_map, params.heap_ptr);
+            let amt = self.first_val_word(b, self.gl, s2, vmap, wide_map, params.heap_ptr);
             let known = if s2.mode() == LogicMode::FourValue {
-                let s2size = gl.vars.size(s2).get().min(64);
-                let spc = if gl.vars.size(s2).get() > 64 {
+                let s2size = self.gl.vars.size(s2).get().min(64);
+                let spc = if self.gl.vars.size(s2).get() > 64 {
                     wide_load(b, self.ptr, params.heap_ptr, wide_map[&s2], 0)
                 } else {
                     b.use_var(spc_map[&s2])
@@ -1918,7 +1780,7 @@ impl Compiler {
             b.ins().stack_store(self.ptr, amt, slot, 8);
             b.ins().stack_addr(self.ptr, slot, 0)
         } else {
-            self.value_words_ptr(b, gl, s2, vmap, spc_map, wide_map, params.heap_ptr)
+            self.value_words_ptr(b, s2, vmap, spc_map, wide_map, params.heap_ptr)
         };
 
         let dst_wide = dsize > 64;
@@ -2069,7 +1931,7 @@ impl Compiler {
         let is_fv = dst.mode() == LogicMode::FourValue;
         let dsize = gl.vars.size(dst).get();
         let ssize = gl.vars.size(src).get();
-        let src_ptr = self.value_words_ptr(b, gl, src, vmap, spc_map, wide_map, params.heap_ptr);
+        let src_ptr = self.value_words_ptr(b, src, vmap, spc_map, wide_map, params.heap_ptr);
         let imm_ptr = self.materialize_imm_slot(b, imm, is_fv);
         let (lhs_ptr, rhs_ptr) = if swap {
             (imm_ptr, src_ptr)
@@ -2155,7 +2017,7 @@ impl Compiler {
         let is_fv = dst.mode() == LogicMode::FourValue;
         let dsize = gl.vars.size(dst).get();
         let ssize = gl.vars.size(src).get();
-        let src_ptr = self.value_words_ptr(b, gl, src, vmap, spc_map, wide_map, params.heap_ptr);
+        let src_ptr = self.value_words_ptr(b, src, vmap, spc_map, wide_map, params.heap_ptr);
         // amount operand: [known = 1, amount].
         let amt_slot =
             b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 16, 3));
@@ -2565,8 +2427,6 @@ impl Compiler {
         &mut self,
         b: &mut FunctionBuilder,
         params: &Params,
-        gl: &GlobalContext,
-        info: &SignalInfo,
         vmap: &VgHashMap<VariableKey, Variable>,
         spc_map: &VgHashMap<VariableKey, Variable>,
         wide_map: &WideMap,
@@ -2574,11 +2434,11 @@ impl Compiler {
     ) {
         let ptr = self.ptr;
         let heap = params.heap_ptr;
-        let sz = |v: VariableKey| gl.vars.size(v).get();
+        let sz = |v: VariableKey| self.gl.vars.size(v).get();
         let is_fv = |v: VariableKey| v.mode() == LogicMode::FourValue;
         // read value word i (narrow => i == 0)
         let rv = |b: &mut FunctionBuilder, v: VariableKey, i: u32| -> Value {
-            let size = gl.vars.size(v).get();
+            let size = self.gl.vars.size(v).get();
             if size > 64 {
                 let off = if v.mode() == LogicMode::FourValue {
                     nwords(size) + i
@@ -2591,7 +2451,7 @@ impl Compiler {
             }
         };
         let rs = |b: &mut FunctionBuilder, v: VariableKey, i: u32| -> Value {
-            let size = gl.vars.size(v).get();
+            let size = self.gl.vars.size(v).get();
             if size > 64 {
                 wide_load(b, ptr, heap, wide_map[&v], i)
             } else if v.mode() == LogicMode::FourValue {
@@ -2601,7 +2461,7 @@ impl Compiler {
             }
         };
         let wv = |b: &mut FunctionBuilder, v: VariableKey, i: u32, val: Value| {
-            let size = gl.vars.size(v).get();
+            let size = self.gl.vars.size(v).get();
             if size > 64 {
                 let off = if v.mode() == LogicMode::FourValue {
                     nwords(size) + i
@@ -2614,7 +2474,7 @@ impl Compiler {
             }
         };
         let ws = |b: &mut FunctionBuilder, v: VariableKey, i: u32, val: Value| {
-            let size = gl.vars.size(v).get();
+            let size = self.gl.vars.size(v).get();
             if size > 64 {
                 wide_store(b, ptr, heap, wide_map[&v], i, val);
             } else {
@@ -2678,10 +2538,10 @@ impl Compiler {
                 }
             }
             Instruction::Probe(dst, signal, off) => {
-                let (href, _rt, mode) = info.heap_ref(*signal);
+                let (href, _rt, mode) = self.info.heap_ref(*signal);
                 let heap = params.heap_ptr;
                 let base = href.offset.bit_offset / 64;
-                let s_size = gl.signals[*signal].size.get();
+                let s_size = self.gl.signals[*signal].size.get();
                 let d_size = sz(*dst);
                 if *off == 0 && d_size == s_size {
                     // Whole-signal probe: word copy.
@@ -2700,7 +2560,7 @@ impl Compiler {
                     let one = b.ins().iconst(types::I8, 1);
                     let src_is_fv = mode == LogicMode::FourValue;
                     self.emit_wide_slice(
-                        b, params, gl, *dst, src_ptr, offc, one, s_size, src_is_fv, false, vmap,
+                        b, params, *dst, src_ptr, offc, one, s_size, src_is_fv, false, vmap,
                         spc_map, wide_map,
                     );
                 }
@@ -2708,9 +2568,10 @@ impl Compiler {
             // Full-width wide drive (offset 0, src == signal width): word-copy
             // fast path. Partial drives go through the wide_drive shim.
             Instruction::Drive(_dst, signal, src, off)
-                if *off == 0 && sz(*src) == gl.signals[*signal].size.get() =>
+                if *off == 0 && sz(*src) == self.gl.signals[*signal].size.get() =>
             {
-                let (href, rt, _mode) = info.heap_ref(*signal);
+                let (href, rt, _mode) = self.info.heap_ref(*signal);
+
                 let heap = params.heap_ptr;
                 let base = href.offset.bit_offset / 64;
                 let n = nwords(sz(*src));
@@ -2730,7 +2591,7 @@ impl Compiler {
                 let merge = b.create_block();
                 b.ins().brif(changed, do_bb, &[], merge, &[]);
                 b.switch_to_block(do_bb);
-                self.call_drive_signal(b, params, info, rt);
+                self.call_drive_signal(b, params, rt);
                 for i in 0..words {
                     let sw = wide_load(b, ptr, heap, loc, i);
                     b.ins()
@@ -2742,9 +2603,7 @@ impl Compiler {
             Instruction::Drive(_dst, signal, src, off) => {
                 let offc = b.ins().iconst(I64, *off as i64);
                 let one = b.ins().iconst(types::I8, 1);
-                self.emit_wide_drive(
-                    b, params, info, gl, *signal, *src, offc, one, vmap, spc_map, wide_map,
-                );
+                self.emit_wide_drive(b, params, *signal, *src, offc, one, vmap, spc_map, wide_map);
             }
             Instruction::DriveSlice(_dst, signal, src, index) => {
                 let off = rv(b, *index, 0);
@@ -2755,7 +2614,7 @@ impl Compiler {
                     b.ins().iconst(types::I8, 1)
                 };
                 self.emit_wide_drive(
-                    b, params, info, gl, *signal, *src, off, off_known, vmap, spc_map, wide_map,
+                    b, params, *signal, *src, off, off_known, vmap, spc_map, wide_map,
                 );
             }
             Instruction::Resize(dst, op, src) => {
@@ -2869,11 +2728,10 @@ impl Compiler {
                     b.ins().iconst(types::I8, 1)
                 };
                 let src_ptr =
-                    self.value_words_ptr(b, gl, *src, vmap, spc_map, wide_map, params.heap_ptr);
+                    self.value_words_ptr(b, *src, vmap, spc_map, wide_map, params.heap_ptr);
                 self.emit_wide_slice(
                     b,
                     params,
-                    gl,
                     *dst,
                     src_ptr,
                     off,
@@ -2915,13 +2773,12 @@ impl Compiler {
             Instruction::SliceImm(dst, src, offset) => {
                 let s_size = sz(*src);
                 let src_ptr =
-                    self.value_words_ptr(b, gl, *src, vmap, spc_map, wide_map, params.heap_ptr);
+                    self.value_words_ptr(b, *src, vmap, spc_map, wide_map, params.heap_ptr);
                 let offc = b.ins().iconst(I64, *offset as i64);
                 let one = b.ins().iconst(types::I8, 1);
                 self.emit_wide_slice(
                     b,
                     params,
-                    gl,
                     *dst,
                     src_ptr,
                     offc,
@@ -3136,7 +2993,7 @@ impl Compiler {
                 }
             }
             Instruction::Binary(dst, op, s1, s2) => {
-                self.emit_wide_binop(b, params, gl, *op, *dst, *s1, *s2, vmap, spc_map, wide_map);
+                self.emit_wide_binop(b, params, *op, *dst, *s1, *s2, vmap, spc_map, wide_map);
             }
             // Count leading (most-significant) zero bits of a wide two-value
             // source, walking words from the top down until the first set bit.
@@ -3410,20 +3267,20 @@ impl Compiler {
             // the wide_binop shim.
             Instruction::BinaryImm(dst, op, src, imm) => {
                 self.emit_wide_binop_imm(
-                    b, params, gl, *op, *dst, *src, imm, vmap, spc_map, wide_map,
+                    b, params, self.gl, *op, *dst, *src, imm, vmap, spc_map, wide_map,
                 );
             }
             // Wide shift by a constant amount, via the shim (handles ASR).
             Instruction::ShiftImm(dst, op, src, amount) => {
                 self.emit_wide_shift_imm(
-                    b, params, gl, *op, *dst, *src, *amount, vmap, spc_map, wide_map,
+                    b, params, self.gl, *op, *dst, *src, *amount, vmap, spc_map, wide_map,
                 );
             }
             // Variable-offset slice out of a signal's heap words into a wide dst.
             Instruction::ProbeSlice(dst, signal, offset) => {
-                let (href, _rt, mode) = info.heap_ref(*signal);
+                let (href, _rt, mode) = self.info.heap_ref(*signal);
                 let heap = params.heap_ptr;
-                let s_size = gl.signals[*signal].size.get();
+                let s_size = self.gl.signals[*signal].size.get();
                 let base = href.offset.bit_offset / 64;
                 let src_ptr = b.ins().iadd_imm_u(heap, (base * 8) as i64);
                 let off = rv(b, *offset, 0);
@@ -3435,7 +3292,7 @@ impl Compiler {
                 };
                 let src_is_fv = mode == LogicMode::FourValue;
                 self.emit_wide_slice(
-                    b, params, gl, *dst, src_ptr, off, off_known, s_size, src_is_fv, true, vmap,
+                    b, params, *dst, src_ptr, off, off_known, s_size, src_is_fv, true, vmap,
                     spc_map, wide_map,
                 );
             }
@@ -3450,13 +3307,12 @@ impl Compiler {
         &mut self,
         b: &mut FunctionBuilder,
         params: &Params,
-        info: &SignalInfo,
         signal: SignalKey,
         src: Value,
         size: u32,
         offset: u32,
     ) {
-        let (href, rt, _mode) = info.heap_ref(signal);
+        let (href, rt, _mode) = self.info.heap_ref(signal);
         let bit = href.offset.bit_offset + offset as usize;
         let word = bit / 64;
         let shift = bit % 64;
@@ -3499,7 +3355,7 @@ impl Compiler {
         b.ins().brif(guard, do_bb, &[], merge, &[]);
 
         b.switch_to_block(do_bb);
-        self.call_drive_signal(b, params, info, rt);
+        self.call_drive_signal(b, params, rt);
         // store src into the signal field (read-modify-write).
         if !crosses {
             if size == 64 && shift == 0 {
@@ -3548,13 +3404,12 @@ impl Compiler {
         &mut self,
         b: &mut FunctionBuilder,
         params: &Params,
-        info: &SignalInfo,
         signal: SignalKey,
         src_val: Value,
         src_spc: Value,
         size: u32,
     ) {
-        let (href, rt, _) = info.heap_ref(signal);
+        let (href, rt, _) = self.info.heap_ref(signal);
         let heap = params.heap_ptr;
         let word = href.offset.bit_offset / 64;
         let shift = href.offset.bit_offset % 64;
@@ -3577,7 +3432,7 @@ impl Compiler {
             let changed = b.ins().icmp(IntCC::NotEqual, new_packed, old_field);
             b.ins().brif(changed, do_bb, &[], merge, &[]);
             b.switch_to_block(do_bb);
-            self.call_drive_signal(b, params, info, rt);
+            self.call_drive_signal(b, params, rt);
             if psize == 64 && shift == 0 {
                 b.ins().store(mem(), new_packed, heap, (word * 8) as i32);
             } else {
@@ -3607,7 +3462,7 @@ impl Compiler {
             let changed = b.ins().bor(c1, c2);
             b.ins().brif(changed, do_bb, &[], merge, &[]);
             b.switch_to_block(do_bb);
-            self.call_drive_signal(b, params, info, rt);
+            self.call_drive_signal(b, params, rt);
             let ms = maskv(b, src_spc, size);
             let mv = maskv(b, src_val, size);
             b.ins().store(mem(), ms, heap, (word * 8) as i32);
@@ -3622,16 +3477,10 @@ impl Compiler {
     /// body has no calls (absent plugins), so an inlined-drive TR stays leaf:
     /// no frame, no callee-save spills. Correct listener sets require the
     /// `collect_listeners` pre-pass to have run first.
-    fn call_drive_signal(
-        &mut self,
-        b: &mut FunctionBuilder,
-        params: &Params,
-        info: &SignalInfo,
-        rt: RtSignalKey,
-    ) {
+    fn call_drive_signal(&mut self, b: &mut FunctionBuilder, params: &Params, rt: RtSignalKey) {
         let idx = rt.as_usize();
-        let is_tv = info.signal_mode[idx] == LogicMode::TwoValue;
-        let lupdt = info.lupdt_indexes.get(&rt).copied();
+        let is_tv = self.info.signal_mode[idx] == LogicMode::TwoValue;
+        let lupdt = self.info.lupdt_indexes.get(&rt).copied();
         let listeners: Vec<(u32, FuncId)> = self.listeners[idx]
             .iter()
             .map(|l| (l.offset, l.target))
@@ -3742,8 +3591,6 @@ impl Compiler {
         &mut self,
         b: &mut FunctionBuilder,
         params: &Params,
-        info: &SignalInfo,
-        gl: &GlobalContext,
         signal: SignalKey,
         src: VariableKey,
         offset: Value,
@@ -3752,13 +3599,13 @@ impl Compiler {
         spc_map: &VgHashMap<VariableKey, Variable>,
         wide_map: &WideMap,
     ) {
-        let (href, rt, mode) = info.heap_ref(signal);
+        let (href, rt, mode) = self.info.heap_ref(signal);
         let heap = params.heap_ptr;
         let base_word = (href.offset.bit_offset / 64) as i64;
-        let d_size = gl.signals[signal].size.get();
-        let s_size = gl.vars.size(src).get();
+        let d_size = self.gl.signals[signal].size.get();
+        let s_size = self.gl.vars.size(src).get();
         let is_fv = mode == LogicMode::FourValue;
-        let src_ptr = self.value_words_ptr(b, gl, src, vmap, spc_map, wide_map, params.heap_ptr);
+        let src_ptr = self.value_words_ptr(b, src, vmap, spc_map, wide_map, params.heap_ptr);
 
         let do_bb = b.create_block();
         let merge = b.create_block();
@@ -3815,7 +3662,7 @@ impl Compiler {
         let drive_bb = b.create_block();
         b.ins().brif(poke, drive_bb, &[], merge, &[]);
         b.switch_to_block(drive_bb);
-        self.call_drive_signal(b, params, info, rt);
+        self.call_drive_signal(b, params, rt);
         b.ins().jump(merge, &[]);
         b.switch_to_block(merge);
     }
@@ -3829,7 +3676,6 @@ impl Compiler {
         &mut self,
         b: &mut FunctionBuilder,
         params: &Params,
-        gl: &GlobalContext,
         dst: VariableKey,
         src_ptr: Value,
         offset: Value,
@@ -3841,7 +3687,7 @@ impl Compiler {
         spc_map: &VgHashMap<VariableKey, Variable>,
         wide_map: &WideMap,
     ) {
-        let d_size = gl.vars.size(dst).get();
+        let d_size = self.gl.vars.size(dst).get();
         let dst_is_fv = src_is_fv || fill_with_x;
         let dnw = nwords(d_size) as usize;
         let dst_words = if dst_is_fv { 2 * dnw } else { dnw };
@@ -3924,8 +3770,6 @@ impl Compiler {
         &mut self,
         b: &mut FunctionBuilder,
         params: &Params,
-        info: &SignalInfo,
-        gl: &GlobalContext,
         signal: SignalKey,
         src_val: Value,
         src_spc: Option<Value>,
@@ -3933,8 +3777,8 @@ impl Compiler {
         off: Value,
         off_known: Value,
     ) {
-        let (href, rt, mode) = info.heap_ref(signal);
-        let d_size = gl.signals[signal].size.get();
+        let (href, rt, mode) = self.info.heap_ref(signal);
+        let d_size = self.gl.signals[signal].size.get();
         let heap = params.heap_ptr;
         let base_bit = href.offset.bit_offset;
         let do_bb = b.create_block();
@@ -3961,7 +3805,7 @@ impl Compiler {
             let guard = b.ins().band(poke, off_known);
             b.ins().brif(guard, do_bb, &[], merge, &[]);
             b.switch_to_block(do_bb);
-            self.call_drive_signal(b, params, info, rt);
+            self.call_drive_signal(b, params, rt);
             write_heap_field(b, heap, base_bit, d_size, new);
         } else {
             let (cur_val, cur_spc) = fv_load(b, heap, href, d_size);
@@ -3978,7 +3822,7 @@ impl Compiler {
             let guard = b.ins().band(ch, off_known);
             b.ins().brif(guard, do_bb, &[], merge, &[]);
             b.switch_to_block(do_bb);
-            self.call_drive_signal(b, params, info, rt);
+            self.call_drive_signal(b, params, rt);
             self.fv_store(b, heap, href, d_size, new_val, new_spc);
         }
         b.ins().jump(merge, &[]);
@@ -3993,8 +3837,6 @@ impl Compiler {
         blocks: &VgHashMap<BasicBlockKey, Block>,
         vmap: &VgHashMap<VariableKey, Variable>,
         spc_map: &VgHashMap<VariableKey, Variable>,
-        gl: &GlobalContext,
-        _info: &SignalInfo,
         process_idx: usize,
         regions: &[TemporalRegionKey],
         bb_key: BasicBlockKey,
@@ -4036,7 +3878,7 @@ impl Compiler {
                     // Unknown delay collapses to 0 (matches bytecode semantics).
                     let dv = b.use_var(vmap[delay]);
                     let ds = b.use_var(spc_map[delay]);
-                    let m = mask_of(gl.vars.size(*delay).get());
+                    let m = mask_of(self.gl.vars.size(*delay).get());
                     let known = b.ins().icmp_imm_u(IntCC::Equal, ds, m);
                     let zero = b.ins().iconst(I64, 0);
                     b.ins().select(known, dv, zero)
@@ -4170,13 +4012,12 @@ impl Compiler {
     fn build_drive_signal(
         &mut self,
         fb: &mut FunctionBuilderContext,
-        info: &SignalInfo,
         rt: RtSignalKey,
         func_id: FuncId,
     ) {
         let idx = rt.as_usize();
-        let is_tv = info.signal_mode[idx] == LogicMode::TwoValue;
-        let lupdt = info.lupdt_indexes.get(&rt).copied();
+        let is_tv = self.info.signal_mode[idx] == LogicMode::TwoValue;
+        let lupdt = self.info.lupdt_indexes.get(&rt).copied();
         let listeners: Vec<(u32, FuncId)> = self.listeners[idx]
             .iter()
             .map(|l| (l.offset, l.target))
@@ -5053,14 +4894,14 @@ fn fv_shift_imm(
 // compile
 // ---------------------------------------------------------------------------
 
-pub fn compile(
-    gl: &GlobalContext,
-    info: &SignalInfo,
+pub fn compile<'a>(
+    gl: &'a GlobalContext,
+    info: SignalInfo<'a>,
     num_plugins: usize,
     scratch_base_word: u32,
 ) -> Result<Compiled, String> {
     let num_signals = info.signal_to_heap.len();
-    let mut c = Compiler::new(num_signals, num_plugins);
+    let mut c = Compiler::new(num_signals, num_plugins, gl, info);
     c.scratch_base = scratch_base_word;
     // drive_fn ids, filled below.
     let mut fb = FunctionBuilderContext::new();
@@ -5102,7 +4943,7 @@ pub fn compile(
             .as_deref()
             .filter(|w| w.iter().any(|s| !gl.signals[*s].triggers_t0_poke()));
         for tr in process.regions.iter() {
-            c.collect_listeners(gl, info, pi, tr.entry(), &process.regions, standing);
+            c.collect_listeners(pi, tr.entry(), &process.regions, standing);
         }
     }
 
@@ -5113,16 +4954,7 @@ pub fn compile(
         let mut seen = vogls_utils::VgHashSet::default();
         vogls_codegen::insert_bb_phis(&process.regions, gl, &mut stack, &mut seen, &mut bb_phis);
         for (ti, tr) in process.regions.iter().enumerate() {
-            c.build_tr(
-                &mut fb,
-                gl,
-                info,
-                pi,
-                ti,
-                tr.entry(),
-                &process.regions,
-                &bb_phis,
-            );
+            c.build_tr(&mut fb, pi, ti, tr.entry(), &process.regions, &bb_phis);
         }
     }
 
@@ -5130,7 +4962,6 @@ pub fn compile(
     for i in 0..num_signals {
         c.build_drive_signal(
             &mut fb,
-            info,
             RtSignalKey::from_usize(i).unwrap(),
             drive_fn_ids[i],
         );
@@ -5179,7 +5010,7 @@ mod tests {
             signal_mode: &[],
             lupdt_indexes: &lupdt,
         };
-        let compiled = compile(gl, &info, 0, 0).unwrap();
+        let compiled = compile(gl, info, 0, 0).unwrap();
         let design = compiled.into_design(3);
         let heap = HeapBuilder::new().finish();
         let time_format = TimeFormat::new(TimeResolution::NS1);
