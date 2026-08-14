@@ -64,14 +64,13 @@ endmodule
         Err(_) => bail!("Lowering error"),
     };
 
-    let design = lowered
+    let (design, mut state) = lowered
         .to_bytecode()
         .map_err(|_| anyhow!("to_bytecode error"))?;
 
     let rt = design.resolve_handle(result_handle);
-    let mut state = design.initial_state().clone();
 
-    design.run_from_state(&mut state, &mut SimulationIo::default(), 1)?;
+    design.run(&mut state, &mut SimulationIo::default(), 1)?;
 
     assert_eq!(
         design.get_signal(&state, rt),

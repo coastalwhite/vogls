@@ -1,4 +1,5 @@
 // vogls: mode=two-value-logic
+// vogls: backend=bytecode
 // vogls: disable-optimization=*
 // vogls: panic
 `timescale 1ns/1ps

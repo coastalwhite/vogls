@@ -63,6 +63,8 @@ struct Args {
     #[arg(short = 'C')]
     compile: bool,
     #[arg(long)]
+    clif: bool,
+    #[arg(long)]
     output_source: Option<PathBuf>,
     #[arg(long)]
     timings: bool,
@@ -109,6 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sdf,
         defines,
         compile,
+        clif,
         output_source,
         timings,
         no_constant_propagation,
@@ -250,6 +253,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     timers.start("compilation");
     let (design, mut state) = if compile {
         lowered.compile()
+    } else if clif {
+        lowered.to_cranelift()
     } else {
         lowered.to_bytecode()
     }?;

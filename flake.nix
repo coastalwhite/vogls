@@ -36,7 +36,11 @@
             };
 
             buildTarget = "wasm32-unknown-unknown";
-            rustToolchain = pkgs.rust-bin.nightly.latest.default.override {
+            rustToolchainNightly = pkgs.rust-bin.nightly.latest.default.override {
+              targets = [ buildTarget ];
+              extensions = [ "rust-src" ];
+            };
+            rustToolchain = pkgs.rust-bin.stable.latest.default.override {
               targets = [ buildTarget ];
               extensions = [ "rust-src" ];
             };

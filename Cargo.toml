@@ -26,6 +26,12 @@ bumpalo = "3.20"
 tempfile = "3.27.0"
 pyo3 = { version = "0.28.1", features = ["abi3-py311"] }
 
+cranelift-codegen = "0.134"
+cranelift-frontend = "0.134"
+cranelift-module = "0.134"
+cranelift-jit = "0.134"
+cranelift-native = "0.134"
+
 vogls = { path = "crates/vogls", default-features = false }
 vogls-frontend.path = "crates/vogls-frontend"
 vogls-bytecode.path = "crates/vogls-bytecode"
@@ -36,6 +42,7 @@ vogls-verilog.path = "crates/vogls-verilog"
 vogls-utils.path = "crates/vogls-utils"
 vogls-codegen.path = "crates/vogls-codegen"
 vogls-codegen-c.path = "crates/vogls-codegen-c"
+vogls-codegen-clif.path = "crates/vogls-codegen-clif"
 vogls-runtime.path = "crates/vogls-runtime"
 vogls-vcd.path = "crates/vogls-vcd"
 vogls-sdf.path = "crates/vogls-sdf"

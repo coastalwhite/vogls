@@ -15,6 +15,7 @@ vogls-utils.workspace = true
 vogls-bits.workspace = true
 vogls-codegen.workspace = true
 vogls-codegen-c = { workspace = true, optional = true }
+vogls-codegen-clif = { workspace = true, optional = true }
 vogls-runtime.workspace = true
 vogls-vcd.workspace = true
 vogls-fuse-signals.workspace = true
@@ -23,7 +24,7 @@ vogls-sdf.workspace = true
 [features]
 default = ["native"]
 random = ["vogls-bits/random"]
-native = ["dep:tempfile", "dep:vogls-codegen-c"]
+native = ["dep:tempfile", "dep:vogls-codegen-c", "dep:vogls-codegen-clif"]
 unstable = []
 tailcall = ["vogls-bytecode/tailcall"]
 

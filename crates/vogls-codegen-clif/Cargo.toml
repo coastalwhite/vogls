@@ -1,0 +1,20 @@
+[package]
+name = "vogls-codegen-clif"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vogls-ir.workspace = true
+vogls-bits.workspace = true
+vogls-utils.workspace = true
+vogls-codegen.workspace = true
+vogls-runtime.workspace = true
+
+cranelift-codegen.workspace = true
+cranelift-frontend.workspace = true
+cranelift-module.workspace = true
+cranelift-jit.workspace = true
+cranelift-native.workspace = true
+
+[lints]
+workspace = true

@@ -14,7 +14,6 @@ use vogls_frontend::symbol_table::FrozenSymbolTable;
 #[cfg(feature = "unstable")]
 use vogls_ir::ProcessKind;
 use vogls_ir::optimize::Optimizations;
-#[cfg(feature = "native")]
 use vogls_ir::time::TimeResolution;
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{GlobalContext, LogicMode, SCALAR_VSIZE, Signal, SignalKey};
@@ -335,6 +334,78 @@ impl LoweredDesign {
                 ident_table: self.ident_table,
                 elab_table: self.table,
                 backend: DesignBackend::Bytecode { design },
+                rt_signal_map,
+                signal_to_heap,
+                signal_mode,
+                time_resolution: self.time_resolution,
+            },
+            state,
+        ))
+    }
+
+    #[cfg(feature = "native")]
+    pub fn to_cranelift(mut self) -> Result<(Design, DesignState), Box<dyn std::error::Error>> {
+        use crate::design::{DesignBackend, DesignState};
+
+        let CodegenPreparation {
+            mut heap_builder,
+            signal_to_heap,
+            signal_mode,
+            rt_signal_map,
+            lupdt_indexes,
+            plugins,
+        } = self.prepare_codegen();
+
+        let num_plugins = plugins.len();
+        let info = vogls_codegen_clif::lower::SignalInfo {
+            signal_to_heap: &signal_to_heap,
+            rt_signal_map: &rt_signal_map,
+            signal_mode: &signal_mode,
+            lupdt_indexes: &lupdt_indexes,
+        };
+
+        // Reserve a heap scratch region for wide values too large for a stack
+        // slot (sized to the largest TR's spilled footprint); pass its base word
+        // offset to codegen so those values are addressed off the heap pointer.
+        let scratch_words = vogls_codegen_clif::lower::max_scratch_words(&self.gl);
+        let scratch_base_word = if scratch_words > 0 {
+            (heap_builder.claim_words(scratch_words) / 64) as u32
+        } else {
+            0
+        };
+        let compiled =
+            vogls_codegen_clif::lower::compile(&self.gl, &info, num_plugins, scratch_base_word)?;
+        let num_listening = compiled.num_listening;
+        let design = compiled.into_design(NUM_REGIONS);
+
+        let mut heap = heap_builder.finish();
+        let mut lupdt_updated = vec![false; lupdt_indexes.len()];
+        let mut updated = vec![false; self.gl.signals.len()];
+        for (key, signal) in &self.gl.signals {
+            if let Some(initialize) = &signal.initialize {
+                let rt_key = rt_signal_map[&key];
+                assert_eq!(initialize.size(), signal.size);
+                heap.store_bits(signal_to_heap[rt_key.as_usize()], signal.mode, initialize);
+                if let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
+                    lupdt_updated[*lupdt_idx as usize] = true;
+                }
+                updated[rt_key.as_usize()] = true;
+            }
+        }
+
+        let time_format = vogls_runtime::TimeFormat::new(self.time_resolution);
+        let runtime =
+            vogls_runtime::RuntimeState::new(&self.gl, heap, &updated, &lupdt_updated, time_format);
+        let mut state = design.new_state(num_listening, NUM_REGIONS, runtime, &self.gl);
+        state.plugins = plugins;
+        let state = DesignState::Cranelift(state);
+
+        Ok((
+            Design {
+                gl: self.gl,
+                ident_table: self.ident_table,
+                elab_table: self.table,
+                backend: DesignBackend::Cranelift { design },
                 rt_signal_map,
                 signal_to_heap,
                 signal_mode,

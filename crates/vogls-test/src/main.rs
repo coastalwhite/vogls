@@ -39,6 +39,8 @@ struct Args {
     #[arg(short = 'C')]
     compiled: bool,
     #[arg(long)]
+    cranelift: bool,
+    #[arg(long)]
     opt_rounds: Option<u8>,
 
     #[arg(short = 'n', long, default_value_t = 0)]
@@ -62,6 +64,7 @@ impl io::Write for Io {
 enum Backend {
     Compile,
     Bytecode,
+    Cranelift,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +102,9 @@ impl SelectBackend {
             }
             Self::Only(Backend::Compile) if input.contains(&Backend::Compile) => {
                 &[Backend::Compile]
+            }
+            Self::Only(Backend::Cranelift) if input.contains(&Backend::Cranelift) => {
+                &[Backend::Cranelift]
             }
             Self::Only(_) => &[],
         }
@@ -264,15 +270,16 @@ impl TestInfo {
                     let unit = TimeUnit::from_str(unit.trim()).expect("Invalid unit");
                     info.timeout = Some((value, unit));
                 }
-                _ if line.starts_with("mode=") => match &line[5..] {
+                _ if line.starts_with("mode=") => match &line["mode=".len()..] {
                     "two-value-logic" => info.mode = SelectLogicMode::Only(LogicMode::TwoValue),
                     "four-value-logic" => info.mode = SelectLogicMode::Only(LogicMode::FourValue),
                     "template" => info.mode = SelectLogicMode::Template,
                     _ => return Err("failed to parse 'mode'".into()),
                 },
-                _ if line.starts_with("backend=") => match &line[5..] {
+                _ if line.starts_with("backend=") => match &line["backend=".len()..] {
                     "bytecode" => info.backend = SelectBackend::Only(Backend::Bytecode),
                     "compile" => info.backend = SelectBackend::Only(Backend::Compile),
+                    "cranelift" => info.backend = SelectBackend::Only(Backend::Cranelift),
                     _ => return Err("failed to parse 'backend'".into()),
                 },
                 _ if line.starts_with("disable-optimization=") => {
@@ -428,6 +435,8 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         backends.push(Backend::Bytecode);
     } else if args.compiled {
         backends.push(Backend::Compile);
+    } else if args.cranelift {
+        backends.push(Backend::Cranelift);
     } else {
         backends.extend([Backend::Bytecode, Backend::Compile]);
     }
@@ -598,6 +607,7 @@ fn report_fails(o: &mut io::Stdout, fails: Vec<Fail>, num_tests: usize) -> io::R
             let backend = match backend {
                 Backend::Compile => "compile",
                 Backend::Bytecode => "bytecode",
+                Backend::Cranelift => "cranelift",
             };
 
             write!(o, "+ {name}[{mode_str}-{backend}-O{opt_rounds}]")?;
@@ -887,6 +897,7 @@ fn run_test(
             let (design, mut state) = match backend {
                 Backend::Compile => design.compile(),
                 Backend::Bytecode => design.to_bytecode(),
+                Backend::Cranelift => design.to_cranelift(),
             }
             .map_err(|_| {
                 FailureInfo::CompileFailure(
