@@ -1,12 +1,19 @@
+use std::mem::offset_of;
+
 use cranelift_codegen::Context;
-use cranelift_codegen::ir::{Block, StackSlotData, StackSlotKind, UserFuncName};
+use cranelift_codegen::ir::condcodes::IntCC;
+use cranelift_codegen::ir::{Block, InstBuilder, StackSlotData, StackSlotKind, UserFuncName};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
-use cranelift_module::FuncId;
+use cranelift_module::{FuncId, Module};
 use vogls_codegen::SixBitSize;
-use vogls_ir::{BasicBlockKey, Instruction, LogicMode, TemporalRegionKey, VariableKey};
+use vogls_ir::{BasicBlockKey, BasicBlockTerminator, Instruction, LogicMode, VariableKey};
 use vogls_utils::VgHashMap;
 
-use crate::lower::{I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, instr_is_wide, var_words};
+use crate::ffi::FfiVec;
+use crate::lower::{
+    I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, instr_is_wide, mem, var_words,
+};
+use crate::runtime::{EventT, ScheduleT};
 
 use super::{Compiler, WideMap, wide_load, wide_store};
 
@@ -22,9 +29,6 @@ pub struct TrBuilder<'a, 'b> {
     wide_map: WideMap,
 
     params: Params,
-
-    process_idx: usize,
-    regions: &'a [TemporalRegionKey],
 }
 
 impl<'a, 'b> TrBuilder<'a, 'b> {
@@ -34,8 +38,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
         fb: &'a mut FunctionBuilderContext,
         func_id: FuncId,
         entry_bb: BasicBlockKey,
-        process_idx: usize,
-        regions: &'a [TemporalRegionKey],
     ) -> Self {
         if compiler.disassembly {
             ctx.set_disasm(true);
@@ -73,7 +75,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
         // TR runs at a time so the region is reused).
         let mut scratch_cursor: u32 = 0;
         for &k in &order {
-            let _ = compiler.gl.bbs[k].for_each_var(|v| {
+            let _ = compiler.gl.bbs[k].for_each_dst_var(|v| {
                 debug_assert!(!vmap.contains_key(&v));
                 debug_assert!(!wide_map.contains_key(&v));
 
@@ -118,8 +120,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
             spc_map,
             wide_map,
             params,
-            process_idx,
-            regions,
         }
     }
 
@@ -190,17 +190,124 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                     }
                 }
             }
-            self.compiler.lower_terminator(
-                &mut self.b,
-                &self.params,
-                &self.blocks,
-                &self.vmap,
-                &self.spc_map,
-                self.process_idx,
-                self.regions,
-                k,
-                &bb.terminator,
-            );
+
+            let b = &mut self.b;
+            let params = &mut self.params;
+            let blocks = &mut self.blocks;
+            let vmap = &mut self.vmap;
+            let spc_map = &mut self.spc_map;
+
+            use BasicBlockTerminator as T;
+            match &bb.terminator {
+                T::Halt => self.compiler.tail_pop_next_or_return(b, params),
+                T::Jump(t) => _ = b.ins().jump(blocks[t], &[]),
+                T::Branch(cond, t, f) => {
+                    let c = match cond.mode() {
+                        LogicMode::TwoValue => b.use_var(vmap[cond]),
+                        LogicMode::FourValue => {
+                            let val = b.use_var(vmap[cond]);
+                            let spc = b.use_var(spc_map[cond]);
+                            b.ins().band(spc, val)
+                        }
+                    };
+
+                    b.ins().brif(c, blocks[t], &[], blocks[f], &[]);
+                }
+
+                T::Wait(tr, time) => {
+                    let next_tr = self.compiler.tr_funcs[tr];
+                    let next_tr_ref = self.compiler.module.declare_func_in_func(next_tr, b.func);
+
+                    if time.0 == 0 {
+                        b.ins().return_call(next_tr_ref, params.as_slice());
+                    } else {
+                        let next_time = b.ins().iadd_imm_u(params.time, time.0 as i64);
+                        let next_tr_addr = b.ins().func_addr(self.compiler.ptr, next_tr_ref);
+                        let sfe = self
+                            .compiler
+                            .module
+                            .declare_func_in_func(self.compiler.sfe, b.func);
+                        b.ins()
+                            .call(sfe, &[params.schedule, next_time, next_tr_addr]);
+
+                        self.compiler.tail_pop_next_or_return(b, params);
+                    }
+                }
+                T::VariableWait(tr, delay) => {
+                    let next_tr = self.compiler.tr_funcs[tr];
+                    let next_tr_ref = self.compiler.module.declare_func_in_func(next_tr, b.func);
+
+                    let now_bb = b.create_block();
+                    let later_bb = b.create_block();
+
+                    let d = match delay.mode() {
+                        LogicMode::TwoValue => b.use_var(vmap[delay]),
+                        LogicMode::FourValue => {
+                            // Unknown delay collapses to 0 (matches bytecode semantics).
+                            let dv = b.use_var(vmap[delay]);
+                            let ds = b.use_var(spc_map[delay]);
+                            let known = b.ins().icmp_imm_u(IntCC::Equal, ds, -1);
+                            let zero = b.ins().iconst(I64, 0);
+                            b.ins().select(known, dv, zero)
+                        }
+                    };
+
+                    // if delay == 0: Continue to the next TR
+                    b.ins().brif(d, later_bb, &[], now_bb, &[]);
+                    b.switch_to_block(now_bb);
+                    b.ins().return_call(next_tr_ref, params.as_slice());
+
+                    // if delay != 0: Push and continue to the next active event.
+                    b.switch_to_block(later_bb);
+                    let next_time = b.ins().iadd(params.time, d);
+                    let next_tr_addr = b.ins().func_addr(self.compiler.ptr, next_tr_ref);
+                    let sfe = self
+                        .compiler
+                        .module
+                        .declare_func_in_func(self.compiler.sfe, b.func);
+                    b.ins().call(sfe, &[params.schedule, next_time, next_tr_addr]);
+                    self.compiler.tail_pop_next_or_return(b, params);
+                }
+                T::WaitRegion(tr, region) => {
+                    let next_tr = self.compiler.tr_funcs[tr];
+                    let next_tr_ref = self.compiler.module.declare_func_in_func(next_tr, b.func);
+                    let next_tr_addr = b.ins().func_addr(self.compiler.ptr, next_tr_ref);
+
+                    // regions_base = &schedule->regions
+                    let regions_base = b.ins().load(
+                        self.compiler.ptr,
+                        mem(),
+                        params.schedule,
+                        offset_of!(ScheduleT, regions) as i32,
+                    );
+                    // region_vec = &schedule->regions[region]
+                    let region_vec = b.ins().iadd_imm_u(
+                        regions_base,
+                        (*region as usize * size_of::<FfiVec<EventT>>()) as i64,
+                    );
+
+                    // Call the push function.
+                    let push = self
+                        .compiler
+                        .module
+                        .declare_func_in_func(self.compiler.push, b.func);
+                    b.ins().call(push, &[region_vec, next_tr_addr]);
+                    self.compiler.tail_pop_next_or_return(b, params);
+                }
+                T::Watch(_tr, _signals) => {
+                    // Offset + listener registration were assigned by the pre-pass
+                    // (collect_listeners); here we only arm the listener bit.
+                    let offset = self.compiler.watch_offset[&k];
+                    // Arm the listener: set the bit in `listening`.
+                    let w = b
+                        .ins()
+                        .load(I64, mem(), params.listening, ((offset / 64) * 8) as i32);
+                    let set = b.ins().bor_imm_u(w, 1i64 << (offset % 64));
+                    b.ins()
+                        .store(mem(), set, params.listening, ((offset / 64) * 8) as i32);
+                    self.compiler.tail_pop_next_or_return(b, params);
+                }
+            }
         }
     }
 

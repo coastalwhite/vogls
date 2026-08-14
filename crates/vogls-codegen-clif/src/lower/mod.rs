@@ -366,7 +366,7 @@ struct Compiler<'a> {
     push: FuncId,
     sfe: FuncId,
     entry: FuncId,
-    tr_funcs: Vec<Vec<FuncId>>,
+    tr_funcs: VgHashMap<TemporalRegionKey, FuncId>,
     drive_fn_ids: Vec<FuncId>,
     /// Listeners per signal (by `RtSignalKey::as_usize`), collected while
     /// lowering `Watch` terminators.
@@ -425,7 +425,7 @@ impl<'a> Compiler<'a> {
             push: FuncId::from_u32(0),
             sfe: FuncId::from_u32(0),
             entry: FuncId::from_u32(0),
-            tr_funcs: Vec::new(),
+            tr_funcs: VgHashMap::default(),
             drive_fn_ids: Vec::new(),
             listeners: (0..num_signals).map(|_| Vec::new()).collect(),
             num_listening: 0,
@@ -658,7 +658,6 @@ impl<'a> Compiler<'a> {
         &mut self,
         process_idx: usize,
         entry_bb: BasicBlockKey,
-        regions: &[TemporalRegionKey],
         standing: Option<&[SignalKey]>,
     ) {
         let mut seen = vogls_utils::VgHashSet::default();
@@ -675,7 +674,7 @@ impl<'a> Compiler<'a> {
         }
         for &k in &order {
             if let BasicBlockTerminator::Watch(tr, signals) = &self.gl.bbs[k].terminator {
-                let target = self.tr_target(tr, process_idx, regions);
+                let target = self.tr_funcs[tr];
                 let offset = self.num_listening;
                 self.num_listening += 1;
                 for sig in signals.iter() {
@@ -705,13 +704,11 @@ impl<'a> Compiler<'a> {
         process_idx: usize,
         tr_idx: usize,
         entry_bb: BasicBlockKey,
-        regions: &[TemporalRegionKey],
         bb_phis: &VgHashMap<BasicBlockKey, Vec<(VariableKey, VariableKey)>>,
     ) {
-        let func_id = self.tr_funcs[process_idx][tr_idx];
+        let func_id = self.tr_funcs[&TemporalRegionKey::from_entry(entry_bb)];
         let mut ctx = self.module.make_context();
-        let mut builder =
-            TrBuilder::new(&mut ctx, self, fb, func_id, entry_bb, process_idx, regions);
+        let mut builder = TrBuilder::new(&mut ctx, self, fb, func_id, entry_bb);
         builder.lower(bb_phis);
         builder.finalize();
         self.module.define_function(func_id, &mut ctx).unwrap();
@@ -3820,108 +3817,6 @@ impl<'a> Compiler<'a> {
         b.switch_to_block(merge);
     }
 
-    #[expect(clippy::too_many_arguments)]
-    fn lower_terminator(
-        &mut self,
-        b: &mut FunctionBuilder,
-        params: &Params,
-        blocks: &VgHashMap<BasicBlockKey, Block>,
-        vmap: &VgHashMap<VariableKey, Variable>,
-        spc_map: &VgHashMap<VariableKey, Variable>,
-        process_idx: usize,
-        regions: &[TemporalRegionKey],
-        bb_key: BasicBlockKey,
-        term: &BasicBlockTerminator,
-    ) {
-        match term {
-            BasicBlockTerminator::Halt => self.tail_pop_next_or_return(b, params),
-            BasicBlockTerminator::Jump(t) => {
-                b.ins().jump(blocks[t], &[]);
-            }
-            BasicBlockTerminator::Branch(cond, t, f) => {
-                let c = if cond.mode() == LogicMode::FourValue {
-                    let cv = b.use_var(vmap[cond]);
-                    let cs = b.use_var(spc_map[cond]);
-                    b.ins().band(cs, cv)
-                } else {
-                    b.use_var(vmap[cond])
-                };
-                b.ins().brif(c, blocks[t], &[], blocks[f], &[]);
-            }
-            BasicBlockTerminator::Wait(tr, time) => {
-                let target = self.tr_target(tr, process_idx, regions);
-                if time.0 == 0 {
-                    let fr = self.module.declare_func_in_func(target, b.func);
-                    b.ins().return_call(fr, params.as_slice());
-                } else {
-                    let fr = self.module.declare_func_in_func(target, b.func);
-                    let ta = b.ins().func_addr(self.ptr, fr);
-                    let when = b.ins().iadd_imm_u(params.time, time.0 as i64);
-                    let sfe = self.module.declare_func_in_func(self.sfe, b.func);
-                    b.ins().call(sfe, &[params.schedule, when, ta]);
-                    self.tail_pop_next_or_return(b, params);
-                }
-            }
-            BasicBlockTerminator::VariableWait(tr, delay) => {
-                let target = self.tr_target(tr, process_idx, regions);
-                let fr = self.module.declare_func_in_func(target, b.func);
-                let d = if delay.mode() == LogicMode::FourValue {
-                    // Unknown delay collapses to 0 (matches bytecode semantics).
-                    let dv = b.use_var(vmap[delay]);
-                    let ds = b.use_var(spc_map[delay]);
-                    let m = mask_of(self.gl.vars.size(*delay).get());
-                    let known = b.ins().icmp_imm_u(IntCC::Equal, ds, m);
-                    let zero = b.ins().iconst(I64, 0);
-                    b.ins().select(known, dv, zero)
-                } else {
-                    b.use_var(vmap[delay])
-                };
-                let now_bb = b.create_block();
-                let later_bb = b.create_block();
-                b.ins().brif(d, later_bb, &[], now_bb, &[]);
-                b.switch_to_block(now_bb);
-                b.ins().return_call(fr, params.as_slice());
-                b.switch_to_block(later_bb);
-                let ta = b.ins().func_addr(self.ptr, fr);
-                let when = b.ins().iadd(params.time, d);
-                let sfe = self.module.declare_func_in_func(self.sfe, b.func);
-                b.ins().call(sfe, &[params.schedule, when, ta]);
-                self.tail_pop_next_or_return(b, params);
-            }
-            BasicBlockTerminator::WaitRegion(tr, region) => {
-                let target = self.tr_target(tr, process_idx, regions);
-                let fr = self.module.declare_func_in_func(target, b.func);
-                let ta = b.ins().func_addr(self.ptr, fr);
-                let regions_base = b.ins().load(
-                    self.ptr,
-                    mem(),
-                    params.schedule,
-                    layout::SCHED_REGIONS as i32,
-                );
-                let region_vec = b.ins().iadd_imm_u(
-                    regions_base,
-                    (*region as usize * size_of::<FfiVec<EventT>>()) as i64,
-                );
-                let push = self.module.declare_func_in_func(self.push, b.func);
-                b.ins().call(push, &[region_vec, ta]);
-                self.tail_pop_next_or_return(b, params);
-            }
-            BasicBlockTerminator::Watch(_tr, _signals) => {
-                // Offset + listener registration were assigned by the pre-pass
-                // (collect_listeners); here we only arm the listener bit.
-                let offset = self.watch_offset[&bb_key];
-                // Arm the listener: set the bit in `listening`.
-                let w = b
-                    .ins()
-                    .load(I64, mem(), params.listening, ((offset / 64) * 8) as i32);
-                let set = b.ins().bor_imm_u(w, 1i64 << (offset % 64));
-                b.ins()
-                    .store(mem(), set, params.listening, ((offset / 64) * 8) as i32);
-                self.tail_pop_next_or_return(b, params);
-            }
-        }
-    }
-
     /// Inline instructions for "get next event or return" as a tailcall.
     fn tail_pop_next_or_return(&mut self, b: &mut FunctionBuilder, params: &Params) {
         self.pop_next_or_return(b, params, true);
@@ -3987,16 +3882,6 @@ impl<'a> Compiler<'a> {
         b.switch_to_block(blk_return);
         let zero = b.ins().iconst(types::I32, 0);
         b.ins().return_(&[zero]);
-    }
-
-    fn tr_target(
-        &self,
-        tr: &TemporalRegionKey,
-        process_idx: usize,
-        regions: &[TemporalRegionKey],
-    ) -> FuncId {
-        let idx = regions.iter().position(|r| r == tr).unwrap();
-        self.tr_funcs[process_idx][idx]
     }
 
     /// Generate the per-signal poke routine `drive_signal_{rt}`.
@@ -4914,12 +4799,13 @@ pub fn compile<'a>(
     let drive_sig = c.sigs.drive.clone();
     let mut procs = Vec::new();
     for (pi, (_k, process)) in gl.processes.iter().enumerate() {
-        let mut trs = Vec::new();
-        for ti in 0..process.regions.len() {
-            trs.push(c.declare(&format!("tr_{pi}_{ti}"), &event_sig));
+        let mut fst = None;
+        for (ti, tr) in process.regions.iter().enumerate() {
+            let fid = c.declare(&format!("tr_{pi}_{ti}"), &event_sig);
+            fst.get_or_insert(fid);
+            c.tr_funcs.insert(*tr, fid);
         }
-        procs.push(trs[0]);
-        c.tr_funcs.push(trs);
+        procs.push(fst.unwrap());
     }
     let mut drive_fn_ids = Vec::new();
     for i in 0..num_signals {
@@ -4942,7 +4828,7 @@ pub fn compile<'a>(
             .as_deref()
             .filter(|w| w.iter().any(|s| !gl.signals[*s].triggers_t0_poke()));
         for tr in process.regions.iter() {
-            c.collect_listeners(pi, tr.entry(), &process.regions, standing);
+            c.collect_listeners(pi, tr.entry(), standing);
         }
     }
 
@@ -4953,7 +4839,7 @@ pub fn compile<'a>(
         let mut seen = vogls_utils::VgHashSet::default();
         vogls_codegen::insert_bb_phis(&process.regions, gl, &mut stack, &mut seen, &mut bb_phis);
         for (ti, tr) in process.regions.iter().enumerate() {
-            c.build_tr(&mut fb, pi, ti, tr.entry(), &process.regions, &bb_phis);
+            c.build_tr(&mut fb, pi, ti, tr.entry(), &bb_phis);
         }
     }
 
