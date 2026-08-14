@@ -34,7 +34,7 @@ use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction,
     IntrinsicOp, LogicMode, ResizeOp, ShiftImmOp, SignalKey, TemporalRegionKey, UnaryOp,
-    VariableKey,
+    VariableKey, VectorSize,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{TableKey, VgHashMap};
@@ -286,12 +286,6 @@ enum WideLoc {
 
 type WideMap = VgHashMap<VariableKey, WideLoc>;
 
-/// Total u64-word storage a wide value occupies (four-value = two planes).
-fn var_words(size: u32, fv: bool) -> usize {
-    let n = nwords(size) as usize;
-    if fv { 2 * n } else { n }
-}
-
 /// Address of word `word` of a wide value.
 fn wide_addr(b: &mut FunctionBuilder, ptr: Type, heap: Value, loc: WideLoc, word: u32) -> Value {
     match loc {
@@ -344,8 +338,7 @@ pub fn max_scratch_words(gl: &GlobalContext) -> usize {
             while let Some(k) = stack.pop() {
                 let _ = gl.bbs[k].try_for_each_dst_var(|v| {
                     if seen.insert(v) {
-                        let words =
-                            var_words(gl.vars.size(v).get(), v.mode() == LogicMode::FourValue);
+                        let words = var_words(gl.vars.size(v), v.mode());
                         if words > WIDE_HEAP_THRESHOLD_WORDS {
                             total += words;
                         }
@@ -902,9 +895,7 @@ impl<'a> Compiler<'a> {
                     let out = self.lower_real_binary(b, params, *op, l, r);
                     b.def_var(vmap[dst], out);
                 } else if shim {
-                    self.emit_wide_binop(
-                        b, params, *op, *dst, *s1, *s2, vmap, spc_map, wide_map,
-                    );
+                    self.emit_wide_binop(b, params, *op, *dst, *s1, *s2, vmap, spc_map, wide_map);
                 } else if is_fv(*dst) {
                     let lv = get(b, *s1);
                     let ls = gets(b, *s1);
@@ -4136,6 +4127,14 @@ fn mask_u64(size: u32) -> u64 {
 /// Number of 64-bit words needed for `size` bits.
 fn nwords(size: u32) -> u32 {
     size.div_ceil(64)
+}
+
+fn var_words(size: VectorSize, mode: LogicMode) -> usize {
+    let words = nwords(size.get()) as usize;
+    match mode {
+        LogicMode::TwoValue => words,
+        LogicMode::FourValue => words * 2,
+    }
 }
 
 /// One 64-bit word of a two-value bitwise op (top-word masking is the caller's).

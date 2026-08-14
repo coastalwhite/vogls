@@ -2,12 +2,13 @@ use cranelift_codegen::Context;
 use cranelift_codegen::ir::{Block, StackSlotData, StackSlotKind, UserFuncName};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::FuncId;
+use vogls_codegen::SixBitSize;
 use vogls_ir::{BasicBlockKey, Instruction, LogicMode, TemporalRegionKey, VariableKey};
 use vogls_utils::VgHashMap;
 
-use crate::lower::{I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, instr_is_wide};
+use crate::lower::{I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, instr_is_wide, var_words};
 
-use super::{Compiler, WideMap, nwords, wide_load, wide_store};
+use super::{Compiler, WideMap, wide_load, wide_store};
 
 pub struct TrBuilder<'a, 'b> {
     compiler: &'a mut Compiler<'b>,
@@ -72,40 +73,37 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
         // TR runs at a time so the region is reused).
         let mut scratch_cursor: u32 = 0;
         for &k in &order {
-            let _ = compiler.gl.bbs[k].try_for_each_dst_var(|v| {
+            let _ = compiler.gl.bbs[k].for_each_var(|v| {
                 debug_assert!(!vmap.contains_key(&v));
                 debug_assert!(!wide_map.contains_key(&v));
 
-                let size = compiler.gl.vars.size(v).get();
-                if size > 64 {
-                    let n = nwords(size);
-                    let words = if v.mode() == LogicMode::FourValue {
-                        2 * n
-                    } else {
-                        n
-                    };
-                    let loc = if words as usize > WIDE_HEAP_THRESHOLD_WORDS {
-                        // Too large for a stack slot: place in the heap scratch
-                        // region at a TR-local offset.
-                        let off = scratch_base + scratch_cursor;
-                        scratch_cursor += words;
-                        WideLoc::Heap(off)
-                    } else {
-                        let slot = b.create_sized_stack_slot(StackSlotData::new(
-                            StackSlotKind::ExplicitSlot,
-                            words * 8,
-                            3,
-                        ));
-                        WideLoc::Slot(slot)
-                    };
-                    wide_map.insert(v, loc);
-                } else {
-                    vmap.insert(v, b.declare_var(I64));
-                    if v.mode() == LogicMode::FourValue {
-                        spc_map.insert(v, b.declare_var(I64));
+                let size = compiler.gl.vars.size(v);
+                match SixBitSize::from_vector_size(size) {
+                    Some(_) => {
+                        vmap.insert(v, b.declare_var(I64));
+                        if v.mode() == LogicMode::FourValue {
+                            spc_map.insert(v, b.declare_var(I64));
+                        }
+                    }
+                    None => {
+                        let words = var_words(size, v.mode());
+                        let loc = if words as usize > WIDE_HEAP_THRESHOLD_WORDS {
+                            // Too large for a stack slot: place in the heap scratch
+                            // region at a TR-local offset.
+                            let off = scratch_base + scratch_cursor;
+                            scratch_cursor += words as u32;
+                            WideLoc::Heap(off)
+                        } else {
+                            let slot = b.create_sized_stack_slot(StackSlotData::new(
+                                StackSlotKind::ExplicitSlot,
+                                words as u32 * 8,
+                                3,
+                            ));
+                            WideLoc::Slot(slot)
+                        };
+                        wide_map.insert(v, loc);
                     }
                 }
-                Ok::<(), ()>(())
             });
         }
 
@@ -157,38 +155,37 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
             // (predecessor) block before the terminator.
             if let Some(phis) = bb_phis.get(&k) {
                 for (dst, src) in phis {
-                    if self.compiler.gl.vars.size(*dst).get() > 64 {
-                        let dloc = self.wide_map[dst];
-                        let sloc = self.wide_map[src];
-                        let n = nwords(self.compiler.gl.vars.size(*dst).get());
-                        let words = if dst.mode() == LogicMode::FourValue {
-                            2 * n
-                        } else {
-                            n
-                        };
-                        for i in 0..words {
-                            let w = wide_load(
-                                &mut self.b,
-                                self.compiler.ptr,
-                                self.params.heap_ptr,
-                                sloc,
-                                i,
-                            );
-                            wide_store(
-                                &mut self.b,
-                                self.compiler.ptr,
-                                self.params.heap_ptr,
-                                dloc,
-                                i,
-                                w,
-                            );
+                    let size = self.compiler.gl.vars.size(*dst);
+                    match SixBitSize::from_vector_size(size) {
+                        Some(_) => {
+                            let sv = self.b.use_var(self.vmap[src]);
+                            self.b.def_var(self.vmap[dst], sv);
+                            if dst.mode() == LogicMode::FourValue {
+                                let ss = self.b.use_var(self.spc_map[src]);
+                                self.b.def_var(self.spc_map[dst], ss);
+                            }
                         }
-                    } else {
-                        let sv = self.b.use_var(self.vmap[src]);
-                        self.b.def_var(self.vmap[dst], sv);
-                        if dst.mode() == LogicMode::FourValue {
-                            let ss = self.b.use_var(self.spc_map[src]);
-                            self.b.def_var(self.spc_map[dst], ss);
+                        None => {
+                            let dloc = self.wide_map[dst];
+                            let sloc = self.wide_map[src];
+                            let words = var_words(size, dst.mode());
+                            for i in 0..words {
+                                let w = wide_load(
+                                    &mut self.b,
+                                    self.compiler.ptr,
+                                    self.params.heap_ptr,
+                                    sloc,
+                                    i as u32,
+                                );
+                                wide_store(
+                                    &mut self.b,
+                                    self.compiler.ptr,
+                                    self.params.heap_ptr,
+                                    dloc,
+                                    i as u32,
+                                    w,
+                                );
+                            }
                         }
                     }
                 }

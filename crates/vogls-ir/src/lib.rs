@@ -106,6 +106,15 @@ impl BasicBlock {
         Ok(())
     }
 
+    pub fn for_each_dst_var(
+        &self,
+        mut f: impl FnMut(VariableKey),
+    ) {
+        for i in &self.instrs {
+            f(i.get_destination_variable());
+        }
+    }
+
     pub fn map_signals(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
         for i in &mut self.instrs {
             i.map_signals(&mut f);
