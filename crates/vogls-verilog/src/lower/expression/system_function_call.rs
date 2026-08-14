@@ -566,13 +566,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
 
             let (src, offset, width) = (arguments.get(0), arguments.get(1), arguments.get(2));
 
-            let Expr::Sized(sized) = &*src else {
-                mctx.diagnostics.not_yet_implemented(
-                    ctx.arenas.get_item_span(ident),
-                    "slice first argument should be sized",
-                );
-                return Err(());
-            };
+            let (src, src_ty) = lower_expr(ctx, mctx, scope, builder, src, None)?;
             let Expr::Decimal(offset) = &*offset else {
                 mctx.diagnostics.not_yet_implemented(
                     ctx.arenas.get_item_span(ident),
@@ -588,8 +582,6 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 return Err(());
             };
 
-            let sized = &ctx.arenas.sized_numbers[sized.item.at];
-            let src = sized.value.clone();
             let offset = ctx.arenas.decimals[offset.at].extract_exact_u32().unwrap();
             let width = ctx.arenas.decimals[width.at].extract_exact_u32().unwrap();
 
@@ -601,7 +593,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 return Err(());
             };
 
-            if width > src.size() {
+            if width > src_ty.bit_length() {
                 mctx.diagnostics
                     .not_yet_implemented(ctx.arenas.get_item_span(ident), "width <= src.size()");
                 return Err(());
@@ -609,7 +601,6 @@ pub fn lower_unevaluated_system_function_call<'a>(
 
             // We intentionally don't use slice_constant here as that might get optimized in the
             // future.
-            let src = builder.constant(mctx.gl(), src);
             let offset = builder.constant_u32(mctx.gl(), offset);
             Ok(Some((
                 builder.slice(mctx.gl(), src, offset, width),
