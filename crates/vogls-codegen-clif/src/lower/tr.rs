@@ -73,9 +73,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
         let mut scratch_cursor: u32 = 0;
         for &k in &order {
             let _ = compiler.gl.bbs[k].try_for_each_dst_var(|v| {
-                if vmap.contains_key(&v) || wide_map.contains_key(&v) {
-                    return Ok(());
-                }
+                debug_assert!(!vmap.contains_key(&v));
+                debug_assert!(!wide_map.contains_key(&v));
+
                 let size = compiler.gl.vars.size(v).get();
                 if size > 64 {
                     let n = nwords(size);

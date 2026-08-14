@@ -6,15 +6,18 @@ use vogls_bits::arithmetic::{
 };
 use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::edge::{fv_negedge_u64, fv_posedge_u64};
-use vogls_bits::shift::{fv_logical_shift_left, fv_logical_shift_right, fv_shift_arith_right, tv_shift_arith_right};
+use vogls_bits::shift::{
+    fv_logical_shift_left, fv_logical_shift_right, fv_shift_arith_right, tv_shift_arith_right,
+};
 use vogls_bits::util::wrapping_u64_pow;
+use vogls_codegen::SixBitSize;
 use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
 
 use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    Schedule, SixBitSize, write_padded_mnemonic,
+    Schedule, write_padded_mnemonic,
 };
 
 pub struct BitwiseRType {
@@ -191,11 +194,26 @@ macro_rules! impl_bitwise {
             self.0.encode(BytecodeOpcode::$variant)
         }
         fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-            operands.push(RegInfo::register("rs1", self.0.rs1, LogicMode::$rs1_mode, None));
-            operands.push(RegInfo::register("rs2", self.0.rs2, LogicMode::$rs2_mode, None));
+            operands.push(RegInfo::register(
+                "rs1",
+                self.0.rs1,
+                LogicMode::$rs1_mode,
+                None,
+            ));
+            operands.push(RegInfo::register(
+                "rs2",
+                self.0.rs2,
+                LogicMode::$rs2_mode,
+                None,
+            ));
         }
         fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-            operands.push(RegInfo::register("rd", self.0.rd, LogicMode::$rd_mode, None));
+            operands.push(RegInfo::register(
+                "rd",
+                self.0.rd,
+                LogicMode::$rd_mode,
+                None,
+            ));
         }
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write_padded_mnemonic(f, $mnemonic)?;
@@ -215,11 +233,26 @@ macro_rules! impl_sbs_bitwise {
         }
         fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
             let size = Some(self.0.size.into());
-            operands.push(RegInfo::register("rs1", self.0.rs1, LogicMode::$rs1_mode, size));
-            operands.push(RegInfo::register("rs2", self.0.rs2, LogicMode::$rs2_mode, size));
+            operands.push(RegInfo::register(
+                "rs1",
+                self.0.rs1,
+                LogicMode::$rs1_mode,
+                size,
+            ));
+            operands.push(RegInfo::register(
+                "rs2",
+                self.0.rs2,
+                LogicMode::$rs2_mode,
+                size,
+            ));
         }
         fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-            operands.push(RegInfo::register("rd", self.0.rd, LogicMode::$rd_mode, Some(self.0.size.into())));
+            operands.push(RegInfo::register(
+                "rd",
+                self.0.rd,
+                LogicMode::$rd_mode,
+                Some(self.0.size.into()),
+            ));
         }
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write_padded_mnemonic(f, $mnemonic)?;
@@ -238,11 +271,26 @@ macro_rules! impl_fv_shift {
             self.0.encode(BytecodeOpcode::$variant)
         }
         fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-            operands.push(RegInfo::register("rs1", self.0.rs1, LogicMode::$rs1_mode, Some(self.0.size.into())));
-            operands.push(RegInfo::register("rs2", self.0.rs2, self.0.offset_mode, None));
+            operands.push(RegInfo::register(
+                "rs1",
+                self.0.rs1,
+                LogicMode::$rs1_mode,
+                Some(self.0.size.into()),
+            ));
+            operands.push(RegInfo::register(
+                "rs2",
+                self.0.rs2,
+                self.0.offset_mode,
+                None,
+            ));
         }
         fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-            operands.push(RegInfo::register("rd", self.0.rd, LogicMode::$rd_mode, Some(self.0.size.into())));
+            operands.push(RegInfo::register(
+                "rd",
+                self.0.rd,
+                LogicMode::$rd_mode,
+                Some(self.0.size.into()),
+            ));
         }
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             write_padded_mnemonic(f, $mnemonic)?;

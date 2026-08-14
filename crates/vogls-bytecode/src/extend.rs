@@ -2,6 +2,7 @@ use std::fmt;
 
 use vogls_bits::extend::{fv_l_sign_extend, fv_l_zero_extend, tv_l_sign_extend, tv_l_zero_extend};
 use vogls_bits::truncate::{fv_cell_truncate, tv_cell_truncate};
+use vogls_codegen::SixBitSize;
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
@@ -10,7 +11,7 @@ use crate::BytecodeOpcode;
 use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, ColdContext, InlineNBitSize,
-    Schedule, SixBitSize, write_padded_mnemonic,
+    Schedule, write_padded_mnemonic,
 };
 
 pub struct SignExtend {
@@ -347,7 +348,12 @@ impl BytecodeInstruction for HeapRegExtend {
         } else {
             LogicMode::TwoValue
         };
-        operands.push(RegInfo::register("rs", self.rs, mode, Some(self.src_size.into())));
+        operands.push(RegInfo::register(
+            "rs",
+            self.rs,
+            mode,
+            Some(self.src_size.into()),
+        ));
     }
 
     fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
@@ -442,7 +448,8 @@ impl BytecodeInstruction for SignExtend {
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rs", self.rs,
+            "rs",
+            self.rs,
             LogicMode::TwoValue,
             Some(self.src_size.into()),
         ));
@@ -450,7 +457,8 @@ impl BytecodeInstruction for SignExtend {
 
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rd", self.rd,
+            "rd",
+            self.rd,
             LogicMode::TwoValue,
             Some(self.dst_size.into()),
         ));

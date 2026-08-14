@@ -1,13 +1,13 @@
 use std::fmt;
 
-use vogls_codegen::{HeapAlignment, HeapOffset};
+use vogls_codegen::{HeapAlignment, HeapOffset, SixBitSize};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
 use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    InlineAddrOffset, InlineNBitSize, Schedule, SixBitSize, write_padded_mnemonic,
+    InlineAddrOffset, InlineNBitSize, Schedule, write_padded_mnemonic,
 };
 
 pub struct SetArgs {

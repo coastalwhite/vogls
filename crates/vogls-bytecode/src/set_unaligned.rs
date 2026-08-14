@@ -1,14 +1,14 @@
 use std::{cmp, fmt};
 
 use vogls_bits::set_subslice::set_with_mask;
-use vogls_codegen::HeapOffset;
+use vogls_codegen::{HeapOffset, SixBitSize};
 use vogls_ir::{LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 
 use crate::reg::{Reg, RegInfo, Regs};
 use crate::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    InlineNBitSize, Schedule, SixBitSize, write_padded_mnemonic,
+    InlineNBitSize, Schedule, write_padded_mnemonic,
 };
 
 /// Set bits at given address in the heap without any aligned guarantees.

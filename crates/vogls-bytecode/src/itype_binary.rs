@@ -4,11 +4,12 @@ use vogls_bits::arithmetic::{fv_bitwise_and_elem, fv_bitwise_or_elem, fv_bitwise
 use vogls_bits::shift::{fv_logical_shift_left, fv_logical_shift_right, fv_shift_arith_right};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
+use vogls_codegen::SixBitSize;
 
 use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    Schedule, SignedImmediate, SixBitSize, write_padded_mnemonic,
+    Schedule, SignedImmediate, write_padded_mnemonic,
 };
 
 pub struct IType {

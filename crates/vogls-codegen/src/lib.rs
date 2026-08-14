@@ -1,9 +1,11 @@
 mod alignment;
 mod heap;
 pub mod lsra;
+mod six_bit_size;
 
 pub use alignment::HeapAlignment;
 pub use heap::{Heap, HeapBuilder, HeapOffset, HeapRef};
+pub use six_bit_size::SixBitSize;
 use vogls_ir::{
     BasicBlockKey, BinaryImmOp, BinaryOp, GlobalContext, Instruction, LogicMode, TemporalRegionKey,
     VariableKey,

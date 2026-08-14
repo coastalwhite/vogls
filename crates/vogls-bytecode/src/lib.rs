@@ -23,7 +23,6 @@ mod rtype_binary;
 mod rtype_unary;
 mod set_aligned;
 mod set_unaligned;
-mod six_bit_size;
 mod stack;
 #[cfg(all(nightly, feature = "tailcall"))]
 mod tailcall;
@@ -31,8 +30,7 @@ mod temporal;
 
 use reg::{Reg, Regs};
 use vogls_bits::BitsDataRef;
-use vogls_codegen::{Heap, HeapOffset, HeapRef};
-
+use vogls_codegen::{Heap, HeapOffset, HeapRef, SixBitSize};
 use vogls_ir::{Bits, LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_runtime::{RtSignalKey, RuntimeState};
@@ -52,7 +50,6 @@ pub use rtype_binary::*;
 pub use rtype_unary::*;
 pub use set_aligned::*;
 pub use set_unaligned::*;
-pub use six_bit_size::SixBitSize;
 pub use stack::*;
 pub use temporal::*;
 

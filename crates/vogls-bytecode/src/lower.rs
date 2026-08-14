@@ -1,6 +1,6 @@
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_codegen::lsra::{Slot, StackOffsets, StackTracker};
-use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef, insert_bb_phis};
+use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef, SixBitSize, insert_bb_phis};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
@@ -13,7 +13,7 @@ use vogls_utils::{VgHashMap, VgHashSet};
 use crate::profile::BytecodeDebugInfo;
 use crate::{
     BytecodeEncoder, BytecodeInstruction, BytecodeListeners, InlineAddrOffset, InstructionPtr,
-    IntrinsicOpEqWrap, Jump, Reg, Schedule, SignedImmediate, SixBitSize,
+    IntrinsicOpEqWrap, Jump, Reg, Schedule, SignedImmediate,
 };
 
 use super::{BranchFalse, BranchTrue, RescheduleListen, RescheduleRegion, RescheduleWait};

@@ -2,7 +2,7 @@ use std::fmt;
 use std::num::NonZeroU16;
 
 use vogls_bits::slice::tv_ll_slice;
-use vogls_codegen::{HeapAlignment, HeapOffset};
+use vogls_codegen::{HeapAlignment, HeapOffset, SixBitSize};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
@@ -11,7 +11,7 @@ use crate::write_padded_mnemonic;
 use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    InlineAddrOffset, InlineNBitSize, Schedule, SixBitSize,
+    InlineAddrOffset, InlineNBitSize, Schedule,
 };
 
 pub struct TvLoadRelAligned(pub LoadRelArgs);
@@ -141,14 +141,16 @@ impl BytecodeInstruction for TvLoadRelAligned {
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::heap(
-            "rs", self.0.rs,
+            "rs",
+            self.0.rs,
             LogicMode::TwoValue,
             self.0.size.into(),
         ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rd", self.0.rd,
+            "rd",
+            self.0.rd,
             LogicMode::TwoValue,
             Some(self.0.size.into()),
         ));
@@ -218,7 +220,8 @@ impl BytecodeInstruction for TvLoadAligned {
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rd", self.0.rd,
+            "rd",
+            self.0.rd,
             LogicMode::TwoValue,
             Some(self.0.size.into()),
         ));
@@ -266,14 +269,16 @@ impl BytecodeInstruction for FvLoadAligned {
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::heap(
-            "rs", self.0.rs,
+            "rs",
+            self.0.rs,
             LogicMode::FourValue,
             self.0.size.into(),
         ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rd", self.0.rd,
+            "rd",
+            self.0.rd,
             LogicMode::FourValue,
             Some(self.0.size.into()),
         ));
@@ -323,14 +328,16 @@ impl BytecodeInstruction for LoadRelUnaligned {
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::heap(
-            "rs", self.0.rs,
+            "rs",
+            self.0.rs,
             LogicMode::TwoValue,
             self.0.size.into(),
         ));
     }
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rd", self.0.rd,
+            "rd",
+            self.0.rd,
             LogicMode::TwoValue,
             Some(self.0.size.into()),
         ));
@@ -382,7 +389,8 @@ impl BytecodeInstruction for LoadUnaligned {
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::register(
-            "rd", self.0.rd,
+            "rd",
+            self.0.rd,
             LogicMode::TwoValue,
             Some(self.0.size.into()),
         ));
@@ -432,7 +440,8 @@ impl BytecodeInstruction for LoadHeapAligned {
             None => code[pc as usize + 1].0,
         };
         operands.push(RegInfo::heap(
-            "rs", self.rs,
+            "rs",
+            self.rs,
             LogicMode::TwoValue,
             VectorSize::new(num_words * 64).unwrap(),
         ));
@@ -443,7 +452,8 @@ impl BytecodeInstruction for LoadHeapAligned {
             None => code[pc as usize + 1].0,
         };
         operands.push(RegInfo::heap(
-            "rd", self.rd,
+            "rd",
+            self.rd,
             LogicMode::TwoValue,
             VectorSize::new(num_words * 64).unwrap(),
         ));

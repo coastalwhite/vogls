@@ -1,6 +1,6 @@
 use std::fmt;
 
-use vogls_codegen::HeapAlignment;
+use vogls_codegen::{HeapAlignment, SixBitSize};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 
@@ -9,7 +9,7 @@ use crate::write_padded_mnemonic;
 use super::reg::{Reg, RegInfo, Regs};
 use super::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    InlineNBitSize, Schedule, SixBitSize,
+    InlineNBitSize, Schedule,
 };
 
 pub struct HeapRegSlice {
