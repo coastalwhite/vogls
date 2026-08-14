@@ -171,7 +171,7 @@ impl LoweredDesign {
     }
 
     #[cfg(feature = "native")]
-    pub fn compile(mut self) -> Result<Design, Box<dyn std::error::Error>> {
+    pub fn compile(mut self) -> Result<(Design, DesignState), Box<dyn std::error::Error>> {
         use crate::design::{DesignBackend, DesignState};
 
         let CodegenPreparation {
@@ -198,21 +198,24 @@ impl LoweredDesign {
             NUM_REGIONS,
             self.time_resolution,
         )?;
+        let state = DesignState::Compiled(initial_state);
 
-        Ok(Design {
-            gl: self.gl,
-            ident_table: self.ident_table,
-            elab_table: self.table,
-            backend: DesignBackend::Compiled { design },
-            rt_signal_map,
-            signal_to_heap,
-            signal_mode,
-            initial_state: DesignState::Compiled(initial_state),
-            time_resolution: self.time_resolution,
-        })
+        Ok((
+            Design {
+                gl: self.gl,
+                ident_table: self.ident_table,
+                elab_table: self.table,
+                backend: DesignBackend::Compiled { design },
+                rt_signal_map,
+                signal_to_heap,
+                signal_mode,
+                time_resolution: self.time_resolution,
+            },
+            state,
+        ))
     }
 
-    pub fn to_bytecode(mut self) -> Result<Design, Box<dyn std::error::Error>> {
+    pub fn to_bytecode(mut self) -> Result<(Design, DesignState), Box<dyn std::error::Error>> {
         let CodegenPreparation {
             mut heap_builder,
             signal_to_heap,
@@ -324,18 +327,21 @@ impl LoweredDesign {
             profile: self.profile.clone(),
             debug_info: debug_info.map(std::sync::Arc::new),
         };
+        let state = DesignState::Bytecode(state);
 
-        Ok(Design {
-            gl: self.gl,
-            ident_table: self.ident_table,
-            elab_table: self.table,
-            backend: DesignBackend::Bytecode { design },
-            rt_signal_map,
-            signal_to_heap,
-            signal_mode,
-            initial_state: DesignState::Bytecode(state),
-            time_resolution: self.time_resolution,
-        })
+        Ok((
+            Design {
+                gl: self.gl,
+                ident_table: self.ident_table,
+                elab_table: self.table,
+                backend: DesignBackend::Bytecode { design },
+                rt_signal_map,
+                signal_to_heap,
+                signal_mode,
+                time_resolution: self.time_resolution,
+            },
+            state,
+        ))
     }
 
     fn has_vcd(&self) -> bool {

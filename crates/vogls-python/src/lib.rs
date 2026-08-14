@@ -49,7 +49,6 @@ mod vogls {
     #[pyo3::pyclass]
     pub struct Design {
         inner: vogls::design::Design,
-        state: Snapshot,
     }
 
     #[pyo3::pyclass]
@@ -167,35 +166,31 @@ mod vogls {
     #[pymethods]
     impl LoweredDesign {
         #[pyo3(signature = ())]
-        pub fn to_bytecode(&self) -> PyResult<Design> {
+        pub fn to_bytecode(&self) -> PyResult<(Design, Snapshot)> {
             self.inner
                 .clone()
                 .to_bytecode()
-                .map(|inner| {
-                    let state = inner.initial_state().clone();
-                    Design {
-                        inner,
-                        state: Snapshot {
-                            inner: Arc::new(Mutex::new(state)),
-                        },
-                    }
+                .map(|(design, state)| {
+                    let design = Design { inner: design };
+                    let state = Snapshot {
+                        inner: Arc::new(Mutex::new(state)),
+                    };
+                    (design, state)
                 })
                 .map_err(|_| PyValueError::new_err("failed to compile"))
         }
 
         #[pyo3(signature = ())]
-        pub fn compile(&self) -> PyResult<Design> {
+        pub fn compile(&self) -> PyResult<(Design, Snapshot)> {
             self.inner
                 .clone()
                 .compile()
-                .map(|inner| {
-                    let state = inner.initial_state().clone();
-                    Design {
-                        inner,
-                        state: Snapshot {
-                            inner: Arc::new(Mutex::new(state)),
-                        },
-                    }
+                .map(|(design, state)| {
+                    let design = Design { inner: design };
+                    let state = Snapshot {
+                        inner: Arc::new(Mutex::new(state)),
+                    };
+                    (design, state)
                 })
                 .map_err(|_| PyValueError::new_err("failed to compile"))
         }
@@ -272,94 +267,11 @@ mod vogls {
 
     #[pymethods]
     impl Design {
-        // #[new]
-        // #[pyo3(signature = (path, top_level_module = None, defines = None, four_value_logic = false, compile = false, trace = false, debug_symbols = false, opt = false))]
-        // fn new(
-        //     path: PathBuf,
-        //     top_level_module: Option<String>,
-        //     defines: Option<Vec<String>>,
-        //     four_value_logic: bool,
-        //     compile: bool,
-        //     trace: bool,
-        //     debug_symbols: bool,
-        //     opt: bool,
-        // ) -> PyResult<Self> {
-        //     let mut ectx = ExecutionContext {
-        //         stdout: Box::new(std::io::stdout()),
-        //         stderr: Box::new(std::io::stderr()),
-        //         defines: defines.unwrap_or_default(),
-        //         emit_hierarchy: false,
-        //         emit_unoptimized_ir: false,
-        //         emit_ir: false,
-        //         emit_vm: false,
-        //         emit_process_stats: false,
-        //         itrace: false,
-        //         stats: false,
-        //         debug_symbols,
-        //         time: 0,
-        //         opt: vogls::ir::optimize::OptFlags {
-        //             opt_rounds: if opt { 2 } else { 0 },
-        //             constant_propagation: opt,
-        //             deadcode_elimination: opt,
-        //             common_subexpr_elim: opt,
-        //             peephole: opt,
-        //         },
-        //         logic_mode: if four_value_logic {
-        //             LogicMode::FourValue
-        //         } else {
-        //             LogicMode::TwoValue
-        //         },
-        //         no_run: false,
-        //         vcd: None,
-        //         sdf: None,
-        //         compile,
-        //         output_source: Some(PathBuf::from("out.c")),
-        //         timings: false,
-        //         print_optimized_fuse_signals: false,
-        //         print_round_fuse_signals: false,
-        //         print_unoptimized_fuse_signals: false,
-        //     };
-        //
-        //     let mut plugins = Vec::new();
-        //     if trace {
-        //         plugins.push(Box::new(TracePlugin::default()) as _);
-        //     }
-        //
-        //     let inner = vogls::design::Design::new(
-        //         &[path.as_path()],
-        //         &mut TimerStack::new(false),
-        //         top_level_module.as_deref(),
-        //         &mut ectx,
-        //         plugins,
-        //     )
-        //     .map_err(|e| PyException::new_err(e.to_string()))?;
-        //     let snapshot = Snapshot {
-        //         inner: Arc::new(Mutex::new(inner.initial_state.clone())),
-        //     };
-        //     Ok(Self {
-        //         inner,
-        //         state: snapshot,
-        //     })
-        // }
-
-        fn run(&self, time: u64) -> PyResult<()> {
-            self.inner
-                .run_from_state(
-                    &mut self.state.inner.lock().unwrap(),
-                    &mut SimulationIo {
-                        stdout: Box::new(stdout()) as _,
-                        stderr: Box::new(stderr()) as _,
-                    },
-                    time,
-                )
-                .map_err(|e| PyException::new_err(e.to_string()))
-        }
-
-        fn run_from(&self, py: Python<'_>, snapshot: Py<Snapshot>, time: u64) -> PyResult<()> {
+        fn run(&self, py: Python<'_>, snapshot: Py<Snapshot>, time: u64) -> PyResult<()> {
             let snapshot = snapshot.borrow(py).inner.clone();
             py.detach(|| {
                 self.inner
-                    .run_from_state(
+                    .run(
                         &mut snapshot.lock().unwrap(),
                         &mut SimulationIo {
                             stdout: Box::new(stdout()) as _,
@@ -368,12 +280,6 @@ mod vogls {
                         time,
                     )
                     .map_err(|e| PyException::new_err(e.to_string()))
-            })
-        }
-
-        fn snapshot(&self) -> PyResult<Snapshot> {
-            Ok(Snapshot {
-                inner: self.state.inner.clone(),
             })
         }
     }

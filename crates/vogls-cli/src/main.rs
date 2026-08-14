@@ -248,7 +248,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     lowered.profile = profile;
 
     timers.start("compilation");
-    let mut design = if compile {
+    let (design, mut state) = if compile {
         lowered.compile()
     } else {
         lowered.to_bytecode()
@@ -266,6 +266,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     timers.start("simulation");
     design
         .run(
+            &mut state,
             &mut SimulationIo::new(Box::new(std::io::stdout()), Box::new(std::io::stderr())),
             time,
         )
@@ -273,7 +274,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     timers.stop();
 
     if stats {
-        design.initial_state().runtime().dump_stats(&mut stdout())?;
+        state.runtime().dump_stats(&mut stdout())?;
     }
 
     if timers.enabled {

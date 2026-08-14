@@ -884,7 +884,7 @@ fn run_test(
                 Result::<_, FailureInfo>::Ok(lowered)
             }?;
 
-            let mut design = match backend {
+            let (design, mut state) = match backend {
                 Backend::Compile => design.compile(),
                 Backend::Bytecode => design.to_bytecode(),
             }
@@ -903,6 +903,7 @@ fn run_test(
             });
             design
                 .run(
+                    &mut state,
                     &mut SimulationIo {
                         stdout: Box::new(stdout.clone()) as _,
                         stderr: Box::new(stderr.clone()) as _,

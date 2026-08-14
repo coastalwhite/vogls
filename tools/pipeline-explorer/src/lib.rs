@@ -135,12 +135,10 @@ pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue,
         rounds: 2,
         flags: OptFlags::ALL,
     });
-    let design = design
+    let (design, mut state) = design
         .to_bytecode()
         .map_err(|_| TraceError::Build("failed to convert to bytecode"))?;
     arena.reset();
-
-    let mut state = design.initial_state().clone();
 
     const CYCLE: u64 = 2;
     const BOOT_OFFSET: usize = 0x0000_0000;
@@ -192,7 +190,7 @@ pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue,
 
     let mut io = SimulationIo::new(Box::new(stdout()), Box::new(stderr()));
     design
-        .run_from_state(&mut state, &mut io, CYCLE * 10)
+        .run(&mut state, &mut io, CYCLE * 10)
         .expect("failed to run");
     design.set_signal(&mut state, rstn, &true.into());
 
@@ -212,7 +210,7 @@ pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue,
     for i in 0..num_cycles {
         let time = state.runtime().time;
         design
-            .run_from_state(&mut state, &mut io, time + CYCLE)
+            .run(&mut state, &mut io, time + CYCLE)
             .expect("failed to run");
 
         let pc = design.get_signal(&state, pc_q).extract_exact_u32().unwrap();
@@ -302,12 +300,10 @@ pub fn get_ibex_trace(
         rounds: 2,
         flags: OptFlags::ALL,
     });
-    let design = design
+    let (design, mut state) = design
         .to_bytecode()
         .map_err(|_| TraceError::Build("failed to convert to bytecode"))?;
     arena.reset();
-
-    let mut state = design.initial_state().clone();
 
     const CYCLE: u64 = 2;
     // Boot address is 0x80 = 128 bytes, so prefix program with 128 zero bytes.
@@ -358,7 +354,7 @@ pub fn get_ibex_trace(
     design.set_signal(&mut state, memory_signal, &memory_bits);
     design.set_signal(&mut state, rst_n, &false.into());
     design
-        .run_from_state(
+        .run(
             &mut state,
             &mut SimulationIo::new(Box::new(stdout()), Box::new(stderr())),
             CYCLE * 10,
@@ -379,7 +375,7 @@ pub fn get_ibex_trace(
     for i in 0..num_cycles {
         let time = state.runtime().time;
         design
-            .run_from_state(&mut state, &mut io, time + CYCLE)
+            .run(&mut state, &mut io, time + CYCLE)
             .expect("failed to run");
 
         let to_slot = |pc: u32, active: bool| -> u32 {
@@ -489,12 +485,10 @@ pub fn get_trace(
         rounds: 2,
         flags: OptFlags::ALL,
     });
-    let design = design
+    let (design, mut state) = design
         .to_bytecode()
         .map_err(|_| TraceError::Build("failed to convert to bytecode"))?;
     arena.reset();
-
-    let mut state = design.initial_state().clone();
 
     const CYCLE: u64 = 2;
     const MEMORY_SIZE: usize = 256 * 4;
@@ -535,7 +529,7 @@ pub fn get_trace(
     design.set_signal(&mut state, memory_signal, &memory);
     design.set_signal(&mut state, nrst, &false.into());
     design
-        .run_from_state(
+        .run(
             &mut state,
             &mut SimulationIo::new(Box::new(stdout()), Box::new(stderr())),
             CYCLE * 10,
@@ -554,7 +548,7 @@ pub fn get_trace(
     for i in 0..num_cycles {
         let time = state.runtime().time;
         design
-            .run_from_state(&mut state, &mut io, time + CYCLE)
+            .run(&mut state, &mut io, time + CYCLE)
             .expect("failed to run");
 
         let pc = design

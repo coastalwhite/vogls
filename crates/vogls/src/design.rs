@@ -36,7 +36,6 @@ pub struct Design {
     pub(crate) rt_signal_map: VgHashMap<SignalKey, RtSignalKey>,
     pub(crate) signal_mode: Arc<[LogicMode]>,
     pub(crate) signal_to_heap: Arc<[HeapRef]>,
-    pub(crate) initial_state: DesignState,
     pub(crate) time_resolution: TimeResolution,
 }
 
@@ -80,57 +79,6 @@ impl DesignState {
 
 impl Design {
     pub fn run(
-        &mut self,
-        io: &mut SimulationIo,
-        time: u64,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        match (&mut self.backend, &mut self.initial_state) {
-            #[cfg(feature = "tailcall")]
-            (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => design
-                .execute_inner_tailcall(state, &mut io.stdout, &mut io.stderr)
-                .map_err(|_| "execution failed.".into()),
-            #[cfg(not(feature = "tailcall"))]
-            (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
-                state.schedule.set_max_time(time);
-                if let Some(profile) = &design.profile {
-                    design.execute_with_tracer(
-                        &mut vogls_bytecode::profile::SamplingProfiler::new(
-                            design.debug_info.clone(),
-                            profile.as_path(),
-                        ),
-                        state,
-                        &mut io.stdout,
-                        &mut io.stderr,
-                    )
-                } else if design.itrace {
-                    design.execute_with_tracer(
-                        &mut vogls_bytecode::InstructionTracer::new_stderr(),
-                        state,
-                        &mut io.stdout,
-                        &mut io.stderr,
-                    )
-                } else if design.stats {
-                    design.execute_with_tracer(
-                        &mut vogls_bytecode::ICountTracer::default(),
-                        state,
-                        &mut io.stdout,
-                        &mut io.stderr,
-                    )
-                } else {
-                    design.execute(state, &mut io.stdout, &mut io.stderr)
-                }
-                .map_err(|_| "execution failed.".into())
-            }
-
-            #[cfg(feature = "native")]
-            (DesignBackend::Compiled { design }, DesignState::Compiled(initial_state)) => design
-                .run(initial_state, io, time)
-                .map_err(|_| "execution failed.".into()),
-            _ => panic!(),
-        }
-    }
-
-    pub fn run_from_state(
         &self,
         state: &mut DesignState,
         io: &mut SimulationIo,
@@ -179,14 +127,6 @@ impl Design {
                 .map_err(|_| "execution failed.".into()),
             _ => panic!(),
         }
-    }
-
-    pub fn initial_state(&self) -> &DesignState {
-        &self.initial_state
-    }
-
-    pub fn initial_state_mut(&mut self) -> &mut DesignState {
-        &mut self.initial_state
     }
 
     pub fn time_resolution(&self) -> TimeResolution {

@@ -209,7 +209,7 @@ impl LazyStep {
             }
             Self::RunFor(time) => design
                 .design
-                .run_from_state(
+                .run(
                     state,
                     &mut SimulationIo {
                         stdout: Box::new(std::io::stdout()),
@@ -308,7 +308,7 @@ impl PlanNode for LazyRun {
             .map_err(|_| ComputeError::NumTracesMismatch)?;
         // @TODO: Insert caching here.
         let design = &inputs.designs[&self.design];
-        let mut state = design.design.initial_state().clone();
+        let mut state = design.initial_state.clone();
 
         // Execute all steps that are shared between traces first on a single trace.
         let mut prelude_steps = 0;
