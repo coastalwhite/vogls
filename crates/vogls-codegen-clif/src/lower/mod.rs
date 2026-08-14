@@ -18,7 +18,7 @@ mod tr;
 
 use std::mem::offset_of;
 
-use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
+use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{
     AbiParam, Block, InstBuilder, MemFlagsData, Signature, StackSlot, StackSlotData, StackSlotKind,
     TrapCode, Type, UserFuncName, Value, types,
@@ -77,68 +77,12 @@ const TRAP_UNIMPLEMENTED: TrapCode = TrapCode::unwrap_user(1);
 const I64: Type = types::I64;
 const F64: Type = types::F64;
 
-fn is_real_binop(op: BinaryOp) -> bool {
-    use BinaryOp::*;
-    matches!(
-        op,
-        RealAdd
-            | RealSub
-            | RealMul
-            | RealDiv
-            | RealPow
-            | RealEq
-            | RealNe
-            | RealLt
-            | RealLeq
-            | RealGt
-            | RealGeq
-            | RealATan2
-            | RealHypot
-    )
-}
-
-fn is_real_unop(op: UnaryOp) -> bool {
-    use UnaryOp::*;
-    matches!(
-        op,
-        RealNeg
-            | RealTruncate
-            | RealSqrt
-            | RealFloor
-            | RealCeil
-            | RealToLogical
-            | RealToU64
-            | RealToI64
-            | RealFromSignedDecimal
-            | RealFromUnsignedDecimal
-            | RealLn
-            | RealLog10
-            | RealExp
-            | RealSin
-            | RealCos
-            | RealTan
-            | RealASin
-            | RealACos
-            | RealATan
-            | RealSinH
-            | RealCosH
-            | RealTanH
-            | RealASinH
-            | RealACosH
-            | RealATanH
-    )
-}
-
 fn mem() -> MemFlagsData {
     MemFlagsData::trusted()
 }
 
 fn cast() -> MemFlagsData {
     MemFlagsData::new()
-}
-
-fn mem_ro() -> MemFlagsData {
-    MemFlagsData::trusted().with_readonly()
 }
 
 /// Signal/heap information the lowering needs (built from `prepare_codegen`).
@@ -753,117 +697,8 @@ impl<'a> Compiler<'a> {
             Instruction::Constant(..) => unreachable!(),
             Instruction::Unary(..) => unreachable!(),
             Instruction::Binary(..) => unreachable!(),
-            Instruction::BinaryImm(dst, BinaryImmOp::CaseEquality, src, imm) => {
-                let av = get(b, *src);
-                let (iv, is) = match imm.as_data_ref() {
-                    vogls_bits::BitsDataRef::InlineTv(v) => (v, mask_u64(sz(*src))),
-                    vogls_bits::BitsDataRef::InlineFv(spc, val) => (val, spc),
-                    vogls_bits::BitsDataRef::SeparateFv(s) => (s[1], s[0]),
-                    _ => (0, 0),
-                };
-                let vm = b.ins().icmp_imm_u(IntCC::Equal, av, iv as i64);
-                let m = if is_fv(*src) {
-                    let as_ = gets(b, *src);
-                    let sm = b.ins().icmp_imm_u(IntCC::Equal, as_, is as i64);
-                    b.ins().band(vm, sm)
-                } else {
-                    vm
-                };
-                let r = b.ins().uextend(I64, m);
-                b.def_var(vmap[dst], r);
-                if is_fv(*dst) {
-                    let one = b.ins().iconst(I64, 1);
-                    b.def_var(spc_map[dst], one);
-                }
-            }
-            // Per-bit 4-state case equality vs an immediate: same-width, fully
-            // known (two-value) result; bit=1 iff operand and immediate agree in
-            // BOTH value and special planes. dst is always two-value.
-            Instruction::BinaryImm(dst, BinaryImmOp::BitwiseCaseEquality, src, imm) => {
-                let av = get(b, *src);
-                let (iv, is) = match imm.as_data_ref() {
-                    vogls_bits::BitsDataRef::InlineTv(v) => (v, mask_u64(imm.size().get())),
-                    vogls_bits::BitsDataRef::SeparateTv(w) => (w[0], mask_u64(imm.size().get())),
-                    vogls_bits::BitsDataRef::InlineFv(spc, v) => (v, spc),
-                    vogls_bits::BitsDataRef::SeparateFv(s) => (s[1], s[0]),
-                };
-                let ivc = b.ins().iconst(I64, iv as i64);
-                let vx = b.ins().bxor(av, ivc);
-                let veq = b.ins().bnot(vx);
-                let ssc = if is_fv(*src) {
-                    gets(b, *src)
-                } else {
-                    b.ins().iconst(I64, mask_of(sz(*src)))
-                };
-                let isc = b.ins().iconst(I64, is as i64);
-                let sx = b.ins().bxor(ssc, isc);
-                let seq = b.ins().bnot(sx);
-                let both = b.ins().band(veq, seq);
-                let r = maskv(b, both, sz(*dst));
-                b.def_var(vmap[dst], r);
-                if is_fv(*dst) {
-                    let allk = b.ins().iconst(I64, mask_of(sz(*dst)));
-                    b.def_var(spc_map[dst], allk);
-                }
-            }
-            Instruction::BinaryImm(dst, op, src, imm) => {
-                // Power and the X-division variants have no clean inline form; run
-                // them through the vogls-bits shim (handles narrow and wide).
-                if matches!(
-                    *op,
-                    BinaryImmOp::RevPower
-                        | BinaryImmOp::Power
-                        | BinaryImmOp::RevDivideX
-                        | BinaryImmOp::RevModulusX
-                ) {
-                    self.emit_wide_binop_imm(
-                        b, params, self.gl, *op, *dst, *src, imm, vmap, spc_map, wide_map,
-                    );
-                } else if is_fv(*dst) {
-                    let lv = get(b, *src);
-                    let ls = gets(b, *src);
-                    let (iv, is) = match imm.as_data_ref() {
-                        // A two-value immediate is fully known (all spc bits set).
-                        vogls_bits::BitsDataRef::InlineTv(v) => (v, mask_u64(imm.size().get())),
-                        vogls_bits::BitsDataRef::InlineFv(spc, val) => (val, spc),
-                        vogls_bits::BitsDataRef::SeparateFv(s) => (s[1], s[0]),
-                        vogls_bits::BitsDataRef::SeparateTv(_) => (0, 0),
-                    };
-                    let (val, spc) =
-                        fv_binary_imm(b, *op, lv, ls, iv, is, sz(*src), imm.size().get(), sz(*dst));
-                    b.def_var(vmap[dst], val);
-                    b.def_var(spc_map[dst], spc);
-                } else {
-                    let l = get(b, *src);
-                    // Narrow (<=64-bit) immediate value word. It may be stored as
-                    // inline or as a one-word `Separate` slice (the optimizer emits
-                    // SeparateTv for some folded constants) — read the low word in
-                    // every case rather than defaulting to 0, which would silently
-                    // drop the immediate (e.g. a folded `+cin` addi).
-                    let iv = match imm.as_data_ref() {
-                        vogls_bits::BitsDataRef::InlineTv(v) => v,
-                        vogls_bits::BitsDataRef::SeparateTv(w) => w[0],
-                        vogls_bits::BitsDataRef::InlineFv(_, val) => val,
-                        vogls_bits::BitsDataRef::SeparateFv(w) => w[w.len() / 2],
-                    };
-                    let out =
-                        self.lower_binary_imm(b, *op, l, iv, sz(*src), imm.size().get(), sz(*dst));
-                    b.def_var(vmap[dst], out);
-                }
-            }
-            Instruction::Resize(dst, op, src) => {
-                if is_fv(*dst) {
-                    let v = get(b, *src);
-                    let s = gets(b, *src);
-                    let (val, spc) = fv_resize(b, *op, v, s, sz(*src), sz(*dst));
-                    b.def_var(vmap[dst], val);
-                    b.def_var(spc_map[dst], spc);
-                } else {
-                    let s = get(b, *src);
-                    let r = lower_resize(b, *op, s, sz(*src), sz(*dst));
-                    b.def_var(vmap[dst], r);
-                }
-            }
+            Instruction::BinaryImm(..) => unreachable!(),
+            Instruction::Resize(..) => unreachable!(),
             Instruction::SliceImm(dst, src, offset) => {
                 let v = get(b, *src);
                 let shifted = if *offset == 0 {
@@ -928,45 +763,8 @@ impl<'a> Compiler<'a> {
                 b.def_var(vmap[dst], val);
                 b.def_var(spc_map[dst], spc);
             }
-            Instruction::ShiftImm(dst, op, src, amount) => {
-                if is_fv(*dst) {
-                    if matches!(*op, ShiftImmOp::ArithmeticShiftRight) {
-                        // Four-value ASR via the shim (correct sign/known handling).
-                        self.emit_wide_shift_imm(
-                            b, params, self.gl, *op, *dst, *src, *amount, vmap, spc_map, wide_map,
-                        );
-                    } else {
-                        let v = get(b, *src);
-                        let s = gets(b, *src);
-                        let (val, spc) = fv_shift_imm(b, *op, v, s, *amount, sz(*src), sz(*dst));
-                        b.def_var(vmap[dst], val);
-                        b.def_var(spc_map[dst], spc);
-                    }
-                } else {
-                    let s = get(b, *src);
-                    let r = lower_shift_imm(b, *op, s, *amount, sz(*dst));
-                    b.def_var(vmap[dst], r);
-                }
-            }
-            Instruction::Select(dst, cond, t, f) => {
-                let c = if is_fv(*cond) {
-                    let cv = get(b, *cond);
-                    let cs = gets(b, *cond);
-                    b.ins().band(cs, cv) // known-1 => 1, else 0
-                } else {
-                    get(b, *cond)
-                };
-                let tv = get(b, *t);
-                let fv = get(b, *f);
-                let r = b.ins().select(c, tv, fv);
-                b.def_var(vmap[dst], r);
-                if is_fv(*dst) {
-                    let ts = gets(b, *t);
-                    let fs = gets(b, *f);
-                    let rs = b.ins().select(c, ts, fs);
-                    b.def_var(spc_map[dst], rs);
-                }
-            }
+            Instruction::ShiftImm(..) => unreachable!(),
+            Instruction::Select(..) => unreachable!(),
             Instruction::Probe(dst, signal, offset) => {
                 let (href, _rt, mode) = self.info.heap_ref(*signal);
                 let heap = params.heap_ptr;
@@ -1109,13 +907,8 @@ impl<'a> Compiler<'a> {
                     b.def_var(spc_map[dst], spc);
                 }
             }
-            Instruction::LastUpdateTime(dst, signal) => {
-                let rt = self.info.rt_signal_map[signal];
-                let idx = self.info.lupdt_indexes.get(&rt).copied().unwrap_or(0);
-                let lat = params.last_active_time;
-                let t = b.ins().load(I64, mem(), lat, (idx * 8) as i32);
-                b.def_var(vmap[dst], t);
-            }
+            Instruction::LastUpdateTime(..) => unreachable!(),
+            Instruction::Intrinsic(..) => unreachable!(),
             Instruction::Drive(dst, signal, src, offset) => {
                 let (_href, _rt, mode) = self.info.heap_ref(*signal);
                 let ssize = sz(*src);
@@ -1174,156 +967,6 @@ impl<'a> Compiler<'a> {
                 let zero = b.ins().iconst(I64, 0);
                 b.def_var(vmap[dst], zero);
             }
-            Instruction::Intrinsic(dst, op, items) => match op.as_ref() {
-                IntrinsicOp::Time => {
-                    let t = params.time;
-                    b.def_var(vmap[dst], t);
-                }
-                IntrinsicOp::Finish => {
-                    let one = b.ins().iconst(types::I32, 1);
-                    b.ins().return_(&[one]);
-                    // Subsequent (dead) instructions land in a fresh block.
-                    let dead = b.create_block();
-                    b.switch_to_block(dead);
-                }
-                IntrinsicOp::Display(fmt) => {
-                    let idx = self.intern_fmt(fmt);
-                    self.emit_fmt_call(b, params, vmap, spc_map, wide_map, items, idx);
-                    let z = b.ins().iconst(I64, 0);
-                    b.def_var(vmap[dst], z);
-                }
-                IntrinsicOp::Assert(fmt) => {
-                    // Assert condition truthiness: two-value nonzero, or the
-                    // known-1 pattern (spc & val) for four-value; a wide operand
-                    // is or-reduced word by word.
-                    let cond = if self.gl.vars.size(items[0]).get() > 64 {
-                        let n = nwords(self.gl.vars.size(items[0]).get());
-                        let fv = items[0].mode() == LogicMode::FourValue;
-                        let mut acc = b.ins().iconst(I64, 0);
-                        for i in 0..n {
-                            let voff = if fv { n + i } else { i };
-                            let vw =
-                                wide_load(b, self.ptr, params.heap_ptr, wide_map[&items[0]], voff);
-                            let known = if fv {
-                                let sw =
-                                    wide_load(b, self.ptr, params.heap_ptr, wide_map[&items[0]], i);
-                                b.ins().band(sw, vw)
-                            } else {
-                                vw
-                            };
-                            acc = b.ins().bor(acc, known);
-                        }
-                        acc
-                    } else if items[0].mode() == LogicMode::FourValue {
-                        let cv = b.use_var(vmap[&items[0]]);
-                        let cs = b.use_var(spc_map[&items[0]]);
-                        b.ins().band(cs, cv)
-                    } else {
-                        b.use_var(vmap[&items[0]])
-                    };
-                    let fail = b.create_block();
-                    let cont = b.create_block();
-                    b.ins().brif(cond, cont, &[], fail, &[]);
-                    b.switch_to_block(fail);
-                    let idx = self.intern_fmt(fmt);
-                    self.emit_fmt_call(b, params, vmap, spc_map, wide_map, &items[1..], idx);
-                    let two = b.ins().iconst(types::I32, 2);
-                    b.ins().return_(&[two]);
-                    b.switch_to_block(cont);
-                    let z = b.ins().iconst(I64, 0);
-                    b.def_var(vmap[dst], z);
-                }
-                IntrinsicOp::Random(kind) => {
-                    use vogls_ir::RandomKind as RK;
-                    let off = match kind {
-                        RK::Uniform => layout::FN_RTL_UNIFORM,
-                        RK::Normal => layout::FN_RTL_NORMAL,
-                        RK::Exponential => layout::FN_RTL_EXPONENTIAL,
-                        RK::Poisson => layout::FN_RTL_POISSON,
-                        RK::ChiSquare => layout::FN_RTL_CHI_SQUARE,
-                        RK::T => layout::FN_RTL_T,
-                        RK::Erlang => layout::FN_RTL_ERLANG,
-                    };
-                    let cldctx = params.cldctx;
-                    let fn_ptr =
-                        b.ins()
-                            .load(self.ptr, mem(), cldctx, (layout::CTX_FN_TABLE + off) as i32);
-                    let stderr = b
-                        .ins()
-                        .load(self.ptr, mem(), cldctx, layout::CTX_STDERR as i32);
-                    // seed + distribution params, each passed as i32, then the io ptr.
-                    let mut args = Vec::new();
-                    let mut sig = Signature::new(CallConv::SystemV);
-                    for item in items.iter() {
-                        let v = get(b, *item);
-                        let v32 = b.ins().ireduce(types::I32, v);
-                        args.push(v32);
-                        sig.params.push(AbiParam::new(types::I32));
-                    }
-                    args.push(stderr);
-                    sig.params.push(AbiParam::new(self.ptr));
-                    sig.returns.push(AbiParam::new(I64));
-                    let sr = b.import_signature(sig);
-                    let call = b.ins().call_indirect(sr, fn_ptr, &args);
-                    let r = b.inst_results(call)[0];
-                    b.def_var(vmap[dst], r);
-                    // The shim returns a fully-known packed result; for a
-                    // four-value dst mark the whole value known (else spc stays
-                    // 0 => the draw reads back as all-x).
-                    if is_fv(*dst) {
-                        let known = b.ins().iconst(I64, mask_of(sz(*dst)));
-                        b.def_var(spc_map[dst], known);
-                    }
-                }
-                IntrinsicOp::ReadMem(rm) => {
-                    let (href, _rt, mode) = self.info.heap_ref(rm.signal);
-                    let idx = self.read_mems.len();
-                    self.read_mems.push((href, (**rm).clone()));
-                    let cldctx = params.cldctx;
-                    let heap = params.heap_ptr;
-                    let heap_len = b
-                        .ins()
-                        .load(I64, mem(), cldctx, layout::CTX_HEAP_LEN as i32);
-                    let mode_c = b
-                        .ins()
-                        .iconst(types::I8, i64::from(mode == LogicMode::FourValue));
-                    let base = b
-                        .ins()
-                        .load(self.ptr, mem(), cldctx, layout::CTX_READMEMS as i32);
-                    let entry = b
-                        .ins()
-                        .iadd_imm_u(base, (idx * layout::READMEM_ENTRY_SIZE) as i64);
-                    let readmem_ptr =
-                        b.ins()
-                            .load(self.ptr, mem(), cldctx, layout::CTX_READMEM as i32);
-                    let mut sig = Signature::new(CallConv::SystemV);
-                    sig.params
-                        .extend([self.ptr, I64, types::I8, self.ptr].map(AbiParam::new));
-                    let sr = b.import_signature(sig);
-                    b.ins()
-                        .call_indirect(sr, readmem_ptr, &[heap, heap_len, mode_c, entry]);
-                    let z = b.ins().iconst(I64, 0);
-                    b.def_var(vmap[dst], z);
-                }
-                IntrinsicOp::BlackBox => {
-                    let v = get(b, items[0]);
-                    b.def_var(vmap[dst], v);
-                    if is_fv(*dst) {
-                        let s = gets(b, items[0]);
-                        b.def_var(spc_map[dst], s);
-                    }
-                }
-                // VCD dump intrinsics ($dumpfile/$dumpvars/$dumpoff/$dumpon) are
-                // a bytecode-only feature; the compiled backends (this one and
-                // the C transpiler) do not emit VCD. Fail cleanly at compile
-                // time rather than executing a machine trap.
-                IntrinsicOp::VcdOpenFile(_)
-                | IntrinsicOp::VcdAppendModule(_)
-                | IntrinsicOp::VcdPause
-                | IntrinsicOp::VcdResume => {
-                    panic!("cranelift backend: VCD dump intrinsics are not supported")
-                }
-            },
         }
     }
 
@@ -1443,51 +1086,6 @@ impl<'a> Compiler<'a> {
         let sig = b.import_signature(self.sigs.fmt.clone());
         b.ins()
             .call_indirect(sig, fmt_ptr, &[stdout, fmt_str_ptr, args_ptr]);
-    }
-
-    fn lower_unary(
-        &self,
-        b: &mut FunctionBuilder,
-        op: UnaryOp,
-        s: Value,
-        ssize: VectorSize,
-        dsize: VectorSize,
-    ) -> Value {
-        match op {
-            UnaryOp::Neg => {
-                let n = b.ins().bnot(s);
-                maskv(b, n, dsize.get())
-            }
-            UnaryOp::ReduceOr => {
-                let c = b.ins().icmp_imm_u(IntCC::NotEqual, s, 0);
-                b.ins().uextend(I64, c)
-            }
-            UnaryOp::ReduceAnd => {
-                let m = mask_of(ssize.get());
-                let c = b.ins().icmp_imm_u(IntCC::Equal, s, m);
-                b.ins().uextend(I64, c)
-            }
-            UnaryOp::ReduceXor => {
-                let p = b.ins().popcnt(s);
-                b.ins().band_imm_u(p, 1)
-            }
-            UnaryOp::LeadingZeros => {
-                let shifted = if ssize.get() < 64 {
-                    b.ins().ishl_imm_u(s, (64 - ssize.get()) as i64)
-                } else {
-                    s
-                };
-                let c = b.ins().clz(shifted);
-                let is_zero = b.ins().icmp_imm_u(IntCC::Equal, s, 0);
-                let full = b.ins().iconst(I64, ssize.get() as i64);
-                let sel = b.ins().select(is_zero, full, c);
-                maskv(b, sel, dsize.get())
-            }
-            _ => {
-                b.ins().trap(TRAP_UNIMPLEMENTED);
-                b.ins().iconst(I64, 0)
-            }
-        }
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -1907,95 +1505,6 @@ impl<'a> Compiler<'a> {
             } else {
                 let val = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 0);
                 b.def_var(vmap[&dst], val);
-            }
-        }
-    }
-
-    #[expect(clippy::too_many_arguments)]
-    fn lower_binary_imm(
-        &self,
-        b: &mut FunctionBuilder,
-        op: BinaryImmOp,
-        l: Value,
-        imm: u64,
-        ssize: u32,
-        isize: u32,
-        dsize: u32,
-    ) -> Value {
-        use BinaryImmOp::*;
-        let ic = |b: &mut FunctionBuilder| b.ins().iconst(I64, imm as i64);
-        match op {
-            And => b.ins().band_imm_u(l, imm as i64),
-            Or => b.ins().bor_imm_u(l, imm as i64),
-            Xor => b.ins().bxor_imm_u(l, imm as i64),
-            Add => {
-                let a = b.ins().iadd_imm_u(l, imm as i64);
-                maskv(b, a, dsize)
-            }
-            Sub => {
-                let a = b.ins().iadd_imm_u(l, (imm as i64).wrapping_neg());
-                maskv(b, a, dsize)
-            }
-            Multiply => {
-                let a = b.ins().imul_imm_u(l, imm as i64);
-                maskv(b, a, dsize)
-            }
-            Divide => {
-                let r = ic(b);
-                safe_udiv(b, l, r)
-            }
-            Modulus => {
-                let r = ic(b);
-                safe_urem(b, l, r)
-            }
-            RevSub => {
-                let r = ic(b);
-                let a = b.ins().isub(r, l);
-                maskv(b, a, dsize)
-            }
-            RevDivide0 => {
-                let r = ic(b);
-                safe_udiv(b, r, l)
-            }
-            RevModulus0 => {
-                let r = ic(b);
-                safe_urem(b, r, l)
-            }
-            UnsignedLessEqual => {
-                let c = b
-                    .ins()
-                    .icmp_imm_u(IntCC::UnsignedLessThanOrEqual, l, imm as i64);
-                b.ins().uextend(I64, c)
-            }
-            UnsignedGreaterEqual => {
-                let c = b
-                    .ins()
-                    .icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, l, imm as i64);
-                b.ins().uextend(I64, c)
-            }
-            ConcatRight => {
-                // { Operand, Imm } : operand high, imm low.
-                let hi = b.ins().ishl_imm_u(l, isize as i64);
-                let o = b.ins().bor_imm_u(hi, imm as i64);
-                maskv(b, o, dsize)
-            }
-            ConcatLeft => {
-                // { Imm, Operand } : imm high, operand low.
-                let hi = (imm as i64) << ssize;
-                let o = b.ins().bor_imm_u(l, hi);
-                maskv(b, o, dsize)
-            }
-            Min => {
-                let r = ic(b);
-                b.ins().umin(l, r)
-            }
-            Max => {
-                let r = ic(b);
-                b.ins().umax(l, r)
-            }
-            _ => {
-                b.ins().trap(TRAP_UNIMPLEMENTED);
-                b.ins().iconst(I64, 0)
             }
         }
     }
@@ -3706,81 +3215,6 @@ fn maskv(b: &mut FunctionBuilder, v: Value, size: u32) -> Value {
         b.ins().band_imm_u(v, mask_of(size))
     }
 }
-/// Return 0 when the shift amount is >= 64 (Verilog semantics), else `shifted`.
-fn guard_shift(b: &mut FunctionBuilder, amount: Value, shifted: Value) -> Value {
-    let too_big = b
-        .ins()
-        .icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, amount, 64);
-    let zero = b.ins().iconst(I64, 0);
-    b.ins().select(too_big, zero, shifted)
-}
-fn safe_udiv(b: &mut FunctionBuilder, l: Value, r: Value) -> Value {
-    let is_zero = b.ins().icmp_imm_u(IntCC::Equal, r, 0);
-    let one = b.ins().iconst(I64, 1);
-    let safe = b.ins().select(is_zero, one, r);
-    let q = b.ins().udiv(l, safe);
-    let zero = b.ins().iconst(I64, 0);
-    b.ins().select(is_zero, zero, q)
-}
-fn safe_urem(b: &mut FunctionBuilder, l: Value, r: Value) -> Value {
-    let is_zero = b.ins().icmp_imm_u(IntCC::Equal, r, 0);
-    let one = b.ins().iconst(I64, 1);
-    let safe = b.ins().select(is_zero, one, r);
-    let q = b.ins().urem(l, safe);
-    let zero = b.ins().iconst(I64, 0);
-    b.ins().select(is_zero, zero, q)
-}
-fn lower_resize(b: &mut FunctionBuilder, op: ResizeOp, s: Value, ssize: u32, dsize: u32) -> Value {
-    match op {
-        ResizeOp::Truncate => maskv(b, s, dsize),
-        ResizeOp::ZeroExtend => s, // canonical value already has zero high bits
-        ResizeOp::SignExtend => {
-            if ssize >= 64 {
-                s
-            } else {
-                let sh = (64 - ssize) as i64;
-                let up = b.ins().ishl_imm_u(s, sh);
-                let sext = b.ins().sshr_imm_u(up, sh);
-                maskv(b, sext, dsize)
-            }
-        }
-    }
-}
-fn lower_shift_imm(
-    b: &mut FunctionBuilder,
-    op: ShiftImmOp,
-    s: Value,
-    amount: u32,
-    dsize: u32,
-) -> Value {
-    match op {
-        ShiftImmOp::LogicalShiftLeft => {
-            if amount >= 64 {
-                b.ins().iconst(I64, 0)
-            } else {
-                let sh = b.ins().ishl_imm_u(s, amount as i64);
-                maskv(b, sh, dsize)
-            }
-        }
-        ShiftImmOp::LogicalShiftRight => {
-            if amount >= 64 {
-                b.ins().iconst(I64, 0)
-            } else {
-                b.ins().ushr_imm_u(s, amount as i64)
-            }
-        }
-        ShiftImmOp::ArithmeticShiftRight => {
-            // Sign-extend from bit `dsize-1` up to i64, arithmetic-shift, re-mask.
-            // A shift >= width collapses to all sign bits (clamp to 63).
-            let shb = (64 - dsize) as i64;
-            let up = b.ins().ishl_imm_u(s, shb);
-            let se = b.ins().sshr_imm_u(up, shb);
-            let amt = amount.min(63) as i64;
-            let r = b.ins().sshr_imm_u(se, amt);
-            maskv(b, r, dsize)
-        }
-    }
-}
 
 fn ioff(b: &mut FunctionBuilder, _ptr: Type, base: Value, off: usize) -> Value {
     if off == 0 {
@@ -3958,14 +3392,6 @@ fn dyn_slice_read(
 // (0,0)=x  (0,1)=z  (1,0)=0  (1,1)=1.  Inputs are assumed masked to `size`.
 // ---------------------------------------------------------------------------
 
-/// Both operands fully known (each `spc == mask(own size)`). Returns an i8.
-/// The two operands may have different widths (e.g. a `BinaryImm` immediate).
-fn both_known(b: &mut FunctionBuilder, ls: Value, ls_size: u32, rs: Value, rs_size: u32) -> Value {
-    let a = b.ins().icmp_imm_u(IntCC::Equal, ls, mask_of(ls_size));
-    let c = b.ins().icmp_imm_u(IntCC::Equal, rs, mask_of(rs_size));
-    b.ins().band(a, c)
-}
-
 /// Load a four-value signal from the heap into `(val, spc)`.
 fn fv_load(b: &mut FunctionBuilder, heap: Value, href: HeapRef, size: u32) -> (Value, Value) {
     let word = href.offset.bit_offset / 64;
@@ -3992,164 +3418,96 @@ fn fv_load(b: &mut FunctionBuilder, heap: Value, href: HeapRef, size: u32) -> (V
 }
 
 #[expect(clippy::too_many_arguments)]
-fn fv_arith_core(
+fn fv_binary(
     b: &mut FunctionBuilder,
-    raw: Value,
-    ls: Value,
-    rs: Value,
-    s1: u32,
-    s2: u32,
-    extra_known: Option<Value>,
-) -> (Value, Value) {
-    let bk = both_known(b, ls, s1, rs, s2);
-    let gate = match extra_known {
-        Some(x) => b.ins().band(bk, x),
-        None => bk,
-    };
-    // Result width follows the destination (== s1 for equal-width arithmetic).
-    let rawm = maskv(b, raw, s1);
-    let zero = b.ins().iconst(I64, 0);
-    let mfull = b.ins().iconst(I64, mask_of(s1));
-    let val = b.ins().select(gate, rawm, zero);
-    let spc = b.ins().select(gate, mfull, zero);
-    (val, spc)
-}
-
-#[expect(clippy::too_many_arguments)]
-fn fv_binary_imm(
-    b: &mut FunctionBuilder,
-    op: BinaryImmOp,
+    op: BinaryOp,
     lv: Value,
     ls: Value,
-    iv: u64,
-    is: u64,
-    ssize: u32,
-    isize: u32,
+    rv: Value,
+    rs: Value,
+    _s1: u32,
+    _s2: u32,
     dsize: u32,
 ) -> (Value, Value) {
-    use BinaryImmOp as O;
-    let ivc = b.ins().iconst(I64, iv as i64);
-    let isc = b.ins().iconst(I64, is as i64);
+    use BinaryOp::*;
     match op {
-        O::And => fv_binary(b, BinaryOp::And, lv, ls, ivc, isc, ssize, isize, dsize),
-        O::Or => fv_binary(b, BinaryOp::Or, lv, ls, ivc, isc, ssize, isize, dsize),
-        O::Xor => fv_binary(b, BinaryOp::Xor, lv, ls, ivc, isc, ssize, isize, dsize),
-        O::Add => fv_binary(b, BinaryOp::Add, lv, ls, ivc, isc, ssize, isize, dsize),
-        O::Sub => fv_binary(b, BinaryOp::Sub, lv, ls, ivc, isc, ssize, isize, dsize),
-        O::Multiply => fv_binary(b, BinaryOp::Multiply, lv, ls, ivc, isc, ssize, isize, dsize),
-        O::Divide => fv_binary(b, BinaryOp::Divide0, lv, ls, ivc, isc, ssize, isize, dsize),
-        O::Modulus => fv_binary(b, BinaryOp::Modulus0, lv, ls, ivc, isc, ssize, isize, dsize),
-        O::RevSub => fv_binary(b, BinaryOp::Sub, ivc, isc, lv, ls, isize, ssize, dsize),
-        O::RevDivide0 => fv_binary(b, BinaryOp::Divide0, ivc, isc, lv, ls, isize, ssize, dsize),
-        O::RevModulus0 => fv_binary(b, BinaryOp::Modulus0, ivc, isc, lv, ls, isize, ssize, dsize),
-        O::UnsignedLessEqual => fv_binary(
-            b,
-            BinaryOp::UnsignedLessEqual,
-            lv,
-            ls,
-            ivc,
-            isc,
-            ssize,
-            isize,
-            dsize,
-        ),
-        O::UnsignedGreaterEqual => fv_binary(
-            b,
-            BinaryOp::UnsignedLessEqual,
-            ivc,
-            isc,
-            lv,
-            ls,
-            isize,
-            ssize,
-            dsize,
-        ),
-        // {Operand, Imm}: operand high, imm low (shift by imm size).
-        O::ConcatRight => fv_binary(b, BinaryOp::Concat, lv, ls, ivc, isc, ssize, isize, dsize),
-        // {Imm, Operand}: imm high, operand low (shift by operand size).
-        O::ConcatLeft => fv_binary(b, BinaryOp::Concat, ivc, isc, lv, ls, isize, ssize, dsize),
-        O::Min => fv_binary(b, BinaryOp::Min, lv, ls, ivc, isc, ssize, isize, dsize),
-        O::Max => fv_binary(b, BinaryOp::Max, lv, ls, ivc, isc, ssize, isize, dsize),
+        And => {
+            let a = b.ins().band(ls, lv);
+            let c = b.ins().band(rs, rv);
+            let val = b.ins().band(a, c);
+            let nlv = b.ins().bnot(lv);
+            let t1 = b.ins().band(ls, nlv);
+            let nrv = b.ins().bnot(rv);
+            let t2 = b.ins().band(rs, nrv);
+            let t3 = b.ins().bor(t1, t2);
+            let spc = b.ins().bor(t3, val);
+            (val, spc)
+        }
+        Or => {
+            let a = b.ins().band(ls, lv);
+            let c = b.ins().band(rs, rv);
+            let val = b.ins().bor(a, c);
+            let lsrs = b.ins().band(ls, rs);
+            let spc = b.ins().bor(val, lsrs);
+            (val, spc)
+        }
+        Xor => {
+            let spc = b.ins().band(ls, rs);
+            let xv = b.ins().bxor(lv, rv);
+            let val = b.ins().band(spc, xv);
+            (val, spc)
+        }
+        Xnor => {
+            let spc = b.ins().band(ls, rs);
+            let xv = b.ins().bxor(lv, rv);
+            let nxv = b.ins().bnot(xv);
+            let val = b.ins().band(spc, nxv);
+            (val, spc)
+        }
+        AndNot => {
+            let a = b.ins().band(ls, lv);
+            let nrv = b.ins().bnot(rv);
+            let c = b.ins().band(rs, nrv);
+            let val = b.ins().band(a, c);
+            let nlv = b.ins().bnot(lv);
+            let t1 = b.ins().band(ls, nlv);
+            let t2 = b.ins().band(rs, rv);
+            let t3 = b.ins().bor(t1, t2);
+            let spc = b.ins().bor(t3, val);
+            (val, spc)
+        }
+        OrNot => {
+            let a = b.ins().band(ls, lv);
+            let nrv = b.ins().bnot(rv);
+            let c = b.ins().band(rs, nrv);
+            let val = b.ins().bor(a, c);
+            let lsrs = b.ins().band(ls, rs);
+            let spc = b.ins().bor(val, lsrs);
+            (val, spc)
+        }
+        CopyX => {
+            // copy_mask = !rs & !rv (bits of rhs that are x)
+            let nrs = b.ins().bnot(rs);
+            let nrv = b.ins().bnot(rv);
+            let cm0 = b.ins().band(nrs, nrv);
+            let cm = maskv(b, cm0, dsize);
+            let ncm = b.ins().bnot(cm);
+            let spc = b.ins().band(ls, ncm);
+            let val = b.ins().band(lv, ncm);
+            (val, spc)
+        }
+        CopyZ => {
+            // copy_mask = !rs & rv (bits of rhs that are z)
+            let nrs = b.ins().bnot(rs);
+            let cm0 = b.ins().band(nrs, rv);
+            let cm = maskv(b, cm0, dsize);
+            let ncm = b.ins().bnot(cm);
+            let spc = b.ins().band(ls, ncm);
+            let v0 = b.ins().bor(lv, cm);
+            let val = maskv(b, v0, dsize);
+            (val, spc)
+        }
         _ => {
-            b.ins().trap(TRAP_UNIMPLEMENTED);
-            let z = b.ins().iconst(I64, 0);
-            (z, z)
-        }
-    }
-}
-
-fn fv_resize(
-    b: &mut FunctionBuilder,
-    op: ResizeOp,
-    sv: Value,
-    ss: Value,
-    ssize: u32,
-    dsize: u32,
-) -> (Value, Value) {
-    match op {
-        ResizeOp::Truncate => (maskv(b, sv, dsize), maskv(b, ss, dsize)),
-        ResizeOp::ZeroExtend => {
-            let ext = (mask_u64(dsize) & !mask_u64(ssize)) as i64;
-            let spc = b.ins().bor_imm_u(ss, ext);
-            (sv, spc)
-        }
-        ResizeOp::SignExtend => {
-            if ssize >= 64 {
-                (sv, ss)
-            } else {
-                let shb = (64 - ssize) as i64;
-                let uv = b.ins().ishl_imm_u(sv, shb);
-                let sv2 = b.ins().sshr_imm_u(uv, shb);
-                let val = maskv(b, sv2, dsize);
-                let us = b.ins().ishl_imm_u(ss, shb);
-                let ss2 = b.ins().sshr_imm_u(us, shb);
-                let spc = maskv(b, ss2, dsize);
-                (val, spc)
-            }
-        }
-    }
-}
-
-fn fv_shift_imm(
-    b: &mut FunctionBuilder,
-    op: ShiftImmOp,
-    sv: Value,
-    ss: Value,
-    amount: u32,
-    size: u32,
-    _dsize: u32,
-) -> (Value, Value) {
-    match op {
-        ShiftImmOp::LogicalShiftLeft => {
-            if amount >= size {
-                let z = b.ins().iconst(I64, 0);
-                let m = b.ins().iconst(I64, mask_of(size));
-                (z, m)
-            } else {
-                let shv = b.ins().ishl_imm_u(sv, amount as i64);
-                let val = maskv(b, shv, size);
-                let shs = b.ins().ishl_imm_u(ss, amount as i64);
-                let low = ((1u64 << amount) - 1) as i64;
-                let s0 = b.ins().bor_imm_u(shs, low);
-                let spc = maskv(b, s0, size);
-                (val, spc)
-            }
-        }
-        ShiftImmOp::LogicalShiftRight => {
-            if amount >= size {
-                let z = b.ins().iconst(I64, 0);
-                let m = b.ins().iconst(I64, mask_of(size));
-                (z, m)
-            } else {
-                let val = b.ins().ushr_imm_u(sv, amount as i64);
-                let shs = b.ins().ushr_imm_u(ss, amount as i64);
-                let high = (((1u64 << amount) - 1) << (size - amount)) as i64;
-                let s0 = b.ins().bor_imm_u(shs, high);
-                let spc = maskv(b, s0, size);
-                (val, spc)
-            }
-        }
-        ShiftImmOp::ArithmeticShiftRight => {
             b.ins().trap(TRAP_UNIMPLEMENTED);
             let z = b.ins().iconst(I64, 0);
             (z, z)

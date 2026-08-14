@@ -1901,7 +1901,7 @@ impl BinaryImmOp {
             O::RevDivideX | O::RevModulusX => {
                 let convert = src.max(imm);
                 BinaryImmOutputMode {
-                    dst: LogicMode::TwoValue,
+                    dst: LogicMode::FourValue,
                     src: convert,
                 }
             }

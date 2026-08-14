@@ -1106,17 +1106,6 @@ pub fn cgc_case_eq(
     Ok(())
 }
 
-const FV_POSEDGE_LUT: u16 = {
-    let mut fv_lut = 0u16;
-    let mut i = 0;
-    while i < 16 {
-        let before = FvLogicValue::from_repr(i >> 2);
-        let after = FvLogicValue::from_repr(i & 0x3);
-        fv_lut |= (vogls_bits::edge::fv_posedge(before, after) as u16) << i;
-        i += 1;
-    }
-    fv_lut
-};
 const FV_NEGEDGE_LUT: u16 = {
     let mut fv_lut = 0u16;
     let mut i = 0;

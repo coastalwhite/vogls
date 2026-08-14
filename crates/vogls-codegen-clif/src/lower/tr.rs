@@ -2,23 +2,26 @@ use std::mem::offset_of;
 
 use cranelift_codegen::Context;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
+use cranelift_codegen::ir::types::{self, I32};
 use cranelift_codegen::ir::{
-    Block, InstBuilder, StackSlotData, StackSlotKind, UserFuncName, Value,
+    AbiParam, Block, InstBuilder, Signature, StackSlotData, StackSlotKind, UserFuncName, Value,
 };
+use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{FuncId, Module};
 use vogls_codegen::SixBitSize;
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryOp, Instruction, LogicMode, UnaryOp, VariableKey,
+    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Instruction, IntrinsicOp,
+    LogicMode, ResizeOp, ShiftImmOp, UnaryOp, VariableKey,
 };
 use vogls_utils::VgHashMap;
 
 use crate::ffi::FfiVec;
 use crate::lower::{
-    F64, I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, cast, instr_is_wide, is_real_unop,
-    mask_of, maskv, mem, var_words,
+    F64, I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, cast, instr_is_wide, mask_of, maskv, mem,
+    nwords, var_words,
 };
-use crate::runtime::{EventT, ScheduleT};
+use crate::runtime::{EventT, ScheduleT, layout};
 
 use super::{Compiler, WideMap, wide_load, wide_store};
 
@@ -504,22 +507,16 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     LogicMode::FourValue => {
                                         let lspc = spc_get(b, *lhs);
                                         let rspc = spc_get(b, *rhs);
-
-                                        let a = b.ins().icmp_imm_u(
-                                            IntCC::Equal,
+                                        let (val, spc) = clif_fv_arith(
+                                            b,
+                                            result,
                                             lspc,
-                                            mask_of(lhs_size.get()),
-                                        );
-                                        let c = b.ins().icmp_imm_u(
-                                            IntCC::Equal,
+                                            lhs_size.get(),
                                             rspc,
-                                            mask_of(rhs_size.get()),
+                                            rhs_size.get(),
+                                            dst_size.get(),
+                                            None,
                                         );
-                                        let both_known = b.ins().band(a, c);
-                                        let zero = b.ins().iconst(I64, 0);
-                                        let mfull = b.ins().iconst(I64, mask_of(dst_size.get()));
-                                        let val = b.ins().select(both_known, result, zero);
-                                        let spc = b.ins().select(both_known, mfull, zero);
                                         b.def_var(vmap[dst], val);
                                         b.def_var(spc_map[dst], spc);
                                     }
@@ -542,13 +539,17 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         let ushl = |b: &mut FunctionBuilder, v: Value, amt: Value| {
                             let sh = b.ins().ishl(v, amt);
                             let zero = b.ins().iconst(I64, 0);
-                            let big = b.ins().icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, amt, 64);
+                            let big =
+                                b.ins()
+                                    .icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, amt, 64);
                             b.ins().select(big, zero, sh)
                         };
                         let ushr = |b: &mut FunctionBuilder, v: Value, amt: Value| {
                             let sh = b.ins().ushr(v, amt);
                             let zero = b.ins().iconst(I64, 0);
-                            let big = b.ins().icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, amt, 64);
+                            let big =
+                                b.ins()
+                                    .icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, amt, 64);
                             b.ins().select(big, zero, sh)
                         };
                         // 1u64.unbounded_shl(amt).wrapping_sub(1): a low mask of `amt`
@@ -574,19 +575,21 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         // Four-value shift amount: use the value word, but the whole shift
                         // collapses to all-x if the amount isn't fully known. Returns
                         // (amount, known-flag). A two-value amount is always known.
-                        let shift_amount =
-                            |b: &mut FunctionBuilder, v: VariableKey, size: u32| -> (Value, Value) {
-                                let amt = get(b, v);
-                                match v.mode() {
-                                    LogicMode::TwoValue => (amt, b.ins().iconst(I64, 1)),
-                                    LogicMode::FourValue => {
-                                        let spc = spc_get(b, v);
-                                        let known =
-                                            b.ins().icmp_imm_u(IntCC::Equal, spc, mask_of(size));
-                                        (amt, known)
-                                    }
+                        let shift_amount = |b: &mut FunctionBuilder,
+                                            v: VariableKey,
+                                            size: u32|
+                         -> (Value, Value) {
+                            let amt = get(b, v);
+                            match v.mode() {
+                                LogicMode::TwoValue => (amt, b.ins().iconst(I64, 1)),
+                                LogicMode::FourValue => {
+                                    let spc = spc_get(b, v);
+                                    let known =
+                                        b.ins().icmp_imm_u(IntCC::Equal, spc, mask_of(size));
+                                    (amt, known)
                                 }
-                            };
+                            }
+                        };
 
                         use crate::runtime::real_code as rc;
                         use BinaryOp as O;
@@ -617,43 +620,28 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }
 
                             (O::And, M::FourValue, _) => map!((lval, lspc), (rval, rspc) => @fv {
-                                let a = b.ins().band(lspc, lval);
-                                let c = b.ins().band(rspc, rval);
-                                let val = b.ins().band(a, c);
-                                let nlv = b.ins().bnot(lval);
-                                let t1 = b.ins().band(lspc, nlv);
-                                let nrv = b.ins().bnot(rval);
-                                let t2 = b.ins().band(rspc, nrv);
-                                let t3 = b.ins().bor(t1, t2);
-                                let spc = b.ins().bor(t3, val);
-                                (val, spc)
+                                clif_fv_and(b, lval, lspc, rval, rspc)
                             }),
                             (O::Or, M::FourValue, _) => map!((lval, lspc), (rval, rspc) => @fv {
-                                let a = b.ins().band(lspc, lval);
-                                let c = b.ins().band(rspc, rval);
-                                let val = b.ins().bor(a, c);
-                                let lsrs = b.ins().band(lspc, rspc);
-                                let spc = b.ins().bor(val, lsrs);
-                                (val, spc)
+                                clif_fv_or(b, lval, lspc, rval, rspc)
                             }),
                             (O::Xor, M::FourValue, _) => map!((lval, lspc), (rval, rspc) => @fv {
-                                let spc = b.ins().band(lspc, rspc);
-                                let xv = b.ins().bxor(lval, rval);
-                                let val = b.ins().band(spc, xv);
-                                (val, spc)
+                                clif_fv_xor(b, lval, lspc, rval, rspc)
                             }),
-                            (O::AndNot, M::FourValue, _) => map!((lval, lspc), (rval, rspc) => @fv {
-                                let a = b.ins().band(lspc, lval);
-                                let nrv = b.ins().bnot(rval);
-                                let c = b.ins().band(rspc, nrv);
-                                let val = b.ins().band(a, c);
-                                let nlv = b.ins().bnot(lval);
-                                let t1 = b.ins().band(lspc, nlv);
-                                let t2 = b.ins().band(rspc, rval);
-                                let t3 = b.ins().bor(t1, t2);
-                                let spc = b.ins().bor(t3, val);
-                                (val, spc)
-                            }),
+                            (O::AndNot, M::FourValue, _) => {
+                                map!((lval, lspc), (rval, rspc) => @fv {
+                                    let a = b.ins().band(lspc, lval);
+                                    let nrv = b.ins().bnot(rval);
+                                    let c = b.ins().band(rspc, nrv);
+                                    let val = b.ins().band(a, c);
+                                    let nlv = b.ins().bnot(lval);
+                                    let t1 = b.ins().band(lspc, nlv);
+                                    let t2 = b.ins().band(rspc, rval);
+                                    let t3 = b.ins().bor(t1, t2);
+                                    let spc = b.ins().bor(t3, val);
+                                    (val, spc)
+                                })
+                            }
                             (O::OrNot, M::FourValue, _) => map!((lval, lspc), (rval, rspc) => @fv {
                                 let a = b.ins().band(lspc, lval);
                                 let nrv = b.ins().bnot(rval);
@@ -712,78 +700,54 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::Power, _, _) => self.compiler.emit_wide_binop(
-                                b, params, *op, *dst, *lhs, *rhs, vmap, spc_map, &self.wide_map,
+                                b,
+                                params,
+                                *op,
+                                *dst,
+                                *lhs,
+                                *rhs,
+                                vmap,
+                                spc_map,
+                                &self.wide_map,
                             ),
-                            (O::DivideX | O::ModulusX, _, M::TwoValue) => map!(lhs, rhs => @fv {
-                                let nz = b.ins().icmp_imm_u(IntCC::NotEqual, rhs, 0);
-                                let one = b.ins().iconst(I64, 1);
-                                let safe = b.ins().select(nz, rhs, one);
-                                let raw = if matches!(op, O::DivideX) {
-                                    b.ins().udiv(lhs, safe)
-                                } else {
-                                    b.ins().urem(lhs, safe)
-                                };
-                                let rawm = maskv(b, raw, dst_size.get());
-                                let zero = b.ins().iconst(I64, 0);
-                                let mfull = b.ins().iconst(I64, mask_of(dst_size.get()));
-                                let val = b.ins().select(nz, rawm, zero);
-                                let spc = b.ins().select(nz, mfull, zero);
-                                (val, spc)
+                            // DivideX/ModulusX: operands are known; div-by-zero yields x,
+                            // so gate the four-value dst on a non-zero divisor.
+                            (O::DivideX, _, M::TwoValue) => map!(lhs, rhs => @fv {
+                                let (raw, nz) = clif_tv_divx(b, lhs, rhs);
+                                clif_divx_gate(b, raw, nz, dst_size.get())
                             }),
-                            (O::DivideX | O::ModulusX, _, M::FourValue) => {
+                            (O::ModulusX, _, M::TwoValue) => map!(lhs, rhs => @fv {
+                                let (raw, nz) = clif_tv_modx(b, lhs, rhs);
+                                clif_divx_gate(b, raw, nz, dst_size.get())
+                            }),
+                            (O::DivideX, _, M::FourValue) => {
                                 map!((lval, lspc), (rval, rspc) => @fv {
-                                    let nz = b.ins().icmp_imm_u(IntCC::NotEqual, rval, 0);
-                                    let one = b.ins().iconst(I64, 1);
-                                    let safe = b.ins().select(nz, rval, one);
-                                    let raw = if matches!(op, O::DivideX) {
-                                        b.ins().udiv(lval, safe)
-                                    } else {
-                                        b.ins().urem(lval, safe)
-                                    };
-                                    let a = b.ins().icmp_imm_u(IntCC::Equal, lspc, mask_of(lhs_size.get()));
-                                    let c = b.ins().icmp_imm_u(IntCC::Equal, rspc, mask_of(rhs_size.get()));
-                                    let bk = b.ins().band(a, c);
-                                    let gate = b.ins().band(bk, nz);
-                                    let rawm = maskv(b, raw, dst_size.get());
-                                    let zero = b.ins().iconst(I64, 0);
-                                    let mfull = b.ins().iconst(I64, mask_of(dst_size.get()));
-                                    let val = b.ins().select(gate, rawm, zero);
-                                    let spc = b.ins().select(gate, mfull, zero);
-                                    (val, spc)
+                                    let (raw, nz) = clif_tv_divx(b, lval, rval);
+                                    clif_fv_arith(b, raw, lspc, lhs_size.get(), rspc, rhs_size.get(), dst_size.get(), Some(nz))
                                 })
                             }
-                            (O::Divide0 | O::Modulus0, _, M::TwoValue) => map!(lhs, rhs => @tv {
-                                let is_zero = b.ins().icmp_imm_u(IntCC::Equal, rhs, 0);
-                                let one = b.ins().iconst(I64, 1);
-                                let safe = b.ins().select(is_zero, one, rhs);
-                                let q = if matches!(op, O::Divide0) {
-                                    b.ins().udiv(lhs, safe)
-                                } else {
-                                    b.ins().urem(lhs, safe)
-                                };
-                                let zero = b.ins().iconst(I64, 0);
-                                b.ins().select(is_zero, zero, q)
-                            }),
-                            (O::Divide0 | O::Modulus0, _, M::FourValue) => {
+                            (O::ModulusX, _, M::FourValue) => {
                                 map!((lval, lspc), (rval, rspc) => @fv {
-                                    let is_zero = b.ins().icmp_imm_u(IntCC::Equal, rval, 0);
-                                    let one = b.ins().iconst(I64, 1);
-                                    let safe = b.ins().select(is_zero, one, rval);
-                                    let q = if matches!(op, O::Divide0) {
-                                        b.ins().udiv(lval, safe)
-                                    } else {
-                                        b.ins().urem(lval, safe)
-                                    };
-                                    let zero = b.ins().iconst(I64, 0);
-                                    let raw = b.ins().select(is_zero, zero, q);
-                                    let a = b.ins().icmp_imm_u(IntCC::Equal, lspc, mask_of(lhs_size.get()));
-                                    let c = b.ins().icmp_imm_u(IntCC::Equal, rspc, mask_of(rhs_size.get()));
-                                    let bk = b.ins().band(a, c);
-                                    let rawm = maskv(b, raw, dst_size.get());
-                                    let mfull = b.ins().iconst(I64, mask_of(dst_size.get()));
-                                    let val = b.ins().select(bk, rawm, zero);
-                                    let spc = b.ins().select(bk, mfull, zero);
-                                    (val, spc)
+                                    let (raw, nz) = clif_tv_modx(b, lval, rval);
+                                    clif_fv_arith(b, raw, lspc, lhs_size.get(), rspc, rhs_size.get(), dst_size.get(), Some(nz))
+                                })
+                            }
+                            (O::Divide0, _, M::TwoValue) => {
+                                map!(lhs, rhs => @tv clif_tv_div0(b, lhs, rhs))
+                            }
+                            (O::Modulus0, _, M::TwoValue) => {
+                                map!(lhs, rhs => @tv clif_tv_mod0(b, lhs, rhs))
+                            }
+                            (O::Divide0, _, M::FourValue) => {
+                                map!((lval, lspc), (rval, rspc) => @fv {
+                                    let raw = clif_tv_div0(b, lval, rval);
+                                    clif_fv_arith(b, raw, lspc, lhs_size.get(), rspc, rhs_size.get(), dst_size.get(), None)
+                                })
+                            }
+                            (O::Modulus0, _, M::FourValue) => {
+                                map!((lval, lspc), (rval, rspc) => @fv {
+                                    let raw = clif_tv_mod0(b, lval, rval);
+                                    clif_fv_arith(b, raw, lspc, lhs_size.get(), rspc, rhs_size.get(), dst_size.get(), None)
                                 })
                             }
                             (O::UnsignedLessEqual, M::TwoValue, _) => map!(lhs, rhs => @tv {
@@ -792,16 +756,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }),
                             (O::UnsignedLessEqual, M::FourValue, _) => {
                                 map!((lval, lspc), (rval, rspc) => @fv {
-                                    let a = b.ins().icmp_imm_u(IntCC::Equal, lspc, mask_of(lhs_size.get()));
-                                    let c = b.ins().icmp_imm_u(IntCC::Equal, rspc, mask_of(rhs_size.get()));
-                                    let bk = b.ins().band(a, c);
                                     let cmp = b.ins().icmp(IntCC::UnsignedLessThanOrEqual, lval, rval);
                                     let cmpv = b.ins().uextend(I64, cmp);
-                                    let zero = b.ins().iconst(I64, 0);
-                                    let one = b.ins().iconst(I64, 1);
-                                    let val = b.ins().select(bk, cmpv, zero);
-                                    let spc = b.ins().select(bk, one, zero);
-                                    (val, spc)
+                                    clif_fv_arith(b, cmpv, lspc, lhs_size.get(), rspc, rhs_size.get(), dst_size.get(), None)
                                 })
                             }
                             (O::LogicalShiftLeft, M::TwoValue, _) => map!(lhs, rhs => @tv {
@@ -862,13 +819,15 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let hi = b.ins().ishl_imm_u(lhs, rhs_size.get() as i64);
                                 b.ins().bor(hi, rhs)
                             }),
-                            (O::Concat, M::FourValue, _) => map!((lval, lspc), (rval, rspc) => @fv {
-                                let vh = b.ins().ishl_imm_u(lval, rhs_size.get() as i64);
-                                let val = b.ins().bor(vh, rval);
-                                let sh = b.ins().ishl_imm_u(lspc, rhs_size.get() as i64);
-                                let spc = b.ins().bor(sh, rspc);
-                                (val, spc)
-                            }),
+                            (O::Concat, M::FourValue, _) => {
+                                map!((lval, lspc), (rval, rspc) => @fv {
+                                    let vh = b.ins().ishl_imm_u(lval, rhs_size.get() as i64);
+                                    let val = b.ins().bor(vh, rval);
+                                    let sh = b.ins().ishl_imm_u(lspc, rhs_size.get() as i64);
+                                    let spc = b.ins().bor(sh, rspc);
+                                    (val, spc)
+                                })
+                            }
                             (O::CopyX, M::TwoValue, _) => map!(lhs, _rhs => @tv lhs),
                             (O::CopyX, M::FourValue, _) => map!((lval, lspc), (rval, rspc) => @fv {
                                 let nrs = b.ins().bnot(rspc);
@@ -909,6 +868,664 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }
                             (O::RealHypot, _, _) => {
                                 map!(lhs, rhs => @tv self.compiler.real_shim(b, params, rc::HYPOT, lhs, rhs))
+                            }
+                        }
+                    }
+                    Instruction::BinaryImm(dst, op, src, imm) => {
+                        let dst_size = self.compiler.gl.vars.size(*dst);
+                        let src_size = self.compiler.gl.vars.size(*src);
+                        let imm_size = imm.size();
+
+                        // Materialize the immediate's value and special-plane words as
+                        // constants. A two-value immediate is fully known (spc = mask).
+                        let (iv, is) = match imm.as_data_ref() {
+                            vogls_bits::BitsDataRef::InlineTv(v) => {
+                                (v as i64, mask_of(imm_size.get()))
+                            }
+                            vogls_bits::BitsDataRef::InlineFv(spc, val) => (val as i64, spc as i64),
+                            vogls_bits::BitsDataRef::SeparateFv(s) => (s[1] as i64, s[0] as i64),
+                            vogls_bits::BitsDataRef::SeparateTv(s) => {
+                                (s[0] as i64, mask_of(imm_size.get()))
+                            }
+                        };
+
+                        // Like `map!` for Binary, but the rhs operand is the immediate:
+                        // `$sval`/`$sspc` read the src register, `$ival`/`$ispc` are the
+                        // immediate constants.
+                        macro_rules! imap {
+                            ($sval:ident, $ival:ident => @tv $blk:expr) => {{
+                                let $sval = get(b, *src);
+                                let $ival = b.ins().iconst(I64, iv);
+                                let val = $blk;
+                                b.def_var(vmap[dst], val);
+                            }};
+                            (($sval:ident, $sspc:ident), ($ival:ident, $ispc:ident) => @fv $blk:expr) => {{
+                                let $sval = get(b, *src);
+                                let $sspc = spc_get(b, *src);
+                                let $ival = b.ins().iconst(I64, iv);
+                                let $ispc = b.ins().iconst(I64, is);
+                                let (val, spc) = $blk;
+                                b.def_var(vmap[dst], val);
+                                b.def_var(spc_map[dst], spc);
+                            }};
+                            // Plain two-value operand + immediate, four-value dst (for the
+                            // x-injecting variants with two-value operands).
+                            ($sval:ident, $ival:ident => @fv $blk:expr) => {{
+                                let $sval = get(b, *src);
+                                let $ival = b.ins().iconst(I64, iv);
+                                let (val, spc) = $blk;
+                                b.def_var(vmap[dst], val);
+                                b.def_var(spc_map[dst], spc);
+                            }};
+                            // Four-value operand + immediate, two-value dst (for the
+                            // case-equality ops, which reduce both planes to a known bit).
+                            (($sval:ident, $sspc:ident), ($ival:ident, $ispc:ident) => @tv $blk:expr) => {{
+                                let $sval = get(b, *src);
+                                let $sspc = spc_get(b, *src);
+                                let $ival = b.ins().iconst(I64, iv);
+                                let $ispc = b.ins().iconst(I64, is);
+                                let val = $blk;
+                                b.def_var(vmap[dst], val);
+                            }};
+                        }
+
+                        use BinaryImmOp as O;
+                        use LogicMode as M;
+                        match (op, dst.mode(), src.mode()) {
+                            (O::And, M::TwoValue, _) => {
+                                imap!(sval, ival => @tv b.ins().band(sval, ival))
+                            }
+                            (O::And, M::FourValue, _) => imap!((sval, sspc), (ival, ispc) => @fv {
+                                clif_fv_and(b, sval, sspc, ival, ispc)
+                            }),
+                            (O::Or, M::TwoValue, _) => {
+                                imap!(sval, ival => @tv b.ins().bor(sval, ival))
+                            }
+                            (O::Or, M::FourValue, _) => imap!((sval, sspc), (ival, ispc) => @fv {
+                                clif_fv_or(b, sval, sspc, ival, ispc)
+                            }),
+                            (O::Xor, M::TwoValue, _) => {
+                                imap!(sval, ival => @tv b.ins().bxor(sval, ival))
+                            }
+                            (O::Xor, M::FourValue, _) => imap!((sval, sspc), (ival, ispc) => @fv {
+                                clif_fv_xor(b, sval, sspc, ival, ispc)
+                            }),
+
+                            (O::Add, M::TwoValue, _) => imap!(sval, ival => @tv {
+                                let r = b.ins().iadd(sval, ival);
+                                maskv(b, r, dst_size.get())
+                            }),
+                            (O::Add, M::FourValue, _) => imap!((sval, sspc), (ival, ispc) => @fv {
+                                let raw = b.ins().iadd(sval, ival);
+                                clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
+                            }),
+                            // Sub: Operand - Imm.
+                            (O::Sub, M::TwoValue, _) => imap!(sval, ival => @tv {
+                                let r = b.ins().isub(sval, ival);
+                                maskv(b, r, dst_size.get())
+                            }),
+                            (O::Sub, M::FourValue, _) => imap!((sval, sspc), (ival, ispc) => @fv {
+                                let raw = b.ins().isub(sval, ival);
+                                clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
+                            }),
+                            // RevSub: Imm - Operand.
+                            (O::RevSub, M::TwoValue, _) => imap!(sval, ival => @tv {
+                                let r = b.ins().isub(ival, sval);
+                                maskv(b, r, dst_size.get())
+                            }),
+                            (O::RevSub, M::FourValue, _) => {
+                                imap!((sval, sspc), (ival, ispc) => @fv {
+                                    let raw = b.ins().isub(ival, sval);
+                                    clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
+                                })
+                            }
+                            (O::Multiply, M::TwoValue, _) => imap!(sval, ival => @tv {
+                                let r = b.ins().imul(sval, ival);
+                                maskv(b, r, dst_size.get())
+                            }),
+                            (O::Multiply, M::FourValue, _) => {
+                                imap!((sval, sspc), (ival, ispc) => @fv {
+                                    let raw = b.ins().imul(sval, ival);
+                                    clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
+                                })
+                            }
+                            // Divide/Modulus: Operand / Imm, div-by-zero yields 0.
+                            (O::Divide, M::TwoValue, _) => {
+                                imap!(sval, ival => @tv clif_tv_div0(b, sval, ival))
+                            }
+                            (O::Modulus, M::TwoValue, _) => {
+                                imap!(sval, ival => @tv clif_tv_mod0(b, sval, ival))
+                            }
+                            (O::Divide, M::FourValue, _) => {
+                                imap!((sval, sspc), (ival, ispc) => @fv {
+                                    let raw = clif_tv_div0(b, sval, ival);
+                                    clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
+                                })
+                            }
+                            (O::Modulus, M::FourValue, _) => {
+                                imap!((sval, sspc), (ival, ispc) => @fv {
+                                    let raw = clif_tv_mod0(b, sval, ival);
+                                    clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
+                                })
+                            }
+                            // RevDivide0/RevModulus0: Imm / Operand, div-by-zero yields 0.
+                            (O::RevDivide0, M::TwoValue, _) => {
+                                imap!(sval, ival => @tv clif_tv_div0(b, ival, sval))
+                            }
+                            (O::RevModulus0, M::TwoValue, _) => {
+                                imap!(sval, ival => @tv clif_tv_mod0(b, ival, sval))
+                            }
+                            (O::RevDivide0, M::FourValue, _) => {
+                                imap!((sval, sspc), (ival, ispc) => @fv {
+                                    let raw = clif_tv_div0(b, ival, sval);
+                                    clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
+                                })
+                            }
+                            (O::RevModulus0, M::FourValue, _) => {
+                                imap!((sval, sspc), (ival, ispc) => @fv {
+                                    let raw = clif_tv_mod0(b, ival, sval);
+                                    clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
+                                })
+                            }
+                            // RevDivideX/RevModulusX: Imm / Operand, div-by-zero yields x.
+                            // dst is always four-value; gate on a non-zero divisor (the
+                            // operand). Two-value operands are fully known.
+                            (O::RevDivideX, _, M::TwoValue) => imap!(sval, ival => @fv {
+                                let (raw, nz) = clif_tv_divx(b, ival, sval);
+                                clif_divx_gate(b, raw, nz, dst_size.get())
+                            }),
+                            (O::RevModulusX, _, M::TwoValue) => imap!(sval, ival => @fv {
+                                let (raw, nz) = clif_tv_modx(b, ival, sval);
+                                clif_divx_gate(b, raw, nz, dst_size.get())
+                            }),
+                            (O::RevDivideX, _, M::FourValue) => {
+                                imap!((sval, sspc), (ival, ispc) => @fv {
+                                    let (raw, nz) = clif_tv_divx(b, ival, sval);
+                                    clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), Some(nz))
+                                })
+                            }
+                            (O::RevModulusX, _, M::FourValue) => {
+                                imap!((sval, sspc), (ival, ispc) => @fv {
+                                    let (raw, nz) = clif_tv_modx(b, ival, sval);
+                                    clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), Some(nz))
+                                })
+                            }
+                            // UnsignedLessEqual: Operand <= Imm.
+                            (O::UnsignedLessEqual, M::TwoValue, _) => imap!(sval, ival => @tv {
+                                let c = b.ins().icmp(IntCC::UnsignedLessThanOrEqual, sval, ival);
+                                b.ins().uextend(I64, c)
+                            }),
+                            (O::UnsignedLessEqual, M::FourValue, _) => {
+                                imap!((sval, sspc), (ival, ispc) => @fv {
+                                    let c = b.ins().icmp(IntCC::UnsignedLessThanOrEqual, sval, ival);
+                                    let cmpv = b.ins().uextend(I64, c);
+                                    clif_fv_arith(b, cmpv, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
+                                })
+                            }
+                            // UnsignedGreaterEqual: Imm <= Operand, i.e. Operand >= Imm.
+                            (O::UnsignedGreaterEqual, M::TwoValue, _) => imap!(sval, ival => @tv {
+                                let c = b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, sval, ival);
+                                b.ins().uextend(I64, c)
+                            }),
+                            (O::UnsignedGreaterEqual, M::FourValue, _) => {
+                                imap!((sval, sspc), (ival, ispc) => @fv {
+                                    let c = b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, sval, ival);
+                                    let cmpv = b.ins().uextend(I64, c);
+                                    clif_fv_arith(b, cmpv, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
+                                })
+                            }
+                            (O::Min, M::TwoValue, _) => {
+                                imap!(sval, ival => @tv b.ins().umin(sval, ival))
+                            }
+                            (O::Min, M::FourValue, _) => imap!((sval, sspc), (ival, ispc) => @fv {
+                                let raw = b.ins().umin(sval, ival);
+                                clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
+                            }),
+                            (O::Max, M::TwoValue, _) => {
+                                imap!(sval, ival => @tv b.ins().umax(sval, ival))
+                            }
+                            (O::Max, M::FourValue, _) => imap!((sval, sspc), (ival, ispc) => @fv {
+                                let raw = b.ins().umax(sval, ival);
+                                clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
+                            }),
+
+                            // ConcatRight: { Operand, Imm } — operand high, imm low.
+                            (O::ConcatRight, M::TwoValue, _) => imap!(sval, ival => @tv {
+                                let hi = b.ins().ishl_imm_u(sval, imm_size.get() as i64);
+                                b.ins().bor(hi, ival)
+                            }),
+                            (O::ConcatRight, M::FourValue, _) => {
+                                imap!((sval, sspc), (ival, ispc) => @fv {
+                                    let vh = b.ins().ishl_imm_u(sval, imm_size.get() as i64);
+                                    let val = b.ins().bor(vh, ival);
+                                    let sh = b.ins().ishl_imm_u(sspc, imm_size.get() as i64);
+                                    let spc = b.ins().bor(sh, ispc);
+                                    (val, spc)
+                                })
+                            }
+                            // ConcatLeft: { Imm, Operand } — imm high, operand low.
+                            (O::ConcatLeft, M::TwoValue, _) => imap!(sval, ival => @tv {
+                                let hi = b.ins().ishl_imm_u(ival, src_size.get() as i64);
+                                b.ins().bor(hi, sval)
+                            }),
+                            (O::ConcatLeft, M::FourValue, _) => {
+                                imap!((sval, sspc), (ival, ispc) => @fv {
+                                    let vh = b.ins().ishl_imm_u(ival, src_size.get() as i64);
+                                    let val = b.ins().bor(vh, sval);
+                                    let sh = b.ins().ishl_imm_u(ispc, src_size.get() as i64);
+                                    let spc = b.ins().bor(sh, sspc);
+                                    (val, spc)
+                                })
+                            }
+
+                            // CaseEquality (===): whole-word compare of both planes;
+                            // the result is a fully-known single bit (dst is two-value).
+                            (O::CaseEquality, _, M::TwoValue) => imap!(sval, ival => @tv {
+                                let eq = b.ins().icmp(IntCC::Equal, sval, ival);
+                                b.ins().uextend(I64, eq)
+                            }),
+                            (O::CaseEquality, _, M::FourValue) => {
+                                imap!((sval, sspc), (ival, ispc) => @tv {
+                                    let vm = b.ins().icmp(IntCC::Equal, sval, ival);
+                                    let sm = b.ins().icmp(IntCC::Equal, sspc, ispc);
+                                    let eq = b.ins().band(vm, sm);
+                                    b.ins().uextend(I64, eq)
+                                })
+                            }
+                            // BitwiseCaseEquality (per-bit ===): bit = 1 iff operand and
+                            // immediate agree in BOTH planes. Same-width, fully-known,
+                            // two-value result.
+                            (O::BitwiseCaseEquality, _, M::TwoValue) => imap!(sval, ival => @tv {
+                                let vx = b.ins().bxor(sval, ival);
+                                let veq = b.ins().bnot(vx);
+                                maskv(b, veq, dst_size.get())
+                            }),
+                            (O::BitwiseCaseEquality, _, M::FourValue) => {
+                                imap!((sval, sspc), (ival, ispc) => @tv {
+                                    let vx = b.ins().bxor(sval, ival);
+                                    let veq = b.ins().bnot(vx);
+                                    let sx = b.ins().bxor(sspc, ispc);
+                                    let seq = b.ins().bnot(sx);
+                                    let both = b.ins().band(veq, seq);
+                                    maskv(b, both, dst_size.get())
+                                })
+                            }
+
+                            // Power/RevPower have no clean inline form: run the vogls-bits
+                            // shim (handles narrow and wide).
+                            (O::Power | O::RevPower, _, _) => self.compiler.emit_wide_binop_imm(
+                                b,
+                                params,
+                                self.compiler.gl,
+                                *op,
+                                *dst,
+                                *src,
+                                imm,
+                                vmap,
+                                spc_map,
+                                &self.wide_map,
+                            ),
+                        }
+                    }
+                    Instruction::Resize(dst, op, src) => {
+                        macro_rules! map {
+                            ($val:ident => @tv $blk:expr) => {{
+                                let $val = get(b, *src);
+                                let val = $blk;
+                                b.def_var(vmap[dst], val);
+                            }};
+                            ($val:ident, $spc:ident => @fv $blk:expr) => {{
+                                let $val = get(b, *src);
+                                let $spc = spc_get(b, *src);
+                                let (val, spc) = $blk;
+                                b.def_var(vmap[dst], val);
+                                b.def_var(spc_map[dst], spc);
+                            }};
+                        }
+
+                        let dst_size = self.compiler.gl.vars.size(*dst).get();
+                        let src_size = self.compiler.gl.vars.size(*src).get();
+
+                        use ResizeOp as R;
+                        match (op, dst.mode()) {
+                            (R::Truncate, LogicMode::TwoValue) => {
+                                map!(sv => @tv maskv(b, sv, dst_size))
+                            }
+                            (R::Truncate, LogicMode::FourValue) => map!(sv, ss => @fv {
+                                (maskv(b, sv, dst_size), maskv(b, ss, dst_size))
+                            }),
+                            // Zero-extend: the value's high bits are already zero; only
+                            // the four-value special plane needs the new bits marked known.
+                            (R::ZeroExtend, LogicMode::TwoValue) => map!(sv => @tv sv),
+                            (R::ZeroExtend, LogicMode::FourValue) => map!(sv, ss => @fv {
+                                let ext = mask_of(dst_size) & !mask_of(src_size);
+                                let spc = b.ins().bor_imm_u(ss, ext);
+                                (sv, spc)
+                            }),
+                            // Sign-extend: replicate the top source bit into the new bits.
+                            (R::SignExtend, LogicMode::TwoValue) => {
+                                map!(sv => @tv sign_extend(b, sv, src_size, dst_size))
+                            }
+                            (R::SignExtend, LogicMode::FourValue) => map!(sv, ss => @fv {
+                                let val = sign_extend(b, sv, src_size, dst_size);
+                                let spc = sign_extend(b, ss, src_size, dst_size);
+                                (val, spc)
+                            }),
+                        }
+                    }
+                    Instruction::ShiftImm(dst, op, src, amount) => {
+                        macro_rules! map {
+                            ($val:ident => @tv $blk:expr) => {{
+                                let $val = get(b, *src);
+                                let val = $blk;
+                                b.def_var(vmap[dst], val);
+                            }};
+                            ($val:ident, $spc:ident => @fv $blk:expr) => {{
+                                let $val = get(b, *src);
+                                let $spc = spc_get(b, *src);
+                                let (val, spc) = $blk;
+                                b.def_var(vmap[dst], val);
+                                b.def_var(spc_map[dst], spc);
+                            }};
+                        }
+
+                        // Shifts preserve width, so dst_size == src_size. The amount is a
+                        // compile-time constant: all width comparisons fold away.
+                        let size = self.compiler.gl.vars.size(*dst).get();
+                        let amount = *amount;
+
+                        use ShiftImmOp as S;
+                        match (op, dst.mode()) {
+                            (S::LogicalShiftLeft, LogicMode::TwoValue) => map!(sv => @tv {
+                                if amount >= 64 {
+                                    b.ins().iconst(I64, 0)
+                                } else {
+                                    let sh = b.ins().ishl_imm_u(sv, amount as i64);
+                                    maskv(b, sh, size)
+                                }
+                            }),
+                            (S::LogicalShiftRight, LogicMode::TwoValue) => map!(sv => @tv {
+                                if amount >= 64 {
+                                    b.ins().iconst(I64, 0)
+                                } else {
+                                    b.ins().ushr_imm_u(sv, amount as i64)
+                                }
+                            }),
+                            (S::ArithmeticShiftRight, LogicMode::TwoValue) => map!(sv => @tv {
+                                let sh = sign_shift_right(b, sv, amount, size);
+                                maskv(b, sh, size)
+                            }),
+                            (S::LogicalShiftLeft, LogicMode::FourValue) => map!(sv, ss => @fv {
+                                if amount >= size {
+                                    // Everything shifted out: all known zeros.
+                                    let z = b.ins().iconst(I64, 0);
+                                    let m = b.ins().iconst(I64, mask_of(size));
+                                    (z, m)
+                                } else {
+                                    let shv = b.ins().ishl_imm_u(sv, amount as i64);
+                                    let val = maskv(b, shv, size);
+                                    // Shifted-in low bits are known zeros.
+                                    let shs = b.ins().ishl_imm_u(ss, amount as i64);
+                                    let low = ((1u64 << amount) - 1) as i64;
+                                    let s0 = b.ins().bor_imm_u(shs, low);
+                                    let spc = maskv(b, s0, size);
+                                    (val, spc)
+                                }
+                            }),
+                            (S::LogicalShiftRight, LogicMode::FourValue) => map!(sv, ss => @fv {
+                                if amount >= size {
+                                    let z = b.ins().iconst(I64, 0);
+                                    let m = b.ins().iconst(I64, mask_of(size));
+                                    (z, m)
+                                } else {
+                                    let val = b.ins().ushr_imm_u(sv, amount as i64);
+                                    // Shifted-in high bits are known zeros.
+                                    let shs = b.ins().ushr_imm_u(ss, amount as i64);
+                                    let high = (((1u64 << amount) - 1) << (size - amount)) as i64;
+                                    let s0 = b.ins().bor_imm_u(shs, high);
+                                    let spc = maskv(b, s0, size);
+                                    (val, spc)
+                                }
+                            }),
+                            (S::ArithmeticShiftRight, LogicMode::FourValue) => map!(sv, ss => @fv {
+                                // Arithmetic shift both planes (the special plane's sign
+                                // bit replicates, matching fv_shift_arith_right).
+                                let vsh = sign_shift_right(b, sv, amount, size);
+                                let val = maskv(b, vsh, size);
+                                let ssh = sign_shift_right(b, ss, amount, size);
+                                let spc = maskv(b, ssh, size);
+                                (val, spc)
+                            }),
+                        }
+                    }
+                    Instruction::Select(dst, cond, t, f) => {
+                        // Condition is truthy only when it is a known 1; a four-value
+                        // cond folds x/z to 0 via `cs & cv`.
+                        let c = match cond.mode() {
+                            LogicMode::TwoValue => get(b, *cond),
+                            LogicMode::FourValue => {
+                                let cv = get(b, *cond);
+                                let cs = spc_get(b, *cond);
+                                b.ins().band(cs, cv)
+                            }
+                        };
+                        let tv = get(b, *t);
+                        let fv = get(b, *f);
+                        let val = b.ins().select(c, tv, fv);
+                        b.def_var(vmap[dst], val);
+                        if dst.mode().is_four_value() {
+                            let ts = spc_get(b, *t);
+                            let fs = spc_get(b, *f);
+                            let spc = b.ins().select(c, ts, fs);
+                            b.def_var(spc_map[dst], spc);
+                        }
+                    }
+                    Instruction::LastUpdateTime(dst, signal) => {
+                        let rt = self.compiler.info.rt_signal_map[signal];
+                        let idx = self
+                            .compiler
+                            .info
+                            .lupdt_indexes
+                            .get(&rt)
+                            .copied()
+                            .unwrap_or(0);
+                        let lat = params.last_active_time;
+                        let t = b.ins().load(I64, mem(), lat, (idx * 8) as i32);
+                        b.def_var(vmap[dst], t);
+                    }
+                    Instruction::Intrinsic(dst, op, items) => {
+                        let dst_size = self.compiler.gl.vars.size(*dst);
+                        match op.as_ref() {
+                            IntrinsicOp::Time => {
+                                let t = params.time;
+                                b.def_var(vmap[dst], t);
+                            }
+                            IntrinsicOp::Finish => {
+                                let one = b.ins().iconst(I32, 1);
+                                b.ins().return_(&[one]);
+                                // Subsequent (dead) instructions land in a fresh block.
+                                let dead = b.create_block();
+                                b.switch_to_block(dead);
+                            }
+                            IntrinsicOp::Display(fmt) => {
+                                let idx = self.compiler.intern_fmt(fmt);
+                                self.compiler.emit_fmt_call(
+                                    b,
+                                    params,
+                                    vmap,
+                                    spc_map,
+                                    &self.wide_map,
+                                    items,
+                                    idx,
+                                );
+                                let z = b.ins().iconst(I64, 0);
+                                b.def_var(vmap[dst], z);
+                            }
+                            IntrinsicOp::Assert(fmt) => {
+                                // Assert condition truthiness: two-value nonzero, or the
+                                // known-1 pattern (spc & val) for four-value; a wide operand
+                                // is or-reduced word by word.
+                                let cond = if self.compiler.gl.vars.size(items[0]).get() > 64 {
+                                    let n = nwords(self.compiler.gl.vars.size(items[0]).get());
+                                    let fv = items[0].mode() == LogicMode::FourValue;
+                                    let mut acc = b.ins().iconst(I64, 0);
+                                    for i in 0..n {
+                                        let voff = if fv { n + i } else { i };
+                                        let vw = wide_load(
+                                            b,
+                                            self.compiler.ptr,
+                                            params.heap_ptr,
+                                            self.wide_map[&items[0]],
+                                            voff,
+                                        );
+                                        let known = if fv {
+                                            let sw = wide_load(
+                                                b,
+                                                self.compiler.ptr,
+                                                params.heap_ptr,
+                                                self.wide_map[&items[0]],
+                                                i,
+                                            );
+                                            b.ins().band(sw, vw)
+                                        } else {
+                                            vw
+                                        };
+                                        acc = b.ins().bor(acc, known);
+                                    }
+                                    acc
+                                } else if items[0].mode() == LogicMode::FourValue {
+                                    let cv = b.use_var(vmap[&items[0]]);
+                                    let cs = b.use_var(spc_map[&items[0]]);
+                                    b.ins().band(cs, cv)
+                                } else {
+                                    b.use_var(vmap[&items[0]])
+                                };
+                                let fail = b.create_block();
+                                let cont = b.create_block();
+                                b.ins().brif(cond, cont, &[], fail, &[]);
+                                b.switch_to_block(fail);
+                                let idx = self.compiler.intern_fmt(fmt);
+                                self.compiler.emit_fmt_call(
+                                    b,
+                                    params,
+                                    vmap,
+                                    spc_map,
+                                    &self.wide_map,
+                                    &items[1..],
+                                    idx,
+                                );
+                                let two = b.ins().iconst(I32, 2);
+                                b.ins().return_(&[two]);
+                                b.switch_to_block(cont);
+                                let z = b.ins().iconst(I64, 0);
+                                b.def_var(vmap[dst], z);
+                            }
+                            IntrinsicOp::Random(kind) => {
+                                use vogls_ir::RandomKind as RK;
+                                let off = match kind {
+                                    RK::Uniform => layout::FN_RTL_UNIFORM,
+                                    RK::Normal => layout::FN_RTL_NORMAL,
+                                    RK::Exponential => layout::FN_RTL_EXPONENTIAL,
+                                    RK::Poisson => layout::FN_RTL_POISSON,
+                                    RK::ChiSquare => layout::FN_RTL_CHI_SQUARE,
+                                    RK::T => layout::FN_RTL_T,
+                                    RK::Erlang => layout::FN_RTL_ERLANG,
+                                };
+                                let cldctx = params.cldctx;
+                                let fn_ptr = b.ins().load(
+                                    self.compiler.ptr,
+                                    mem(),
+                                    cldctx,
+                                    (layout::CTX_FN_TABLE + off) as i32,
+                                );
+                                let stderr = b.ins().load(
+                                    self.compiler.ptr,
+                                    mem(),
+                                    cldctx,
+                                    layout::CTX_STDERR as i32,
+                                );
+                                // seed + distribution params, each passed as i32, then the io ptr.
+                                let mut args = Vec::new();
+                                let mut sig = Signature::new(CallConv::SystemV);
+                                for item in items.iter() {
+                                    let v = get(b, *item);
+                                    let v32 = b.ins().ireduce(I32, v);
+                                    args.push(v32);
+                                    sig.params.push(AbiParam::new(I32));
+                                }
+                                args.push(stderr);
+                                sig.params.push(AbiParam::new(self.compiler.ptr));
+                                sig.returns.push(AbiParam::new(I64));
+                                let sr = b.import_signature(sig);
+                                let call = b.ins().call_indirect(sr, fn_ptr, &args);
+                                let r = b.inst_results(call)[0];
+                                b.def_var(vmap[dst], r);
+                                // The shim returns a fully-known packed result; for a
+                                // four-value dst mark the whole value known (else spc stays
+                                // 0 => the draw reads back as all-x).
+                                if dst.mode().is_four_value() {
+                                    let known = b.ins().iconst(I64, mask_of(dst_size.get()));
+                                    b.def_var(spc_map[dst], known);
+                                }
+                            }
+                            IntrinsicOp::ReadMem(rm) => {
+                                let (href, _rt, mode) = self.compiler.info.heap_ref(rm.signal);
+                                let idx = self.compiler.read_mems.len();
+                                self.compiler.read_mems.push((href, (**rm).clone()));
+                                let cldctx = params.cldctx;
+                                let heap = params.heap_ptr;
+                                let heap_len =
+                                    b.ins()
+                                        .load(I64, mem(), cldctx, layout::CTX_HEAP_LEN as i32);
+                                let mode_c = b
+                                    .ins()
+                                    .iconst(types::I8, i64::from(mode == LogicMode::FourValue));
+                                let base = b.ins().load(
+                                    self.compiler.ptr,
+                                    mem(),
+                                    cldctx,
+                                    layout::CTX_READMEMS as i32,
+                                );
+                                let entry = b
+                                    .ins()
+                                    .iadd_imm_u(base, (idx * layout::READMEM_ENTRY_SIZE) as i64);
+                                let readmem_ptr = b.ins().load(
+                                    self.compiler.ptr,
+                                    mem(),
+                                    cldctx,
+                                    layout::CTX_READMEM as i32,
+                                );
+                                let mut sig = Signature::new(CallConv::SystemV);
+                                sig.params.extend(
+                                    [self.compiler.ptr, I64, types::I8, self.compiler.ptr]
+                                        .map(AbiParam::new),
+                                );
+                                let sr = b.import_signature(sig);
+                                b.ins().call_indirect(
+                                    sr,
+                                    readmem_ptr,
+                                    &[heap, heap_len, mode_c, entry],
+                                );
+                                let z = b.ins().iconst(I64, 0);
+                                b.def_var(vmap[dst], z);
+                            }
+                            IntrinsicOp::BlackBox => {
+                                let v = get(b, items[0]);
+                                b.def_var(vmap[dst], v);
+                                if dst.mode().is_four_value() {
+                                    let s = spc_get(b, items[0]);
+                                    b.def_var(spc_map[dst], s);
+                                }
+                            }
+                            // VCD dump intrinsics ($dumpfile/$dumpvars/$dumpoff/$dumpon) are
+                            // a bytecode-only feature; the compiled backends (this one and
+                            // the C transpiler) do not emit VCD. Fail cleanly at compile
+                            // time rather than executing a machine trap.
+                            IntrinsicOp::VcdOpenFile(_)
+                            | IntrinsicOp::VcdAppendModule(_)
+                            | IntrinsicOp::VcdPause
+                            | IntrinsicOp::VcdResume => {
+                                panic!("cranelift backend: VCD dump intrinsics are not supported")
                             }
                         }
                     }
@@ -1089,4 +1706,171 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
         self.b.seal_all_blocks();
         self.b.finalize(self.compiler.fe);
     }
+}
+
+/// Four-value bitwise AND of two operands given as `(val, spc)` planes,
+/// returning the result `(val, spc)`. Shared by the `Binary` and `BinaryImm`
+/// lowerings.
+fn clif_fv_and(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    let a = b.ins().band(lspc, lval);
+    let c = b.ins().band(rspc, rval);
+    let val = b.ins().band(a, c);
+    let nlv = b.ins().bnot(lval);
+    let t1 = b.ins().band(lspc, nlv);
+    let nrv = b.ins().bnot(rval);
+    let t2 = b.ins().band(rspc, nrv);
+    let t3 = b.ins().bor(t1, t2);
+    let spc = b.ins().bor(t3, val);
+    (val, spc)
+}
+
+/// Four-value bitwise OR of two operands given as `(val, spc)` planes.
+/// Shared by the `Binary` and `BinaryImm` lowerings.
+fn clif_fv_or(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    let a = b.ins().band(lspc, lval);
+    let c = b.ins().band(rspc, rval);
+    let val = b.ins().bor(a, c);
+    let lsrs = b.ins().band(lspc, rspc);
+    let spc = b.ins().bor(val, lsrs);
+    (val, spc)
+}
+
+/// Four-value bitwise XOR of two operands given as `(val, spc)` planes.
+/// Shared by the `Binary` and `BinaryImm` lowerings.
+fn clif_fv_xor(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    let spc = b.ins().band(lspc, rspc);
+    let xv = b.ins().bxor(lval, rval);
+    let val = b.ins().band(spc, xv);
+    (val, spc)
+}
+
+/// Sign-extend `s` from `ssize` bits to `dsize` bits (replicating bit
+/// `ssize-1`), masked to `dsize`. Shared by the two- and four-value `Resize`
+/// sign-extend lowerings.
+fn sign_extend(b: &mut FunctionBuilder, s: Value, ssize: u32, dsize: u32) -> Value {
+    if ssize >= 64 {
+        s
+    } else {
+        let sh = (64 - ssize) as i64;
+        let up = b.ins().ishl_imm_u(s, sh);
+        let sext = b.ins().sshr_imm_u(up, sh);
+        maskv(b, sext, dsize)
+    }
+}
+
+/// Arithmetic shift right of a `size`-wide value by a compile-time constant
+/// `amount`: sign-extend bit `size-1` up to i64, arithmetic-shift by `amount`
+/// (clamped to 63 so a shift >= width fills with the sign bit), then re-mask is
+/// left to the caller. Shared by the two- and four-value `ShiftImm` lowerings.
+fn sign_shift_right(b: &mut FunctionBuilder, s: Value, amount: u32, size: u32) -> Value {
+    let shb = (64 - size) as i64;
+    let up = b.ins().ishl_imm_u(s, shb);
+    let se = b.ins().sshr_imm_u(up, shb);
+    let amt = amount.min(63) as i64;
+    b.ins().sshr_imm_u(se, amt)
+}
+
+/// Two-value unsigned divide with div-by-zero yielding 0 (substitute a divisor
+/// of 1 to avoid a hardware trap, then force the result to 0). Shared by the
+/// `Binary` and `BinaryImm` lowerings.
+fn clif_tv_div0(b: &mut FunctionBuilder, l: Value, r: Value) -> Value {
+    let is_zero = b.ins().icmp_imm_u(IntCC::Equal, r, 0);
+    let one = b.ins().iconst(I64, 1);
+    let safe = b.ins().select(is_zero, one, r);
+    let q = b.ins().udiv(l, safe);
+    let zero = b.ins().iconst(I64, 0);
+    b.ins().select(is_zero, zero, q)
+}
+
+/// Two-value unsigned remainder with mod-by-zero yielding 0. See [`clif_tv_div0`].
+fn clif_tv_mod0(b: &mut FunctionBuilder, l: Value, r: Value) -> Value {
+    let is_zero = b.ins().icmp_imm_u(IntCC::Equal, r, 0);
+    let one = b.ins().iconst(I64, 1);
+    let safe = b.ins().select(is_zero, one, r);
+    let q = b.ins().urem(l, safe);
+    let zero = b.ins().iconst(I64, 0);
+    b.ins().select(is_zero, zero, q)
+}
+
+/// Two-value unsigned divide for the x-on-div-by-zero variants. Substitutes a
+/// divisor of 1 to avoid a hardware trap and returns `(quotient, nz)` where `nz`
+/// is the non-zero-divisor flag; the caller injects x when `nz` is false (a
+/// four-value dst). Shared by the `Binary` and `BinaryImm` lowerings.
+fn clif_tv_divx(b: &mut FunctionBuilder, l: Value, r: Value) -> (Value, Value) {
+    let nz = b.ins().icmp_imm_u(IntCC::NotEqual, r, 0);
+    let one = b.ins().iconst(I64, 1);
+    let safe = b.ins().select(nz, r, one);
+    let q = b.ins().udiv(l, safe);
+    (q, nz)
+}
+
+/// Two-value unsigned remainder for the x-on-mod-by-zero variants. See
+/// [`clif_tv_divx`].
+fn clif_tv_modx(b: &mut FunctionBuilder, l: Value, r: Value) -> (Value, Value) {
+    let nz = b.ins().icmp_imm_u(IntCC::NotEqual, r, 0);
+    let one = b.ins().iconst(I64, 1);
+    let safe = b.ins().select(nz, r, one);
+    let q = b.ins().urem(l, safe);
+    (q, nz)
+}
+
+/// Gate an x-on-div-by-zero result (`raw`, `nz` from [`clif_tv_divx`]/
+/// [`clif_tv_modx`]) for a four-value dst with fully-known operands: the result
+/// is `raw` masked to `dsize` when the divisor is non-zero, else all-x. Shared
+/// by the two-value-operand `Binary` and `BinaryImm` x-division lowerings.
+fn clif_divx_gate(b: &mut FunctionBuilder, raw: Value, nz: Value, dsize: u32) -> (Value, Value) {
+    let rawm = maskv(b, raw, dsize);
+    let zero = b.ins().iconst(I64, 0);
+    let mfull = b.ins().iconst(I64, mask_of(dsize));
+    let val = b.ins().select(nz, rawm, zero);
+    let spc = b.ins().select(nz, mfull, zero);
+    (val, spc)
+}
+
+/// Gate a four-value arithmetic result on both operands being fully known:
+/// if either operand has an x/z bit (or the optional `extra_known` flag is
+/// false) the whole result is x, else it is `raw` masked to `dsize` with a
+/// full special plane. Shared by the `Binary` and `BinaryImm` lowerings.
+#[expect(clippy::too_many_arguments)]
+fn clif_fv_arith(
+    b: &mut FunctionBuilder,
+    raw: Value,
+    lspc: Value,
+    lsize: u32,
+    rspc: Value,
+    rsize: u32,
+    dsize: u32,
+    extra_known: Option<Value>,
+) -> (Value, Value) {
+    let a = b.ins().icmp_imm_u(IntCC::Equal, lspc, mask_of(lsize));
+    let c = b.ins().icmp_imm_u(IntCC::Equal, rspc, mask_of(rsize));
+    let bk = b.ins().band(a, c);
+    let gate = match extra_known {
+        Some(x) => b.ins().band(bk, x),
+        None => bk,
+    };
+    let rawm = maskv(b, raw, dsize);
+    let zero = b.ins().iconst(I64, 0);
+    let mfull = b.ins().iconst(I64, mask_of(dsize));
+    let val = b.ins().select(gate, rawm, zero);
+    let spc = b.ins().select(gate, mfull, zero);
+    (val, spc)
 }
