@@ -8,7 +8,9 @@ use cranelift_codegen::ir::{
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{FuncId, Module};
 use vogls_codegen::SixBitSize;
-use vogls_ir::{BasicBlockKey, BasicBlockTerminator, Instruction, LogicMode, UnaryOp, VariableKey};
+use vogls_ir::{
+    BasicBlockKey, BasicBlockTerminator, BinaryOp, Instruction, LogicMode, UnaryOp, VariableKey,
+};
 use vogls_utils::VgHashMap;
 
 use crate::ffi::FfiVec;
@@ -148,7 +150,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
 
                 let b = &mut self.b;
                 let params = &mut self.params;
-                let blocks = &mut self.blocks;
                 let vmap = &mut self.vmap;
                 let spc_map = &mut self.spc_map;
 
@@ -427,6 +428,198 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }
                             (O::RealATanH, _, _) => {
                                 map!(val => @tv self.compiler.real_shim(b, params, rc::ATANH, val, val))
+                            }
+                        }
+                    }
+                    Instruction::Binary(dst, op, lhs, rhs) => {
+                        let dst_size = self.compiler.gl.vars.size(*dst);
+                        let lhs_size = self.compiler.gl.vars.size(*lhs);
+                        let rhs_size = self.compiler.gl.vars.size(*rhs);
+
+                        macro_rules! map {
+                            ($lval:ident, $rval:ident => @tv $blk:expr) => {{
+                                let $lval = get(b, *lhs);
+                                let $rval = get(b, *rhs);
+                                let val = $blk;
+                                b.def_var(vmap[dst], val);
+                            }};
+                            (($lval:ident, $lspc:ident), ($rval:ident, $rspc:ident) => @tv $blk:expr) => {{
+                                let $lval = get(b, *lhs);
+                                let $rval = get(b, *rhs);
+                                let $lspc = spc_get(b, *lhs);
+                                let $rspc = spc_get(b, *rhs);
+                                let val = $blk;
+                                b.def_var(vmap[dst], val);
+                            }};
+                            (($lval:ident, $lspc:ident), ($rval:ident, $rspc:ident) => @fv $blk:expr) => {{
+                                let $lval = get(b, *lhs);
+                                let $rval = get(b, *rhs);
+                                let $lspc = spc_get(b, *lhs);
+                                let $rspc = spc_get(b, *rhs);
+                                let (val, spc) = $blk;
+                                b.def_var(vmap[dst], val);
+                                b.def_var(spc_map[dst], spc);
+                            }};
+                        }
+                        macro_rules! bin_arith {
+                            ($lhs:ident, $rhs:ident => $blk:expr, $mask:literal) => {{
+                                let $lhs = get(b, *lhs);
+                                let $rhs = get(b, *rhs);
+
+                                let mut result = $blk;
+                                if $mask {
+                                    result = maskv(b, result, dst_size.get());
+                                }
+
+                                match lhs.mode() {
+                                    LogicMode::TwoValue => b.def_var(vmap[dst], result),
+                                    LogicMode::FourValue => {
+                                        let lspc = spc_get(b, *lhs);
+                                        let rspc = spc_get(b, *rhs);
+
+                                        let a = b.ins().icmp_imm_u(
+                                            IntCC::Equal,
+                                            lspc,
+                                            mask_of(lhs_size.get()),
+                                        );
+                                        let c = b.ins().icmp_imm_u(
+                                            IntCC::Equal,
+                                            rspc,
+                                            mask_of(rhs_size.get()),
+                                        );
+                                        let both_known = b.ins().band(a, c);
+                                        let zero = b.ins().iconst(I64, 0);
+                                        let mfull = b.ins().iconst(I64, mask_of(dst_size.get()));
+                                        let val = b.ins().select(both_known, result, zero);
+                                        let spc = b.ins().select(both_known, mfull, zero);
+                                        b.def_var(vmap[dst], val);
+                                        b.def_var(spc_map[dst], spc);
+                                    }
+                                }
+                            }};
+                        }
+
+                        let native =
+                            |b: &mut FunctionBuilder, x: Value| b.ins().bitcast(I64, cast(), x);
+
+                        use BinaryOp as O;
+                        use LogicMode as M;
+                        match (op, dst.mode(), lhs.mode()) {
+                            (O::And, M::TwoValue, _) => {
+                                map!(lhs, rhs => @tv b.ins().band(lhs, rhs))
+                            }
+                            (O::Or, M::TwoValue, _) => map!(lhs, rhs => @tv b.ins().bor(lhs, rhs)),
+                            (O::Xor, M::TwoValue, _) => {
+                                map!(lhs, rhs => @tv b.ins().bxor(lhs, rhs))
+                            }
+                            (O::AndNot, M::TwoValue, _) => {
+                                map!(lhs, rhs => @tv {
+                                    let and_not = b.ins().band_not(lhs, rhs);
+                                    maskv(b, and_not, dst_size.get())
+                                })
+                            }
+                            (O::OrNot, M::TwoValue, _) => map!(lhs, rhs => @tv {
+                                let or_not = b.ins().bor_not(lhs, rhs);
+                                maskv(b, or_not, dst_size.get())
+                            }),
+                            (O::Xnor, M::TwoValue, _) => {
+                                map!(lhs, rhs => @tv {
+                                    let xnor = b.ins().bxor_not(lhs, rhs);
+                                    maskv(b, xnor, dst_size.get())
+                                })
+                            }
+
+                            (O::And, M::FourValue, _) => map!((lval, lspc), (rval, rspc) => @fv {
+                                let a = b.ins().band(lspc, lval);
+                                let c = b.ins().band(rspc, rval);
+                                let val = b.ins().band(a, c);
+                                let nlv = b.ins().bnot(lval);
+                                let t1 = b.ins().band(lspc, nlv);
+                                let nrv = b.ins().bnot(rval);
+                                let t2 = b.ins().band(rspc, nrv);
+                                let t3 = b.ins().bor(t1, t2);
+                                let spc = b.ins().bor(t3, val);
+                                (val, spc)
+                            }),
+
+                            (O::Or, M::FourValue, _) => map!((lval, lspc), (rval, rspc) => @fv {
+                                let a = b.ins().band(lspc, lval);
+                                let c = b.ins().band(rspc, rval);
+                                let val = b.ins().bor(a, c);
+                                let lsrs = b.ins().band(lspc, rspc);
+                                let spc = b.ins().bor(val, lsrs);
+                                (val, spc)
+                            }),
+                            (O::Xor, M::FourValue, _) => map!((lval, lspc), (rval, rspc) => @fv {
+                                let spc = b.ins().band(lspc, rspc);
+                                let xv = b.ins().bxor(lval, rval);
+                                let val = b.ins().band(spc, xv);
+                                (val, spc)
+                            }),
+
+                            (O::Add, _, _) => bin_arith!(lhs, rhs => b.ins().iadd(lhs, rhs), true),
+                            (O::Sub, _, _) => bin_arith!(lhs, rhs => b.ins().isub(lhs, rhs), true),
+                            (O::Multiply, _, _) => {
+                                bin_arith!(lhs, rhs => b.ins().imul(lhs, rhs), true)
+                            }
+                            (O::Min, _, _) => bin_arith!(lhs, rhs => b.ins().umin(lhs, rhs), false),
+                            (O::Max, _, _) => bin_arith!(lhs, rhs => b.ins().umax(lhs, rhs), false),
+
+                            (O::Negedge, _, M::TwoValue) => {
+                                map!(lhs, rhs => @tv {
+                                    let and_not = b.ins().band_not(lhs, rhs);
+                                    maskv(b, and_not, dst_size.get())
+                                })
+                            }
+                            (O::Negedge, _, M::FourValue) => {
+                                map!((lval, lspc), (rval, rspc) => @tv {
+                                    // Negedge: (xspc & xval & (!yspc | !yval)) | (!xspc & yspc & !yval)
+                                    let nxspc = b.ins().bnot(lspc);
+                                    let nyspc = b.ins().bnot(rspc);
+                                    let nyval = b.ins().bnot(rval);
+                                    let t0 = b.ins().band(lspc, lval);
+                                    let t1 = b.ins().bor(nyspc, nyval);
+                                    let a = b.ins().band(t0, t1);
+                                    let t2 = b.ins().band(nxspc, rspc);
+                                    let c = b.ins().band(t2, nyval);
+                                    b.ins().bor(a, c)
+                                })
+                            }
+                            // (O::Power, _, _) => todo!(),
+                            // (O::DivideX, _, _) => todo!(),
+                            // (O::Divide0, _, _) => todo!(),
+                            // (O::ModulusX, _, _) => todo!(),
+                            // (O::Modulus0, _, _) => todo!(),
+                            // (O::UnsignedLessEqual, _, _) => todo!(),
+                            // (O::LogicalShiftLeft, _, _) => todo!(),
+                            // (O::LogicalShiftRight, _, _) => todo!(),
+                            // (O::ArithmeticShiftRight, _, _) => todo!(),
+                            // (O::Concat, _, _) => todo!(),
+                            // (O::CopyX, _, _) => todo!(),
+                            // (O::CopyZ, _, _) => todo!(),
+                            // (O::CaseEquality, _, _) => todo!(),
+                            // (O::RealAdd, _, _) => todo!(),
+                            // (O::RealSub, _, _) => todo!(),
+                            // (O::RealMul, _, _) => todo!(),
+                            // (O::RealDiv, _, _) => todo!(),
+                            // (O::RealPow, _, _) => todo!(),
+                            // (O::RealEq, _, _) => todo!(),
+                            // (O::RealNe, _, _) => todo!(),
+                            // (O::RealLt, _, _) => todo!(),
+                            // (O::RealLeq, _, _) => todo!(),
+                            // (O::RealGt, _, _) => todo!(),
+                            // (O::RealGeq, _, _) => todo!(),
+                            // (O::RealATan2, _, _) => todo!(),
+                            // (O::RealHypot, _, _) => todo!(),
+                            _ => {
+                                self.compiler.lower_instruction(
+                                    &mut self.b,
+                                    &self.params,
+                                    &self.vmap,
+                                    &self.spc_map,
+                                    &self.wide_map,
+                                    instr,
+                                );
                             }
                         }
                     }

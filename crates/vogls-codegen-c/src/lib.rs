@@ -664,9 +664,6 @@ pub fn lower_process(
                             O::CaseEquality => {
                                 binary::cgc_case_eq(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
                             }
-                            O::Posedge => {
-                                binary::cgc_posedge(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
-                            }
                             O::Negedge => {
                                 binary::cgc_negedge(&mut buffer, dst_t.ident, lhs_t, rhs_t)?
                             }

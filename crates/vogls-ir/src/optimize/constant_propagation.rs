@@ -341,8 +341,6 @@ fn constant_propagate_instruction(
                     additional.push(BI(dst, IO::CaseEquality, lhs, b.clone()))
                 }
 
-                (O::Posedge, Some(_), _) => {}
-                (O::Posedge, _, Some(_)) => {}
                 (O::Negedge, Some(_), _) => {}
                 (O::Negedge, _, Some(_)) => {}
 

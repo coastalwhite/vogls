@@ -704,7 +704,6 @@ fn parse_instr<'a>(
         "min" => parse_binary(c, symbols, gl, dst, B::Min)?,
         "max" => parse_binary(c, symbols, gl, dst, B::Max)?,
         "ceq" => parse_binary(c, symbols, gl, dst, B::CaseEquality)?,
-        "posedge" => parse_binary(c, symbols, gl, dst, B::Posedge)?,
         "negedge" => parse_binary(c, symbols, gl, dst, B::Negedge)?,
 
         // BinaryImm

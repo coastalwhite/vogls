@@ -775,9 +775,7 @@ impl<'a> Compiler<'a> {
             // Edge detect with four-value operands: posedge/negedge yield a
             // two-value 1-bit flag, but a transition into/out of x/z is a real
             // edge, so the spc words matter. Mirrors vogls_bits::edge.
-            Instruction::Binary(dst, op @ (BinaryOp::Posedge | BinaryOp::Negedge), s1, s2)
-                if is_fv(*s1) =>
-            {
+            Instruction::Binary(dst, op @ BinaryOp::Negedge, s1, s2) if is_fv(*s1) => {
                 let xval = get(b, *s1);
                 let xspc = gets(b, *s1);
                 let yval = get(b, *s2);
@@ -785,16 +783,6 @@ impl<'a> Compiler<'a> {
                 let nxspc = b.ins().bnot(xspc);
                 let nyspc = b.ins().bnot(yspc);
                 let r = match op {
-                    BinaryOp::Posedge => {
-                        // (xspc & !xval & (!yspc | yval)) | (!xspc & yspc & yval)
-                        let nxval = b.ins().bnot(xval);
-                        let t0 = b.ins().band(xspc, nxval);
-                        let t1 = b.ins().bor(nyspc, yval);
-                        let a = b.ins().band(t0, t1);
-                        let t2 = b.ins().band(nxspc, yspc);
-                        let c = b.ins().band(t2, yval);
-                        b.ins().bor(a, c)
-                    }
                     _ => {
                         // Negedge: (xspc & xval & (!yspc | !yval)) | (!xspc & yspc & !yval)
                         let nyval = b.ins().bnot(yval);

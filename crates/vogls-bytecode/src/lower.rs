@@ -986,8 +986,6 @@ fn lower_instruction(
                     bce.heap_fv_ceq(rd, rs1, rs2, lhs_size)
                 }
 
-                (O::Posedge, _, _, M::TwoValue, _) => bce.andnot(rd, rs2, rs1, SixBitSize::N1),
-                (O::Posedge, _, _, M::FourValue, _) => bce.fv_posedge(rd, rs1, rs2),
                 (O::Negedge, _, _, M::TwoValue, _) => bce.andnot(rd, rs1, rs2, SixBitSize::N1),
                 (O::Negedge, _, _, M::FourValue, _) => bce.fv_negedge(rd, rs1, rs2),
 

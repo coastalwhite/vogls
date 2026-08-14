@@ -565,7 +565,6 @@ impl BasicBlockBuilder {
         (modulus, ModulusX)
         (power, Power)
         (concat, Concat)
-        (posedge, Posedge)
         (negedge, Negedge)
         (copy_x, CopyX)
         (copy_z, CopyZ)
@@ -1338,5 +1337,9 @@ impl BasicBlockBuilder {
                 self.and_constant(gl, src, Bits::new_ones(size))
             }
         }
+    }
+
+    pub fn posedge(&mut self, gl: &mut GlobalContext, lhs: VariableKey, rhs: VariableKey) -> VariableKey {
+        self.negedge(gl, rhs, lhs)
     }
 }

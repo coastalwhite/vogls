@@ -239,7 +239,6 @@ impl BinaryOp {
             Self::Min => "min",
             Self::Max => "max",
 
-            Self::Posedge => "posedge",
             Self::Negedge => "negedge",
 
             Self::RealAdd => "real.add",

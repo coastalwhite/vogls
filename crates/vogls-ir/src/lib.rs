@@ -5,8 +5,8 @@ mod form;
 mod format;
 pub mod optimize;
 pub mod orders;
-pub mod time;
 pub mod parse;
+pub mod time;
 pub mod token_range;
 mod variable;
 pub mod vcd;
@@ -106,10 +106,7 @@ impl BasicBlock {
         Ok(())
     }
 
-    pub fn for_each_dst_var(
-        &self,
-        mut f: impl FnMut(VariableKey),
-    ) {
+    pub fn for_each_dst_var(&self, mut f: impl FnMut(VariableKey)) {
         for i in &self.instrs {
             f(i.get_destination_variable());
         }
@@ -573,8 +570,6 @@ pub enum BinaryOp {
 
     /// Exact bitpattern equality
     CaseEquality,
-    /// Positive edge
-    Posedge,
     /// Negedge edge
     Negedge,
 
@@ -1347,10 +1342,6 @@ impl BinaryOp {
             O::Min => Bits::min(lhs, rhs),
             O::Max => Bits::max(lhs, rhs),
 
-            O::Posedge => Bits::from(vogls_bits::edge::fv_posedge(
-                lhs.select_value(0),
-                rhs.select_value(0),
-            )),
             O::Negedge => Bits::from(vogls_bits::edge::fv_negedge(
                 lhs.select_value(0),
                 rhs.select_value(0),
@@ -1425,7 +1416,7 @@ impl BinaryOp {
     }
 
     pub fn always_outputs_bool(&self) -> bool {
-        matches!(self, Self::CaseEquality | Self::Posedge | Self::Negedge)
+        matches!(self, Self::CaseEquality | Self::Negedge)
     }
 
     pub fn always_outputs_four_value(&self) -> bool {
@@ -1472,7 +1463,7 @@ impl BinaryOp {
                 Some(lhs)
             }
             O::Concat => lhs.checked_add(rhs.get()),
-            O::Posedge | O::Negedge => {
+            O::Negedge => {
                 if lhs != SCALAR_VSIZE || rhs != SCALAR_VSIZE {
                     return None;
                 }
@@ -1538,7 +1529,7 @@ impl BinaryOp {
                     rhs: convert_mode,
                 }
             }
-            O::CaseEquality | O::Posedge | O::Negedge => {
+            O::CaseEquality | O::Negedge => {
                 let convert_mode = lhs.max(rhs);
                 BinaryOutputMode {
                     dst: LogicMode::TwoValue,
@@ -1587,9 +1578,7 @@ impl BinaryOp {
             | Self::CopyX
             | Self::CopyZ => Some(TvPushdownVariant::CastOutput),
 
-            Self::CaseEquality | Self::Posedge | Self::Negedge => {
-                Some(TvPushdownVariant::KeepOutput)
-            }
+            Self::CaseEquality | Self::Negedge => Some(TvPushdownVariant::KeepOutput),
 
             Self::DivideX | Self::ModulusX => None,
             Self::LogicalShiftLeft | Self::LogicalShiftRight | Self::ArithmeticShiftRight => None,

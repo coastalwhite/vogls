@@ -1129,24 +1129,6 @@ const FV_NEGEDGE_LUT: u16 = {
     fv_lut
 };
 
-pub fn cgc_posedge(
-    f: &mut impl io::Write,
-    dst: CIdent,
-    lhs: CExpr<'_>,
-    rhs: CExpr<'_>,
-) -> io::Result<()> {
-    let (d, l, r) = (dst, lhs, rhs);
-    match lhs.ty().mode {
-        LogicMode::TwoValue => writeln!(f, "{INDENT}{d} = {r} & ~{l};")?,
-        LogicMode::FourValue => writeln!(
-            f,
-            "{INDENT}{d} = (0x{FV_POSEDGE_LUT:x} >> (({l} << 2) | {r})) & 1;"
-        )?,
-    }
-
-    Ok(())
-}
-
 pub fn cgc_negedge(f: &mut impl io::Write, dst: CIdent, lhs: CExpr, rhs: CExpr) -> io::Result<()> {
     let (d, l, r) = (dst, lhs, rhs);
     match lhs.ty().mode {
