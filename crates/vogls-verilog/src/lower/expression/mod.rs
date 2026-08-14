@@ -1004,6 +1004,7 @@ pub fn lower_expr<'a>(
                             continue;
                         }
                         Err(()) => {
+                            error = true;
                             result_stack.push(None);
                             continue;
                         }
