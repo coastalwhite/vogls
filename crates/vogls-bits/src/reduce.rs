@@ -87,7 +87,7 @@ pub fn fv_reduce_and_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValu
     let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
     let z1 = (spc == mask) | (spc & !value != 0);
     let z0 = (spc == mask) & (value == mask);
-    FvLogicValue::from_repr((u8::from(z0) << 1) | u8::from(z1))
+    FvLogicValue::from_spc_and_val(z1, z0)
 }
 #[inline(always)]
 pub fn fv_reduce_or_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValue {
@@ -101,7 +101,7 @@ pub fn fv_reduce_or_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValue
     let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
     let z0 = (spc & value) != 0;
     let z1 = (spc == mask) | z0;
-    FvLogicValue::from_repr((u8::from(z0) << 1) | u8::from(z1))
+    FvLogicValue::from_spc_and_val(z1, z0)
 }
 #[inline(always)]
 pub fn fv_reduce_xor_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValue {
@@ -115,5 +115,5 @@ pub fn fv_reduce_xor_elem(spc: u64, value: u64, size: VectorSize) -> FvLogicValu
     let mask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
     let z1 = spc == mask;
     let z0 = z1 & (value.count_ones() % 2 == 1);
-    FvLogicValue::from_repr((u8::from(z0) << 1) | u8::from(z1))
+    FvLogicValue::from_spc_and_val(z1, z0)
 }

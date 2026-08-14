@@ -1,17 +1,20 @@
 use std::mem::offset_of;
 
 use cranelift_codegen::Context;
-use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{Block, InstBuilder, StackSlotData, StackSlotKind, UserFuncName};
+use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
+use cranelift_codegen::ir::{
+    Block, InstBuilder, StackSlotData, StackSlotKind, UserFuncName, Value,
+};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{FuncId, Module};
 use vogls_codegen::SixBitSize;
-use vogls_ir::{BasicBlockKey, BasicBlockTerminator, Instruction, LogicMode, VariableKey};
+use vogls_ir::{BasicBlockKey, BasicBlockTerminator, Instruction, LogicMode, UnaryOp, VariableKey};
 use vogls_utils::VgHashMap;
 
 use crate::ffi::FfiVec;
 use crate::lower::{
-    I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, instr_is_wide, mem, var_words,
+    F64, I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, cast, instr_is_wide, is_real_unop,
+    mask_of, maskv, mem, var_words,
 };
 use crate::runtime::{EventT, ScheduleT};
 
@@ -140,15 +143,303 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         &self.wide_map,
                         instr,
                     );
-                } else {
-                    self.compiler.lower_instruction(
-                        &mut self.b,
-                        &self.params,
-                        &self.vmap,
-                        &self.spc_map,
-                        &self.wide_map,
-                        instr,
-                    );
+                    continue;
+                }
+
+                let b = &mut self.b;
+                let params = &mut self.params;
+                let blocks = &mut self.blocks;
+                let vmap = &mut self.vmap;
+                let spc_map = &mut self.spc_map;
+
+                let get = |b: &mut FunctionBuilder, v: VariableKey| b.use_var(vmap[&v]);
+                // A two-value operand used in a four-value op is fully known (spc = mask).
+                let spc_get = |b: &mut FunctionBuilder, v: VariableKey| {
+                    debug_assert_eq!(v.mode(), LogicMode::FourValue);
+                    b.use_var(spc_map[&v])
+                };
+
+                match instr {
+                    // Phi nodes are realized by the per-block phi copies emitted at the
+                    // end of each predecessor block, so the instruction itself is a no-op.
+                    Instruction::Phi(..) => {}
+                    Instruction::Constant(dst, bits) => {
+                        debug_assert!(!bits.contains_special() || dst.mode().is_four_value());
+                        debug_assert!(bits.size().get() <= 64);
+
+                        let size = bits.size();
+                        match bits.clone_lowering_mode().as_data_ref() {
+                            vogls_bits::BitsDataRef::InlineTv(v) => {
+                                let val = b.ins().iconst(I64, v as i64);
+                                b.def_var(vmap[dst], val);
+                                if dst.mode().is_four_value() {
+                                    let spc = b.ins().iconst(I64, mask_of(size.get()));
+                                    b.def_var(spc_map[dst], spc);
+                                }
+                            }
+                            vogls_bits::BitsDataRef::InlineFv(spc, val) => {
+                                let val = b.ins().iconst(I64, val as i64);
+                                let spc = b.ins().iconst(I64, spc as i64);
+                                b.def_var(vmap[dst], val);
+                                b.def_var(spc_map[dst], spc);
+                            }
+                            vogls_bits::BitsDataRef::SeparateFv(s) => {
+                                // 33..=64: [spc, val].
+                                let val = b.ins().iconst(I64, s[1] as i64);
+                                let spc = b.ins().iconst(I64, s[0] as i64);
+                                b.def_var(vmap[dst], val);
+                                b.def_var(spc_map[dst], spc);
+                            }
+                            vogls_bits::BitsDataRef::SeparateTv(_) => unreachable!(),
+                        }
+                    }
+                    Instruction::Unary(dst, op, src) => {
+                        macro_rules! map {
+                            ($val:ident => @tv $blk:expr) => {{
+                                let $val = get(b, *src);
+                                let val = $blk;
+                                b.def_var(vmap[dst], val);
+                            }};
+                            ($val:ident => @fv $blk:expr) => {{
+                                let $val = get(b, *src);
+                                let (val, spc) = $blk;
+                                b.def_var(vmap[dst], val);
+                                b.def_var(spc_map[dst], spc);
+                            }};
+                            ($val:ident, $spc:ident => @tv $blk:expr) => {{
+                                let $val = get(b, *src);
+                                let $spc = spc_get(b, *src);
+                                let val = $blk;
+                                b.def_var(vmap[dst], val);
+                            }};
+                            ($val:ident, $spc:ident => @fv $blk:expr) => {{
+                                let $val = get(b, *src);
+                                let $spc = spc_get(b, *src);
+                                let (val, spc) = $blk;
+                                b.def_var(vmap[dst], val);
+                                b.def_var(spc_map[dst], spc);
+                            }};
+                        }
+
+                        let dst_size = self.compiler.gl.vars.size(*dst);
+                        let src_size = self.compiler.gl.vars.size(*src);
+
+                        let native =
+                            |b: &mut FunctionBuilder, x: Value| b.ins().bitcast(I64, cast(), x);
+
+                        use crate::runtime::real_code as rc;
+                        use LogicMode as M;
+                        use UnaryOp as O;
+                        match (op, dst.mode(), src.mode()) {
+                            (O::TvToFv, _, _) => {
+                                map!(val => @fv { (val, b.ins().iconst(I64, mask_of(src_size.get()))) })
+                            }
+                            (O::FvToTv, _, _) => map!(val, spc => @tv { b.ins().band(val, spc) }),
+                            (UnaryOp::Neg, M::TwoValue, _) => map!(val => @tv {
+                                let n = b.ins().bnot(val);
+                                maskv(b, n, dst_size.get())
+                            }),
+                            (UnaryOp::Neg, M::FourValue, _) => map!(val, spc => @fv {
+                                let nsv = b.ins().bnot(val);
+                                let val = b.ins().band(spc, nsv);
+                                (val, spc)
+                            }),
+                            (UnaryOp::ReduceOr, M::TwoValue, _) => map!(val => @tv {
+                                let c = b.ins().icmp_imm_u(IntCC::NotEqual, val, 0);
+                                b.ins().uextend(I64, c)
+                            }),
+                            (UnaryOp::ReduceOr, M::FourValue, _) => map!(val, spc => @fv {
+                                // See fv_reduce_or_elem.
+                                let sandv = b.ins().band(spc, val);
+                                let z0 = b.ins().icmp_imm_u(IntCC::NotEqual, sandv, 0);
+                                let allk = b.ins().icmp_imm_u(IntCC::Equal, spc, mask_of(src_size.get()));
+                                let z1 = b.ins().bor(allk, z0);
+                                let val = b.ins().uextend(I64, z0);
+                                let spc = b.ins().uextend(I64, z1);
+                                (val, spc)
+                            }),
+                            (UnaryOp::ReduceAnd, M::TwoValue, _) => map!(val => @tv {
+                                let m = mask_of(src_size.get());
+                                let c = b.ins().icmp_imm_u(IntCC::Equal, val, m);
+                                b.ins().uextend(I64, c)
+                            }),
+                            (UnaryOp::ReduceAnd, M::FourValue, _) => map!(val, spc => @fv {
+                                // See fv_reduce_and_elem.
+                                let m = mask_of(src_size.get());
+                                let allk = b.ins().icmp_imm_u(IntCC::Equal, spc, m);
+                                let nsv = b.ins().bnot(val);
+                                let ssnv = b.ins().band(spc, nsv);
+                                let known0 = b.ins().icmp_imm_u(IntCC::NotEqual, ssnv, 0);
+                                let z1 = b.ins().bor(allk, known0);
+                                let allval = b.ins().icmp_imm_u(IntCC::Equal, val, m);
+                                let z0 = b.ins().band(allk, allval);
+                                let val = b.ins().uextend(I64, z0);
+                                let spc = b.ins().uextend(I64, z1);
+                                (val, spc)
+                            }),
+                            (UnaryOp::ReduceXor, M::TwoValue, _) => map!(val => @tv {
+                                let p = b.ins().popcnt(val);
+                                b.ins().band_imm_u(p, 1)
+                            }),
+                            (UnaryOp::ReduceXor, M::FourValue, _) => map!(val, spc => @fv {
+                                // See fv_reduce_xor_elem.
+                                let allk = b.ins().icmp_imm_u(IntCC::Equal, spc, mask_of(src_size.get()));
+                                let pc = b.ins().popcnt(val);
+                                let par = b.ins().band_imm_u(pc, 1);
+                                let parb = b.ins().icmp_imm_u(IntCC::NotEqual, par, 0);
+                                let z0 = b.ins().band(allk, parb);
+                                let val = b.ins().uextend(I64, z0);
+                                let spc = b.ins().uextend(I64, allk);
+                                (val, spc)
+                            }),
+                            (UnaryOp::LeadingZeros, M::TwoValue, _) => map!(val => @tv {
+                                let shifted = if src_size.get() < 64 {
+                                    b.ins().ishl_imm_u(val, (64 - src_size.get()) as i64)
+                                } else {
+                                    val
+                                };
+                                let c = b.ins().clz(shifted);
+                                let is_zero = b.ins().icmp_imm_u(IntCC::Equal, val, 0);
+                                let full = b.ins().iconst(I64, src_size.get() as i64);
+                                let sel = b.ins().select(is_zero, full, c);
+                                maskv(b, sel, dst_size.get())
+                            }),
+                            (UnaryOp::LeadingZeros, M::FourValue, _) => map!(val, spc => @fv {
+                                // vogls-bits::fv_leading_zeros: any x/z bit anywhere makes the whole
+                                // result x; otherwise it is the two-value leading-zeros of the value
+                                // plane (mirrors the two-value arm in lower_unary).
+                                let known = b.ins().icmp_imm_u(IntCC::Equal, spc, mask_of(src_size.get()));
+                                let shifted = if src_size.get() < 64 {
+                                    b.ins().ishl_imm_u(val, (64 - src_size.get()) as i64)
+                                } else {
+                                    val
+                                };
+                                let c = b.ins().clz(shifted);
+                                let is_zero = b.ins().icmp_imm_u(IntCC::Equal, val, 0);
+                                let full = b.ins().iconst(I64, src_size.get() as i64);
+                                let lz = b.ins().select(is_zero, full, c);
+                                let lz = maskv(b, lz, dst_size.get());
+                                let zero = b.ins().iconst(I64, 0);
+                                let val = b.ins().select(known, lz, zero);
+                                let spc_full = b.ins().iconst(I64, mask_of(dst_size.get()));
+                                let spc = b.ins().select(known, spc_full, zero);
+                                (val, spc)
+                            }),
+
+                            (O::RealNeg, _, _) => {
+                                map!(val => @tv { let fs = b.ins().bitcast(F64, cast(), val); let r = b.ins().fneg(fs); native(b, r) })
+                            }
+                            (O::RealSqrt, _, _) => {
+                                map!(val => @tv { let fs = b.ins().bitcast(F64, cast(), val); let r = b.ins().sqrt(fs); native(b, r) })
+                            }
+                            (O::RealFloor, _, _) => {
+                                map!(val => @tv { let fs = b.ins().bitcast(F64, cast(), val); let r = b.ins().floor(fs); native(b, r) })
+                            }
+                            (O::RealCeil, _, _) => {
+                                map!(val => @tv { let fs = b.ins().bitcast(F64, cast(), val); let r = b.ins().ceil(fs); native(b, r) })
+                            }
+                            (O::RealTruncate, _, _) => {
+                                map!(val => @tv { let fs = b.ins().bitcast(F64, cast(), val); let r = b.ins().trunc(fs); native(b, r) })
+                            }
+                            (O::RealToLogical, _, _) => map!(val => @tv {
+                                let fs = b.ins().bitcast(F64, cast(), val);
+                                let z = b.ins().f64const(0.0);
+                                let c = b.ins().fcmp(FloatCC::NotEqual, fs, z);
+                                b.ins().uextend(I64, c)
+                            }),
+                            (O::RealToU64 | O::RealToI64, _, _) => map!(val => @tv {
+                                // Verilog real->int rounds half AWAY from zero (bytecode uses
+                                // f64::round()); CLIF has no such instr, so bias by +/-0.5 then
+                                // truncate toward zero. (CLIF `nearest` is round-half-to-EVEN,
+                                // which would give 2.5 -> 2, so it can't be used.)
+                                let fs = b.ins().bitcast(F64, cast(), val);
+                                let z = b.ins().f64const(0.0);
+                                let half = b.ins().f64const(0.5);
+                                let neg_half = b.ins().f64const(-0.5);
+                                let is_neg = b.ins().fcmp(FloatCC::LessThan, fs, z);
+                                let bias = b.ins().select(is_neg, neg_half, half);
+                                let biased = b.ins().fadd(fs, bias);
+                                let rounded = b.ins().trunc(biased);
+                                if matches!(op, O::RealToU64) {
+                                    b.ins().fcvt_to_uint_sat(I64, rounded)
+                                } else {
+                                    b.ins().fcvt_to_sint_sat(I64, rounded)
+                                }
+                            }),
+                            (O::RealFromSignedDecimal, _, _) => map!(val => @tv {
+                                // Sign-extend from the operand's declared width before the
+                                // signed convert; the value word is only zero-extended to i64.
+                                let se = if src_size.get() >= 64 {
+                                    val
+                                } else {
+                                    let shb = (64 - src_size.get()) as i64;
+                                    let up = b.ins().ishl_imm_u(val, shb);
+                                    b.ins().sshr_imm_u(up, shb)
+                                };
+                                let x = b.ins().fcvt_from_sint(F64, se);
+                                native(b, x)
+                            }),
+                            (O::RealFromUnsignedDecimal, _, _) => map!(val => @tv {
+                                let x = b.ins().fcvt_from_uint(F64, val);
+                                native(b, x)
+                            }),
+                            (O::RealLn, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::LN, val, val))
+                            }
+                            (O::RealLog10, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::LOG10, val, val))
+                            }
+                            (O::RealExp, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::EXP, val, val))
+                            }
+                            (O::RealSin, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::SIN, val, val))
+                            }
+                            (O::RealCos, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::COS, val, val))
+                            }
+                            (O::RealTan, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::TAN, val, val))
+                            }
+                            (O::RealASin, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::ASIN, val, val))
+                            }
+                            (O::RealACos, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::ACOS, val, val))
+                            }
+                            (O::RealATan, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::ATAN, val, val))
+                            }
+                            (O::RealSinH, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::SINH, val, val))
+                            }
+                            (O::RealCosH, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::COSH, val, val))
+                            }
+                            (O::RealTanH, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::TANH, val, val))
+                            }
+                            (O::RealASinH, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::ASINH, val, val))
+                            }
+                            (O::RealACosH, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::ACOSH, val, val))
+                            }
+                            (O::RealATanH, _, _) => {
+                                map!(val => @tv self.compiler.real_shim(b, params, rc::ATANH, val, val))
+                            }
+                        }
+                    }
+                    _ => {
+                        self.compiler.lower_instruction(
+                            &mut self.b,
+                            &self.params,
+                            &self.vmap,
+                            &self.spc_map,
+                            &self.wide_map,
+                            instr,
+                        );
+                    }
                 }
             }
             // Phi copies for successors, emitted at the end of this
@@ -265,7 +556,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         .compiler
                         .module
                         .declare_func_in_func(self.compiler.sfe, b.func);
-                    b.ins().call(sfe, &[params.schedule, next_time, next_tr_addr]);
+                    b.ins()
+                        .call(sfe, &[params.schedule, next_time, next_tr_addr]);
                     self.compiler.tail_pop_next_or_return(b, params);
                 }
                 T::WaitRegion(tr, region) => {

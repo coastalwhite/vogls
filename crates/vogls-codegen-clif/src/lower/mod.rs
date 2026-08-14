@@ -750,76 +750,8 @@ impl<'a> Compiler<'a> {
             // Phi nodes are realized by the per-block phi copies emitted at the
             // end of each predecessor block, so the instruction itself is a no-op.
             Instruction::Phi(..) => {}
-            Instruction::Constant(dst, bits) => match bits.as_data_ref() {
-                vogls_bits::BitsDataRef::InlineTv(v) => {
-                    let c = b.ins().iconst(I64, v as i64);
-                    b.def_var(vmap[dst], c);
-                    // A two-value constant assigned to a four-value var is fully
-                    // known: set all spc bits.
-                    if is_fv(*dst) {
-                        let known = b.ins().iconst(I64, mask_of(sz(*dst)));
-                        b.def_var(spc_map[dst], known);
-                    }
-                }
-                vogls_bits::BitsDataRef::InlineFv(spc, val) => {
-                    if is_fv(*dst) {
-                        let vc = b.ins().iconst(I64, val as i64);
-                        let sc = b.ins().iconst(I64, spc as i64);
-                        b.def_var(vmap[dst], vc);
-                        b.def_var(spc_map[dst], sc);
-                    } else {
-                        // Four-value constant into a two-value dst: collapse (spc & val).
-                        let vc = b.ins().iconst(I64, (spc & val) as i64);
-                        b.def_var(vmap[dst], vc);
-                    }
-                }
-                vogls_bits::BitsDataRef::SeparateFv(s) => {
-                    // 33..=64: [spc, val].
-                    if is_fv(*dst) {
-                        let vc = b.ins().iconst(I64, s[1] as i64);
-                        let sc = b.ins().iconst(I64, s[0] as i64);
-                        b.def_var(vmap[dst], vc);
-                        b.def_var(spc_map[dst], sc);
-                    } else {
-                        let vc = b.ins().iconst(I64, (s[0] & s[1]) as i64);
-                        b.def_var(vmap[dst], vc);
-                    }
-                }
-                vogls_bits::BitsDataRef::SeparateTv(_) => {
-                    b.ins().trap(TRAP_UNIMPLEMENTED); // >64, rejected by pre-scan
-                }
-            },
-            Instruction::Unary(dst, op, src) => match op {
-                UnaryOp::TvToFv => {
-                    let v = get(b, *src);
-                    let known = b.ins().iconst(I64, mask_of(sz(*src)));
-                    b.def_var(vmap[dst], v);
-                    b.def_var(spc_map[dst], known);
-                }
-                UnaryOp::FvToTv => {
-                    let v = get(b, *src);
-                    let s = gets(b, *src);
-                    let r = b.ins().band(s, v);
-                    b.def_var(vmap[dst], r);
-                }
-                _ if is_real_unop(*op) => {
-                    let s = get(b, *src);
-                    let out = self.lower_real_unary(b, params, *op, s, sz(*src));
-                    b.def_var(vmap[dst], out);
-                }
-                _ if is_fv(*dst) => {
-                    let v = get(b, *src);
-                    let s = gets(b, *src);
-                    let (val, spc) = fv_unary(b, *op, v, s, sz(*src), sz(*dst));
-                    b.def_var(vmap[dst], val);
-                    b.def_var(spc_map[dst], spc);
-                }
-                _ => {
-                    let s = get(b, *src);
-                    let r = self.lower_unary(b, *op, s, sz(*src), sz(*dst));
-                    b.def_var(vmap[dst], r);
-                }
-            },
+            Instruction::Constant(..) => unreachable!(),
+            Instruction::Unary(..) => unreachable!(),
             // Case equality (===): bit-exact match (value AND special), TV result.
             Instruction::Binary(dst, BinaryOp::CaseEquality, s1, s2) => {
                 let av = get(b, *s1);
@@ -1606,20 +1538,20 @@ impl<'a> Compiler<'a> {
         b: &mut FunctionBuilder,
         op: UnaryOp,
         s: Value,
-        ssize: u32,
-        dsize: u32,
+        ssize: VectorSize,
+        dsize: VectorSize,
     ) -> Value {
         match op {
             UnaryOp::Neg => {
                 let n = b.ins().bnot(s);
-                maskv(b, n, dsize)
+                maskv(b, n, dsize.get())
             }
             UnaryOp::ReduceOr => {
                 let c = b.ins().icmp_imm_u(IntCC::NotEqual, s, 0);
                 b.ins().uextend(I64, c)
             }
             UnaryOp::ReduceAnd => {
-                let m = mask_of(ssize);
+                let m = mask_of(ssize.get());
                 let c = b.ins().icmp_imm_u(IntCC::Equal, s, m);
                 b.ins().uextend(I64, c)
             }
@@ -1628,16 +1560,16 @@ impl<'a> Compiler<'a> {
                 b.ins().band_imm_u(p, 1)
             }
             UnaryOp::LeadingZeros => {
-                let shifted = if ssize < 64 {
-                    b.ins().ishl_imm_u(s, (64 - ssize) as i64)
+                let shifted = if ssize.get() < 64 {
+                    b.ins().ishl_imm_u(s, (64 - ssize.get()) as i64)
                 } else {
                     s
                 };
                 let c = b.ins().clz(shifted);
                 let is_zero = b.ins().icmp_imm_u(IntCC::Equal, s, 0);
-                let full = b.ins().iconst(I64, ssize as i64);
+                let full = b.ins().iconst(I64, ssize.get() as i64);
                 let sel = b.ins().select(is_zero, full, c);
-                maskv(b, sel, dsize)
+                maskv(b, sel, dsize.get())
             }
             _ => {
                 b.ins().trap(TRAP_UNIMPLEMENTED);
@@ -2312,98 +2244,6 @@ impl<'a> Compiler<'a> {
             _ => {
                 b.ins().trap(TRAP_UNIMPLEMENTED);
                 b.ins().iconst(I64, 0)
-            }
-        }
-    }
-
-    fn lower_real_unary(
-        &self,
-        b: &mut FunctionBuilder,
-        params: &Params,
-        op: UnaryOp,
-        s: Value,
-        ssize: u32,
-    ) -> Value {
-        use crate::runtime::real_code as rc;
-        use UnaryOp::*;
-        let native = |b: &mut FunctionBuilder, x: Value| b.ins().bitcast(I64, cast(), x);
-        match op {
-            RealNeg | RealSqrt | RealFloor | RealCeil | RealTruncate => {
-                let fs = b.ins().bitcast(F64, cast(), s);
-                let x = match op {
-                    RealNeg => b.ins().fneg(fs),
-                    RealSqrt => b.ins().sqrt(fs),
-                    RealFloor => b.ins().floor(fs),
-                    RealCeil => b.ins().ceil(fs),
-                    _ => b.ins().trunc(fs),
-                };
-                native(b, x)
-            }
-            RealToLogical => {
-                let fs = b.ins().bitcast(F64, cast(), s);
-                let z = b.ins().f64const(0.0);
-                let c = b.ins().fcmp(FloatCC::NotEqual, fs, z);
-                b.ins().uextend(I64, c)
-            }
-            RealToU64 | RealToI64 => {
-                // Verilog real->int rounds half AWAY from zero (bytecode uses
-                // f64::round()); CLIF has no such instr, so bias by +/-0.5 then
-                // truncate toward zero. (CLIF `nearest` is round-half-to-EVEN,
-                // which would give 2.5 -> 2, so it can't be used.)
-                let fs = b.ins().bitcast(F64, cast(), s);
-                let z = b.ins().f64const(0.0);
-                let half = b.ins().f64const(0.5);
-                let neg_half = b.ins().f64const(-0.5);
-                let is_neg = b.ins().fcmp(FloatCC::LessThan, fs, z);
-                let bias = b.ins().select(is_neg, neg_half, half);
-                let biased = b.ins().fadd(fs, bias);
-                let rounded = b.ins().trunc(biased);
-                if matches!(op, RealToU64) {
-                    b.ins().fcvt_to_uint_sat(I64, rounded)
-                } else {
-                    b.ins().fcvt_to_sint_sat(I64, rounded)
-                }
-            }
-            RealFromSignedDecimal => {
-                // Sign-extend from the operand's declared width before the
-                // signed convert; the value word is only zero-extended to i64.
-                let se = if ssize >= 64 {
-                    s
-                } else {
-                    let shb = (64 - ssize) as i64;
-                    let up = b.ins().ishl_imm_u(s, shb);
-                    b.ins().sshr_imm_u(up, shb)
-                };
-                let x = b.ins().fcvt_from_sint(F64, se);
-                native(b, x)
-            }
-            RealFromUnsignedDecimal => {
-                let x = b.ins().fcvt_from_uint(F64, s);
-                native(b, x)
-            }
-            _ => {
-                let code = match op {
-                    RealLn => rc::LN,
-                    RealLog10 => rc::LOG10,
-                    RealExp => rc::EXP,
-                    RealSin => rc::SIN,
-                    RealCos => rc::COS,
-                    RealTan => rc::TAN,
-                    RealASin => rc::ASIN,
-                    RealACos => rc::ACOS,
-                    RealATan => rc::ATAN,
-                    RealSinH => rc::SINH,
-                    RealCosH => rc::COSH,
-                    RealTanH => rc::TANH,
-                    RealASinH => rc::ASINH,
-                    RealACosH => rc::ACOSH,
-                    RealATanH => rc::ATANH,
-                    _ => {
-                        b.ins().trap(TRAP_UNIMPLEMENTED);
-                        return b.ins().iconst(I64, 0);
-                    }
-                };
-                self.real_shim(b, params, code, s, s)
             }
         }
     }
@@ -4611,82 +4451,6 @@ fn fv_binary_imm(
         O::ConcatLeft => fv_binary(b, BinaryOp::Concat, ivc, isc, lv, ls, isize, ssize, dsize),
         O::Min => fv_binary(b, BinaryOp::Min, lv, ls, ivc, isc, ssize, isize, dsize),
         O::Max => fv_binary(b, BinaryOp::Max, lv, ls, ivc, isc, ssize, isize, dsize),
-        _ => {
-            b.ins().trap(TRAP_UNIMPLEMENTED);
-            let z = b.ins().iconst(I64, 0);
-            (z, z)
-        }
-    }
-}
-
-fn fv_unary(
-    b: &mut FunctionBuilder,
-    op: UnaryOp,
-    sv: Value,
-    ss: Value,
-    ssize: u32,
-    _dsize: u32,
-) -> (Value, Value) {
-    use UnaryOp::*;
-    let m = mask_of(ssize);
-    match op {
-        Neg => {
-            let nsv = b.ins().bnot(sv);
-            let val = b.ins().band(ss, nsv);
-            (val, ss)
-        }
-        ReduceOr => {
-            let sandv = b.ins().band(ss, sv);
-            let z0 = b.ins().icmp_imm_u(IntCC::NotEqual, sandv, 0);
-            let allk = b.ins().icmp_imm_u(IntCC::Equal, ss, m);
-            let z1 = b.ins().bor(allk, z0);
-            let val = b.ins().uextend(I64, z0);
-            let spc = b.ins().uextend(I64, z1);
-            (val, spc)
-        }
-        ReduceAnd => {
-            let allk = b.ins().icmp_imm_u(IntCC::Equal, ss, m);
-            let nsv = b.ins().bnot(sv);
-            let ssnv = b.ins().band(ss, nsv);
-            let known0 = b.ins().icmp_imm_u(IntCC::NotEqual, ssnv, 0);
-            let z1 = b.ins().bor(allk, known0);
-            let allval = b.ins().icmp_imm_u(IntCC::Equal, sv, m);
-            let z0 = b.ins().band(allk, allval);
-            let val = b.ins().uextend(I64, z0);
-            let spc = b.ins().uextend(I64, z1);
-            (val, spc)
-        }
-        ReduceXor => {
-            let allk = b.ins().icmp_imm_u(IntCC::Equal, ss, m);
-            let pc = b.ins().popcnt(sv);
-            let par = b.ins().band_imm_u(pc, 1);
-            let parb = b.ins().icmp_imm_u(IntCC::NotEqual, par, 0);
-            let z0 = b.ins().band(allk, parb);
-            let val = b.ins().uextend(I64, z0);
-            let spc = b.ins().uextend(I64, allk);
-            (val, spc)
-        }
-        LeadingZeros => {
-            // vogls-bits::fv_leading_zeros: any x/z bit anywhere makes the whole
-            // result x; otherwise it is the two-value leading-zeros of the value
-            // plane (mirrors the two-value arm in lower_unary).
-            let known = b.ins().icmp_imm_u(IntCC::Equal, ss, m);
-            let shifted = if ssize < 64 {
-                b.ins().ishl_imm_u(sv, (64 - ssize) as i64)
-            } else {
-                sv
-            };
-            let c = b.ins().clz(shifted);
-            let is_zero = b.ins().icmp_imm_u(IntCC::Equal, sv, 0);
-            let full = b.ins().iconst(I64, ssize as i64);
-            let lz = b.ins().select(is_zero, full, c);
-            let lz = maskv(b, lz, _dsize);
-            let zero = b.ins().iconst(I64, 0);
-            let val = b.ins().select(known, lz, zero);
-            let spc_full = b.ins().iconst(I64, mask_of(_dsize));
-            let spc = b.ins().select(known, spc_full, zero);
-            (val, spc)
-        }
         _ => {
             b.ins().trap(TRAP_UNIMPLEMENTED);
             let z = b.ins().iconst(I64, 0);
