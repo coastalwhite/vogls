@@ -156,9 +156,14 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                 }
 
                 let b = &mut self.b;
+                let gl = self.compiler.gl;
+                let info = &self.compiler.info;
+                let ptr = self.compiler.ptr;
                 let params = &mut self.params;
                 let vmap = &mut self.vmap;
                 let spc_map = &mut self.spc_map;
+                let heap = params.heap_ptr;
+                let wide_map = &self.wide_map;
 
                 let get = |b: &mut FunctionBuilder, v: VariableKey| b.use_var(vmap[&v]);
                 // A two-value operand used in a four-value op is fully known (spc = mask).
@@ -170,10 +175,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                 // Write value/special word `i` of `v` (narrow => i == 0, Cranelift
                 // Variable; wide => stack/heap store). Mirror the accessors used by
                 // the wide lowering so a single word-loop covers both widths.
-                let gl = self.compiler.gl;
-                let ptr = self.compiler.ptr;
-                let heap = params.heap_ptr;
-                let wide_map = &self.wide_map;
                 let wv = |b: &mut FunctionBuilder, v: VariableKey, i: u32, val: Value| {
                     let size = gl.vars.size(v).get();
                     if size > 64 {
@@ -290,8 +291,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }};
                         }
 
-                        let dst_size = self.compiler.gl.vars.size(*dst);
-                        let src_size = self.compiler.gl.vars.size(*src);
+                        let dst_size = gl.vars.size(*dst);
+                        let src_size = gl.vars.size(*src);
 
                         let native =
                             |b: &mut FunctionBuilder, x: Value| b.ins().bitcast(I64, cast(), x);
@@ -500,9 +501,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         }
                     }
                     Instruction::Binary(dst, op, lhs, rhs) => {
-                        let dst_size = self.compiler.gl.vars.size(*dst);
-                        let lhs_size = self.compiler.gl.vars.size(*lhs);
-                        let rhs_size = self.compiler.gl.vars.size(*rhs);
+                        let dst_size = gl.vars.size(*dst);
+                        let lhs_size = gl.vars.size(*lhs);
+                        let rhs_size = gl.vars.size(*rhs);
 
                         macro_rules! map {
                             ($lval:ident, $rval:ident => @tv $blk:expr) => {{
@@ -765,15 +766,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::Power, _, _) => self.compiler.emit_wide_binop(
-                                b,
-                                params,
-                                *op,
-                                *dst,
-                                *lhs,
-                                *rhs,
-                                vmap,
-                                spc_map,
-                                &self.wide_map,
+                                b, params, *op, *dst, *lhs, *rhs, vmap, spc_map, wide_map,
                             ),
                             // DivideX/ModulusX: operands are known; div-by-zero yields x,
                             // so gate the four-value dst on a non-zero divisor.
@@ -937,8 +930,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         }
                     }
                     Instruction::BinaryImm(dst, op, src, imm) => {
-                        let dst_size = self.compiler.gl.vars.size(*dst);
-                        let src_size = self.compiler.gl.vars.size(*src);
+                        let dst_size = gl.vars.size(*dst);
+                        let src_size = gl.vars.size(*src);
                         let imm_size = imm.size();
 
                         // Materialize the immediate's value and special-plane words as
@@ -1219,16 +1212,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             // Power/RevPower have no clean inline form: run the vogls-bits
                             // shim (handles narrow and wide).
                             (O::Power | O::RevPower, _, _) => self.compiler.emit_wide_binop_imm(
-                                b,
-                                params,
-                                self.compiler.gl,
-                                *op,
-                                *dst,
-                                *src,
-                                imm,
-                                vmap,
-                                spc_map,
-                                &self.wide_map,
+                                b, params, gl, *op, *dst, *src, imm, vmap, spc_map, wide_map,
                             ),
                         }
                     }
@@ -1248,8 +1232,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }};
                         }
 
-                        let dst_size = self.compiler.gl.vars.size(*dst).get();
-                        let src_size = self.compiler.gl.vars.size(*src).get();
+                        let dst_size = gl.vars.size(*dst).get();
+                        let src_size = gl.vars.size(*src).get();
 
                         use ResizeOp as R;
                         match (op, dst.mode()) {
@@ -1296,7 +1280,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
 
                         // Shifts preserve width, so dst_size == src_size. The amount is a
                         // compile-time constant: all width comparisons fold away.
-                        let size = self.compiler.gl.vars.size(*dst).get();
+                        let size = gl.vars.size(*dst).get();
                         let amount = *amount;
 
                         use ShiftImmOp as S;
@@ -1387,8 +1371,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                     }
                     // Constant-offset slice: extract dst-width bits of src at `offset`.
                     Instruction::SliceImm(dst, src, offset) => {
-                        let dst_size = self.compiler.gl.vars.size(*dst);
-                        let src_size = self.compiler.gl.vars.size(*src);
+                        let dst_size = gl.vars.size(*dst);
+                        let src_size = gl.vars.size(*src);
 
                         // Over-sliced. All destination bits are zero.
                         let Some(rem_src_bits) =
@@ -1455,8 +1439,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         }
                     }
                     Instruction::Slice(dst, src, offset) => {
-                        let dst_size = self.compiler.gl.vars.size(*dst);
-                        let src_size = self.compiler.gl.vars.size(*src);
+                        let dst_size = gl.vars.size(*dst);
+                        let src_size = gl.vars.size(*src);
 
                         let offset_val = get(b, *offset);
 
@@ -1516,7 +1500,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         b.switch_to_block(done_bb);
                     }
                     Instruction::LastUpdateTime(dst, signal) => {
-                        let rt = self.compiler.info.rt_signal_map[signal];
+                        let rt = info.rt_signal_map[signal];
                         let &idx = self
                             .compiler
                             .info
@@ -1528,7 +1512,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         b.def_var(vmap[dst], t);
                     }
                     Instruction::Intrinsic(dst, op, items) => {
-                        let dst_size = self.compiler.gl.vars.size(*dst);
+                        let dst_size = gl.vars.size(*dst);
                         match op.as_ref() {
                             IntrinsicOp::Time => {
                                 let t = params.time;
@@ -1543,15 +1527,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }
                             IntrinsicOp::Display(fmt) => {
                                 let idx = self.compiler.intern_fmt(fmt);
-                                self.compiler.emit_fmt_call(
-                                    b,
-                                    params,
-                                    vmap,
-                                    spc_map,
-                                    &self.wide_map,
-                                    items,
-                                    idx,
-                                );
+                                self.compiler
+                                    .emit_fmt_call(b, params, vmap, spc_map, wide_map, items, idx);
                                 let z = b.ins().iconst(I64, 0);
                                 b.def_var(vmap[dst], z);
                             }
@@ -1559,25 +1536,25 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 // Assert condition truthiness: two-value nonzero, or the
                                 // known-1 pattern (spc & val) for four-value; a wide operand
                                 // is or-reduced word by word.
-                                let cond = if self.compiler.gl.vars.size(items[0]).get() > 64 {
-                                    let n = nwords(self.compiler.gl.vars.size(items[0]).get());
+                                let cond = if gl.vars.size(items[0]).get() > 64 {
+                                    let n = nwords(gl.vars.size(items[0]).get());
                                     let fv = items[0].mode() == LogicMode::FourValue;
                                     let mut acc = b.ins().iconst(I64, 0);
                                     for i in 0..n {
                                         let voff = if fv { n + i } else { i };
                                         let vw = wide_load(
                                             b,
-                                            self.compiler.ptr,
+                                            ptr,
                                             params.heap_ptr,
-                                            self.wide_map[&items[0]],
+                                            wide_map[&items[0]],
                                             voff,
                                         );
                                         let known = if fv {
                                             let sw = wide_load(
                                                 b,
-                                                self.compiler.ptr,
+                                                ptr,
                                                 params.heap_ptr,
-                                                self.wide_map[&items[0]],
+                                                wide_map[&items[0]],
                                                 i,
                                             );
                                             b.ins().band(sw, vw)
@@ -1604,7 +1581,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     params,
                                     vmap,
                                     spc_map,
-                                    &self.wide_map,
+                                    wide_map,
                                     &items[1..],
                                     idx,
                                 );
@@ -1627,17 +1604,13 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 };
                                 let cldctx = params.cldctx;
                                 let fn_ptr = b.ins().load(
-                                    self.compiler.ptr,
+                                    ptr,
                                     mem(),
                                     cldctx,
                                     (layout::CTX_FN_TABLE + off) as i32,
                                 );
-                                let stderr = b.ins().load(
-                                    self.compiler.ptr,
-                                    mem(),
-                                    cldctx,
-                                    layout::CTX_STDERR as i32,
-                                );
+                                let stderr =
+                                    b.ins().load(ptr, mem(), cldctx, layout::CTX_STDERR as i32);
                                 // seed + distribution params, each passed as i32, then the io ptr.
                                 let mut args = Vec::new();
                                 let mut sig = Signature::new(CallConv::SystemV);
@@ -1648,7 +1621,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     sig.params.push(AbiParam::new(I32));
                                 }
                                 args.push(stderr);
-                                sig.params.push(AbiParam::new(self.compiler.ptr));
+                                sig.params.push(AbiParam::new(ptr));
                                 sig.returns.push(AbiParam::new(I64));
                                 let sr = b.import_signature(sig);
                                 let call = b.ins().call_indirect(sr, fn_ptr, &args);
@@ -1663,7 +1636,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 }
                             }
                             IntrinsicOp::ReadMem(rm) => {
-                                let (href, _rt, mode) = self.compiler.info.heap_ref(rm.signal);
+                                let (href, _rt, mode) = info.heap_ref(rm.signal);
                                 let idx = self.compiler.read_mems.len();
                                 self.compiler.read_mems.push((href, (**rm).clone()));
                                 let cldctx = params.cldctx;
@@ -1674,26 +1647,17 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let mode_c = b
                                     .ins()
                                     .iconst(types::I8, i64::from(mode == LogicMode::FourValue));
-                                let base = b.ins().load(
-                                    self.compiler.ptr,
-                                    mem(),
-                                    cldctx,
-                                    layout::CTX_READMEMS as i32,
-                                );
+                                let base =
+                                    b.ins()
+                                        .load(ptr, mem(), cldctx, layout::CTX_READMEMS as i32);
                                 let entry = b
                                     .ins()
                                     .iadd_imm_u(base, (idx * layout::READMEM_ENTRY_SIZE) as i64);
-                                let readmem_ptr = b.ins().load(
-                                    self.compiler.ptr,
-                                    mem(),
-                                    cldctx,
-                                    layout::CTX_READMEM as i32,
-                                );
+                                let readmem_ptr =
+                                    b.ins().load(ptr, mem(), cldctx, layout::CTX_READMEM as i32);
                                 let mut sig = Signature::new(CallConv::SystemV);
-                                sig.params.extend(
-                                    [self.compiler.ptr, I64, types::I8, self.compiler.ptr]
-                                        .map(AbiParam::new),
-                                );
+                                sig.params
+                                    .extend([ptr, I64, types::I8, ptr].map(AbiParam::new));
                                 let sr = b.import_signature(sig);
                                 b.ins().call_indirect(
                                     sr,
@@ -1724,10 +1688,10 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         }
                     }
                     Instruction::Probe(dst, signal, offset) => {
-                        let dst_size = self.compiler.gl.vars.size(*dst);
-                        let signal_size = self.compiler.gl.signals[*signal].size;
+                        let dst_size = gl.vars.size(*dst);
+                        let signal_size = gl.signals[*signal].size;
 
-                        let (href, _rt, mode) = self.compiler.info.heap_ref(*signal);
+                        let (href, _rt, mode) = info.heap_ref(*signal);
                         let heap = params.heap_ptr;
                         if mode == LogicMode::TwoValue {
                             let bit = href.offset.bit_offset + *offset as usize;
@@ -1800,11 +1764,11 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         }
                     }
                     Instruction::ProbeSlice(dst, signal, offset) => {
-                        let dst_size = self.compiler.gl.vars.size(*dst);
-                        let signal_size = self.compiler.gl.signals[*signal].size;
-                        let offset_size = self.compiler.gl.vars.size(*offset);
+                        let dst_size = gl.vars.size(*dst);
+                        let signal_size = gl.signals[*signal].size;
+                        let offset_size = gl.vars.size(*offset);
 
-                        let (href, _rt, mode) = self.compiler.info.heap_ref(*signal);
+                        let (href, _rt, mode) = info.heap_ref(*signal);
                         let heap = params.heap_ptr;
                         let src_nwords = nwords(signal_size.get());
                         let base_word = href.offset.bit_offset / 64;
@@ -1904,23 +1868,15 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         b.switch_to_block(done_bb);
                     }
                     Instruction::Drive(dst, signal, src, offset) => {
-                        let ssize = self.compiler.gl.vars.size(*src).get();
-                        let d_size = self.compiler.gl.signals[*signal].size.get();
+                        let ssize = gl.vars.size(*src).get();
+                        let d_size = gl.signals[*signal].size.get();
 
-                        let (_href, _rt, mode) = self.compiler.info.heap_ref(*signal);
+                        let (_href, _rt, mode) = info.heap_ref(*signal);
                         if d_size > 64 && (mode == LogicMode::FourValue || ssize > 64) {
                             let offc = b.ins().iconst(I64, *offset as i64);
                             let one = b.ins().iconst(types::I8, 1);
                             self.compiler.emit_wide_drive(
-                                b,
-                                params,
-                                *signal,
-                                *src,
-                                offc,
-                                one,
-                                vmap,
-                                spc_map,
-                                &self.wide_map,
+                                b, params, *signal, *src, offc, one, vmap, spc_map, wide_map,
                             );
                         } else if mode == LogicMode::TwoValue {
                             // lower_drive_tv already handles two-value partial writes.
@@ -1953,10 +1909,10 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         b.def_var(vmap[dst], zero);
                     }
                     Instruction::DriveSlice(dst, signal, src, index) => {
-                        let (_href, _rt, mode) = self.compiler.info.heap_ref(*signal);
-                        let ssize = self.compiler.gl.vars.size(*src).get();
-                        let d_size = self.compiler.gl.signals[*signal].size.get();
-                        let index_size = self.compiler.gl.vars.size(*index).get();
+                        let (_href, _rt, mode) = info.heap_ref(*signal);
+                        let ssize = gl.vars.size(*src).get();
+                        let d_size = gl.signals[*signal].size.get();
+                        let index_size = gl.vars.size(*index).get();
                         let off = get(b, *index);
                         let off_known = if index.mode().is_four_value() {
                             let os = spc_get(b, *index);
@@ -1966,15 +1922,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         };
                         if d_size > 64 {
                             self.compiler.emit_wide_drive(
-                                b,
-                                params,
-                                *signal,
-                                *src,
-                                off,
-                                off_known,
-                                vmap,
-                                spc_map,
-                                &self.wide_map,
+                                b, params, *signal, *src, off, off_known, vmap, spc_map, wide_map,
                             );
                         } else {
                             let sv = get(b, *src);
