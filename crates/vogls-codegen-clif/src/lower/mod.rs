@@ -29,7 +29,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 
-use vogls_codegen::HeapRef;
+use vogls_codegen::{HeapRef, SixBitSize};
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction,
@@ -1897,29 +1897,8 @@ impl<'a> Compiler<'a> {
                     wv(b, *dst, 0, r);
                 }
             }
-            Instruction::Select(dst, cond, t, f) => {
-                let c = if is_fv(*cond) {
-                    let cv = rv(b, *cond, 0);
-                    let cs = rs(b, *cond, 0);
-                    b.ins().band(cs, cv)
-                } else {
-                    rv(b, *cond, 0)
-                };
-                let n = nwords(sz(*dst));
-                let fv = is_fv(*dst);
-                for i in 0..n {
-                    let tv = rv(b, *t, i);
-                    let fvv = rv(b, *f, i);
-                    let r = b.ins().select(c, tv, fvv);
-                    wv(b, *dst, i, r);
-                    if fv {
-                        let ts = rs(b, *t, i);
-                        let fs = rs(b, *f, i);
-                        let rspc = b.ins().select(c, ts, fs);
-                        ws(b, *dst, i, rspc);
-                    }
-                }
-            }
+            // Select is lowered inline (narrow and wide) by TrBuilder::lower.
+            Instruction::Select(..) => unreachable!(),
             // BlackBox: identity copy of the (wide) value.
             Instruction::Intrinsic(dst, op, items)
                 if matches!(op.as_ref(), IntrinsicOp::BlackBox) =>
@@ -2860,6 +2839,13 @@ fn maskv(b: &mut FunctionBuilder, v: Value, size: u32) -> Value {
         v
     } else {
         b.ins().band_imm_u(v, mask_of(size))
+    }
+}
+fn maskvsbs(b: &mut FunctionBuilder, v: Value, size: SixBitSize) -> Value {
+    if size == SixBitSize::N64 {
+        v
+    } else {
+        b.ins().band_imm_u(v, size.mask(u64::MAX) as i64)
     }
 }
 

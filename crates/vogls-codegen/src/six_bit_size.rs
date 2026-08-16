@@ -6,7 +6,7 @@ use vogls_ir::VectorSize;
 ///
 /// This is generally used to represent the six of an operand within a register.
 #[repr(u8)]
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SixBitSize {
     // @NOTE: This is an enum to allow to compiler to infer the range of this value clearly.
     #[default]
