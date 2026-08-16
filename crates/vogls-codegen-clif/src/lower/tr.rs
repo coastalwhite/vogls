@@ -5,11 +5,13 @@ use cranelift_codegen::Context;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::types::{self, I32};
 use cranelift_codegen::ir::{
-    AbiParam, Block, InstBuilder, Signature, StackSlotData, StackSlotKind, UserFuncName, Value,
+    AbiParam, Block, InstBuilder, Signature, StackSlotData, StackSlotKind, Type, UserFuncName,
+    Value,
 };
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{FuncId, Module};
+use vogls_bits::arithmetic::FvLogicValue;
 use vogls_codegen::SixBitSize;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Instruction, IntrinsicOp,
@@ -19,8 +21,8 @@ use vogls_utils::VgHashMap;
 
 use crate::ffi::FfiVec;
 use crate::lower::{
-    F64, I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, cast, dyn_slice_read, fv_load,
-    instr_is_wide, mask_of, maskv, maskvsbs, mem, nwords, var_words, wide_addr,
+    F64, I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, cast, dyn_slice_read, fv_load, mask_of,
+    maskv, maskvsbs, mem, nwords, var_words, wide_addr,
 };
 use crate::runtime::{EventT, ScheduleT, layout};
 
@@ -138,27 +140,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
             let bb = &self.compiler.gl.bbs[k];
             for instr in &bb.instrs {
                 if matches!(instr, Instruction::Phi(..)) {
-                    continue;
-                }
-                // These dispatch on width inside the match below.
-                if !matches!(
-                    instr,
-                    Instruction::Constant(..)
-                        | Instruction::Unary(..)
-                        | Instruction::Binary(..)
-                        | Instruction::BinaryImm(..)
-                        | Instruction::Resize(..)
-                        | Instruction::Select(..)
-                ) && instr_is_wide(self.compiler.gl, instr)
-                {
-                    self.compiler.lower_wide_instruction(
-                        &mut self.b,
-                        &self.params,
-                        &self.vmap,
-                        &self.spc_map,
-                        &self.wide_map,
-                        instr,
-                    );
                     continue;
                 }
 
@@ -1584,9 +1565,16 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         let size = gl.vars.size(*dst).get();
                         let amount = *amount;
 
+                        use LogicMode as M;
                         use ShiftImmOp as S;
-                        match (op, dst.mode()) {
-                            (S::LogicalShiftLeft, LogicMode::TwoValue) => map!(sv => @tv {
+                        // Wide (>64) shifts delegate to the multi-word lowering; each op
+                        // has a `(.., _)` fallback below.
+                        match (
+                            op,
+                            dst.mode(),
+                            SixBitSize::from_vector_size(gl.vars.size(*dst)),
+                        ) {
+                            (S::LogicalShiftLeft, M::TwoValue, Some(_)) => map!(sv => @tv {
                                 if amount >= 64 {
                                     b.ins().iconst(I64, 0)
                                 } else {
@@ -1594,18 +1582,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     maskv(b, sh, size)
                                 }
                             }),
-                            (S::LogicalShiftRight, LogicMode::TwoValue) => map!(sv => @tv {
-                                if amount >= 64 {
-                                    b.ins().iconst(I64, 0)
-                                } else {
-                                    b.ins().ushr_imm_u(sv, amount as i64)
-                                }
-                            }),
-                            (S::ArithmeticShiftRight, LogicMode::TwoValue) => map!(sv => @tv {
-                                let sh = sign_shift_right(b, sv, amount, size);
-                                maskv(b, sh, size)
-                            }),
-                            (S::LogicalShiftLeft, LogicMode::FourValue) => map!(sv, ss => @fv {
+                            (S::LogicalShiftLeft, M::FourValue, Some(_)) => map!(sv, ss => @fv {
                                 if amount >= size {
                                     // Everything shifted out: all known zeros.
                                     let z = b.ins().iconst(I64, 0);
@@ -1622,7 +1599,17 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     (val, spc)
                                 }
                             }),
-                            (S::LogicalShiftRight, LogicMode::FourValue) => map!(sv, ss => @fv {
+                            (S::LogicalShiftLeft, _, _) => self
+                                .compiler
+                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (S::LogicalShiftRight, M::TwoValue, Some(_)) => map!(sv => @tv {
+                                if amount >= 64 {
+                                    b.ins().iconst(I64, 0)
+                                } else {
+                                    b.ins().ushr_imm_u(sv, amount as i64)
+                                }
+                            }),
+                            (S::LogicalShiftRight, M::FourValue, Some(_)) => map!(sv, ss => @fv {
                                 if amount >= size {
                                     let z = b.ins().iconst(I64, 0);
                                     let m = b.ins().iconst(I64, mask_of(size));
@@ -1637,15 +1624,27 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     (val, spc)
                                 }
                             }),
-                            (S::ArithmeticShiftRight, LogicMode::FourValue) => map!(sv, ss => @fv {
-                                // Arithmetic shift both planes (the special plane's sign
-                                // bit replicates, matching fv_shift_arith_right).
-                                let vsh = sign_shift_right(b, sv, amount, size);
-                                let val = maskv(b, vsh, size);
-                                let ssh = sign_shift_right(b, ss, amount, size);
-                                let spc = maskv(b, ssh, size);
-                                (val, spc)
+                            (S::LogicalShiftRight, _, _) => self
+                                .compiler
+                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (S::ArithmeticShiftRight, M::TwoValue, Some(_)) => map!(sv => @tv {
+                                let sh = sign_shift_right(b, sv, amount, size);
+                                maskv(b, sh, size)
                             }),
+                            (S::ArithmeticShiftRight, M::FourValue, Some(_)) => {
+                                map!(sv, ss => @fv {
+                                    // Arithmetic shift both planes (the special plane's sign
+                                    // bit replicates, matching fv_shift_arith_right).
+                                    let vsh = sign_shift_right(b, sv, amount, size);
+                                    let val = maskv(b, vsh, size);
+                                    let ssh = sign_shift_right(b, ss, amount, size);
+                                    let spc = maskv(b, ssh, size);
+                                    (val, spc)
+                                })
+                            }
+                            (S::ArithmeticShiftRight, _, _) => self
+                                .compiler
+                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                         }
                     }
                     Instruction::Select(dst, cond, truthy, falsy) => {
@@ -1692,12 +1691,34 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         let Some(rem_src_bits) =
                             VectorSize::new(src_size.get().saturating_sub(*offset))
                         else {
-                            let zero = b.ins().iconst(I64, 0);
-                            b.def_var(vmap[dst], zero);
-                            if dst.mode().is_four_value() {
-                                let all_one = b.ins().iconst(I64, mask_of(dst_size.get()));
-                                b.def_var(spc_map[dst], all_one);
+                            match SixBitSize::from_vector_size(dst_size) {
+                                Some(_) => {
+                                    let zero = b.ins().iconst(I64, 0);
+                                    b.def_var(vmap[dst], zero);
+                                    if dst.mode().is_four_value() {
+                                        let all_one = b.ins().iconst(I64, mask_of(dst_size.get()));
+                                        b.def_var(spc_map[dst], all_one);
+                                    }
+                                }
+                                None => wide_fill(
+                                    b,
+                                    ptr,
+                                    heap,
+                                    wide_map[dst],
+                                    dst_size.get(),
+                                    dst.mode(),
+                                    vogls_bits::arithmetic::FvLogicValue::L0,
+                                ),
                             }
+                            continue;
+                        };
+
+                        let (Some(dst_size), Some(src_size)) = (
+                            SixBitSize::from_vector_size(dst_size),
+                            SixBitSize::from_vector_size(src_size),
+                        ) else {
+                            self.compiler
+                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr);
                             continue;
                         };
 
@@ -1706,7 +1727,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         if *offset == 0 {
                             let mut val = val;
                             if dst_size < src_size {
-                                val = maskv(b, val, dst_size.get());
+                                val = maskvsbs(b, val, dst_size);
                             }
 
                             b.def_var(vmap[dst], val);
@@ -1714,12 +1735,12 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let spc = spc_get(b, *src);
                                 let spc = match dst_size.cmp(&src_size) {
                                     // Truncate.
-                                    cmp::Ordering::Less => maskv(b, spc, dst_size.get()),
+                                    cmp::Ordering::Less => maskvsbs(b, spc, dst_size),
                                     // Zero Extend.
                                     cmp::Ordering::Greater => {
                                         let fill =
-                                            mask_of(dst_size.get()) & !mask_of(src_size.get());
-                                        b.ins().bor_imm_u(spc, fill)
+                                            dst_size.mask(u64::MAX) & !src_size.mask(u64::MAX);
+                                        b.ins().bor_imm_u(spc, fill as i64)
                                     }
 
                                     cmp::Ordering::Equal => spc,
@@ -1731,20 +1752,20 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         }
 
                         let mut shifted_val = b.ins().ushr_imm_u(val, *offset as i64);
-                        if rem_src_bits > dst_size {
-                            shifted_val = maskv(b, shifted_val, dst_size.get());
+                        if rem_src_bits > VectorSize::from(dst_size) {
+                            shifted_val = maskvsbs(b, shifted_val, dst_size);
                         }
                         b.def_var(vmap[dst], shifted_val);
                         if dst.mode().is_four_value() {
                             let spc = spc_get(b, *src);
                             let shifted_spc = b.ins().ushr_imm_u(spc, *offset as i64);
-                            let shifted_spc = match dst_size.cmp(&rem_src_bits) {
+                            let shifted_spc = match dst_size.to_vector_size().cmp(&rem_src_bits) {
                                 // Truncate to dst size.
-                                cmp::Ordering::Less => maskv(b, shifted_spc, dst_size.get()),
+                                cmp::Ordering::Less => maskvsbs(b, shifted_spc, dst_size),
                                 // Extend with zeros to dst size.
                                 cmp::Ordering::Greater => {
-                                    let fill =
-                                        mask_of(dst_size.get()) & !mask_of(rem_src_bits.get());
+                                    let fill = dst_size.mask(u64::MAX) as i64
+                                        & !mask_of(rem_src_bits.get());
                                     b.ins().bor_imm_u(shifted_spc, fill)
                                 }
                                 cmp::Ordering::Equal => shifted_spc,
@@ -1769,10 +1790,10 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         let all_x = match offset.mode() {
                             LogicMode::TwoValue => all_x,
                             LogicMode::FourValue => {
-                                let os = spc_get(b, *offset);
+                                let offset_spc = spc_get(b, *offset);
                                 let special = b.ins().icmp_imm_u(
                                     IntCC::NotEqual,
-                                    os,
+                                    offset_spc,
                                     mask_of(VSIZE_32.get()),
                                 );
                                 b.ins().bor(all_x, special)
@@ -1785,30 +1806,55 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         b.ins().brif(all_x, all_x_bb, &[], slice_guarded_bb, &[]);
 
                         b.switch_to_block(slice_guarded_bb);
-                        // Value plane.
-                        let src_val = get(b, *src);
-                        let mut dst_val = b.ins().ushr(src_val, offset_val);
-                        if dst_size < src_size {
-                            dst_val = maskv(b, dst_val, dst_size.get());
+                        match (
+                            SixBitSize::from_vector_size(dst_size),
+                            SixBitSize::from_vector_size(src_size),
+                        ) {
+                            (Some(_), Some(_)) => {
+                                // Value plane.
+                                let src_val = get(b, *src);
+                                let mut dst_val = b.ins().ushr(src_val, offset_val);
+                                if dst_size < src_size {
+                                    dst_val = maskv(b, dst_val, dst_size.get());
+                                }
+                                b.def_var(vmap[dst], dst_val);
+                                // Special plane.
+                                let src_spc = match src.mode() {
+                                    LogicMode::TwoValue => {
+                                        b.ins().iconst(I64, mask_of(src_size.get()))
+                                    }
+                                    LogicMode::FourValue => spc_get(b, *src),
+                                };
+                                let mut dst_spc = b.ins().ushr(src_spc, offset_val);
+                                if dst_size < src_size {
+                                    dst_spc = maskv(b, dst_spc, dst_size.get());
+                                }
+                                b.def_var(spc_map[dst], dst_spc);
+                            }
+                            _ => self
+                                .compiler
+                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                         }
-                        b.def_var(vmap[dst], dst_val);
-                        // Special plane.
-                        let src_spc = match src.mode() {
-                            LogicMode::TwoValue => b.ins().iconst(I64, mask_of(src_size.get())),
-                            LogicMode::FourValue => spc_get(b, *src),
-                        };
-                        let mut dst_spc = b.ins().ushr(src_spc, offset_val);
-                        if dst_size < src_size {
-                            dst_spc = maskv(b, dst_spc, dst_size.get());
-                        }
-                        b.def_var(spc_map[dst], dst_spc);
                         b.ins().jump(done_bb, &[]);
 
                         // Guard condition. Output is all `x`.
                         b.switch_to_block(all_x_bb);
-                        let zero = b.ins().iconst(I64, 0);
-                        b.def_var(vmap[dst], zero);
-                        b.def_var(spc_map[dst], zero);
+                        match SixBitSize::from_vector_size(dst_size) {
+                            Some(_) => {
+                                let zero = b.ins().iconst(I64, 0);
+                                b.def_var(vmap[dst], zero);
+                                b.def_var(spc_map[dst], zero);
+                            }
+                            None => wide_fill(
+                                b,
+                                ptr,
+                                heap,
+                                wide_map[dst],
+                                dst_size.get(),
+                                dst.mode(),
+                                FvLogicValue::X,
+                            ),
+                        }
                         b.ins().jump(done_bb, &[]);
 
                         b.switch_to_block(done_bb);
@@ -1982,11 +2028,23 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 b.def_var(vmap[dst], z);
                             }
                             IntrinsicOp::BlackBox => {
-                                let v = get(b, items[0]);
-                                b.def_var(vmap[dst], v);
-                                if dst.mode().is_four_value() {
-                                    let s = spc_get(b, items[0]);
-                                    b.def_var(spc_map[dst], s);
+                                let size = gl.vars.size(*dst);
+                                match SixBitSize::from_vector_size(size) {
+                                    Some(_) => {
+                                        let v = get(b, items[0]);
+                                        b.def_var(vmap[dst], v);
+                                        if dst.mode().is_four_value() {
+                                            let s = spc_get(b, items[0]);
+                                            b.def_var(spc_map[dst], s);
+                                        }
+                                    }
+                                    None => {
+                                        let dst_ptr = wide_addr(b, ptr, heap, wide_map[dst], 0);
+                                        let src_ptr =
+                                            wide_addr(b, ptr, heap, wide_map[&items[0]], 0);
+                                        let nwords = var_words(size, dst.mode()) as u32;
+                                        wide_copy(b, dst_ptr, src_ptr, nwords);
+                                    }
                                 }
                             }
                             // VCD dump intrinsics ($dumpfile/$dumpvars/$dumpoff/$dumpon) are
@@ -2004,6 +2062,14 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                     Instruction::Probe(dst, signal, offset) => {
                         let dst_size = gl.vars.size(*dst);
                         let signal_size = gl.signals[*signal].size;
+
+                        // A wide dst needs the multi-word extraction; the inline path
+                        // below reads into a single-word (<=64) dst.
+                        if SixBitSize::from_vector_size(dst_size).is_none() {
+                            self.compiler
+                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr);
+                            continue;
+                        }
 
                         let (href, _rt, mode) = info.heap_ref(*signal);
                         let heap = params.heap_ptr;
@@ -2112,9 +2178,13 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         let done_bb = b.create_block();
                         b.ins().brif(all_x, all_x_bb, &[], probe_bb, &[]);
 
-                        // Offset in range: read dst_size bits at `off`.
+                        // Offset in range: read dst_size bits at `off`. The guard is
+                        // shared, but a wide dst needs the multi-word extraction.
                         b.switch_to_block(probe_bb);
-                        if mode == LogicMode::FourValue && signal_size.get() <= 32 {
+                        if SixBitSize::from_vector_size(dst_size).is_none() {
+                            self.compiler
+                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr);
+                        } else if mode == LogicMode::FourValue && signal_size.get() <= 32 {
                             // Packed four-value signal: spc | (val << s_size) in one word.
                             // val/spc share the word, so a plain shift past the field pulls
                             // in the other plane's bits; mask any partial overhang past
@@ -2173,10 +2243,24 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         }
                         b.ins().jump(done_bb, &[]);
 
+                        // Guard condition. Output is all `x`.
                         b.switch_to_block(all_x_bb);
-                        let zero = b.ins().iconst(I64, 0);
-                        b.def_var(vmap[dst], zero);
-                        b.def_var(spc_map[dst], zero);
+                        match SixBitSize::from_vector_size(dst_size) {
+                            Some(_) => {
+                                let zero = b.ins().iconst(I64, 0);
+                                b.def_var(vmap[dst], zero);
+                                b.def_var(spc_map[dst], zero);
+                            }
+                            None => wide_fill(
+                                b,
+                                ptr,
+                                heap,
+                                wide_map[dst],
+                                dst_size.get(),
+                                dst.mode(),
+                                vogls_bits::arithmetic::FvLogicValue::X,
+                            ),
+                        }
                         b.ins().jump(done_bb, &[]);
 
                         b.switch_to_block(done_bb);
@@ -2186,12 +2270,14 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         let d_size = gl.signals[*signal].size.get();
 
                         let (_href, _rt, mode) = info.heap_ref(*signal);
-                        if d_size > 64 && (mode == LogicMode::FourValue || ssize > 64) {
-                            let offc = b.ins().iconst(I64, *offset as i64);
-                            let one = b.ins().iconst(types::I8, 1);
-                            self.compiler.emit_wide_drive(
-                                b, params, *signal, *src, offc, one, vmap, spc_map, wide_map,
-                            );
+                        // A wide (>64) signal driven by a four-value or wide source needs
+                        // the multi-word drive. A two-value narrow source into a wide
+                        // signal is still a single-word partial write (lower_drive_tv).
+                        if SixBitSize::from_vector_size(gl.signals[*signal].size).is_none()
+                            && (mode == LogicMode::FourValue || ssize > 64)
+                        {
+                            self.compiler
+                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr);
                         } else if mode == LogicMode::TwoValue {
                             // lower_drive_tv already handles two-value partial writes.
                             let sv = get(b, *src);
@@ -2219,26 +2305,41 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 one,
                             );
                         }
-                        let zero = b.ins().iconst(I64, 0);
-                        b.def_var(vmap[dst], zero);
+                        // The dst is the changed-bits mask (src-sized, two-value); it is
+                        // currently stubbed to zero. A wide dst lives in the wide storage.
+                        match SixBitSize::from_vector_size(gl.vars.size(*dst)) {
+                            Some(_) => {
+                                let zero = b.ins().iconst(I64, 0);
+                                b.def_var(vmap[dst], zero);
+                            }
+                            None => wide_fill(
+                                b,
+                                ptr,
+                                heap,
+                                wide_map[dst],
+                                gl.vars.size(*dst).get(),
+                                dst.mode(),
+                                vogls_bits::arithmetic::FvLogicValue::L0,
+                            ),
+                        }
                     }
                     Instruction::DriveSlice(dst, signal, src, index) => {
                         let (_href, _rt, mode) = info.heap_ref(*signal);
                         let ssize = gl.vars.size(*src).get();
-                        let d_size = gl.signals[*signal].size.get();
                         let index_size = gl.vars.size(*index).get();
-                        let off = get(b, *index);
-                        let off_known = if index.mode().is_four_value() {
-                            let os = spc_get(b, *index);
-                            b.ins().icmp_imm_u(IntCC::Equal, os, mask_of(index_size))
+                        // A wide (>64) signal needs the multi-word drive; drive_partial
+                        // below writes a single-word (<=64) signal.
+                        if SixBitSize::from_vector_size(gl.signals[*signal].size).is_none() {
+                            self.compiler
+                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr);
                         } else {
-                            b.ins().iconst(types::I8, 1)
-                        };
-                        if d_size > 64 {
-                            self.compiler.emit_wide_drive(
-                                b, params, *signal, *src, off, off_known, vmap, spc_map, wide_map,
-                            );
-                        } else {
+                            let off = get(b, *index);
+                            let off_known = if index.mode().is_four_value() {
+                                let os = spc_get(b, *index);
+                                b.ins().icmp_imm_u(IntCC::Equal, os, mask_of(index_size))
+                            } else {
+                                b.ins().iconst(types::I8, 1)
+                            };
                             let sv = get(b, *src);
                             let src_spc = if mode == LogicMode::FourValue {
                                 Some(spc_get(b, *src))
@@ -2249,8 +2350,23 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 b, params, *signal, sv, src_spc, ssize, off, off_known,
                             );
                         }
-                        let zero = b.ins().iconst(I64, 0);
-                        b.def_var(vmap[dst], zero);
+                        // The dst is the changed-bits mask (src-sized, two-value); it is
+                        // currently stubbed to zero. A wide dst lives in the wide storage.
+                        match SixBitSize::from_vector_size(gl.vars.size(*dst)) {
+                            Some(_) => {
+                                let zero = b.ins().iconst(I64, 0);
+                                b.def_var(vmap[dst], zero);
+                            }
+                            None => wide_fill(
+                                b,
+                                ptr,
+                                heap,
+                                wide_map[dst],
+                                gl.vars.size(*dst).get(),
+                                dst.mode(),
+                                vogls_bits::arithmetic::FvLogicValue::L0,
+                            ),
+                        }
                     }
                 }
             }
@@ -2511,6 +2627,40 @@ fn wide_copy(b: &mut FunctionBuilder, dst_ptr: Value, src_ptr: Value, words: u32
         let off = (i * 8) as i32;
         let w = b.ins().load(I64, mem(), src_ptr, off);
         b.ins().store(mem(), w, dst_ptr, off);
+    }
+}
+
+/// Fill a wide (>64) value's word block with a single four-value logic value
+/// (every bit set to `value`), masking the top word. For a four-value dst the
+/// heap layout is n spc words then n val words.
+fn wide_fill(
+    b: &mut FunctionBuilder,
+    ptr: Type,
+    heap: Value,
+    loc: WideLoc,
+    size: u32,
+    mode: LogicMode,
+    value: vogls_bits::arithmetic::FvLogicValue,
+) {
+    let n = nwords(size);
+    let plane = |b: &mut FunctionBuilder, base: u32, bit: bool| {
+        let word = if bit { -1i64 } else { 0 };
+        for i in 0..n {
+            let w = if i == n - 1 {
+                word & super::top_i64(size)
+            } else {
+                word
+            };
+            let c = b.ins().iconst(I64, w);
+            wide_store(b, ptr, heap, loc, base + i, c);
+        }
+    };
+    match mode {
+        LogicMode::TwoValue => plane(b, 0, value.val()),
+        LogicMode::FourValue => {
+            plane(b, 0, value.spc()); // spc words first
+            plane(b, n, value.val()); // then val words
+        }
     }
 }
 

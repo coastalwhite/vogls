@@ -2809,28 +2809,6 @@ fn top_i64(size: u32) -> i64 {
     (if r == 0 { u64::MAX } else { (1u64 << r) - 1 }) as i64
 }
 
-/// True if any operand of `instr` is wider than 64 bits.
-fn instr_is_wide(gl: &GlobalContext, instr: &Instruction) -> bool {
-    // Display/Assert stay on the narrow path; emit_fmt_call reads their wide
-    // operands straight from the wide stack slots.
-    if let Instruction::Intrinsic(_, op, _) = instr {
-        if matches!(
-            op.as_ref(),
-            IntrinsicOp::Display(_) | IntrinsicOp::Assert(_)
-        ) {
-            return false;
-        }
-    }
-    let mut wide = false;
-    let mut check = |v: VariableKey| {
-        if gl.vars.size(v).get() > 64 {
-            wide = true;
-        }
-    };
-    check(instr.get_destination_variable());
-    instr.for_each_src(&mut check);
-    wide
-}
 fn mask_of(size: u32) -> i64 {
     mask_u64(size) as i64
 }

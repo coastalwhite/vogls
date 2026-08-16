@@ -79,7 +79,7 @@ pub enum SixBitSize {
 impl From<SixBitSize> for VectorSize {
     #[inline(always)]
     fn from(value: SixBitSize) -> Self {
-        VectorSize::new(value as u32).unwrap()
+        value.to_vector_size()
     }
 }
 
@@ -140,6 +140,11 @@ impl SixBitSize {
     pub fn mask(self, v: u64) -> u64 {
         // @NOTE: This unbounded_shr generates better code than a normal shift for some reason.
         v & u64::MAX.unbounded_shr(64 - self as u32)
+    }
+
+    #[inline(always)]
+    pub fn to_vector_size(self) -> VectorSize {
+        VectorSize::new(self as u32).unwrap()
     }
 }
 
