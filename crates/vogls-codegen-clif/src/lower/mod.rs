@@ -1714,46 +1714,6 @@ impl<'a> Compiler<'a> {
                     }
                 }
             }
-            // Per-word bitwise ops inline; arithmetic/shift/compare/min-max/power
-            // go through the wide_binop shim.
-            Instruction::Binary(dst, op, s1, s2)
-                if matches!(
-                    *op,
-                    BinaryOp::And
-                        | BinaryOp::Or
-                        | BinaryOp::Xor
-                        | BinaryOp::AndNot
-                        | BinaryOp::OrNot
-                        | BinaryOp::Xnor
-                        | BinaryOp::CopyX
-                        | BinaryOp::CopyZ
-                ) =>
-            {
-                let n = nwords(sz(*dst));
-                let fv = is_fv(*dst);
-                let top = top_i64(sz(*dst));
-                for i in 0..n {
-                    let av = rv(b, *s1, i);
-                    let bv = rv(b, *s2, i);
-                    if fv {
-                        let as_ = rs(b, *s1, i);
-                        let bs = rs(b, *s2, i);
-                        let (mut val, mut spc) = fv_binary(b, *op, av, as_, bv, bs, 64, 64, 64);
-                        if i == n - 1 {
-                            val = b.ins().band_imm_u(val, top);
-                            spc = b.ins().band_imm_u(spc, top);
-                        }
-                        wv(b, *dst, i, val);
-                        ws(b, *dst, i, spc);
-                    } else {
-                        let mut w = tv_bitword(b, *op, av, bv);
-                        if i == n - 1 {
-                            w = b.ins().band_imm_u(w, top);
-                        }
-                        wv(b, *dst, i, w);
-                    }
-                }
-            }
             Instruction::Binary(dst, op, s1, s2) => {
                 self.emit_wide_binop(b, params, *op, *dst, *s1, *s2, vmap, spc_map, wide_map);
             }
@@ -2775,34 +2735,6 @@ fn var_words(size: VectorSize, mode: LogicMode) -> usize {
     }
 }
 
-/// One 64-bit word of a two-value bitwise op (top-word masking is the caller's).
-fn tv_bitword(b: &mut FunctionBuilder, op: BinaryOp, a: Value, c: Value) -> Value {
-    use BinaryOp::*;
-    match op {
-        And => b.ins().band(a, c),
-        Or => b.ins().bor(a, c),
-        Xor => b.ins().bxor(a, c),
-        AndNot => {
-            let n = b.ins().bnot(c);
-            b.ins().band(a, n)
-        }
-        OrNot => {
-            let n = b.ins().bnot(c);
-            b.ins().bor(a, n)
-        }
-        Xnor => {
-            let x = b.ins().bxor(a, c);
-            b.ins().bnot(x)
-        }
-        // Two-value CopyX/CopyZ have no x/z to inject: copy the lhs word.
-        CopyX | CopyZ => a,
-        _ => {
-            b.ins().trap(TRAP_UNIMPLEMENTED);
-            b.ins().iconst(I64, 0)
-        }
-    }
-}
-
 /// Mask (as i64) for the top (most-significant) word of a `size`-bit value.
 fn top_i64(size: u32) -> i64 {
     let r = size % 64;
@@ -3027,108 +2959,6 @@ fn fv_load(b: &mut FunctionBuilder, heap: Value, href: HeapRef, size: u32) -> (V
         (val, spc)
     }
 }
-
-#[expect(clippy::too_many_arguments)]
-fn fv_binary(
-    b: &mut FunctionBuilder,
-    op: BinaryOp,
-    lv: Value,
-    ls: Value,
-    rv: Value,
-    rs: Value,
-    _s1: u32,
-    _s2: u32,
-    dsize: u32,
-) -> (Value, Value) {
-    use BinaryOp::*;
-    match op {
-        And => {
-            let a = b.ins().band(ls, lv);
-            let c = b.ins().band(rs, rv);
-            let val = b.ins().band(a, c);
-            let nlv = b.ins().bnot(lv);
-            let t1 = b.ins().band(ls, nlv);
-            let nrv = b.ins().bnot(rv);
-            let t2 = b.ins().band(rs, nrv);
-            let t3 = b.ins().bor(t1, t2);
-            let spc = b.ins().bor(t3, val);
-            (val, spc)
-        }
-        Or => {
-            let a = b.ins().band(ls, lv);
-            let c = b.ins().band(rs, rv);
-            let val = b.ins().bor(a, c);
-            let lsrs = b.ins().band(ls, rs);
-            let spc = b.ins().bor(val, lsrs);
-            (val, spc)
-        }
-        Xor => {
-            let spc = b.ins().band(ls, rs);
-            let xv = b.ins().bxor(lv, rv);
-            let val = b.ins().band(spc, xv);
-            (val, spc)
-        }
-        Xnor => {
-            let spc = b.ins().band(ls, rs);
-            let xv = b.ins().bxor(lv, rv);
-            let nxv = b.ins().bnot(xv);
-            let val = b.ins().band(spc, nxv);
-            (val, spc)
-        }
-        AndNot => {
-            let a = b.ins().band(ls, lv);
-            let nrv = b.ins().bnot(rv);
-            let c = b.ins().band(rs, nrv);
-            let val = b.ins().band(a, c);
-            let nlv = b.ins().bnot(lv);
-            let t1 = b.ins().band(ls, nlv);
-            let t2 = b.ins().band(rs, rv);
-            let t3 = b.ins().bor(t1, t2);
-            let spc = b.ins().bor(t3, val);
-            (val, spc)
-        }
-        OrNot => {
-            let a = b.ins().band(ls, lv);
-            let nrv = b.ins().bnot(rv);
-            let c = b.ins().band(rs, nrv);
-            let val = b.ins().bor(a, c);
-            let lsrs = b.ins().band(ls, rs);
-            let spc = b.ins().bor(val, lsrs);
-            (val, spc)
-        }
-        CopyX => {
-            // copy_mask = !rs & !rv (bits of rhs that are x)
-            let nrs = b.ins().bnot(rs);
-            let nrv = b.ins().bnot(rv);
-            let cm0 = b.ins().band(nrs, nrv);
-            let cm = maskv(b, cm0, dsize);
-            let ncm = b.ins().bnot(cm);
-            let spc = b.ins().band(ls, ncm);
-            let val = b.ins().band(lv, ncm);
-            (val, spc)
-        }
-        CopyZ => {
-            // copy_mask = !rs & rv (bits of rhs that are z)
-            let nrs = b.ins().bnot(rs);
-            let cm0 = b.ins().band(nrs, rv);
-            let cm = maskv(b, cm0, dsize);
-            let ncm = b.ins().bnot(cm);
-            let spc = b.ins().band(ls, ncm);
-            let v0 = b.ins().bor(lv, cm);
-            let val = maskv(b, v0, dsize);
-            (val, spc)
-        }
-        _ => {
-            b.ins().trap(TRAP_UNIMPLEMENTED);
-            let z = b.ins().iconst(I64, 0);
-            (z, z)
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// compile
-// ---------------------------------------------------------------------------
 
 pub fn compile<'a>(
     gl: &'a GlobalContext,

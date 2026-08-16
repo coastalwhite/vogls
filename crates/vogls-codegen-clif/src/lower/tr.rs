@@ -5,14 +5,14 @@ use cranelift_codegen::Context;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::types::{self, I32};
 use cranelift_codegen::ir::{
-    AbiParam, Block, InstBuilder, Signature, StackSlotData, StackSlotKind, Type, UserFuncName,
-    Value,
+    AbiParam, Block, BlockArg, InstBuilder, Signature, StackSlotData, StackSlotKind, Type,
+    UserFuncName, Value,
 };
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{FuncId, Module};
 use vogls_bits::arithmetic::FvLogicValue;
-use vogls_codegen::SixBitSize;
+use vogls_codegen::{HeapAlignment, SixBitSize};
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Instruction, IntrinsicOp,
     LogicMode, ResizeOp, ShiftImmOp, UnaryOp, VSIZE_32, VariableKey, VectorSize,
@@ -720,68 +720,167 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_and(b, lval, lspc, rval, rspc)
                                 })
                             }
-                            (O::And, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             (O::Or, M::FourValue, _, Some(_), _, _) => {
                                 map!((lval, lspc), (rval, rspc) => @fv {
                                     clif_fv_or(b, lval, lspc, rval, rspc)
                                 })
                             }
-                            (O::Or, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             (O::Xor, M::FourValue, _, Some(_), _, _) => {
                                 map!((lval, lspc), (rval, rspc) => @fv {
                                     clif_fv_xor(b, lval, lspc, rval, rspc)
                                 })
                             }
-                            (O::Xor, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
-                            (O::AndNot, M::FourValue, _, Some(_), _, _) => {
+                            (O::AndNot, M::FourValue, _, Some(size), _, _) => {
                                 map!((lval, lspc), (rval, rspc) => @fv {
-                                    let a = b.ins().band(lspc, lval);
-                                    let nrv = b.ins().bnot(rval);
-                                    let c = b.ins().band(rspc, nrv);
-                                    let val = b.ins().band(a, c);
-                                    let nlv = b.ins().bnot(lval);
-                                    let t1 = b.ins().band(lspc, nlv);
-                                    let t2 = b.ins().band(rspc, rval);
-                                    let t3 = b.ins().bor(t1, t2);
-                                    let spc = b.ins().bor(t3, val);
+                                    let (val, spc) = clif_fv_andnot(b, lval, lspc, rval, rspc);
+                                    let val = maskvsbs(b, val, size);
+                                    let spc = maskvsbs(b, spc, size);
                                     (val, spc)
                                 })
                             }
-                            (O::AndNot, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
-                            (O::OrNot, M::FourValue, _, Some(_), _, _) => {
+                            (O::OrNot, M::FourValue, _, Some(size), _, _) => {
                                 map!((lval, lspc), (rval, rspc) => @fv {
-                                    let a = b.ins().band(lspc, lval);
-                                    let nrv = b.ins().bnot(rval);
-                                    let c = b.ins().band(rspc, nrv);
-                                    let val = b.ins().bor(a, c);
-                                    let lsrs = b.ins().band(lspc, rspc);
-                                    let spc = b.ins().bor(val, lsrs);
+                                    let (val, spc) = clif_fv_ornot(b, lval, lspc, rval, rspc);
+                                    let val = maskvsbs(b, val, size);
+                                    let spc = maskvsbs(b, spc, size);
                                     (val, spc)
                                 })
                             }
-                            (O::OrNot, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
-                            (O::Xnor, M::FourValue, _, Some(_), _, _) => {
+                            (O::Xnor, M::FourValue, _, Some(size), _, _) => {
                                 map!((lval, lspc), (rval, rspc) => @fv {
-                                    let spc = b.ins().band(lspc, rspc);
-                                    let xv = b.ins().bxor(lval, rval);
-                                    let nxv = b.ins().bnot(xv);
-                                    let val = b.ins().band(spc, nxv);
+                                    let (val, spc) = clif_fv_xnor(b, lval, lspc, rval, rspc);
+                                    let val = maskvsbs(b, val, size);
+                                    let spc = maskvsbs(b, spc, size);
                                     (val, spc)
                                 })
                             }
-                            (O::Xnor, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+
+                            (O::And, _, _, _, _, _) => wide_binary_bitwise(
+                                b,
+                                wide_map,
+                                dst_size,
+                                ptr,
+                                heap,
+                                *dst,
+                                *lhs,
+                                *rhs,
+                                |b, l, r| b.ins().band(l, r),
+                                clif_fv_and,
+                                false,
+                            ),
+                            (O::Or, _, _, _, _, _) => wide_binary_bitwise(
+                                b,
+                                wide_map,
+                                dst_size,
+                                ptr,
+                                heap,
+                                *dst,
+                                *lhs,
+                                *rhs,
+                                |b, l, r| b.ins().bor(l, r),
+                                clif_fv_or,
+                                false,
+                            ),
+                            (O::Xor, _, _, _, _, _) => wide_binary_bitwise(
+                                b,
+                                wide_map,
+                                dst_size,
+                                ptr,
+                                heap,
+                                *dst,
+                                *lhs,
+                                *rhs,
+                                |b, l, r| b.ins().bxor(l, r),
+                                clif_fv_xor,
+                                false,
+                            ),
+                            (O::AndNot, _, _, _, _, _) => wide_binary_bitwise(
+                                b,
+                                wide_map,
+                                dst_size,
+                                ptr,
+                                heap,
+                                *dst,
+                                *lhs,
+                                *rhs,
+                                |b, l, r| b.ins().band_not(l, r),
+                                clif_fv_andnot,
+                                false,
+                            ),
+                            (O::OrNot, _, _, _, _, _) => wide_binary_bitwise(
+                                b,
+                                wide_map,
+                                dst_size,
+                                ptr,
+                                heap,
+                                *dst,
+                                *lhs,
+                                *rhs,
+                                |b, l, r| b.ins().bor_not(l, r),
+                                clif_fv_ornot,
+                                false,
+                            ),
+                            (O::Xnor, _, _, _, _, _) => wide_binary_bitwise(
+                                b,
+                                wide_map,
+                                dst_size,
+                                ptr,
+                                heap,
+                                *dst,
+                                *lhs,
+                                *rhs,
+                                |b, l, r| b.ins().bxor_not(l, r),
+                                clif_fv_xnor,
+                                false,
+                            ),
+                            (O::CopyX, M::TwoValue, _, Some(_), _, _) => {
+                                map!(lhs, _rhs => @tv lhs)
+                            }
+                            (O::CopyX, M::FourValue, _, Some(size), _, _) => {
+                                map!((lval, lspc), (rval, rspc) => @fv {
+                                    let (val, spc) = clif_fv_copyx(b, lval, lspc, rval, rspc);
+                                    let val = maskvsbs(b, val, size);
+                                    let spc = maskvsbs(b, spc, size);
+                                    (val, spc)
+                                })
+                            }
+                            (O::CopyX, _, _, _, _, _) => wide_binary_bitwise(
+                                b,
+                                wide_map,
+                                dst_size,
+                                ptr,
+                                heap,
+                                *dst,
+                                *lhs,
+                                *rhs,
+                                |_b, l, _r| l,
+                                clif_fv_copyx,
+                                false,
+                            ),
+                            (O::CopyZ, M::TwoValue, _, Some(_), _, _) => {
+                                map!(lhs, _rhs => @tv lhs)
+                            }
+                            (O::CopyZ, M::FourValue, _, Some(size), _, _) => {
+                                map!((lval, lspc), (rval, rspc) => @fv {
+                                    let (val, spc) = clif_fv_copyz(b, lval, lspc, rval, rspc);
+                                    let val = maskvsbs(b, val, size);
+                                    let spc = maskvsbs(b, spc, size);
+                                    (val, spc)
+                                })
+                            }
+                            (O::CopyZ, _, _, _, _, _) => wide_binary_bitwise(
+                                b,
+                                wide_map,
+                                dst_size,
+                                ptr,
+                                heap,
+                                *dst,
+                                *lhs,
+                                *rhs,
+                                |_b, l, _r| l,
+                                clif_fv_copyz,
+                                false,
+                            ),
 
                             (O::Add, _, _, Some(_), _, _) => {
                                 bin_arith!(lhs, rhs => b.ins().iadd(lhs, rhs), true)
@@ -1014,42 +1113,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::Concat, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
-                            (O::CopyX, M::TwoValue, _, Some(_), _, _) => {
-                                map!(lhs, _rhs => @tv lhs)
-                            }
-                            (O::CopyX, M::FourValue, _, Some(_), _, _) => {
-                                map!((lval, lspc), (rval, rspc) => @fv {
-                                    let nrs = b.ins().bnot(rspc);
-                                    let nrv = b.ins().bnot(rval);
-                                    let cm0 = b.ins().band(nrs, nrv);
-                                    let cm = maskv(b, cm0, dst_size.get());
-                                    let ncm = b.ins().bnot(cm);
-                                    let spc = b.ins().band(lspc, ncm);
-                                    let val = b.ins().band(lval, ncm);
-                                    (val, spc)
-                                })
-                            }
-                            (O::CopyX, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
-                            (O::CopyZ, M::TwoValue, _, Some(_), _, _) => {
-                                map!(lhs, _rhs => @tv lhs)
-                            }
-                            (O::CopyZ, M::FourValue, _, Some(_), _, _) => {
-                                map!((lval, lspc), (rval, rspc) => @fv {
-                                    let nrs = b.ins().bnot(rspc);
-                                    let cm0 = b.ins().band(nrs, rval);
-                                    let cm = maskv(b, cm0, dst_size.get());
-                                    let ncm = b.ins().bnot(cm);
-                                    let spc = b.ins().band(lspc, ncm);
-                                    let v0 = b.ins().bor(lval, cm);
-                                    let val = maskv(b, v0, dst_size.get());
-                                    (val, spc)
-                                })
-                            }
-                            (O::CopyZ, _, _, _, _, _) => self
                                 .compiler
                                 .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             // Real* ops are always 64-bit, so never wide.
@@ -2591,6 +2654,86 @@ fn clif_fv_xor(
     (val, spc)
 }
 
+fn clif_fv_andnot(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    let a = b.ins().band(lspc, lval);
+    let nrv = b.ins().bnot(rval);
+    let c = b.ins().band(rspc, nrv);
+    let val = b.ins().band(a, c);
+    let nlv = b.ins().bnot(lval);
+    let t1 = b.ins().band(lspc, nlv);
+    let t2 = b.ins().band(rspc, rval);
+    let t3 = b.ins().bor(t1, t2);
+    let spc = b.ins().bor(t3, val);
+    (val, spc)
+}
+
+fn clif_fv_ornot(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    let a = b.ins().band(lspc, lval);
+    let nrv = b.ins().bnot(rval);
+    let c = b.ins().band(rspc, nrv);
+    let val = b.ins().bor(a, c);
+    let lsrs = b.ins().band(lspc, rspc);
+    let spc = b.ins().bor(val, lsrs);
+    (val, spc)
+}
+
+fn clif_fv_xnor(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    let spc = b.ins().band(lspc, rspc);
+    let xv = b.ins().bxor(lval, rval);
+    let nxv = b.ins().bnot(xv);
+    let val = b.ins().band(spc, nxv);
+    (val, spc)
+}
+
+fn clif_fv_copyx(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    let nrs = b.ins().bnot(rspc);
+    let nrv = b.ins().bnot(rval);
+    let cm0 = b.ins().band(nrs, nrv);
+    let ncm = b.ins().bnot(cm0);
+    let spc = b.ins().band(lspc, ncm);
+    let val = b.ins().band(lval, ncm);
+    (val, spc)
+}
+
+fn clif_fv_copyz(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    let nrs = b.ins().bnot(rspc);
+    let cm0 = b.ins().band(nrs, rval);
+    let ncm = b.ins().bnot(cm0);
+    let spc = b.ins().band(lspc, ncm);
+    let val = b.ins().bor(lval, cm0);
+    (val, spc)
+}
+
 fn sign_extend(
     b: &mut FunctionBuilder,
     val: Value,
@@ -2749,4 +2892,81 @@ fn clif_fv_arith(
     let val = b.ins().select(gate, rawm, zero);
     let spc = b.ins().select(gate, mfull, zero);
     (val, spc)
+}
+
+fn wide_binary_bitwise(
+    b: &mut FunctionBuilder,
+    wide_map: &WideMap,
+    size: VectorSize,
+    ptr: Type,
+    heap: Value,
+    dst: VariableKey,
+    lhs: VariableKey,
+    rhs: VariableKey,
+    tv: impl Fn(&mut FunctionBuilder, Value, Value) -> Value,
+    fv: impl Fn(&mut FunctionBuilder, Value, Value, Value, Value) -> (Value, Value),
+    needs_mask: bool,
+) {
+    let dst_base = wide_addr(b, ptr, heap, wide_map[&dst], 0);
+    let lhs_base = wide_addr(b, ptr, heap, wide_map[&lhs], 0);
+    let rhs_base = wide_addr(b, ptr, heap, wide_map[&rhs], 0);
+
+    let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
+    let words = nwords(size.get());
+
+    let bitwise_bb = b.create_block();
+    let done_bb = b.create_block();
+    let it = b.append_block_param(bitwise_bb, I64);
+
+    let zero = b.ins().iconst(I64, 0);
+    b.ins().jump(bitwise_bb, &[BlockArg::from(zero)]);
+
+    b.switch_to_block(bitwise_bb);
+    let lhs_ptr = b.ins().iadd(lhs_base, it);
+    let rhs_ptr = b.ins().iadd(rhs_base, it);
+    let dst_ptr = b.ins().iadd(dst_base, it);
+
+    match dst.mode() {
+        LogicMode::TwoValue => {
+            let lhs_val = b.ins().load(I64, mem(), lhs_ptr, 0);
+            let rhs_val = b.ins().load(I64, mem(), rhs_ptr, 0);
+            let dst_val = tv(b, lhs_val, rhs_val);
+            b.ins().store(mem(), dst_val, dst_ptr, 0);
+        }
+        LogicMode::FourValue => {
+            let lhs_spc = b.ins().load(I64, mem(), lhs_ptr, 0);
+            let rhs_spc = b.ins().load(I64, mem(), rhs_ptr, 0);
+            let lhs_val = b.ins().load(I64, mem(), lhs_ptr, val_offset);
+            let rhs_val = b.ins().load(I64, mem(), rhs_ptr, val_offset);
+            let (dst_val, dst_spc) = fv(b, lhs_val, lhs_spc, rhs_val, rhs_spc);
+            b.ins().store(mem(), dst_spc, dst_ptr, 0);
+            b.ins().store(mem(), dst_val, dst_ptr, val_offset);
+        }
+    }
+    let next = b.ins().iadd_imm_u(it, 8);
+    let lt = b
+        .ins()
+        .icmp_imm_u(IntCC::UnsignedLessThan, next, (words * 8) as i64);
+    b.ins()
+        .brif(lt, bitwise_bb, &[BlockArg::from(next)], done_bb, &[]);
+
+    b.switch_to_block(done_bb);
+    if needs_mask && let Some(mask_size) = SixBitSize::last_word_size(size) {
+        let last = b.ins().iadd_imm_u(dst_base, ((words - 1) * 8) as i64);
+        match dst.mode() {
+            LogicMode::TwoValue => {
+                let last_word = b.ins().load(I64, mem(), last, 0);
+                let masked = maskvsbs(b, last_word, mask_size);
+                b.ins().store(mem(), masked, last, 0);
+            }
+            LogicMode::FourValue => {
+                let last_word_spc = b.ins().load(I64, mem(), last, 0);
+                let last_word_val = b.ins().load(I64, mem(), last, val_offset);
+                let masked_spc = maskvsbs(b, last_word_spc, mask_size);
+                let masked_val = maskvsbs(b, last_word_val, mask_size);
+                b.ins().store(mem(), masked_spc, last, 0);
+                b.ins().store(mem(), masked_val, last, val_offset);
+            }
+        }
+    }
 }

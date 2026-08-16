@@ -146,6 +146,11 @@ impl SixBitSize {
     pub fn to_vector_size(self) -> VectorSize {
         VectorSize::new(self as u32).unwrap()
     }
+
+    #[inline(always)]
+    pub fn last_word_size(size: VectorSize) -> Option<SixBitSize> {
+        SixBitSize::new((size.get() & 0x3F) as u8)
+    }
 }
 
 impl fmt::Display for SixBitSize {
