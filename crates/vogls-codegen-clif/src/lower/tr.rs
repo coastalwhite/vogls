@@ -1,3 +1,4 @@
+use std::cmp;
 use std::mem::offset_of;
 
 use cranelift_codegen::Context;
@@ -12,14 +13,14 @@ use cranelift_module::{FuncId, Module};
 use vogls_codegen::SixBitSize;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Instruction, IntrinsicOp,
-    LogicMode, ResizeOp, ShiftImmOp, UnaryOp, VariableKey,
+    LogicMode, ResizeOp, ShiftImmOp, UnaryOp, VSIZE_32, VariableKey, VectorSize,
 };
 use vogls_utils::VgHashMap;
 
 use crate::ffi::FfiVec;
 use crate::lower::{
-    F64, I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, cast, instr_is_wide, mask_of, maskv, mem,
-    nwords, var_words,
+    F64, I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, cast, dyn_slice_read, fv_load,
+    instr_is_wide, mask_of, maskv, mem, nwords, var_words,
 };
 use crate::runtime::{EventT, ScheduleT, layout};
 
@@ -139,7 +140,10 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                 if matches!(instr, Instruction::Phi(..)) {
                     continue;
                 }
-                if instr_is_wide(self.compiler.gl, instr) {
+                // Constant is lowered inline for both widths by the match below.
+                if !matches!(instr, Instruction::Constant(..))
+                    && instr_is_wide(self.compiler.gl, instr)
+                {
                     self.compiler.lower_wide_instruction(
                         &mut self.b,
                         &self.params,
@@ -163,38 +167,99 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                     b.use_var(spc_map[&v])
                 };
 
+                // Write value/special word `i` of `v` (narrow => i == 0, Cranelift
+                // Variable; wide => stack/heap store). Mirror the accessors used by
+                // the wide lowering so a single word-loop covers both widths.
+                let gl = self.compiler.gl;
+                let ptr = self.compiler.ptr;
+                let heap = params.heap_ptr;
+                let wide_map = &self.wide_map;
+                let wv = |b: &mut FunctionBuilder, v: VariableKey, i: u32, val: Value| {
+                    let size = gl.vars.size(v).get();
+                    if size > 64 {
+                        let off = if v.mode() == LogicMode::FourValue {
+                            nwords(size) + i
+                        } else {
+                            i
+                        };
+                        wide_store(b, ptr, heap, wide_map[&v], off, val);
+                    } else {
+                        b.def_var(vmap[&v], val);
+                    }
+                };
+                let ws = |b: &mut FunctionBuilder, v: VariableKey, i: u32, val: Value| {
+                    let size = gl.vars.size(v).get();
+                    if size > 64 {
+                        wide_store(b, ptr, heap, wide_map[&v], i, val);
+                    } else {
+                        b.def_var(spc_map[&v], val);
+                    }
+                };
+
                 match instr {
                     // Phi nodes are realized by the per-block phi copies emitted at the
                     // end of each predecessor block, so the instruction itself is a no-op.
                     Instruction::Phi(..) => {}
                     Instruction::Constant(dst, bits) => {
-                        debug_assert!(!bits.contains_special() || dst.mode().is_four_value());
-                        debug_assert!(bits.size().get() <= 64);
+                        // Normalize the constant representation such that
+                        //   contains_special() => representation is fv
+                        let bits = bits.clone_lowering_mode();
 
-                        let size = bits.size();
-                        match bits.clone_lowering_mode().as_data_ref() {
-                            vogls_bits::BitsDataRef::InlineTv(v) => {
+                        debug_assert!(!bits.contains_special() || dst.mode().is_four_value());
+
+                        let dst_size = gl.vars.size(*dst);
+
+                        use vogls_bits::BitsDataRef as R;
+                        match bits.as_data_ref() {
+                            R::InlineTv(v) => {
                                 let val = b.ins().iconst(I64, v as i64);
                                 b.def_var(vmap[dst], val);
                                 if dst.mode().is_four_value() {
-                                    let spc = b.ins().iconst(I64, mask_of(size.get()));
+                                    let spc = b.ins().iconst(I64, mask_of(dst_size.get()));
                                     b.def_var(spc_map[dst], spc);
                                 }
                             }
-                            vogls_bits::BitsDataRef::InlineFv(spc, val) => {
+                            R::InlineFv(spc, val) => {
                                 let val = b.ins().iconst(I64, val as i64);
                                 let spc = b.ins().iconst(I64, spc as i64);
                                 b.def_var(vmap[dst], val);
                                 b.def_var(spc_map[dst], spc);
                             }
-                            vogls_bits::BitsDataRef::SeparateFv(s) => {
-                                // 33..=64: [spc, val].
-                                let val = b.ins().iconst(I64, s[1] as i64);
+                            // Four-value data with size 33..=64.
+                            R::SeparateFv(s) if dst_size.get() <= 64 => {
                                 let spc = b.ins().iconst(I64, s[0] as i64);
+                                let val = b.ins().iconst(I64, s[1] as i64);
                                 b.def_var(vmap[dst], val);
                                 b.def_var(spc_map[dst], spc);
                             }
-                            vogls_bits::BitsDataRef::SeparateTv(_) => unreachable!(),
+
+                            // @TODO: Don't inline the value. Instead put it on the heap and
+                            // memcpy it.
+                            R::SeparateFv(s) => {
+                                let n = nwords(dst_size.get());
+                                for i in 0..n {
+                                    let sc = b.ins().iconst(I64, s[i as usize] as i64);
+                                    ws(b, *dst, i, sc);
+                                    let vc = b.ins().iconst(I64, s[(n + i) as usize] as i64);
+                                    wv(b, *dst, i, vc);
+                                }
+                            }
+                            R::SeparateTv(w) => {
+                                let n = nwords(dst_size.get());
+                                for i in 0..n {
+                                    let c = b.ins().iconst(I64, w[i as usize] as i64);
+                                    wv(b, *dst, i, c);
+                                    if dst.mode().is_four_value() {
+                                        let m = if i == n - 1 {
+                                            super::top_i64(dst_size.get())
+                                        } else {
+                                            -1
+                                        };
+                                        let sc = b.ins().iconst(I64, m);
+                                        ws(b, *dst, i, sc);
+                                    }
+                                }
+                            }
                         }
                     }
                     Instruction::Unary(dst, op, src) => {
@@ -1320,15 +1385,144 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             b.def_var(spc_map[dst], spc);
                         }
                     }
+                    // Constant-offset slice: extract dst-width bits of src at `offset`.
+                    Instruction::SliceImm(dst, src, offset) => {
+                        let dst_size = self.compiler.gl.vars.size(*dst);
+                        let src_size = self.compiler.gl.vars.size(*src);
+
+                        // Over-sliced. All destination bits are zero.
+                        let Some(rem_src_bits) =
+                            VectorSize::new(src_size.get().saturating_sub(*offset))
+                        else {
+                            let zero = b.ins().iconst(I64, 0);
+                            b.def_var(vmap[dst], zero);
+                            if dst.mode().is_four_value() {
+                                let all_one = b.ins().iconst(I64, mask_of(dst_size.get()));
+                                b.def_var(spc_map[dst], all_one);
+                            }
+                            continue;
+                        };
+
+                        // Truncation / Zero-extend.
+                        let val = get(b, *src);
+                        if *offset == 0 {
+                            let mut val = val;
+                            if dst_size < src_size {
+                                val = maskv(b, val, dst_size.get());
+                            }
+
+                            b.def_var(vmap[dst], val);
+                            if dst.mode().is_four_value() {
+                                let spc = spc_get(b, *src);
+                                let spc = match dst_size.cmp(&src_size) {
+                                    // Truncate.
+                                    cmp::Ordering::Less => maskv(b, spc, dst_size.get()),
+                                    // Zero Extend.
+                                    cmp::Ordering::Greater => {
+                                        let fill =
+                                            mask_of(dst_size.get()) & !mask_of(src_size.get());
+                                        b.ins().bor_imm_u(spc, fill)
+                                    }
+
+                                    cmp::Ordering::Equal => spc,
+                                };
+
+                                b.def_var(spc_map[dst], spc);
+                            }
+                            continue;
+                        }
+
+                        let mut shifted_val = b.ins().ushr_imm_u(val, *offset as i64);
+                        if rem_src_bits > dst_size {
+                            shifted_val = maskv(b, shifted_val, dst_size.get());
+                        }
+                        b.def_var(vmap[dst], shifted_val);
+                        if dst.mode().is_four_value() {
+                            let spc = spc_get(b, *src);
+                            let shifted_spc = b.ins().ushr_imm_u(spc, *offset as i64);
+                            let shifted_spc = match dst_size.cmp(&rem_src_bits) {
+                                // Truncate to dst size.
+                                cmp::Ordering::Less => maskv(b, shifted_spc, dst_size.get()),
+                                // Extend with zeros to dst size.
+                                cmp::Ordering::Greater => {
+                                    let fill =
+                                        mask_of(dst_size.get()) & !mask_of(rem_src_bits.get());
+                                    b.ins().bor_imm_u(shifted_spc, fill)
+                                }
+                                cmp::Ordering::Equal => shifted_spc,
+                            };
+                            b.def_var(spc_map[dst], shifted_spc);
+                        }
+                    }
+                    Instruction::Slice(dst, src, offset) => {
+                        let dst_size = self.compiler.gl.vars.size(*dst);
+                        let src_size = self.compiler.gl.vars.size(*src);
+
+                        let offset_val = get(b, *offset);
+
+                        // Guard (predictable branch) and fill destination with `x` if
+                        // - `offset >= src_size` (which guards against shift overflow)
+                        // - `offset` contains `x` or `z`.
+                        let all_x = b.ins().icmp_imm_u(
+                            IntCC::UnsignedGreaterThanOrEqual,
+                            offset_val,
+                            src_size.get() as i64,
+                        );
+                        let all_x = match offset.mode() {
+                            LogicMode::TwoValue => all_x,
+                            LogicMode::FourValue => {
+                                let os = spc_get(b, *offset);
+                                let special = b.ins().icmp_imm_u(
+                                    IntCC::NotEqual,
+                                    os,
+                                    mask_of(VSIZE_32.get()),
+                                );
+                                b.ins().bor(all_x, special)
+                            }
+                        };
+
+                        let all_x_bb = b.create_block();
+                        let slice_guarded_bb = b.create_block();
+                        let done_bb = b.create_block();
+                        b.ins().brif(all_x, all_x_bb, &[], slice_guarded_bb, &[]);
+
+                        b.switch_to_block(slice_guarded_bb);
+                        // Value plane.
+                        let src_val = get(b, *src);
+                        let mut dst_val = b.ins().ushr(src_val, offset_val);
+                        if dst_size < src_size {
+                            dst_val = maskv(b, dst_val, dst_size.get());
+                        }
+                        b.def_var(vmap[dst], dst_val);
+                        // Special plane.
+                        let src_spc = match src.mode() {
+                            LogicMode::TwoValue => b.ins().iconst(I64, mask_of(src_size.get())),
+                            LogicMode::FourValue => spc_get(b, *src),
+                        };
+                        let mut dst_spc = b.ins().ushr(src_spc, offset_val);
+                        if dst_size < src_size {
+                            dst_spc = maskv(b, dst_spc, dst_size.get());
+                        }
+                        b.def_var(spc_map[dst], dst_spc);
+                        b.ins().jump(done_bb, &[]);
+
+                        // Guard condition. Output is all `x`.
+                        b.switch_to_block(all_x_bb);
+                        let zero = b.ins().iconst(I64, 0);
+                        b.def_var(vmap[dst], zero);
+                        b.def_var(spc_map[dst], zero);
+                        b.ins().jump(done_bb, &[]);
+
+                        b.switch_to_block(done_bb);
+                    }
                     Instruction::LastUpdateTime(dst, signal) => {
                         let rt = self.compiler.info.rt_signal_map[signal];
-                        let idx = self
+                        let &idx = self
                             .compiler
                             .info
                             .lupdt_indexes
                             .get(&rt)
-                            .copied()
-                            .unwrap_or(0);
+                            .expect("Should have been populated in a prepass.");
                         let lat = params.last_active_time;
                         let t = b.ins().load(I64, mem(), lat, (idx * 8) as i32);
                         b.def_var(vmap[dst], t);
@@ -1529,15 +1723,272 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }
                         }
                     }
-                    _ => {
-                        self.compiler.lower_instruction(
-                            &mut self.b,
-                            &self.params,
-                            &self.vmap,
-                            &self.spc_map,
-                            &self.wide_map,
-                            instr,
+                    Instruction::Probe(dst, signal, offset) => {
+                        let dst_size = self.compiler.gl.vars.size(*dst);
+                        let signal_size = self.compiler.gl.signals[*signal].size;
+
+                        let (href, _rt, mode) = self.compiler.info.heap_ref(*signal);
+                        let heap = params.heap_ptr;
+                        if mode == LogicMode::TwoValue {
+                            let bit = href.offset.bit_offset + *offset as usize;
+                            let word = bit / 64;
+                            let shift = bit % 64;
+                            let loaded = b.ins().load(I64, mem(), heap, (word * 8) as i32);
+                            let shifted = if shift == 0 {
+                                loaded
+                            } else {
+                                b.ins().ushr_imm_u(loaded, shift as i64)
+                            };
+                            let r = maskv(b, shifted, dst_size.get());
+                            b.def_var(vmap[dst], r);
+                        } else if *offset == 0 && dst_size == signal_size {
+                            // Whole-signal probe: dst width matches the signal's storage.
+                            let (val, spc) = fv_load(b, heap, href, dst_size.get());
+                            b.def_var(vmap[dst], val);
+                            b.def_var(spc_map[dst], spc);
+                        } else {
+                            // Four-value probe at a constant bit offset. The heap layout
+                            // depends on the signal's own size: packed (<=32), split
+                            // spc/val words (33..=64), or separate spc/val regions (>64).
+                            let s_size = signal_size.get();
+                            let d_mask = mask_of(dst_size.get());
+                            let off = *offset as usize;
+                            let base = href.offset.bit_offset;
+                            if s_size <= 32 {
+                                let word = base / 64;
+                                let shift = base % 64;
+                                let loaded = b.ins().load(I64, mem(), heap, (word * 8) as i32);
+                                let s0 = b.ins().ushr_imm_u(loaded, (shift + off) as i64);
+                                let spc = b.ins().band_imm_u(s0, d_mask);
+                                let v0 = b
+                                    .ins()
+                                    .ushr_imm_u(loaded, (shift + s_size as usize + off) as i64);
+                                let val = b.ins().band_imm_u(v0, d_mask);
+                                b.def_var(vmap[dst], val);
+                                b.def_var(spc_map[dst], spc);
+                            } else if s_size <= 64 {
+                                let word = base / 64;
+                                let sw = b.ins().load(I64, mem(), heap, (word * 8) as i32);
+                                let vw = b.ins().load(I64, mem(), heap, ((word + 1) * 8) as i32);
+                                let s0 = b.ins().ushr_imm_u(sw, off as i64);
+                                let spc = b.ins().band_imm_u(s0, d_mask);
+                                let v0 = b.ins().ushr_imm_u(vw, off as i64);
+                                let val = b.ins().band_imm_u(v0, d_mask);
+                                b.def_var(vmap[dst], val);
+                                b.def_var(spc_map[dst], spc);
+                            } else {
+                                let src_nwords = nwords(s_size);
+                                let base_ptr = b.ins().iadd_imm_u(heap, ((base / 64) * 8) as i64);
+                                let val_ptr = b
+                                    .ins()
+                                    .iadd_imm_u(base_ptr, (src_nwords as usize * 8) as i64);
+                                let one = b.ins().iconst(types::I8, 1);
+                                let offc = b.ins().iconst(I64, off as i64);
+                                let (val, spc) = dyn_slice_read(
+                                    b,
+                                    val_ptr,
+                                    Some(base_ptr),
+                                    offc,
+                                    one,
+                                    s_size,
+                                    dst_size.get(),
+                                    0,
+                                );
+                                b.def_var(vmap[dst], val);
+                                b.def_var(spc_map[dst], spc);
+                            }
+                        }
+                    }
+                    Instruction::ProbeSlice(dst, signal, offset) => {
+                        let dst_size = self.compiler.gl.vars.size(*dst);
+                        let signal_size = self.compiler.gl.signals[*signal].size;
+                        let offset_size = self.compiler.gl.vars.size(*offset);
+
+                        let (href, _rt, mode) = self.compiler.info.heap_ref(*signal);
+                        let heap = params.heap_ptr;
+                        let src_nwords = nwords(signal_size.get());
+                        let base_word = href.offset.bit_offset / 64;
+                        let off = get(b, *offset);
+
+                        // Like Slice: the whole result is x if the offset is fully out of
+                        // range, or (four-value offset) the offset has any x/z bit. Guard
+                        // it with an explicit (predictable) branch so the in-range extract
+                        // needs no per-read oob/known selects.
+                        let all_x = b.ins().icmp_imm_u(
+                            IntCC::UnsignedGreaterThanOrEqual,
+                            off,
+                            signal_size.get() as i64,
                         );
+                        let all_x = if offset.mode().is_four_value() {
+                            let os = spc_get(b, *offset);
+                            let special =
+                                b.ins()
+                                    .icmp_imm_u(IntCC::NotEqual, os, mask_of(offset_size.get()));
+                            b.ins().bor(all_x, special)
+                        } else {
+                            all_x
+                        };
+
+                        let all_x_bb = b.create_block();
+                        let probe_bb = b.create_block();
+                        let done_bb = b.create_block();
+                        b.ins().brif(all_x, all_x_bb, &[], probe_bb, &[]);
+
+                        // Offset in range: read dst_size bits at `off`.
+                        b.switch_to_block(probe_bb);
+                        if mode == LogicMode::FourValue && signal_size.get() <= 32 {
+                            // Packed four-value signal: spc | (val << s_size) in one word.
+                            // val/spc share the word, so a plain shift past the field pulls
+                            // in the other plane's bits; mask any partial overhang past
+                            // s_size to x (spc=0) with the in-range mask.
+                            let d_mask = mask_of(dst_size.get());
+                            let bshift = (href.offset.bit_offset % 64) as i64;
+                            let word = href.offset.bit_offset / 64;
+                            let loaded = b.ins().load(I64, mem(), heap, (word * 8) as i32);
+                            let base_off = b.ins().iadd_imm_u(off, bshift);
+                            let s0 = b.ins().ushr(loaded, base_off);
+                            let spc_raw = b.ins().band_imm_u(s0, d_mask);
+                            let val_off =
+                                b.ins().iadd_imm_u(off, bshift + signal_size.get() as i64);
+                            let v0 = b.ins().ushr(loaded, val_off);
+                            let val_raw = b.ins().band_imm_u(v0, d_mask);
+                            // in-range mask: off<=diff ? mask : mask>>(off-diff).
+                            let diff = signal_size.get() - dst_size.get();
+                            let le = b.ins().icmp_imm_u(
+                                IntCC::UnsignedLessThanOrEqual,
+                                off,
+                                diff as i64,
+                            );
+                            let mc = b.ins().iconst(I64, d_mask);
+                            let over = b.ins().iadd_imm_u(off, -(diff as i64));
+                            let sh = b.ins().ushr(mc, over);
+                            let inr = b.ins().select(le, mc, sh);
+                            let val = b.ins().band(val_raw, inr);
+                            let spc = b.ins().band(spc_raw, inr);
+                            b.def_var(vmap[dst], val);
+                            b.def_var(spc_map[dst], spc);
+                        } else {
+                            let base_ptr = b.ins().iadd_imm_u(heap, (base_word * 8) as i64);
+                            let (val_ptr, spc_ptr) = if mode == LogicMode::FourValue {
+                                let vp = b
+                                    .ins()
+                                    .iadd_imm_u(base_ptr, (src_nwords as usize * 8) as i64);
+                                (vp, Some(base_ptr))
+                            } else {
+                                (base_ptr, None)
+                            };
+                            // The branch already handled a fully-out-of-range/unknown
+                            // offset, so read with off_known = true.
+                            let known = b.ins().iconst(types::I8, 1);
+                            let (val, spc) = dyn_slice_read(
+                                b,
+                                val_ptr,
+                                spc_ptr,
+                                off,
+                                known,
+                                signal_size.get(),
+                                dst_size.get(),
+                                (href.offset.bit_offset % 64) as u32,
+                            );
+                            b.def_var(vmap[dst], val);
+                            b.def_var(spc_map[dst], spc);
+                        }
+                        b.ins().jump(done_bb, &[]);
+
+                        b.switch_to_block(all_x_bb);
+                        let zero = b.ins().iconst(I64, 0);
+                        b.def_var(vmap[dst], zero);
+                        b.def_var(spc_map[dst], zero);
+                        b.ins().jump(done_bb, &[]);
+
+                        b.switch_to_block(done_bb);
+                    }
+                    Instruction::Drive(dst, signal, src, offset) => {
+                        let ssize = self.compiler.gl.vars.size(*src).get();
+                        let d_size = self.compiler.gl.signals[*signal].size.get();
+
+                        let (_href, _rt, mode) = self.compiler.info.heap_ref(*signal);
+                        if d_size > 64 && (mode == LogicMode::FourValue || ssize > 64) {
+                            let offc = b.ins().iconst(I64, *offset as i64);
+                            let one = b.ins().iconst(types::I8, 1);
+                            self.compiler.emit_wide_drive(
+                                b,
+                                params,
+                                *signal,
+                                *src,
+                                offc,
+                                one,
+                                vmap,
+                                spc_map,
+                                &self.wide_map,
+                            );
+                        } else if mode == LogicMode::TwoValue {
+                            // lower_drive_tv already handles two-value partial writes.
+                            let sv = get(b, *src);
+                            self.compiler
+                                .lower_drive_tv(b, params, *signal, sv, ssize, *offset);
+                        } else if *offset == 0 && ssize == d_size {
+                            let sv = get(b, *src);
+                            let ss = spc_get(b, *src);
+                            self.compiler
+                                .lower_drive_fv(b, params, *signal, sv, ss, ssize);
+                        } else {
+                            // Four-value partial drive at a constant offset.
+                            let sv = get(b, *src);
+                            let ss = spc_get(b, *src);
+                            let offc = b.ins().iconst(I64, *offset as i64);
+                            let one = b.ins().iconst(types::I8, 1);
+                            self.compiler.drive_partial(
+                                b,
+                                params,
+                                *signal,
+                                sv,
+                                Some(ss),
+                                ssize,
+                                offc,
+                                one,
+                            );
+                        }
+                        let zero = b.ins().iconst(I64, 0);
+                        b.def_var(vmap[dst], zero);
+                    }
+                    Instruction::DriveSlice(dst, signal, src, index) => {
+                        let (_href, _rt, mode) = self.compiler.info.heap_ref(*signal);
+                        let ssize = self.compiler.gl.vars.size(*src).get();
+                        let d_size = self.compiler.gl.signals[*signal].size.get();
+                        let index_size = self.compiler.gl.vars.size(*index).get();
+                        let off = get(b, *index);
+                        let off_known = if index.mode().is_four_value() {
+                            let os = spc_get(b, *index);
+                            b.ins().icmp_imm_u(IntCC::Equal, os, mask_of(index_size))
+                        } else {
+                            b.ins().iconst(types::I8, 1)
+                        };
+                        if d_size > 64 {
+                            self.compiler.emit_wide_drive(
+                                b,
+                                params,
+                                *signal,
+                                *src,
+                                off,
+                                off_known,
+                                vmap,
+                                spc_map,
+                                &self.wide_map,
+                            );
+                        } else {
+                            let sv = get(b, *src);
+                            let src_spc = if mode == LogicMode::FourValue {
+                                Some(spc_get(b, *src))
+                            } else {
+                                None
+                            };
+                            self.compiler.drive_partial(
+                                b, params, *signal, sv, src_spc, ssize, off, off_known,
+                            );
+                        }
+                        let zero = b.ins().iconst(I64, 0);
+                        b.def_var(vmap[dst], zero);
                     }
                 }
             }

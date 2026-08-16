@@ -676,7 +676,22 @@ pub enum Instruction {
     Binary(VariableKey, BinaryOp, VariableKey, VariableKey),
     BinaryImm(VariableKey, BinaryImmOp, VariableKey, Bits),
 
+    /// Slice the `src` starting at the `offset` to the size of `dst`.  
+    ///
+    /// Any out-of-bounds bits are filled with `x` (as opposed to [`Instruction::SliceImm`] which
+    /// fills with `0`). If the `offset` contains `x` or `z`, the output is full `x`.
+    ///
+    /// The `offset` variable is always 32-bits.
+    ///
+    /// (dst, src, offset)
     Slice(VariableKey, VariableKey, VariableKey),
+
+    /// Slice the `src` starting at the `offset` to the size of `dst`.  
+    ///
+    /// Any out-of-bounds bits are filled with `0` (as opposed to [`Instruction::Slice`] which
+    /// fills with `x`).
+    ///
+    /// (dst, src, offset)
     SliceImm(VariableKey, VariableKey, u32),
     ShiftImm(VariableKey, ShiftImmOp, VariableKey, u32),
 
