@@ -297,27 +297,81 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             (O::TvToFv, _, Some(_), Some(_)) => {
                                 map!(val => @fv { (val, b.ins().iconst(I64, mask_of(src_size.get()))) })
                             }
-                            (O::TvToFv, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::TvToFv, _, _, _) => {
+                                let dst_base = wide_addr(b, ptr, heap, wide_map[dst], 0);
+                                let src_base = wide_addr(b, ptr, heap, wide_map[src], 0);
+
+                                clif_unary(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    src_base,
+                                    UnaryTvFvFn {
+                                        iter: |b: &mut FunctionBuilder, src| {
+                                            let all_one = b.ins().iconst(I64, -1);
+                                            (src, all_one)
+                                        },
+                                        spc_mask: true,
+                                        val_mask: false,
+                                    },
+                                );
+                            }
                             (O::FvToTv, _, Some(_), Some(_)) => {
                                 map!(val, spc => @tv { b.ins().band(val, spc) })
                             }
-                            (O::FvToTv, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::FvToTv, _, _, _) => {
+                                let dst_base = wide_addr(b, ptr, heap, wide_map[dst], 0);
+                                let src_base = wide_addr(b, ptr, heap, wide_map[src], 0);
+
+                                clif_unary(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    src_base,
+                                    UnaryFvTvFn {
+                                        iter: |b: &mut FunctionBuilder, val, spc| {
+                                            b.ins().band(val, spc)
+                                        },
+                                        mask: false,
+                                    },
+                                );
+                            }
                             (O::Neg, M::TwoValue, Some(_), Some(_)) => map!(val => @tv {
                                 let n = b.ins().bnot(val);
                                 maskv(b, n, dst_size.get())
                             }),
-                            (O::Neg, M::FourValue, Some(_), Some(_)) => map!(val, spc => @fv {
-                                let nsv = b.ins().bnot(val);
-                                let val = b.ins().band(spc, nsv);
-                                (val, spc)
-                            }),
-                            (O::Neg, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::Neg, M::FourValue, Some(_), Some(_)) => {
+                                map!(val, spc => @fv clif_fv_not(b, val, spc))
+                            }
+                            (O::Neg, M::TwoValue, _, _) => {
+                                let dst_base = wide_addr(b, ptr, heap, wide_map[dst], 0);
+                                let src_base = wide_addr(b, ptr, heap, wide_map[src], 0);
+                                clif_unary(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    src_base,
+                                    UnaryTvTvFn {
+                                        iter: |b: &mut FunctionBuilder, src| b.ins().bnot(src),
+                                        mask: true,
+                                    },
+                                );
+                            }
+                            (O::Neg, M::FourValue, _, _) => {
+                                let dst_base = wide_addr(b, ptr, heap, wide_map[dst], 0);
+                                let src_base = wide_addr(b, ptr, heap, wide_map[src], 0);
+                                clif_unary(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    src_base,
+                                    UnaryFvFvFn {
+                                        iter: clif_fv_not,
+                                        spc_mask: false,
+                                        val_mask: false,
+                                    },
+                                );
+                            }
                             (O::ReduceOr, M::TwoValue, _, Some(_)) => map!(val => @tv {
                                 let c = b.ins().icmp_imm_u(IntCC::NotEqual, val, 0);
                                 b.ins().uextend(I64, c)
@@ -2639,6 +2693,12 @@ fn clif_fv_or(
     (val, spc)
 }
 
+fn clif_fv_not(b: &mut FunctionBuilder, val: Value, spc: Value) -> (Value, Value) {
+    let nsv = b.ins().bnot(val);
+    let val = b.ins().band(spc, nsv);
+    (val, spc)
+}
+
 /// Four-value bitwise XOR of two operands given as `(val, spc)` planes.
 /// Shared by the `Binary` and `BinaryImm` lowerings.
 fn clif_fv_xor(
@@ -2969,4 +3029,161 @@ fn wide_binary_bitwise(
             }
         }
     }
+}
+
+trait UnaryLowerFn {
+    fn lower(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value, src_ptr: Value);
+    fn finish(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value);
+}
+
+struct UnaryTvTvFn<F> {
+    iter: F,
+    mask: bool,
+}
+struct UnaryTvFvFn<F> {
+    iter: F,
+    spc_mask: bool,
+    val_mask: bool,
+}
+struct UnaryFvFvFn<F> {
+    iter: F,
+    spc_mask: bool,
+    val_mask: bool,
+}
+struct UnaryFvTvFn<F> {
+    iter: F,
+    mask: bool,
+}
+
+impl<F: FnMut(&mut FunctionBuilder, Value) -> Value> UnaryLowerFn for UnaryTvTvFn<F> {
+    fn lower(
+        &mut self,
+        b: &mut FunctionBuilder,
+        _size: VectorSize,
+        dst_ptr: Value,
+        src_ptr: Value,
+    ) {
+        let src = b.ins().load(I64, mem(), src_ptr, 0);
+        let out = (self.iter)(b, src);
+        b.ins().store(mem(), out, dst_ptr, 0);
+    }
+
+    fn finish(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value) {
+        if self.mask
+            && let Some(mask_size) = SixBitSize::last_word_size(size)
+        {
+            let last_word = b.ins().load(I64, mem(), dst_ptr, 0);
+            let masked = maskvsbs(b, last_word, mask_size);
+            b.ins().store(mem(), masked, dst_ptr, 0);
+        }
+    }
+}
+impl<F: FnMut(&mut FunctionBuilder, Value) -> (Value, Value)> UnaryLowerFn for UnaryTvFvFn<F> {
+    fn lower(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value, src_ptr: Value) {
+        let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
+        let src = b.ins().load(I64, mem(), src_ptr, 0);
+        let (val, spc) = (self.iter)(b, src);
+        b.ins().store(mem(), spc, dst_ptr, 0);
+        b.ins().store(mem(), val, dst_ptr, val_offset);
+    }
+
+    fn finish(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value) {
+        if (self.spc_mask || self.val_mask)
+            && let Some(mask_size) = SixBitSize::last_word_size(size)
+        {
+            let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
+            if self.spc_mask {
+                let last_word_spc = b.ins().load(I64, mem(), dst_ptr, 0);
+                let masked_spc = maskvsbs(b, last_word_spc, mask_size);
+                b.ins().store(mem(), masked_spc, dst_ptr, 0);
+            }
+            if self.val_mask {
+                let last_word_val = b.ins().load(I64, mem(), dst_ptr, val_offset);
+                let masked_val = maskvsbs(b, last_word_val, mask_size);
+                b.ins().store(mem(), masked_val, dst_ptr, val_offset);
+            }
+        }
+    }
+}
+impl<F: FnMut(&mut FunctionBuilder, Value, Value) -> Value> UnaryLowerFn for UnaryFvTvFn<F> {
+    fn lower(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value, src_ptr: Value) {
+        let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
+        let spc = b.ins().load(I64, mem(), src_ptr, 0);
+        let val = b.ins().load(I64, mem(), src_ptr, val_offset);
+        let out = (self.iter)(b, val, spc);
+        b.ins().store(mem(), out, dst_ptr, 0);
+    }
+
+    fn finish(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value) {
+        if self.mask
+            && let Some(mask_size) = SixBitSize::last_word_size(size)
+        {
+            let last_word = b.ins().load(I64, mem(), dst_ptr, 0);
+            let masked = maskvsbs(b, last_word, mask_size);
+            b.ins().store(mem(), masked, dst_ptr, 0);
+        }
+    }
+}
+impl<F: FnMut(&mut FunctionBuilder, Value, Value) -> (Value, Value)> UnaryLowerFn
+    for UnaryFvFvFn<F>
+{
+    fn lower(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value, src_ptr: Value) {
+        let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
+        let spc = b.ins().load(I64, mem(), src_ptr, 0);
+        let val = b.ins().load(I64, mem(), src_ptr, val_offset);
+        let (val, spc) = (self.iter)(b, val, spc);
+        b.ins().store(mem(), spc, dst_ptr, 0);
+        b.ins().store(mem(), val, dst_ptr, val_offset);
+    }
+
+    fn finish(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value) {
+        if (self.spc_mask || self.val_mask)
+            && let Some(mask_size) = SixBitSize::last_word_size(size)
+        {
+            let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
+            if self.spc_mask {
+                let last_word_spc = b.ins().load(I64, mem(), dst_ptr, 0);
+                let masked_spc = maskvsbs(b, last_word_spc, mask_size);
+                b.ins().store(mem(), masked_spc, dst_ptr, 0);
+            }
+            if self.val_mask {
+                let last_word_val = b.ins().load(I64, mem(), dst_ptr, val_offset);
+                let masked_val = maskvsbs(b, last_word_val, mask_size);
+                b.ins().store(mem(), masked_val, dst_ptr, val_offset);
+            }
+        }
+    }
+}
+
+fn clif_unary(
+    b: &mut FunctionBuilder,
+    size: VectorSize,
+    dst_base: Value,
+    src_base: Value,
+    mut f: impl UnaryLowerFn,
+) {
+    let nwords = nwords(size.get());
+
+    let bitwise_bb = b.create_block();
+    let done_bb = b.create_block();
+    let it = b.append_block_param(bitwise_bb, I64);
+
+    let zero = b.ins().iconst(I64, 0);
+    b.ins().jump(bitwise_bb, &[BlockArg::from(zero)]);
+
+    b.switch_to_block(bitwise_bb);
+    let dst_ptr = b.ins().iadd(dst_base, it);
+    let src_ptr = b.ins().iadd(src_base, it);
+    f.lower(b, size, dst_ptr, src_ptr);
+
+    let next = b.ins().iadd_imm_u(it, 8);
+    let lt = b
+        .ins()
+        .icmp_imm_u(IntCC::UnsignedLessThan, next, (nwords * 8) as i64);
+    b.ins()
+        .brif(lt, bitwise_bb, &[BlockArg::from(next)], done_bb, &[]);
+
+    b.switch_to_block(done_bb);
+    let last = b.ins().iadd_imm_u(dst_base, ((nwords - 1) * 8) as i64);
+    f.finish(b, size, last);
 }
