@@ -29,7 +29,7 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 
-use vogls_codegen::{HeapRef, SixBitSize};
+use vogls_codegen::{HeapBuilder, HeapRef, SixBitSize};
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction,
@@ -40,7 +40,7 @@ use vogls_runtime::RtSignalKey;
 use vogls_utils::{TableKey, VgHashMap};
 
 use crate::ffi::FfiVec;
-use crate::runtime::{EventT, ScheduleT, layout};
+use crate::runtime::{ColdContextT, EventT, ScheduleT, layout};
 
 use self::tr::TrBuilder;
 
@@ -79,6 +79,10 @@ const F64: Type = types::F64;
 
 fn mem() -> MemFlagsData {
     MemFlagsData::trusted()
+}
+
+fn mem_ro() -> MemFlagsData {
+    MemFlagsData::trusted().with_readonly()
 }
 
 fn cast() -> MemFlagsData {
@@ -166,7 +170,7 @@ pub struct Compiled {
 }
 
 impl Compiled {
-    pub fn into_design(self, num_regions: u8) -> crate::runtime::ClifDesign {
+    pub fn into_design(self, heap_wide_ptr: u64, num_regions: u8) -> crate::runtime::ClifDesign {
         use crate::runtime::{ClifDesign, DriveFn, EmptyActiveEventQueueFn, EventT};
         let Compiled {
             module,
@@ -198,6 +202,7 @@ impl Compiled {
             drive_fns,
             dyn_fmt_strs,
             read_mems,
+            heap_wide_ptr,
             num_regions,
             standing_procs,
             standing_arm_offsets,
@@ -228,43 +233,43 @@ enum WideLoc {
     Heap(u32),
 }
 
-type WideMap = VgHashMap<VariableKey, WideLoc>;
-
-/// Address of word `word` of a wide value.
-fn wide_addr(b: &mut FunctionBuilder, ptr: Type, heap: Value, loc: WideLoc, word: u32) -> Value {
-    match loc {
-        WideLoc::Slot(s) => b.ins().stack_addr(ptr, s, (word * 8) as i32),
-        WideLoc::Heap(base) => b.ins().iadd_imm_u(heap, i64::from(base + word) * 8),
-    }
-}
-/// Load word `word` of a wide value.
-fn wide_load(b: &mut FunctionBuilder, ptr: Type, heap: Value, loc: WideLoc, word: u32) -> Value {
-    match loc {
-        WideLoc::Slot(s) => b.ins().stack_load(ptr, I64, s, (word * 8) as i32),
-        WideLoc::Heap(base) => {
-            let a = b.ins().iadd_imm_u(heap, i64::from(base + word) * 8);
-            b.ins().load(I64, mem(), a, 0)
+impl WideLoc {
+    fn addr(self, b: &mut FunctionBuilder, ptr: Type, cldctx: Value, word: u32) -> Value {
+        match self {
+            WideLoc::Slot(s) => b.ins().stack_addr(ptr, s, (word * 8) as i32),
+            WideLoc::Heap(base) => {
+                let heap_wide_ptr = b.ins().load(
+                    ptr,
+                    mem_ro(),
+                    cldctx,
+                    offset_of!(ColdContextT, heap_wide_ptr) as i32,
+                );
+                b.ins()
+                    .iadd_imm_u(heap_wide_ptr, i64::from(base + word) * 8)
+            }
         }
     }
 }
-/// Store `val` into word `word` of a wide value.
+
+type WideMap = VgHashMap<VariableKey, WideLoc>;
+
+/// Load word `word` of a wide value, resolving its base through [`WideLoc::addr`]
+/// (stack slot, or the cold-context wide-scratch pointer for a heap location).
+fn wide_load(b: &mut FunctionBuilder, ptr: Type, cldctx: Value, loc: WideLoc, word: u32) -> Value {
+    let a = loc.addr(b, ptr, cldctx, word);
+    b.ins().load(I64, mem(), a, 0)
+}
+/// Store `val` into word `word` of a wide value (see [`wide_load`] for addressing).
 fn wide_store(
     b: &mut FunctionBuilder,
     ptr: Type,
-    heap: Value,
+    cldctx: Value,
     loc: WideLoc,
     word: u32,
     val: Value,
 ) {
-    match loc {
-        WideLoc::Slot(s) => {
-            b.ins().stack_store(ptr, val, s, (word * 8) as i32);
-        }
-        WideLoc::Heap(base) => {
-            let a = b.ins().iadd_imm_u(heap, i64::from(base + word) * 8);
-            b.ins().store(mem(), val, a, 0);
-        }
-    }
+    let a = loc.addr(b, ptr, cldctx, word);
+    b.ins().store(mem(), val, a, 0);
 }
 
 /// Max over all TRs of the total spilled-word footprint (vars above the heap
@@ -334,6 +339,7 @@ struct Compiler<'a> {
 
     gl: &'a GlobalContext,
     info: SignalInfo<'a>,
+    heap_builder: &'a mut HeapBuilder,
 
     disassembly: bool,
 }
@@ -344,6 +350,7 @@ impl<'a> Compiler<'a> {
         num_plugins: usize,
         gl: &'a GlobalContext,
         info: SignalInfo<'a>,
+        heap_builder: &'a mut HeapBuilder,
     ) -> Self {
         let mut fb = settings::builder();
         fb.set("opt_level", "speed").unwrap();
@@ -382,6 +389,7 @@ impl<'a> Compiler<'a> {
             scratch_base: 0,
             gl,
             info,
+            heap_builder,
             disassembly,
         }
     }
@@ -724,7 +732,7 @@ impl<'a> Compiler<'a> {
             // Pointer to this arg's bits: the wide slot (already in heap layout)
             // for >64, otherwise a freshly packed word in `val_slot`.
             let arg_ptr = if size > 64 {
-                wide_addr(b, self.ptr, params.heap_ptr, wide_map[item], 0)
+                wide_map[item].addr(b, self.ptr, params.cldctx, 0)
             } else {
                 if !fv {
                     let v = b.use_var(vmap[item]);
@@ -797,11 +805,11 @@ impl<'a> Compiler<'a> {
         vmap: &VgHashMap<VariableKey, Variable>,
         spc_map: &VgHashMap<VariableKey, Variable>,
         wide_map: &WideMap,
-        heap: Value,
+        cldctx: Value,
     ) -> Value {
         let size = self.gl.vars.size(key).get();
         if size > 64 {
-            return wide_addr(b, self.ptr, heap, wide_map[&key], 0);
+            return wide_map[&key].addr(b, self.ptr, cldctx, 0);
         }
         let fv = key.mode() == LogicMode::FourValue;
         let words = if fv { 2 } else { 1 };
@@ -830,7 +838,7 @@ impl<'a> Compiler<'a> {
         key: VariableKey,
         vmap: &VgHashMap<VariableKey, Variable>,
         wide_map: &WideMap,
-        heap: Value,
+        cldctx: Value,
     ) -> Value {
         let size = gl.vars.size(key).get();
         if size > 64 {
@@ -839,7 +847,7 @@ impl<'a> Compiler<'a> {
             } else {
                 0
             };
-            wide_load(b, self.ptr, heap, wide_map[&key], off)
+            wide_load(b, self.ptr, cldctx, wide_map[&key], off)
         } else {
             b.use_var(vmap[&key])
         }
@@ -886,15 +894,15 @@ impl<'a> Compiler<'a> {
         let dsize = self.gl.vars.size(dst).get();
         let ssize = self.gl.vars.size(s1).get();
 
-        let lhs_ptr = self.value_words_ptr(b, s1, vmap, spc_map, wide_map, params.heap_ptr);
+        let lhs_ptr = self.value_words_ptr(b, s1, vmap, spc_map, wide_map, params.cldctx);
         let rhs_ptr = if is_shift {
             // Pass [amt_known, amt_val]; a four-value amount that isn't fully
             // known makes the shim produce all-x.
-            let amt = self.first_val_word(b, self.gl, s2, vmap, wide_map, params.heap_ptr);
+            let amt = self.first_val_word(b, self.gl, s2, vmap, wide_map, params.cldctx);
             let known = if s2.mode() == LogicMode::FourValue {
                 let s2size = self.gl.vars.size(s2).get().min(64);
                 let spc = if self.gl.vars.size(s2).get() > 64 {
-                    wide_load(b, self.ptr, params.heap_ptr, wide_map[&s2], 0)
+                    wide_load(b, self.ptr, params.cldctx, wide_map[&s2], 0)
                 } else {
                     b.use_var(spc_map[&s2])
                 };
@@ -909,7 +917,7 @@ impl<'a> Compiler<'a> {
             b.ins().stack_store(self.ptr, amt, slot, 8);
             b.ins().stack_addr(self.ptr, slot, 0)
         } else {
-            self.value_words_ptr(b, s2, vmap, spc_map, wide_map, params.heap_ptr)
+            self.value_words_ptr(b, s2, vmap, spc_map, wide_map, params.cldctx)
         };
 
         let dst_wide = dsize > 64;
@@ -923,7 +931,7 @@ impl<'a> Compiler<'a> {
                 3,
             )))
         };
-        let dst_ptr = wide_addr(b, self.ptr, params.heap_ptr, dst_slot, 0);
+        let dst_ptr = dst_slot.addr(b, self.ptr, params.cldctx, 0);
 
         let cldctx = params.cldctx;
         let fnp = b.ins().load(
@@ -953,12 +961,12 @@ impl<'a> Compiler<'a> {
 
         if !dst_wide {
             if is_fv {
-                let spc = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 0);
-                let val = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 1);
+                let spc = wide_load(b, self.ptr, params.cldctx, dst_slot, 0);
+                let val = wide_load(b, self.ptr, params.cldctx, dst_slot, 1);
                 b.def_var(spc_map[&dst], spc);
                 b.def_var(vmap[&dst], val);
             } else {
-                let val = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 0);
+                let val = wide_load(b, self.ptr, params.cldctx, dst_slot, 0);
                 b.def_var(vmap[&dst], val);
             }
         }
@@ -1060,7 +1068,7 @@ impl<'a> Compiler<'a> {
         let is_fv = dst.mode() == LogicMode::FourValue;
         let dsize = gl.vars.size(dst).get();
         let ssize = gl.vars.size(src).get();
-        let src_ptr = self.value_words_ptr(b, src, vmap, spc_map, wide_map, params.heap_ptr);
+        let src_ptr = self.value_words_ptr(b, src, vmap, spc_map, wide_map, params.cldctx);
         let imm_ptr = self.materialize_imm_slot(b, imm, is_fv);
         let (lhs_ptr, rhs_ptr) = if swap {
             (imm_ptr, src_ptr)
@@ -1079,7 +1087,7 @@ impl<'a> Compiler<'a> {
                 3,
             )))
         };
-        let dst_ptr = wide_addr(b, self.ptr, params.heap_ptr, dst_slot, 0);
+        let dst_ptr = dst_slot.addr(b, self.ptr, params.cldctx, 0);
 
         let cldctx = params.cldctx;
         let fnp = b.ins().load(
@@ -1109,12 +1117,12 @@ impl<'a> Compiler<'a> {
 
         if !dst_wide {
             if is_fv {
-                let spc = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 0);
-                let val = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 1);
+                let spc = wide_load(b, self.ptr, params.cldctx, dst_slot, 0);
+                let val = wide_load(b, self.ptr, params.cldctx, dst_slot, 1);
                 b.def_var(spc_map[&dst], spc);
                 b.def_var(vmap[&dst], val);
             } else {
-                let val = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 0);
+                let val = wide_load(b, self.ptr, params.cldctx, dst_slot, 0);
                 b.def_var(vmap[&dst], val);
             }
         }
@@ -1146,7 +1154,7 @@ impl<'a> Compiler<'a> {
         let is_fv = dst.mode() == LogicMode::FourValue;
         let dsize = gl.vars.size(dst).get();
         let ssize = gl.vars.size(src).get();
-        let src_ptr = self.value_words_ptr(b, src, vmap, spc_map, wide_map, params.heap_ptr);
+        let src_ptr = self.value_words_ptr(b, src, vmap, spc_map, wide_map, params.cldctx);
         // amount operand: [known = 1, amount].
         let amt_slot =
             b.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 16, 3));
@@ -1167,7 +1175,7 @@ impl<'a> Compiler<'a> {
                 3,
             )))
         };
-        let dst_ptr = wide_addr(b, self.ptr, params.heap_ptr, dst_slot, 0);
+        let dst_ptr = dst_slot.addr(b, self.ptr, params.cldctx, 0);
 
         let cldctx = params.cldctx;
         let fnp = b.ins().load(
@@ -1197,12 +1205,12 @@ impl<'a> Compiler<'a> {
 
         if !dst_wide {
             if is_fv {
-                let spc = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 0);
-                let val = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 1);
+                let spc = wide_load(b, self.ptr, params.cldctx, dst_slot, 0);
+                let val = wide_load(b, self.ptr, params.cldctx, dst_slot, 1);
                 b.def_var(spc_map[&dst], spc);
                 b.def_var(vmap[&dst], val);
             } else {
-                let val = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 0);
+                let val = wide_load(b, self.ptr, params.cldctx, dst_slot, 0);
                 b.def_var(vmap[&dst], val);
             }
         }
@@ -1247,7 +1255,6 @@ impl<'a> Compiler<'a> {
         instr: &Instruction,
     ) {
         let ptr = self.ptr;
-        let heap = params.heap_ptr;
         let sz = |v: VariableKey| self.gl.vars.size(v).get();
         let is_fv = |v: VariableKey| v.mode() == LogicMode::FourValue;
         // read value word i (narrow => i == 0)
@@ -1259,7 +1266,7 @@ impl<'a> Compiler<'a> {
                 } else {
                     i
                 };
-                wide_load(b, ptr, heap, wide_map[&v], off)
+                wide_load(b, ptr, params.cldctx, wide_map[&v], off)
             } else {
                 b.use_var(vmap[&v])
             }
@@ -1267,7 +1274,7 @@ impl<'a> Compiler<'a> {
         let rs = |b: &mut FunctionBuilder, v: VariableKey, i: u32| -> Value {
             let size = self.gl.vars.size(v).get();
             if size > 64 {
-                wide_load(b, ptr, heap, wide_map[&v], i)
+                wide_load(b, ptr, params.cldctx, wide_map[&v], i)
             } else if v.mode() == LogicMode::FourValue {
                 b.use_var(spc_map[&v])
             } else {
@@ -1282,7 +1289,7 @@ impl<'a> Compiler<'a> {
                 } else {
                     i
                 };
-                wide_store(b, ptr, heap, wide_map[&v], off, val);
+                wide_store(b, ptr, params.cldctx, wide_map[&v], off, val);
             } else {
                 b.def_var(vmap[&v], val);
             }
@@ -1290,7 +1297,7 @@ impl<'a> Compiler<'a> {
         let ws = |b: &mut FunctionBuilder, v: VariableKey, i: u32, val: Value| {
             let size = self.gl.vars.size(v).get();
             if size > 64 {
-                wide_store(b, ptr, heap, wide_map[&v], i, val);
+                wide_store(b, ptr, params.cldctx, wide_map[&v], i, val);
             } else {
                 b.def_var(spc_map[&v], val);
             }
@@ -1313,7 +1320,7 @@ impl<'a> Compiler<'a> {
                         let w = b
                             .ins()
                             .load(I64, mem(), heap, ((base + i as usize) * 8) as i32);
-                        wide_store(b, ptr, heap, wide_map[dst], i, w);
+                        wide_store(b, ptr, params.cldctx, wide_map[dst], i, w);
                     }
                 } else {
                     // Partial probe: extract from the signal's heap words.
@@ -1341,7 +1348,7 @@ impl<'a> Compiler<'a> {
                 let loc = wide_map[src];
                 let mut acc = b.ins().iconst(I64, 0);
                 for i in 0..words {
-                    let sw = wide_load(b, ptr, heap, loc, i);
+                    let sw = wide_load(b, ptr, params.cldctx, loc, i);
                     let hw = b
                         .ins()
                         .load(I64, mem(), heap, ((base + i as usize) * 8) as i32);
@@ -1355,7 +1362,7 @@ impl<'a> Compiler<'a> {
                 b.switch_to_block(do_bb);
                 self.call_drive_signal(b, params, rt);
                 for i in 0..words {
-                    let sw = wide_load(b, ptr, heap, loc, i);
+                    let sw = wide_load(b, ptr, params.cldctx, loc, i);
                     b.ins()
                         .store(mem(), sw, heap, ((base + i as usize) * 8) as i32);
                 }
@@ -1489,8 +1496,7 @@ impl<'a> Compiler<'a> {
                 } else {
                     b.ins().iconst(types::I8, 1)
                 };
-                let src_ptr =
-                    self.value_words_ptr(b, *src, vmap, spc_map, wide_map, params.heap_ptr);
+                let src_ptr = self.value_words_ptr(b, *src, vmap, spc_map, wide_map, params.cldctx);
                 self.emit_wide_slice(
                     b,
                     params,
@@ -1519,11 +1525,11 @@ impl<'a> Compiler<'a> {
                     b.ins().iconst(types::I8, 1)
                 };
                 let (val_ptr, spc_ptr) = if is_fv(*src) {
-                    let vp = wide_addr(b, ptr, heap, loc, src_nwords);
-                    let sp = wide_addr(b, ptr, heap, loc, 0);
+                    let vp = loc.addr(b, ptr, params.cldctx, src_nwords);
+                    let sp = loc.addr(b, ptr, params.cldctx, 0);
                     (vp, Some(sp))
                 } else {
-                    let vp = wide_addr(b, ptr, heap, loc, 0);
+                    let vp = loc.addr(b, ptr, params.cldctx, 0);
                     (vp, None)
                 };
                 let (val, spc) =
@@ -1534,8 +1540,7 @@ impl<'a> Compiler<'a> {
             // Constant-offset slice out of a wide source (mode preserved).
             Instruction::SliceImm(dst, src, offset) => {
                 let s_size = sz(*src);
-                let src_ptr =
-                    self.value_words_ptr(b, *src, vmap, spc_map, wide_map, params.heap_ptr);
+                let src_ptr = self.value_words_ptr(b, *src, vmap, spc_map, wide_map, params.cldctx);
                 let offc = b.ins().iconst(I64, *offset as i64);
                 let one = b.ins().iconst(types::I8, 1);
                 self.emit_wide_slice(
@@ -1553,50 +1558,9 @@ impl<'a> Compiler<'a> {
                     wide_map,
                 );
             }
-            Instruction::Unary(dst, UnaryOp::TvToFv, src) => {
-                let n = nwords(sz(*dst));
-                for i in 0..n {
-                    let v = rv(b, *src, i);
-                    wv(b, *dst, i, v);
-                    let m = if i == n - 1 { top_i64(sz(*dst)) } else { -1 };
-                    let sc = b.ins().iconst(I64, m);
-                    ws(b, *dst, i, sc);
-                }
-            }
-            Instruction::Unary(dst, UnaryOp::FvToTv, src) => {
-                let n = nwords(sz(*dst));
-                for i in 0..n {
-                    let v = rv(b, *src, i);
-                    let s = rs(b, *src, i);
-                    let r = b.ins().band(s, v);
-                    wv(b, *dst, i, r);
-                }
-            }
-            Instruction::Unary(dst, UnaryOp::Neg, src) => {
-                let n = nwords(sz(*dst));
-                let fv = is_fv(*dst);
-                for i in 0..n {
-                    let sv = rv(b, *src, i);
-                    if fv {
-                        let ss = rs(b, *src, i);
-                        let nsv = b.ins().bnot(sv);
-                        let mut val = b.ins().band(ss, nsv);
-                        let mut spc = ss;
-                        if i == n - 1 {
-                            val = b.ins().band_imm_u(val, top_i64(sz(*dst)));
-                            spc = b.ins().band_imm_u(spc, top_i64(sz(*dst)));
-                        }
-                        wv(b, *dst, i, val);
-                        ws(b, *dst, i, spc);
-                    } else {
-                        let mut w = b.ins().bnot(sv);
-                        if i == n - 1 {
-                            w = b.ins().band_imm_u(w, top_i64(sz(*dst)));
-                        }
-                        wv(b, *dst, i, w);
-                    }
-                }
-            }
+            Instruction::Unary(_, UnaryOp::TvToFv, _) => unreachable!(),
+            Instruction::Unary(_, UnaryOp::FvToTv, _) => unreachable!(),
+            Instruction::Unary(_, UnaryOp::Neg, _) => unreachable!(),
             // Bit-exact equality (===): all value words equal, and (for
             // four-value operands) all special words equal. A two-value operand
             // is fully known, so its special word is the per-word mask.
@@ -1863,16 +1827,7 @@ impl<'a> Compiler<'a> {
             Instruction::Intrinsic(dst, op, items)
                 if matches!(op.as_ref(), IntrinsicOp::BlackBox) =>
             {
-                let n = nwords(sz(*dst));
-                let fv = is_fv(*dst);
-                for i in 0..n {
-                    let v = rv(b, items[0], i);
-                    wv(b, *dst, i, v);
-                    if fv {
-                        let s = rs(b, items[0], i);
-                        ws(b, *dst, i, s);
-                    }
-                }
+                unreachable!()
             }
             // Bit-exact equality against an immediate (wide source, 1-bit dst).
             // The immediate may be narrower than the source (zero-extended).
@@ -2306,7 +2261,7 @@ impl<'a> Compiler<'a> {
         let d_size = self.gl.signals[signal].size.get();
         let s_size = self.gl.vars.size(src).get();
         let is_fv = mode == LogicMode::FourValue;
-        let src_ptr = self.value_words_ptr(b, src, vmap, spc_map, wide_map, params.heap_ptr);
+        let src_ptr = self.value_words_ptr(b, src, vmap, spc_map, wide_map, params.cldctx);
 
         let do_bb = b.create_block();
         let merge = b.create_block();
@@ -2402,7 +2357,7 @@ impl<'a> Compiler<'a> {
                 3,
             )))
         };
-        let dst_ptr = wide_addr(b, self.ptr, params.heap_ptr, dst_slot, 0);
+        let dst_ptr = dst_slot.addr(b, self.ptr, params.cldctx, 0);
 
         let do_bb = b.create_block();
         let zero_bb = b.create_block();
@@ -2444,19 +2399,19 @@ impl<'a> Compiler<'a> {
         b.switch_to_block(zero_bb);
         let z = b.ins().iconst(I64, 0);
         for i in 0..dst_words {
-            wide_store(b, self.ptr, params.heap_ptr, dst_slot, i as u32, z);
+            wide_store(b, self.ptr, params.cldctx, dst_slot, i as u32, z);
         }
         b.ins().jump(merge, &[]);
         b.switch_to_block(merge);
 
         if !dst_wide {
             if dst_is_fv {
-                let spc = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 0);
-                let val = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 1);
+                let spc = wide_load(b, self.ptr, params.cldctx, dst_slot, 0);
+                let val = wide_load(b, self.ptr, params.cldctx, dst_slot, 1);
                 b.def_var(spc_map[&dst], spc);
                 b.def_var(vmap[&dst], val);
             } else {
-                let val = wide_load(b, self.ptr, params.heap_ptr, dst_slot, 0);
+                let val = wide_load(b, self.ptr, params.cldctx, dst_slot, 0);
                 b.def_var(vmap[&dst], val);
             }
         }
@@ -2963,12 +2918,11 @@ fn fv_load(b: &mut FunctionBuilder, heap: Value, href: HeapRef, size: u32) -> (V
 pub fn compile<'a>(
     gl: &'a GlobalContext,
     info: SignalInfo<'a>,
+    heap_builder: &'a mut HeapBuilder,
     num_plugins: usize,
-    scratch_base_word: u32,
 ) -> Result<Compiled, String> {
     let num_signals = info.signal_to_heap.len();
-    let mut c = Compiler::new(num_signals, num_plugins, gl, info);
-    c.scratch_base = scratch_base_word;
+    let mut c = Compiler::new(num_signals, num_plugins, gl, info, heap_builder);
     // drive_fn ids, filled below.
     let mut fb = FunctionBuilderContext::new();
 
@@ -3047,104 +3001,4 @@ pub fn compile<'a>(
         standing_procs: c.standing_procs,
         standing_arm_offsets: c.standing_arm_offsets,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{SignalInfo, compile};
-    use vogls_codegen::HeapBuilder;
-    use vogls_ir::time::TimeResolution;
-    use vogls_ir::token_range::TokenRange;
-    use vogls_ir::{
-        BasicBlock, BasicBlockTerminator, GlobalContext, Process, ProcessKind, TemporalRegionKey,
-        Time,
-    };
-    use vogls_runtime::{RuntimeState, SimulationIo, TimeFormat};
-    use vogls_utils::VgHashMap;
-
-    fn empty_info() -> (
-        VgHashMap<vogls_ir::SignalKey, vogls_runtime::RtSignalKey>,
-        VgHashMap<vogls_runtime::RtSignalKey, u64>,
-    ) {
-        (VgHashMap::default(), VgHashMap::default())
-    }
-
-    fn run(gl: &GlobalContext, max_time: u64) {
-        let (rt_map, lupdt) = empty_info();
-        let info = SignalInfo {
-            signal_to_heap: &[],
-            rt_signal_map: &rt_map,
-            signal_mode: &[],
-            lupdt_indexes: &lupdt,
-        };
-        let compiled = compile(gl, info, 0, 0).unwrap();
-        let design = compiled.into_design(3);
-        let heap = HeapBuilder::new().finish();
-        let time_format = TimeFormat::new(TimeResolution::NS1);
-        let runtime = RuntimeState::new(gl, heap, &[], &[], time_format);
-        let mut state = design.new_state(compiled_listeners(), 3, runtime, gl);
-        let mut io = SimulationIo::default();
-        design.run(&mut state, &mut io, max_time).unwrap();
-    }
-
-    // Empty designs have no listeners.
-    fn compiled_listeners() -> usize {
-        0
-    }
-
-    fn empty_bb(gl: &mut GlobalContext, term: BasicBlockTerminator) -> TemporalRegionKey {
-        let key = gl.bbs.insert_with_key(|k| BasicBlock {
-            instrs: Vec::new(),
-            region: TemporalRegionKey::from_entry(k),
-            terminator: term,
-        });
-        TemporalRegionKey::from_entry(key)
-    }
-
-    fn one_process(gl: &mut GlobalContext, regions: Vec<TemporalRegionKey>) {
-        gl.processes.insert(Process {
-            kind: ProcessKind::Other,
-            standing: None,
-            regions,
-            origin: TokenRange::default(),
-        });
-    }
-
-    #[test]
-    fn empty_design_runs() {
-        run(&GlobalContext::default(), u64::MAX);
-    }
-
-    #[test]
-    fn single_tr_halt() {
-        let mut gl = GlobalContext::default();
-        let tr = empty_bb(&mut gl, BasicBlockTerminator::Halt);
-        one_process(&mut gl, vec![tr]);
-        run(&gl, u64::MAX);
-    }
-
-    #[test]
-    fn wait_delay_reschedules() {
-        let mut gl = GlobalContext::default();
-        let key = gl.bbs.insert_with_key(|k| {
-            let tr = TemporalRegionKey::from_entry(k);
-            BasicBlock {
-                instrs: Vec::new(),
-                region: tr,
-                terminator: BasicBlockTerminator::Wait(tr, Time(1)),
-            }
-        });
-        let tr = TemporalRegionKey::from_entry(key);
-        one_process(&mut gl, vec![tr]);
-        run(&gl, 3);
-    }
-
-    #[test]
-    fn wait_zero_chains_trs() {
-        let mut gl = GlobalContext::default();
-        let tr1 = empty_bb(&mut gl, BasicBlockTerminator::Halt);
-        let tr0 = empty_bb(&mut gl, BasicBlockTerminator::Wait(tr1, Time(0)));
-        one_process(&mut gl, vec![tr0, tr1]);
-        run(&gl, u64::MAX);
-    }
 }

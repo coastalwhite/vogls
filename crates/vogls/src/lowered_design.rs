@@ -364,21 +364,27 @@ impl LoweredDesign {
             lupdt_indexes: &lupdt_indexes,
         };
 
+        let compiled = vogls_codegen_clif::lower::compile(
+            &self.gl,
+            info,
+            &mut heap_builder,
+            num_plugins,
+        )?;
+
         // Reserve a heap scratch region for wide values too large for a stack
         // slot (sized to the largest TR's spilled footprint); pass its base word
         // offset to codegen so those values are addressed off the heap pointer.
         let scratch_words = vogls_codegen_clif::lower::max_scratch_words(&self.gl);
         let scratch_base_word = if scratch_words > 0 {
-            (heap_builder.claim_words(scratch_words) / 64) as u32
+            (heap_builder.claim_words(scratch_words) / 64) as u64
         } else {
             0
         };
-        let compiled =
-            vogls_codegen_clif::lower::compile(&self.gl, info, num_plugins, scratch_base_word)?;
-        let num_listening = compiled.num_listening;
-        let design = compiled.into_design(NUM_REGIONS);
-
         let mut heap = heap_builder.finish();
+
+        let num_listening = compiled.num_listening;
+        let design = compiled.into_design(scratch_base_word, NUM_REGIONS);
+
         let mut lupdt_updated = vec![false; lupdt_indexes.len()];
         let mut updated = vec![false; self.gl.signals.len()];
         for (key, signal) in &self.gl.signals {

@@ -22,7 +22,7 @@ use vogls_utils::VgHashMap;
 use crate::ffi::FfiVec;
 use crate::lower::{
     F64, I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, cast, dyn_slice_read, fv_load, mask_of,
-    maskv, maskvsbs, mem, nwords, var_words, wide_addr,
+    maskv, maskvsbs, mem, nwords, var_words,
 };
 use crate::runtime::{EventT, ScheduleT, layout};
 
@@ -160,31 +160,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                     b.use_var(spc_map[&v])
                 };
 
-                // Write value/special word `i` of `v` (narrow => i == 0, Cranelift
-                // Variable; wide => stack/heap store). Mirror the accessors used by
-                // the wide lowering so a single word-loop covers both widths.
-                let wv = |b: &mut FunctionBuilder, v: VariableKey, i: u32, val: Value| {
-                    let size = gl.vars.size(v).get();
-                    if size > 64 {
-                        let off = if v.mode() == LogicMode::FourValue {
-                            nwords(size) + i
-                        } else {
-                            i
-                        };
-                        wide_store(b, ptr, heap, wide_map[&v], off, val);
-                    } else {
-                        b.def_var(vmap[&v], val);
-                    }
-                };
-                let ws = |b: &mut FunctionBuilder, v: VariableKey, i: u32, val: Value| {
-                    let size = gl.vars.size(v).get();
-                    if size > 64 {
-                        wide_store(b, ptr, heap, wide_map[&v], i, val);
-                    } else {
-                        b.def_var(spc_map[&v], val);
-                    }
-                };
-
                 match instr {
                     // Phi nodes are realized by the per-block phi copies emitted at the
                     // end of each predecessor block, so the instruction itself is a no-op.
@@ -224,30 +199,17 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
 
                             // @TODO: Don't inline the value. Instead put it on the heap and
                             // memcpy it.
-                            R::SeparateFv(s) => {
-                                let n = nwords(dst_size.get());
-                                for i in 0..n {
-                                    let sc = b.ins().iconst(I64, s[i as usize] as i64);
-                                    ws(b, *dst, i, sc);
-                                    let vc = b.ins().iconst(I64, s[(n + i) as usize] as i64);
-                                    wv(b, *dst, i, vc);
-                                }
-                            }
-                            R::SeparateTv(w) => {
-                                let n = nwords(dst_size.get());
-                                for i in 0..n {
-                                    let c = b.ins().iconst(I64, w[i as usize] as i64);
-                                    wv(b, *dst, i, c);
-                                    if dst.mode().is_four_value() {
-                                        let m = if i == n - 1 {
-                                            super::top_i64(dst_size.get())
-                                        } else {
-                                            -1
-                                        };
-                                        let sc = b.ins().iconst(I64, m);
-                                        ws(b, *dst, i, sc);
-                                    }
-                                }
+                            R::SeparateTv(_) | R::SeparateFv(_) => {
+                                let offset = self
+                                    .compiler
+                                    .heap_builder
+                                    .claim_constant(dst.mode(), bits.clone());
+                                let dst_ptr = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let src_ptr = b
+                                    .ins()
+                                    .iadd_imm_u(heap, offset.offset.bit_offset as i64 / 8);
+                                let n = var_words(dst_size, dst.mode());
+                                wide_copy(b, dst_ptr, src_ptr, n as u32);
                             }
                         }
                     }
@@ -298,8 +260,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 map!(val => @fv { (val, b.ins().iconst(I64, mask_of(src_size.get()))) })
                             }
                             (O::TvToFv, _, _, _) => {
-                                let dst_base = wide_addr(b, ptr, heap, wide_map[dst], 0);
-                                let src_base = wide_addr(b, ptr, heap, wide_map[src], 0);
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let src_base = wide_map[src].addr(b, ptr, params.cldctx, 0);
 
                                 clif_unary(
                                     b,
@@ -320,8 +282,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 map!(val, spc => @tv { b.ins().band(val, spc) })
                             }
                             (O::FvToTv, _, _, _) => {
-                                let dst_base = wide_addr(b, ptr, heap, wide_map[dst], 0);
-                                let src_base = wide_addr(b, ptr, heap, wide_map[src], 0);
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let src_base = wide_map[src].addr(b, ptr, params.cldctx, 0);
 
                                 clif_unary(
                                     b,
@@ -344,8 +306,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 map!(val, spc => @fv clif_fv_not(b, val, spc))
                             }
                             (O::Neg, M::TwoValue, _, _) => {
-                                let dst_base = wide_addr(b, ptr, heap, wide_map[dst], 0);
-                                let src_base = wide_addr(b, ptr, heap, wide_map[src], 0);
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let src_base = wide_map[src].addr(b, ptr, params.cldctx, 0);
                                 clif_unary(
                                     b,
                                     dst_size,
@@ -358,8 +320,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 );
                             }
                             (O::Neg, M::FourValue, _, _) => {
-                                let dst_base = wide_addr(b, ptr, heap, wide_map[dst], 0);
-                                let src_base = wide_addr(b, ptr, heap, wide_map[src], 0);
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let src_base = wide_map[src].addr(b, ptr, params.cldctx, 0);
                                 clif_unary(
                                     b,
                                     dst_size,
@@ -814,7 +776,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 wide_map,
                                 dst_size,
                                 ptr,
-                                heap,
+                                params,
                                 *dst,
                                 *lhs,
                                 *rhs,
@@ -827,7 +789,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 wide_map,
                                 dst_size,
                                 ptr,
-                                heap,
+                                params,
                                 *dst,
                                 *lhs,
                                 *rhs,
@@ -840,7 +802,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 wide_map,
                                 dst_size,
                                 ptr,
-                                heap,
+                                params,
                                 *dst,
                                 *lhs,
                                 *rhs,
@@ -853,7 +815,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 wide_map,
                                 dst_size,
                                 ptr,
-                                heap,
+                                params,
                                 *dst,
                                 *lhs,
                                 *rhs,
@@ -866,7 +828,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 wide_map,
                                 dst_size,
                                 ptr,
-                                heap,
+                                params,
                                 *dst,
                                 *lhs,
                                 *rhs,
@@ -879,7 +841,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 wide_map,
                                 dst_size,
                                 ptr,
-                                heap,
+                                params,
                                 *dst,
                                 *lhs,
                                 *rhs,
@@ -903,7 +865,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 wide_map,
                                 dst_size,
                                 ptr,
-                                heap,
+                                params,
                                 *dst,
                                 *lhs,
                                 *rhs,
@@ -927,7 +889,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 wide_map,
                                 dst_size,
                                 ptr,
-                                heap,
+                                params,
                                 *dst,
                                 *lhs,
                                 *rhs,
@@ -1790,10 +1752,10 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 }
                             }
                             None => {
-                                let truthy_ptr = wide_addr(b, ptr, heap, wide_map[truthy], 0);
-                                let falsy_ptr = wide_addr(b, ptr, heap, wide_map[falsy], 0);
+                                let truthy_ptr = wide_map[truthy].addr(b, ptr, params.cldctx, 0);
+                                let falsy_ptr = wide_map[falsy].addr(b, ptr, params.cldctx, 0);
                                 let src_ptr = b.ins().select(cond, truthy_ptr, falsy_ptr);
-                                let dst_ptr = wide_addr(b, ptr, heap, wide_map[dst], 0);
+                                let dst_ptr = wide_map[dst].addr(b, ptr, params.cldctx, 0);
                                 let words = var_words(size, dst.mode()) as u32;
                                 wide_copy(b, dst_ptr, src_ptr, words);
                             }
@@ -1820,7 +1782,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 None => wide_fill(
                                     b,
                                     ptr,
-                                    heap,
+                                    params.cldctx,
                                     wide_map[dst],
                                     dst_size.get(),
                                     dst.mode(),
@@ -1965,7 +1927,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             None => wide_fill(
                                 b,
                                 ptr,
-                                heap,
+                                params.cldctx,
                                 wide_map[dst],
                                 dst_size.get(),
                                 dst.mode(),
@@ -2022,7 +1984,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                         let vw = wide_load(
                                             b,
                                             ptr,
-                                            params.heap_ptr,
+                                            params.cldctx,
                                             wide_map[&items[0]],
                                             voff,
                                         );
@@ -2030,7 +1992,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                             let sw = wide_load(
                                                 b,
                                                 ptr,
-                                                params.heap_ptr,
+                                                params.cldctx,
                                                 wide_map[&items[0]],
                                                 i,
                                             );
@@ -2156,9 +2118,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                         }
                                     }
                                     None => {
-                                        let dst_ptr = wide_addr(b, ptr, heap, wide_map[dst], 0);
+                                        let dst_ptr = wide_map[dst].addr(b, ptr, params.cldctx, 0);
                                         let src_ptr =
-                                            wide_addr(b, ptr, heap, wide_map[&items[0]], 0);
+                                            wide_map[&items[0]].addr(b, ptr, params.cldctx, 0);
                                         let nwords = var_words(size, dst.mode()) as u32;
                                         wide_copy(b, dst_ptr, src_ptr, nwords);
                                     }
@@ -2371,7 +2333,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             None => wide_fill(
                                 b,
                                 ptr,
-                                heap,
+                                params.cldctx,
                                 wide_map[dst],
                                 dst_size.get(),
                                 dst.mode(),
@@ -2432,7 +2394,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             None => wide_fill(
                                 b,
                                 ptr,
-                                heap,
+                                params.cldctx,
                                 wide_map[dst],
                                 gl.vars.size(*dst).get(),
                                 dst.mode(),
@@ -2477,7 +2439,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             None => wide_fill(
                                 b,
                                 ptr,
-                                heap,
+                                params.cldctx,
                                 wide_map[dst],
                                 gl.vars.size(*dst).get(),
                                 dst.mode(),
@@ -2509,14 +2471,14 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let w = wide_load(
                                     &mut self.b,
                                     self.compiler.ptr,
-                                    self.params.heap_ptr,
+                                    self.params.cldctx,
                                     sloc,
                                     i as u32,
                                 );
                                 wide_store(
                                     &mut self.b,
                                     self.compiler.ptr,
-                                    self.params.heap_ptr,
+                                    self.params.cldctx,
                                     dloc,
                                     i as u32,
                                     w,
@@ -2839,7 +2801,7 @@ fn wide_copy(b: &mut FunctionBuilder, dst_ptr: Value, src_ptr: Value, words: u32
 fn wide_fill(
     b: &mut FunctionBuilder,
     ptr: Type,
-    heap: Value,
+    cldctx: Value,
     loc: WideLoc,
     size: u32,
     mode: LogicMode,
@@ -2855,7 +2817,7 @@ fn wide_fill(
                 word
             };
             let c = b.ins().iconst(I64, w);
-            wide_store(b, ptr, heap, loc, base + i, c);
+            wide_store(b, ptr, cldctx, loc, base + i, c);
         }
     };
     match mode {
@@ -2959,7 +2921,7 @@ fn wide_binary_bitwise(
     wide_map: &WideMap,
     size: VectorSize,
     ptr: Type,
-    heap: Value,
+    params: &Params,
     dst: VariableKey,
     lhs: VariableKey,
     rhs: VariableKey,
@@ -2967,9 +2929,9 @@ fn wide_binary_bitwise(
     fv: impl Fn(&mut FunctionBuilder, Value, Value, Value, Value) -> (Value, Value),
     needs_mask: bool,
 ) {
-    let dst_base = wide_addr(b, ptr, heap, wide_map[&dst], 0);
-    let lhs_base = wide_addr(b, ptr, heap, wide_map[&lhs], 0);
-    let rhs_base = wide_addr(b, ptr, heap, wide_map[&rhs], 0);
+    let dst_base = wide_map[&dst].addr(b, ptr, params.cldctx, 0);
+    let lhs_base = wide_map[&lhs].addr(b, ptr, params.cldctx, 0);
+    let rhs_base = wide_map[&rhs].addr(b, ptr, params.cldctx, 0);
 
     let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
     let words = nwords(size.get());

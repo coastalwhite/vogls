@@ -474,6 +474,8 @@ pub struct ColdContextT {
     readmems: *const (HeapRef, ReadMem),
     readmem: extern "C" fn(*mut u64, usize, u8, NonNull<(HeapRef, ReadMem)>),
 
+    pub heap_wide_ptr: *mut u64,
+
     fst_poke: *mut u64,
 
     icount: u64,
@@ -603,6 +605,7 @@ pub struct ClifDesign {
     drive_fns: Vec<DriveFn>,
     dyn_fmt_strs: Vec<DynFormatString>,
     read_mems: Vec<(HeapRef, ReadMem)>,
+    heap_wide_ptr: u64,
     num_regions: u8,
     /// Standing processes: armed at startup but not seeded into the active
     /// region (their body must not run at t=0).
@@ -621,6 +624,7 @@ impl ClifDesign {
         drive_fns: Vec<DriveFn>,
         dyn_fmt_strs: Vec<DynFormatString>,
         read_mems: Vec<(HeapRef, ReadMem)>,
+        heap_wide_ptr: u64,
         num_regions: u8,
         standing_procs: vogls_utils::VgHashSet<usize>,
         standing_arm_offsets: Vec<u32>,
@@ -631,6 +635,7 @@ impl ClifDesign {
             procs,
             drive_fns,
             dyn_fmt_strs,
+            heap_wide_ptr,
             read_mems,
             num_regions,
             standing_procs,
@@ -685,6 +690,14 @@ impl ClifDesign {
         max_time: u64,
     ) -> Result<(), ()> {
         let empty_active_event_queue_fn = self.entry;
+        let heap_wide_ptr = unsafe {
+            state
+                .runtime
+                .heap
+                .0
+                .as_mut_ptr()
+                .add(self.heap_wide_ptr as usize)
+        };
         let mut cldctx = ColdContextT {
             fn_table: FnTable::new(),
             fmt_strs: self.dyn_fmt_strs.as_ptr(),
@@ -692,6 +705,7 @@ impl ClifDesign {
             plugin_poke_signal,
             heap_len: state.runtime.heap.0.len(),
             readmems: self.read_mems.as_ptr(),
+            heap_wide_ptr,
             readmem: read_mem,
             fst_poke: state.runtime.tvl_first_write.as_mut_ptr(),
             icount: state.runtime.instruction_count,
@@ -796,6 +810,14 @@ impl ClifDesign {
         // use-after-free once they format output. @TODO: passthrough IO.)
         let mut out: Box<dyn std::io::Write + Send + Sync> = Box::new(stdout());
         let mut err: Box<dyn std::io::Write + Send + Sync> = Box::new(stderr());
+        let heap_wide_ptr = unsafe {
+            state
+                .runtime
+                .heap
+                .0
+                .as_mut_ptr()
+                .add(self.heap_wide_ptr as usize)
+        };
         let mut cldctx = ColdContextT {
             fn_table: FnTable::new(),
             fmt_strs: self.dyn_fmt_strs.as_ptr(),
@@ -806,6 +828,7 @@ impl ClifDesign {
             heap_len: state.runtime.heap.0.len(),
             readmems: self.read_mems.as_ptr(),
             readmem: read_mem,
+            heap_wide_ptr,
 
             fst_poke: state.runtime.tvl_first_write.as_mut_ptr(),
 
