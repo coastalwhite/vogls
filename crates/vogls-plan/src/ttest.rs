@@ -7,7 +7,54 @@ use crate::typing::DataType;
 use crate::value::Value;
 
 #[derive(Clone, PartialEq, Eq, Hash)]
-pub struct TTest;
+pub struct TTest {
+    pub order: u32,
+}
+
+impl TTest {
+    pub fn new(order: u32) -> Self {
+        TTest { order }
+    }
+}
+
+impl Default for TTest {
+    fn default() -> Self {
+        TTest { order: 1 }
+    }
+}
+
+fn moment_stats(data: &[u64], order: u32) -> (f64, f64) {
+    let n = data.len() as f64;
+    let mean = data.iter().map(|&v| v as f64).sum::<f64>() / n;
+
+    // Standard deviation is only needed to standardise orders >= 3.
+    let std = if order >= 3 {
+        let var = data
+            .iter()
+            .map(|&v| (v as f64 - mean).powi(2))
+            .sum::<f64>()
+            / n;
+        var.sqrt()
+    } else {
+        1.0
+    };
+
+    // Pre-process each raw sample into the statistic whose group means we
+    // ultimately compare with the t-test.
+    let preprocess = |v: u64| -> f64 {
+        let centered = v as f64 - mean;
+        match order {
+            1 => v as f64,
+            2 => centered * centered,
+            d => (centered / std).powi(d as i32),
+        }
+    };
+
+    let preprocessed: Vec<f64> = data.iter().map(|&v| preprocess(v)).collect();
+    let pmean = preprocessed.iter().sum::<f64>() / n;
+    let psumsq = preprocessed.iter().map(|&t| (t - pmean).powi(2)).sum::<f64>();
+    (pmean, psumsq)
+}
 
 impl Agg for TTest {
     type Inputs<Input>
@@ -17,7 +64,7 @@ impl Agg for TTest {
     type Scratches = ();
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("TTest")
+        write!(f, "TTest(order={})", self.order)
     }
 
     fn output_type(&self, inputs: Self::Inputs<DataType>) -> ComputeResult<DataType> {
@@ -37,21 +84,12 @@ impl Agg for TTest {
             return Err(ComputeError::InvalidTypes);
         };
 
-        let lmean = ldata.iter().map(|&v| v as f64).sum::<f64>() / ldata.len() as f64;
-        let rmean = rdata.iter().map(|&v| v as f64).sum::<f64>() / rdata.len() as f64;
-
-        let lvar = ldata
-            .iter()
-            .map(|&v| (v as f64 - lmean).powi(2))
-            .sum::<f64>();
-        let rvar = rdata
-            .iter()
-            .map(|&v| (v as f64 - rmean).powi(2))
-            .sum::<f64>();
+        let (lmean, lsumsq) = moment_stats(&ldata, self.order);
+        let (rmean, rsumsq) = moment_stats(&rdata, self.order);
 
         let numerator = lmean - rmean;
         let denumerator =
-            (lvar / (ldata.len() as f64).powi(2) + rvar / (rdata.len() as f64).powi(2)).sqrt();
+            (lsumsq / (ldata.len() as f64).powi(2) + rsumsq / (rdata.len() as f64).powi(2)).sqrt();
 
         let tvalue = numerator / denumerator;
         Ok(Value::Float(tvalue))

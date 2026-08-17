@@ -390,22 +390,39 @@ def _type_name(v: Any) -> str:
 
 
 @overload
-def welch_t_test(lhs: LazyArray, rhs: LazyArray) -> LazyValue: ...
+def welch_t_test(lhs: LazyArray, rhs: LazyArray, order: int = 1) -> LazyValue: ...
 @overload
-def welch_t_test(lhs: LazyRunVector, rhs: LazyRunVector) -> LazyArray: ...
+def welch_t_test(
+    lhs: LazyRunVector, rhs: LazyRunVector, order: int = 1
+) -> LazyArray: ...
 
 
 def welch_t_test(
-    lhs: LazyRunVector | LazyArray, rhs: LazyRunVector | LazyArray
+    lhs: LazyRunVector | LazyArray,
+    rhs: LazyRunVector | LazyArray,
+    order: int = 1,
 ) -> LazyArray | LazyValue:
     """
-    Calculate the 1st moment Welch T-Test between RunVectors or Arrays.
+    Calculate the Welch T-Test between RunVectors or Arrays for a given
+    statistical `order` (moment), i.e. a higher-order TVLA.
+
+    - `order == 1` compares the means (classic first-order TVLA).
+    - `order == 2` compares the variances (samples pre-processed as `(x - mu)^2`).
+    - `order >= 3` compares the standardised central moments (samples
+      pre-processed as `((x - mu) / sigma)^order`).
     """
 
+    if order < 1:
+        raise ValueError(f"`order` must be >= 1, got {order}")
+
     if isinstance(lhs, LazyRunVector) and isinstance(rhs, LazyRunVector):
-        return LazyArray._from_py(vgr.PyLazyArray.ttest(lhs._producer, rhs._producer))
+        return LazyArray._from_py(
+            vgr.PyLazyArray.ttest(lhs._producer, rhs._producer, order)
+        )
     elif isinstance(lhs, LazyArray) and isinstance(rhs, LazyArray):
-        return LazyValue._from_py(vgr.PyLazyValue.ttest(lhs._producer, rhs._producer))
+        return LazyValue._from_py(
+            vgr.PyLazyValue.ttest(lhs._producer, rhs._producer, order)
+        )
     else:
         raise ValueError(
             f"cannot call `welch_t_test` on {_type_name(lhs)} and {_type_name(rhs)}"

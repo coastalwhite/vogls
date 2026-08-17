@@ -646,9 +646,14 @@ mod vogls {
         }
 
         #[staticmethod]
-        pub fn ttest(lhs: Bound<PyLazyRunVector>, rhs: Bound<PyLazyRunVector>) -> PyResult<Self> {
+        #[pyo3(signature = (lhs, rhs, order = 1))]
+        pub fn ttest(
+            lhs: Bound<PyLazyRunVector>,
+            rhs: Bound<PyLazyRunVector>,
+            order: u32,
+        ) -> PyResult<Self> {
             Ok(PyLazyArray(build_run_vector_agg(
-                TTest,
+                TTest::new(order),
                 [lhs.get().0.clone(), rhs.get().0.clone()],
             )?))
         }
@@ -765,9 +770,14 @@ mod vogls {
         }
 
         #[staticmethod]
-        pub fn ttest(lhs: Bound<PyLazyArray>, rhs: Bound<PyLazyArray>) -> PyResult<Self> {
+        #[pyo3(signature = (lhs, rhs, order = 1))]
+        pub fn ttest(
+            lhs: Bound<PyLazyArray>,
+            rhs: Bound<PyLazyArray>,
+            order: u32,
+        ) -> PyResult<Self> {
             Ok(PyLazyValue(build_array_agg(
-                TTest,
+                TTest::new(order),
                 [lhs.get().0.clone(), rhs.get().0.clone()],
             )?))
         }
