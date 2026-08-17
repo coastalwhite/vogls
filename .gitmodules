@@ -7,3 +7,6 @@
 [submodule "submodules/neorv32"]
 	path = submodules/neorv32
 	url = https://github.com/stnolting/neorv32
+[submodule "submodules/opentitan"]
+	path = submodules/opentitan
+	url = https://github.com/lowRISC/opentitan
