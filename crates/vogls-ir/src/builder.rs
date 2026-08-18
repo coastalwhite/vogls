@@ -509,7 +509,7 @@ impl BasicBlockBuilder {
     }
 
     unary_ops! {
-        (binary_neg, Neg)
+        (binary_not, Not)
         (reduce_or, ReduceOr)
         (reduce_and, ReduceAnd)
         (reduce_xor, ReduceXor)
@@ -617,7 +617,7 @@ impl BasicBlockBuilder {
 
     pub fn logical_neg(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         let src = self.reduce_or(gl, src);
-        self.binary_neg(gl, src)
+        self.binary_not(gl, src)
     }
 
     pub fn unary_op(

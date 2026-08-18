@@ -669,7 +669,7 @@ fn parse_instr<'a>(
         }
 
         // Unary
-        "negate" => parse_unary(c, symbols, gl, dst, UO::Neg)?,
+        "not" => parse_unary(c, symbols, gl, dst, UO::Not)?,
         "reduce_or" => parse_unary(c, symbols, gl, dst, UO::ReduceOr)?,
         "reduce_and" => parse_unary(c, symbols, gl, dst, UO::ReduceAnd)?,
         "reduce_xor" => parse_unary(c, symbols, gl, dst, UO::ReduceXor)?,

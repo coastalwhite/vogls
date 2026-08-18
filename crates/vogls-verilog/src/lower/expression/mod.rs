@@ -123,7 +123,7 @@ pub fn lower_expr<'a>(
                         result_stack.push(None);
                         continue;
                     }
-                    O::BitwiseNegation => (builder.binary_neg(&mut mctx.gl, child), ty),
+                    O::BitwiseNegation => (builder.binary_not(&mut mctx.gl, child), ty),
                     O::ReductionAnd => (builder.reduce_and(&mut mctx.gl, child), VType::SCALAR_NET),
                     O::ReductionOr => (builder.reduce_or(&mut mctx.gl, child), VType::SCALAR_NET),
                     O::ReductionNand => {

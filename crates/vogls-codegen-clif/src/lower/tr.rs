@@ -298,14 +298,14 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     },
                                 );
                             }
-                            (O::Neg, M::TwoValue, Some(_), Some(_)) => map!(val => @tv {
+                            (O::Not, M::TwoValue, Some(_), Some(_)) => map!(val => @tv {
                                 let n = b.ins().bnot(val);
                                 maskv(b, n, dst_size.get())
                             }),
-                            (O::Neg, M::FourValue, Some(_), Some(_)) => {
+                            (O::Not, M::FourValue, Some(_), Some(_)) => {
                                 map!(val, spc => @fv clif_fv_not(b, val, spc))
                             }
-                            (O::Neg, M::TwoValue, _, _) => {
+                            (O::Not, M::TwoValue, _, _) => {
                                 let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
                                 let src_base = wide_map[src].addr(b, ptr, params.cldctx, 0);
                                 clif_unary_bitwise(
@@ -319,7 +319,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     },
                                 );
                             }
-                            (O::Neg, M::FourValue, _, _) => {
+                            (O::Not, M::FourValue, _, _) => {
                                 let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
                                 let src_base = wide_map[src].addr(b, ptr, params.cldctx, 0);
                                 clif_unary_bitwise(

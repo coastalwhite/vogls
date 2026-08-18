@@ -170,8 +170,8 @@ impl VValue {
     pub fn bitwise_invert(self) -> Result<VValue, ()> {
         use VValue as V;
         match self {
-            V::SignedNet(v) => Ok(V::SignedNet(v.bitwise_negate())),
-            V::UnsignedNet(v) => Ok(V::UnsignedNet(v.bitwise_negate())),
+            V::SignedNet(v) => Ok(V::SignedNet(v.bitwise_not())),
+            V::UnsignedNet(v) => Ok(V::UnsignedNet(v.bitwise_not())),
             V::Real(_) => Err(()),
         }
     }

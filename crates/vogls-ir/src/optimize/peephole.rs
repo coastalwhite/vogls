@@ -140,7 +140,7 @@ pub fn peephole(
                 T::Jump(..) => {}
                 T::Branch(cond, truthy, falsy) => {
                     let cond = try_lookup!(cond);
-                    if let CSExpr::Unary(UnaryOp::Neg, new_src) = exprs[cond].1 {
+                    if let CSExpr::Unary(UnaryOp::Not, new_src) = exprs[cond].1 {
                         bb.terminator = T::Branch(exprs[new_src].0, *falsy, *truthy);
                     }
                 }
@@ -495,7 +495,7 @@ fn peephole_instruction(
             }
 
             if let Some(cond_ek) = var_lookup.get(cond) {
-                if let CSExpr::Unary(UnaryOp::Neg, src_ek) = &exprs[*cond_ek].1 {
+                if let CSExpr::Unary(UnaryOp::Not, src_ek) = &exprs[*cond_ek].1 {
                     *instr = I::Select(*dst, exprs[*src_ek].0, *falsy, *truthy);
                     return PeepholeResult::Changed;
                 }

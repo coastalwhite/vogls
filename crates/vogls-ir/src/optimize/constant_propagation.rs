@@ -251,12 +251,12 @@ fn constant_propagate_instruction(
 
                 (O::AndNot, Some(_), _) => {}
                 (O::AndNot, _, Some(b)) => {
-                    additional.push(BI(dst, IO::And, lhs, b.bitwise_negate()))
+                    additional.push(BI(dst, IO::And, lhs, b.bitwise_not()))
                 }
                 (O::OrNot, Some(_), _) => {}
-                (O::OrNot, _, Some(b)) => additional.push(BI(dst, IO::Or, lhs, b.bitwise_negate())),
-                (O::Xnor, Some(b), _) => additional.push(BI(dst, IO::Xor, rhs, b.bitwise_negate())),
-                (O::Xnor, _, Some(b)) => additional.push(BI(dst, IO::Xor, lhs, b.bitwise_negate())),
+                (O::OrNot, _, Some(b)) => additional.push(BI(dst, IO::Or, lhs, b.bitwise_not())),
+                (O::Xnor, Some(b), _) => additional.push(BI(dst, IO::Xor, rhs, b.bitwise_not())),
+                (O::Xnor, _, Some(b)) => additional.push(BI(dst, IO::Xor, lhs, b.bitwise_not())),
 
                 (O::Add, Some(b), _) => additional.push(BI(dst, IO::Add, rhs, b.clone())),
                 (O::Add, _, Some(b)) => additional.push(BI(dst, IO::Add, lhs, b.clone())),
@@ -532,7 +532,7 @@ fn constant_propagate_instruction(
                             return PropagateResult { replace: true };
                         }
                         (L::L0, L::L1) => {
-                            additional.push(I::Unary(dst, UnaryOp::Neg, *cond));
+                            additional.push(I::Unary(dst, UnaryOp::Not, *cond));
                             return PropagateResult { replace: true };
                         }
                         _ => {}

@@ -493,7 +493,7 @@ pub fn lower_process(
                         let dst_t = temp_map[dst];
                         use UnaryOp as O;
                         match op {
-                            O::Neg => unary::cgc_negate(&mut buffer, dst_t, t)?,
+                            O::Not => unary::cgc_negate(&mut buffer, dst_t, t)?,
                             O::ReduceOr => unary::cgc_reduce_or(&mut buffer, dst_t, t)?,
                             O::ReduceAnd => unary::cgc_reduce_and(&mut buffer, dst_t, t)?,
                             O::ReduceXor => unary::cgc_reduce_xor(&mut buffer, dst_t, t)?,

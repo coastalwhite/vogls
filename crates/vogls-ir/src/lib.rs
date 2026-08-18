@@ -384,7 +384,7 @@ pub struct ReadMem {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOp {
-    Neg,
+    Not,
     ReduceOr,
     ReduceAnd,
     ReduceXor,
@@ -1025,7 +1025,7 @@ impl UnaryOp {
     pub fn evaluate(self, src: &Bits) -> Bits {
         use UnaryOp as O;
         match self {
-            O::Neg => src.bitwise_negate(),
+            O::Not => src.bitwise_not(),
             O::ReduceOr => Bits::from(src.reduce_or()),
             O::ReduceAnd => Bits::from(src.reduce_and()),
             O::ReduceXor => Bits::from(src.reduce_xor()),
@@ -1148,7 +1148,7 @@ impl UnaryOp {
             {
                 UnaryOpSimplification::Source
             }
-            O::Neg
+            O::Not
             | O::ReduceOr
             | O::ReduceAnd
             | O::ReduceXor
@@ -1185,7 +1185,7 @@ impl UnaryOp {
 
     fn output_size(self, size: VectorSize) -> VectorSize {
         match self {
-            UnaryOp::Neg | UnaryOp::TvToFv | UnaryOp::FvToTv => size,
+            UnaryOp::Not | UnaryOp::TvToFv | UnaryOp::FvToTv => size,
             UnaryOp::RealToLogical
             | UnaryOp::ReduceOr
             | UnaryOp::ReduceAnd
@@ -1221,7 +1221,7 @@ impl UnaryOp {
     pub fn output_mode(self, src: LogicMode) -> Option<LogicMode> {
         use UnaryOp as O;
         match self {
-            O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor => Some(src),
+            O::Not | O::ReduceOr | O::ReduceAnd | O::ReduceXor => Some(src),
             O::TvToFv if src == LogicMode::TwoValue => Some(LogicMode::FourValue),
             O::FvToTv if src == LogicMode::FourValue => Some(LogicMode::TwoValue),
             O::TvToFv | O::FvToTv => None,
@@ -1257,7 +1257,7 @@ impl UnaryOp {
     fn supports_tv_pushdown(&self) -> bool {
         use UnaryOp as O;
         match self {
-            O::Neg | O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::LeadingZeros => true,
+            O::Not | O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::LeadingZeros => true,
             O::TvToFv | O::FvToTv => false,
             O::RealToLogical
             | O::RealToU64
@@ -1716,7 +1716,7 @@ impl BinaryImmOp {
 
                 let num_ones = imm.count_ones();
                 if num_ones == imm.size().get() {
-                    return S::Instruction(Instruction::Unary(dst, UnaryOp::Neg, src));
+                    return S::Instruction(Instruction::Unary(dst, UnaryOp::Not, src));
                 } else if num_special == 0 && num_ones == 0 && src.mode() == LogicMode::TwoValue {
                     return S::Source;
                 }
@@ -1836,14 +1836,14 @@ impl BinaryImmOp {
             }
             O::CaseEquality if src.mode().is_two_value() && src.is_scalar() => {
                 if imm.eq_zero() {
-                    S::Instruction(Instruction::Unary(dst, UnaryOp::Neg, src))
+                    S::Instruction(Instruction::Unary(dst, UnaryOp::Not, src))
                 } else {
                     S::Source
                 }
             }
             O::CaseEquality => S::Keep,
             O::BitwiseCaseEquality if src.mode().is_two_value() => S::Instruction(
-                Instruction::BinaryImm(dst, O::Xor, src, imm.bitwise_negate()),
+                Instruction::BinaryImm(dst, O::Xor, src, imm.bitwise_not()),
             ),
             O::BitwiseCaseEquality => S::Keep,
         }

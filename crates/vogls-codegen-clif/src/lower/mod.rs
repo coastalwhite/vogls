@@ -1560,7 +1560,7 @@ impl<'a> Compiler<'a> {
             }
             Instruction::Unary(_, UnaryOp::TvToFv, _) => unreachable!(),
             Instruction::Unary(_, UnaryOp::FvToTv, _) => unreachable!(),
-            Instruction::Unary(_, UnaryOp::Neg, _) => unreachable!(),
+            Instruction::Unary(_, UnaryOp::Not, _) => unreachable!(),
             // Bit-exact equality (===): all value words equal, and (for
             // four-value operands) all special words equal. A two-value operand
             // is fully known, so its special word is the per-word mask.

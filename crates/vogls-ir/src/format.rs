@@ -294,7 +294,7 @@ impl BinaryImmOp {
 impl UnaryOp {
     pub const fn into_mnemonic(&self) -> &'static str {
         match self {
-            Self::Neg => "negate",
+            Self::Not => "not",
             Self::ReduceAnd => "reduce_and",
             Self::ReduceOr => "reduce_or",
             Self::ReduceXor => "reduce_xor",

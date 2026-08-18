@@ -11,7 +11,7 @@ use vogls_bits::comparison::{bitwise_ceq, fv_l_unsigned_leq, tv_gtu64_unsigned_l
 use vogls_bits::concat::{fv_l_concat, tv_l_concat};
 use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::leading_trailing::{fv_leading_zeros, tv_leading_zeros};
-use vogls_bits::negate::{fv_cell_negate, tv_cell_negate};
+use vogls_bits::bitwise_not::{fv_cell_not, tv_cell_not};
 use vogls_bits::reduce::{
     fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor, tv_reduce_and, tv_reduce_or, tv_reduce_xor,
 };
@@ -1450,7 +1450,7 @@ impl BytecodeInstruction for HeapUnary {
             LogicMode::TwoValue
         };
         match self.op {
-            UnaryOp::TvNeg | UnaryOp::TvCopy | UnaryOp::FvNeg | UnaryOp::FvCopy => {
+            UnaryOp::TvNot | UnaryOp::TvCopy | UnaryOp::FvNot | UnaryOp::FvCopy => {
                 let mut pc = pc + 1;
                 let size = self.size.get(&mut pc, code);
                 operands.push(RegInfo::heap("rd", self.rd, mode, size));
@@ -1489,13 +1489,13 @@ impl BytecodeInstruction for HeapUnary {
             size: _,
         } = self;
         let mnemonic = match op {
-            UnaryOp::TvNeg => "tv.heap_neg",
+            UnaryOp::TvNot => "tv.heap_neg",
             UnaryOp::TvCopy => "tv.heap_copy",
             UnaryOp::TvReduceOr => "tv.heap_reduce_or",
             UnaryOp::TvReduceAnd => "tv.heap_reduce_and",
             UnaryOp::TvReduceXor => "tv.heap_reduce_xor",
             UnaryOp::TvLeadingZeros => "tv.heap_leading_zeros",
-            UnaryOp::FvNeg => "fv.heap_neg",
+            UnaryOp::FvNot => "fv.heap_neg",
             UnaryOp::FvCopy => "fv.heap_copy",
             UnaryOp::FvReduceOr => "fv.heap_reduce_or",
             UnaryOp::FvReduceAnd => "fv.heap_reduce_and",
@@ -1525,12 +1525,12 @@ impl BytecodeInstruction for HeapUnary {
 
         use UnaryOp as O;
         match op {
-            O::TvNeg => {
+            O::TvNot => {
                 let [dst, src] = state.heap.get_u64_cell_slices([
                     (regs.get_as_addr(rd), num_words),
                     (regs.get_as_addr(rs), num_words),
                 ]);
-                tv_cell_negate(dst, src, size);
+                tv_cell_not(dst, src, size);
             }
             O::TvCopy => {
                 let [dst, src] = state.heap.get_u64_cell_slices([
@@ -1561,12 +1561,12 @@ impl BytecodeInstruction for HeapUnary {
                     size,
                 ));
             }
-            O::FvNeg => {
+            O::FvNot => {
                 let [dst, src] = state.heap.get_u64_cell_slices([
                     (regs.get_as_addr(rd), num_words),
                     (regs.get_as_addr(rs), num_words),
                 ]);
-                fv_cell_negate(dst, src, size);
+                fv_cell_not(dst, src, size);
             }
             O::FvCopy => {
                 let [dst, src] = state.heap.get_u64_cell_slices([
@@ -1776,13 +1776,13 @@ impl ShiftOp {
 
 #[derive(Clone, Copy)]
 pub enum UnaryOp {
-    TvNeg,
+    TvNot,
     TvCopy,
     TvReduceOr,
     TvReduceAnd,
     TvReduceXor,
     TvLeadingZeros,
-    FvNeg,
+    FvNot,
     FvCopy,
     FvReduceOr,
     FvReduceAnd,
@@ -1793,13 +1793,13 @@ pub enum UnaryOp {
 impl UnaryOp {
     pub fn is_four_value(self) -> bool {
         match self {
-            Self::TvNeg
+            Self::TvNot
             | Self::TvCopy
             | Self::TvReduceOr
             | Self::TvReduceAnd
             | Self::TvReduceXor
             | Self::TvLeadingZeros => false,
-            Self::FvNeg
+            Self::FvNot
             | Self::FvCopy
             | Self::FvReduceOr
             | Self::FvReduceAnd
@@ -1810,13 +1810,13 @@ impl UnaryOp {
 
     pub fn new_masked(v: u32) -> Self {
         match v & 0xF {
-            0 => Self::TvNeg,
+            0 => Self::TvNot,
             1 => Self::TvCopy,
             2 => Self::TvReduceOr,
             3 => Self::TvReduceAnd,
             4 => Self::TvReduceXor,
             5 => Self::TvLeadingZeros,
-            6 => Self::FvNeg,
+            6 => Self::FvNot,
             7 => Self::FvCopy,
             8 => Self::FvReduceOr,
             9 => Self::FvReduceAnd,
@@ -2158,8 +2158,8 @@ impl BytecodeEncoder {
         self.heap_binary_shift(rd, rs1, rs2, ShiftOp::FvSar, size);
     }
 
-    pub fn heap_tv_neg(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
-        self.heap_unary(rd, rs, UnaryOp::TvNeg, size);
+    pub fn heap_tv_not(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
+        self.heap_unary(rd, rs, UnaryOp::TvNot, size);
     }
     pub fn heap_tv_copy(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
         self.heap_unary(rd, rs, UnaryOp::TvCopy, size);
@@ -2176,8 +2176,8 @@ impl BytecodeEncoder {
     pub fn heap_tv_leading_zeros(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
         self.heap_unary(rd, rs, UnaryOp::TvLeadingZeros, size);
     }
-    pub fn heap_fv_neg(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
-        self.heap_unary(rd, rs, UnaryOp::FvNeg, size);
+    pub fn heap_fv_not(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
+        self.heap_unary(rd, rs, UnaryOp::FvNot, size);
     }
     pub fn heap_fv_copy(&mut self, rd: Reg, rs: Reg, size: VectorSize) {
         self.heap_unary(rd, rs, UnaryOp::FvCopy, size);

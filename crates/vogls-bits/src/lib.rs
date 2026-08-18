@@ -23,7 +23,7 @@ pub mod format;
 pub mod iter;
 pub mod leading_trailing;
 pub mod load;
-pub mod negate;
+pub mod bitwise_not;
 pub mod parse;
 #[cfg(test)]
 pub mod proptest;
@@ -839,7 +839,7 @@ impl Bits {
         !self.reduce_xor()
     }
 
-    pub fn bitwise_negate(&self) -> Self {
+    pub fn bitwise_not(&self) -> Self {
         match self.as_data_ref() {
             BitsDataRef::InlineTv(value) => Bits::from_u64(self.size(), !value),
             BitsDataRef::InlineFv(spc, val) => {

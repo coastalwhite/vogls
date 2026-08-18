@@ -79,7 +79,7 @@ pub fn lower<'a>(
                 }
 
                 if matches!(id.gatetype.item, G::Nand | G::Nor | G::Xnor) {
-                    value = bb_builder.binary_neg(mctx.gl(), value);
+                    value = bb_builder.binary_not(mctx.gl(), value);
                 }
 
                 assign_net_lvalue(
@@ -134,7 +134,7 @@ pub fn lower<'a>(
                     );
                     match id.gatetype.item {
                         G::Buf => value = bb_builder.x_to_z(mctx.gl(), value),
-                        G::Not => value = bb_builder.binary_neg(mctx.gl(), value),
+                        G::Not => value = bb_builder.binary_not(mctx.gl(), value),
                     }
 
                     assign_net_lvalue(

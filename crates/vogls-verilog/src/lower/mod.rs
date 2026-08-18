@@ -694,7 +694,7 @@ pub fn create_nba_process(
 
             let mask_v = builder.probe(gl, mask);
             let value_v = builder.probe(gl, value);
-            let inv_mask = builder.binary_neg(gl, mask_v);
+            let inv_mask = builder.binary_not(gl, mask_v);
             let old = builder.probe(gl, signal);
             let old = builder.and(gl, old, inv_mask);
             let value_v = builder.and(gl, value_v, mask_v);

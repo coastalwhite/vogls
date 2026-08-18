@@ -552,10 +552,10 @@ fn lower_instruction(
                 src.mode(),
                 SixBitSize::from_vector_size(src_size),
             ) {
-                (O::Neg, M::TwoValue, _, Some(src_size)) => bce.not(rd, rs, src_size),
-                (O::Neg, M::TwoValue, _, None) => bce.heap_tv_neg(rd, rs, src_size),
-                (O::Neg, M::FourValue, _, Some(_)) => bce.fv_not(rd, rs),
-                (O::Neg, M::FourValue, _, None) => bce.heap_fv_neg(rd, rs, src_size),
+                (O::Not, M::TwoValue, _, Some(src_size)) => bce.not(rd, rs, src_size),
+                (O::Not, M::TwoValue, _, None) => bce.heap_tv_not(rd, rs, src_size),
+                (O::Not, M::FourValue, _, Some(_)) => bce.fv_not(rd, rs),
+                (O::Not, M::FourValue, _, None) => bce.heap_fv_not(rd, rs, src_size),
                 (O::ReduceOr, M::TwoValue, _, Some(src_size)) => {
                     bce.cnei(rd, rs, SignedImmediate::ZERO, src_size)
                 }
@@ -1591,7 +1591,7 @@ fn lower_instruction(
                     bce.heap_fv_ceq(rd, rs, T4, src_size);
                 }
                 (O::BitwiseCaseEquality, _, _, M::TwoValue, _, Some(src_size)) => {
-                    match SignedImmediate::new_from_bits(&imm.bitwise_negate()) {
+                    match SignedImmediate::new_from_bits(&imm.bitwise_not()) {
                         None => {
                             bce.load_bits_into_register(T4, M::TwoValue, imm);
                             bce.xnor(rd, rs, T4, src_size);
@@ -1600,7 +1600,7 @@ fn lower_instruction(
                     }
                 }
                 (O::BitwiseCaseEquality, _, _, M::TwoValue, _, None) => {
-                    let imm = heap_builder.claim_constant(M::TwoValue, imm.bitwise_negate());
+                    let imm = heap_builder.claim_constant(M::TwoValue, imm.bitwise_not());
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
                     bce.heap_tv_xor(rd, rs, T4, src_size);
                 }
