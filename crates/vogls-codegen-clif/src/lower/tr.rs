@@ -263,12 +263,12 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
                                 let src_base = wide_map[src].addr(b, ptr, params.cldctx, 0);
 
-                                clif_unary(
+                                clif_unary_bitwise(
                                     b,
                                     dst_size,
                                     dst_base,
                                     src_base,
-                                    UnaryTvFvFn {
+                                    TvFvFn {
                                         iter: |b: &mut FunctionBuilder, src| {
                                             let all_one = b.ins().iconst(I64, -1);
                                             (src, all_one)
@@ -285,12 +285,12 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
                                 let src_base = wide_map[src].addr(b, ptr, params.cldctx, 0);
 
-                                clif_unary(
+                                clif_unary_bitwise(
                                     b,
                                     dst_size,
                                     dst_base,
                                     src_base,
-                                    UnaryFvTvFn {
+                                    FvTvFn {
                                         iter: |b: &mut FunctionBuilder, val, spc| {
                                             b.ins().band(val, spc)
                                         },
@@ -308,12 +308,12 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             (O::Neg, M::TwoValue, _, _) => {
                                 let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
                                 let src_base = wide_map[src].addr(b, ptr, params.cldctx, 0);
-                                clif_unary(
+                                clif_unary_bitwise(
                                     b,
                                     dst_size,
                                     dst_base,
                                     src_base,
-                                    UnaryTvTvFn {
+                                    TvTvFn {
                                         iter: |b: &mut FunctionBuilder, src| b.ins().bnot(src),
                                         mask: true,
                                     },
@@ -322,12 +322,12 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             (O::Neg, M::FourValue, _, _) => {
                                 let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
                                 let src_base = wide_map[src].addr(b, ptr, params.cldctx, 0);
-                                clif_unary(
+                                clif_unary_bitwise(
                                     b,
                                     dst_size,
                                     dst_base,
                                     src_base,
-                                    UnaryFvFvFn {
+                                    FvFvFn {
                                         iter: clif_fv_not,
                                         spc_mask: false,
                                         val_mask: false,
@@ -1168,15 +1168,12 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
 
                         // Materialize the immediate's value and special-plane words as
                         // constants. A two-value immediate is fully known (spc = mask).
+                        use vogls_bits::BitsDataRef as R;
                         let (iv, is) = match imm.as_data_ref() {
-                            vogls_bits::BitsDataRef::InlineTv(v) => {
-                                (v as i64, mask_of(imm_size.get()))
-                            }
-                            vogls_bits::BitsDataRef::InlineFv(spc, val) => (val as i64, spc as i64),
-                            vogls_bits::BitsDataRef::SeparateFv(s) => (s[1] as i64, s[0] as i64),
-                            vogls_bits::BitsDataRef::SeparateTv(s) => {
-                                (s[0] as i64, mask_of(imm_size.get()))
-                            }
+                            R::InlineTv(v) => (v as i64, mask_of(imm_size.get())),
+                            R::InlineFv(spc, val) => (val as i64, spc as i64),
+                            R::SeparateFv(s) => (s[1] as i64, s[0] as i64),
+                            R::SeparateTv(s) => (s[0] as i64, mask_of(imm_size.get())),
                         };
 
                         // Like `map!` for Binary, but the rhs operand is the immediate:
@@ -1219,6 +1216,19 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }};
                         }
 
+                        let mut wide_ptrs = |b: &mut FunctionBuilder| {
+                            let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                            let lhs_base = wide_map[src].addr(b, ptr, params.cldctx, 0);
+                            let rhs = self
+                                .compiler
+                                .heap_builder
+                                .claim_constant(dst.mode(), imm.clone());
+                            let rhs_base = b
+                                .ins()
+                                .iadd_imm_u(params.heap_ptr, (rhs.offset.bit_offset / 8) as i64);
+                            (dst_base, lhs_base, rhs_base)
+                        };
+
                         use BinaryImmOp as O;
                         use LogicMode as M;
                         // Wide (>64 dst/src/imm) ops delegate to the multi-word lowering;
@@ -1240,9 +1250,35 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_and(b, sval, sspc, ival, ispc)
                                 })
                             }
-                            (O::And, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::And, M::TwoValue, _, _, _, _) => {
+                                let (dst_base, lhs_base, rhs_base) = wide_ptrs(b);
+                                clif_binary_bitwise(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    lhs_base,
+                                    rhs_base,
+                                    TvTvFn {
+                                        iter: |b: &mut FunctionBuilder, l, r| b.ins().band(l, r),
+                                        mask: false,
+                                    },
+                                );
+                            }
+                            (O::And, M::FourValue, _, _, _, _) => {
+                                let (dst_base, lhs_base, rhs_base) = wide_ptrs(b);
+                                clif_binary_bitwise(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    lhs_base,
+                                    rhs_base,
+                                    FvFvFn {
+                                        iter: clif_fv_and,
+                                        val_mask: false,
+                                        spc_mask: false,
+                                    },
+                                );
+                            }
                             (O::Or, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv b.ins().bor(sval, ival))
                             }
@@ -1251,9 +1287,35 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_or(b, sval, sspc, ival, ispc)
                                 })
                             }
-                            (O::Or, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::Or, M::TwoValue, _, _, _, _) => {
+                                let (dst_base, lhs_base, rhs_base) = wide_ptrs(b);
+                                clif_binary_bitwise(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    lhs_base,
+                                    rhs_base,
+                                    TvTvFn {
+                                        iter: |b: &mut FunctionBuilder, l, r| b.ins().bor(l, r),
+                                        mask: false,
+                                    },
+                                );
+                            }
+                            (O::Or, M::FourValue, _, _, _, _) => {
+                                let (dst_base, lhs_base, rhs_base) = wide_ptrs(b);
+                                clif_binary_bitwise(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    lhs_base,
+                                    rhs_base,
+                                    FvFvFn {
+                                        iter: clif_fv_or,
+                                        val_mask: false,
+                                        spc_mask: false,
+                                    },
+                                );
+                            }
                             (O::Xor, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv b.ins().bxor(sval, ival))
                             }
@@ -1262,9 +1324,35 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_xor(b, sval, sspc, ival, ispc)
                                 })
                             }
-                            (O::Xor, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::Xor, M::TwoValue, _, _, _, _) => {
+                                let (dst_base, lhs_base, rhs_base) = wide_ptrs(b);
+                                clif_binary_bitwise(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    lhs_base,
+                                    rhs_base,
+                                    TvTvFn {
+                                        iter: |b: &mut FunctionBuilder, l, r| b.ins().bxor(l, r),
+                                        mask: false,
+                                    },
+                                );
+                            }
+                            (O::Xor, M::FourValue, _, _, _, _) => {
+                                let (dst_base, lhs_base, rhs_base) = wide_ptrs(b);
+                                clif_binary_bitwise(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    lhs_base,
+                                    rhs_base,
+                                    FvFvFn {
+                                        iter: clif_fv_xor,
+                                        val_mask: false,
+                                        spc_mask: false,
+                                    },
+                                );
+                            }
 
                             (O::Add, M::TwoValue, _, Some(_), _, _) => imap!(sval, ival => @tv {
                                 let r = b.ins().iadd(sval, ival);
@@ -1527,24 +1615,46 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             // two-value result.
                             (O::BitwiseCaseEquality, _, M::TwoValue, Some(dst_size), _, _) => {
                                 imap!(sval, ival => @tv {
-                                    let vx = b.ins().bxor(sval, ival);
-                                    let veq = b.ins().bnot(vx);
+                                    let veq = b.ins().bxor_not(sval, ival);
                                     maskvsbs(b, veq, dst_size)
                                 })
                             }
-                            (O::BitwiseCaseEquality, _, M::FourValue, Some(_), _, _) => {
+                            (O::BitwiseCaseEquality, _, M::FourValue, Some(dst_size), _, _) => {
                                 imap!((sval, sspc), (ival, ispc) => @tv {
-                                    let vx = b.ins().bxor(sval, ival);
-                                    let veq = b.ins().bnot(vx);
-                                    let sx = b.ins().bxor(sspc, ispc);
-                                    let seq = b.ins().bnot(sx);
-                                    let both = b.ins().band(veq, seq);
-                                    maskv(b, both, dst_size.get())
+                                    let out = clif_fv_bitwise_ceq(b, sval, sspc, ival, ispc);
+                                    maskvsbs(b, out, dst_size)
                                 })
                             }
-                            (O::BitwiseCaseEquality, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::BitwiseCaseEquality, M::TwoValue, _, _, _, _) => {
+                                let (dst_base, lhs_base, rhs_base) = wide_ptrs(b);
+                                clif_binary_bitwise(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    lhs_base,
+                                    rhs_base,
+                                    TvTvFn {
+                                        iter: |b: &mut FunctionBuilder, l, r| {
+                                            b.ins().bxor_not(l, r)
+                                        },
+                                        mask: true,
+                                    },
+                                );
+                            }
+                            (O::BitwiseCaseEquality, M::FourValue, _, _, _, _) => {
+                                let (dst_base, lhs_base, rhs_base) = wide_ptrs(b);
+                                clif_binary_bitwise(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    lhs_base,
+                                    rhs_base,
+                                    FvTvFn {
+                                        iter: clif_fv_bitwise_ceq,
+                                        mask: true,
+                                    },
+                                );
+                            }
 
                             // Power/RevPower have no clean inline form: run the vogls-bits
                             // shim (handles narrow and wide).
@@ -2725,6 +2835,18 @@ fn clif_fv_xnor(
     (val, spc)
 }
 
+fn clif_fv_bitwise_ceq(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> Value {
+    let spc = b.ins().bxor_not(lspc, rspc);
+    let val = b.ins().bxor_not(lval, rval);
+    b.ins().band(spc, val)
+}
+
 fn clif_fv_copyx(
     b: &mut FunctionBuilder,
     lval: Value,
@@ -2933,62 +3055,33 @@ fn wide_binary_bitwise(
     let lhs_base = wide_map[&lhs].addr(b, ptr, params.cldctx, 0);
     let rhs_base = wide_map[&rhs].addr(b, ptr, params.cldctx, 0);
 
-    let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
-    let words = nwords(size.get());
-
-    let bitwise_bb = b.create_block();
-    let done_bb = b.create_block();
-    let it = b.append_block_param(bitwise_bb, I64);
-
-    let zero = b.ins().iconst(I64, 0);
-    b.ins().jump(bitwise_bb, &[BlockArg::from(zero)]);
-
-    b.switch_to_block(bitwise_bb);
-    let lhs_ptr = b.ins().iadd(lhs_base, it);
-    let rhs_ptr = b.ins().iadd(rhs_base, it);
-    let dst_ptr = b.ins().iadd(dst_base, it);
-
     match dst.mode() {
         LogicMode::TwoValue => {
-            let lhs_val = b.ins().load(I64, mem(), lhs_ptr, 0);
-            let rhs_val = b.ins().load(I64, mem(), rhs_ptr, 0);
-            let dst_val = tv(b, lhs_val, rhs_val);
-            b.ins().store(mem(), dst_val, dst_ptr, 0);
+            clif_binary_bitwise(
+                b,
+                size,
+                dst_base,
+                lhs_base,
+                rhs_base,
+                TvTvFn {
+                    iter: tv,
+                    mask: needs_mask,
+                },
+            );
         }
         LogicMode::FourValue => {
-            let lhs_spc = b.ins().load(I64, mem(), lhs_ptr, 0);
-            let rhs_spc = b.ins().load(I64, mem(), rhs_ptr, 0);
-            let lhs_val = b.ins().load(I64, mem(), lhs_ptr, val_offset);
-            let rhs_val = b.ins().load(I64, mem(), rhs_ptr, val_offset);
-            let (dst_val, dst_spc) = fv(b, lhs_val, lhs_spc, rhs_val, rhs_spc);
-            b.ins().store(mem(), dst_spc, dst_ptr, 0);
-            b.ins().store(mem(), dst_val, dst_ptr, val_offset);
-        }
-    }
-    let next = b.ins().iadd_imm_u(it, 8);
-    let lt = b
-        .ins()
-        .icmp_imm_u(IntCC::UnsignedLessThan, next, (words * 8) as i64);
-    b.ins()
-        .brif(lt, bitwise_bb, &[BlockArg::from(next)], done_bb, &[]);
-
-    b.switch_to_block(done_bb);
-    if needs_mask && let Some(mask_size) = SixBitSize::last_word_size(size) {
-        let last = b.ins().iadd_imm_u(dst_base, ((words - 1) * 8) as i64);
-        match dst.mode() {
-            LogicMode::TwoValue => {
-                let last_word = b.ins().load(I64, mem(), last, 0);
-                let masked = maskvsbs(b, last_word, mask_size);
-                b.ins().store(mem(), masked, last, 0);
-            }
-            LogicMode::FourValue => {
-                let last_word_spc = b.ins().load(I64, mem(), last, 0);
-                let last_word_val = b.ins().load(I64, mem(), last, val_offset);
-                let masked_spc = maskvsbs(b, last_word_spc, mask_size);
-                let masked_val = maskvsbs(b, last_word_val, mask_size);
-                b.ins().store(mem(), masked_spc, last, 0);
-                b.ins().store(mem(), masked_val, last, val_offset);
-            }
+            clif_binary_bitwise(
+                b,
+                size,
+                dst_base,
+                lhs_base,
+                rhs_base,
+                FvFvFn {
+                    iter: fv,
+                    val_mask: needs_mask,
+                    spc_mask: needs_mask,
+                },
+            );
         }
     }
 }
@@ -2997,27 +3090,38 @@ trait UnaryLowerFn {
     fn lower(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value, src_ptr: Value);
     fn finish(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value);
 }
+trait BinaryLowerFn {
+    fn lower(
+        &mut self,
+        b: &mut FunctionBuilder,
+        size: VectorSize,
+        dst_ptr: Value,
+        lhs_ptr: Value,
+        rhs_ptr: Value,
+    );
+    fn finish(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value);
+}
 
-struct UnaryTvTvFn<F> {
+struct TvTvFn<F> {
     iter: F,
     mask: bool,
 }
-struct UnaryTvFvFn<F> {
+struct TvFvFn<F> {
     iter: F,
     spc_mask: bool,
     val_mask: bool,
 }
-struct UnaryFvFvFn<F> {
+struct FvFvFn<F> {
     iter: F,
     spc_mask: bool,
     val_mask: bool,
 }
-struct UnaryFvTvFn<F> {
+struct FvTvFn<F> {
     iter: F,
     mask: bool,
 }
 
-impl<F: FnMut(&mut FunctionBuilder, Value) -> Value> UnaryLowerFn for UnaryTvTvFn<F> {
+impl<F: FnMut(&mut FunctionBuilder, Value) -> Value> UnaryLowerFn for TvTvFn<F> {
     fn lower(
         &mut self,
         b: &mut FunctionBuilder,
@@ -3040,7 +3144,7 @@ impl<F: FnMut(&mut FunctionBuilder, Value) -> Value> UnaryLowerFn for UnaryTvTvF
         }
     }
 }
-impl<F: FnMut(&mut FunctionBuilder, Value) -> (Value, Value)> UnaryLowerFn for UnaryTvFvFn<F> {
+impl<F: FnMut(&mut FunctionBuilder, Value) -> (Value, Value)> UnaryLowerFn for TvFvFn<F> {
     fn lower(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value, src_ptr: Value) {
         let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
         let src = b.ins().load(I64, mem(), src_ptr, 0);
@@ -3067,7 +3171,7 @@ impl<F: FnMut(&mut FunctionBuilder, Value) -> (Value, Value)> UnaryLowerFn for U
         }
     }
 }
-impl<F: FnMut(&mut FunctionBuilder, Value, Value) -> Value> UnaryLowerFn for UnaryFvTvFn<F> {
+impl<F: FnMut(&mut FunctionBuilder, Value, Value) -> Value> UnaryLowerFn for FvTvFn<F> {
     fn lower(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value, src_ptr: Value) {
         let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
         let spc = b.ins().load(I64, mem(), src_ptr, 0);
@@ -3086,9 +3190,7 @@ impl<F: FnMut(&mut FunctionBuilder, Value, Value) -> Value> UnaryLowerFn for Una
         }
     }
 }
-impl<F: FnMut(&mut FunctionBuilder, Value, Value) -> (Value, Value)> UnaryLowerFn
-    for UnaryFvFvFn<F>
-{
+impl<F: FnMut(&mut FunctionBuilder, Value, Value) -> (Value, Value)> UnaryLowerFn for FvFvFn<F> {
     fn lower(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value, src_ptr: Value) {
         let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
         let spc = b.ins().load(I64, mem(), src_ptr, 0);
@@ -3117,7 +3219,137 @@ impl<F: FnMut(&mut FunctionBuilder, Value, Value) -> (Value, Value)> UnaryLowerF
     }
 }
 
-fn clif_unary(
+impl<F: FnMut(&mut FunctionBuilder, Value, Value) -> Value> BinaryLowerFn for TvTvFn<F> {
+    fn lower(
+        &mut self,
+        b: &mut FunctionBuilder,
+        _size: VectorSize,
+        dst_ptr: Value,
+        lhs_ptr: Value,
+        rhs_ptr: Value,
+    ) {
+        let lhs = b.ins().load(I64, mem(), lhs_ptr, 0);
+        let rhs = b.ins().load(I64, mem(), rhs_ptr, 0);
+        let out = (self.iter)(b, lhs, rhs);
+        b.ins().store(mem(), out, dst_ptr, 0);
+    }
+
+    fn finish(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value) {
+        if self.mask
+            && let Some(mask_size) = SixBitSize::last_word_size(size)
+        {
+            let last_word = b.ins().load(I64, mem(), dst_ptr, 0);
+            let masked = maskvsbs(b, last_word, mask_size);
+            b.ins().store(mem(), masked, dst_ptr, 0);
+        }
+    }
+}
+impl<F: FnMut(&mut FunctionBuilder, Value, Value) -> (Value, Value)> BinaryLowerFn for TvFvFn<F> {
+    fn lower(
+        &mut self,
+        b: &mut FunctionBuilder,
+        size: VectorSize,
+        dst_ptr: Value,
+        lhs_ptr: Value,
+        rhs_ptr: Value,
+    ) {
+        let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
+        let lhs = b.ins().load(I64, mem(), lhs_ptr, 0);
+        let rhs = b.ins().load(I64, mem(), rhs_ptr, 0);
+        let (val, spc) = (self.iter)(b, lhs, rhs);
+        b.ins().store(mem(), spc, dst_ptr, 0);
+        b.ins().store(mem(), val, dst_ptr, val_offset);
+    }
+
+    fn finish(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value) {
+        if (self.spc_mask || self.val_mask)
+            && let Some(mask_size) = SixBitSize::last_word_size(size)
+        {
+            let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
+            if self.spc_mask {
+                let last_word_spc = b.ins().load(I64, mem(), dst_ptr, 0);
+                let masked_spc = maskvsbs(b, last_word_spc, mask_size);
+                b.ins().store(mem(), masked_spc, dst_ptr, 0);
+            }
+            if self.val_mask {
+                let last_word_val = b.ins().load(I64, mem(), dst_ptr, val_offset);
+                let masked_val = maskvsbs(b, last_word_val, mask_size);
+                b.ins().store(mem(), masked_val, dst_ptr, val_offset);
+            }
+        }
+    }
+}
+impl<F: FnMut(&mut FunctionBuilder, Value, Value, Value, Value) -> Value> BinaryLowerFn
+    for FvTvFn<F>
+{
+    fn lower(
+        &mut self,
+        b: &mut FunctionBuilder,
+        size: VectorSize,
+        dst_ptr: Value,
+        lhs_ptr: Value,
+        rhs_ptr: Value,
+    ) {
+        let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
+        let lhs_spc = b.ins().load(I64, mem(), lhs_ptr, 0);
+        let lhs_val = b.ins().load(I64, mem(), lhs_ptr, val_offset);
+        let rhs_spc = b.ins().load(I64, mem(), rhs_ptr, 0);
+        let rhs_val = b.ins().load(I64, mem(), rhs_ptr, val_offset);
+        let out = (self.iter)(b, lhs_val, lhs_spc, rhs_val, rhs_spc);
+        b.ins().store(mem(), out, dst_ptr, 0);
+    }
+
+    fn finish(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value) {
+        if self.mask
+            && let Some(mask_size) = SixBitSize::last_word_size(size)
+        {
+            let last_word = b.ins().load(I64, mem(), dst_ptr, 0);
+            let masked = maskvsbs(b, last_word, mask_size);
+            b.ins().store(mem(), masked, dst_ptr, 0);
+        }
+    }
+}
+impl<F: FnMut(&mut FunctionBuilder, Value, Value, Value, Value) -> (Value, Value)> BinaryLowerFn
+    for FvFvFn<F>
+{
+    fn lower(
+        &mut self,
+        b: &mut FunctionBuilder,
+        size: VectorSize,
+        dst_ptr: Value,
+        lhs_ptr: Value,
+        rhs_ptr: Value,
+    ) {
+        let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
+        let lhs_spc = b.ins().load(I64, mem(), lhs_ptr, 0);
+        let lhs_val = b.ins().load(I64, mem(), lhs_ptr, val_offset);
+        let rhs_spc = b.ins().load(I64, mem(), rhs_ptr, 0);
+        let rhs_val = b.ins().load(I64, mem(), rhs_ptr, val_offset);
+        let (out_val, out_spc) = (self.iter)(b, lhs_val, lhs_spc, rhs_val, rhs_spc);
+        b.ins().store(mem(), out_spc, dst_ptr, 0);
+        b.ins().store(mem(), out_val, dst_ptr, val_offset);
+    }
+
+    fn finish(&mut self, b: &mut FunctionBuilder, size: VectorSize, dst_ptr: Value) {
+        if (self.spc_mask || self.val_mask)
+            && let Some(mask_size) = SixBitSize::last_word_size(size)
+        {
+            let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
+            if self.spc_mask {
+                let last_word_spc = b.ins().load(I64, mem(), dst_ptr, 0);
+                let masked_spc = maskvsbs(b, last_word_spc, mask_size);
+                b.ins().store(mem(), masked_spc, dst_ptr, 0);
+            }
+            if self.val_mask {
+                let last_word_val = b.ins().load(I64, mem(), dst_ptr, val_offset);
+                let masked_val = maskvsbs(b, last_word_val, mask_size);
+                b.ins().store(mem(), masked_val, dst_ptr, val_offset);
+            }
+        }
+    }
+}
+
+fn clif_unary_bitwise(
     b: &mut FunctionBuilder,
     size: VectorSize,
     dst_base: Value,
@@ -3137,6 +3369,41 @@ fn clif_unary(
     let dst_ptr = b.ins().iadd(dst_base, it);
     let src_ptr = b.ins().iadd(src_base, it);
     f.lower(b, size, dst_ptr, src_ptr);
+
+    let next = b.ins().iadd_imm_u(it, 8);
+    let lt = b
+        .ins()
+        .icmp_imm_u(IntCC::UnsignedLessThan, next, (nwords * 8) as i64);
+    b.ins()
+        .brif(lt, bitwise_bb, &[BlockArg::from(next)], done_bb, &[]);
+
+    b.switch_to_block(done_bb);
+    let last = b.ins().iadd_imm_u(dst_base, ((nwords - 1) * 8) as i64);
+    f.finish(b, size, last);
+}
+
+fn clif_binary_bitwise(
+    b: &mut FunctionBuilder,
+    size: VectorSize,
+    dst_base: Value,
+    lhs_base: Value,
+    rhs_base: Value,
+    mut f: impl BinaryLowerFn,
+) {
+    let nwords = nwords(size.get());
+
+    let bitwise_bb = b.create_block();
+    let done_bb = b.create_block();
+    let it = b.append_block_param(bitwise_bb, I64);
+
+    let zero = b.ins().iconst(I64, 0);
+    b.ins().jump(bitwise_bb, &[BlockArg::from(zero)]);
+
+    b.switch_to_block(bitwise_bb);
+    let dst_ptr = b.ins().iadd(dst_base, it);
+    let lhs_ptr = b.ins().iadd(lhs_base, it);
+    let rhs_ptr = b.ins().iadd(rhs_base, it);
+    f.lower(b, size, dst_ptr, lhs_ptr, rhs_ptr);
 
     let next = b.ins().iadd_imm_u(it, 8);
     let lt = b
