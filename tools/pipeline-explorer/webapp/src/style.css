@@ -17,6 +17,8 @@
   --ed-text: #3b3646;
   --ed-caret: #08060d;
   --ed-sel: rgba(170, 59, 255, 0.22);
+  --ed-scroll-thumb: rgba(59, 54, 70, 0.28);
+  --ed-scroll-thumb-h: rgba(59, 54, 70, 0.45);
   --syn-comment: #8a8496;
   --syn-string: #4a7c26;
   --syn-number: #b3541e;
@@ -61,6 +63,8 @@
     --ed-text: #c9d1d9;
     --ed-caret: #d7e0ea;
     --ed-sel: rgba(74, 124, 196, 0.4);
+    --ed-scroll-thumb: rgba(201, 209, 217, 0.24);
+    --ed-scroll-thumb-h: rgba(201, 209, 217, 0.40);
     --syn-comment: #5f6773;
     --syn-string: #c3e88d;
     --syn-number: #f78c6c;
@@ -253,13 +257,32 @@ main #central {
     font: 13px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     tab-size: 4;
     background: var(--ed-bg); border:1px solid var(--ed-border); border-radius:6px;
-    max-width: 82ch;
+    width: 100%;
     flex: 1;
     /* Without this, `min-height: auto` lets the <pre>'s full content height
        win over the flex share and the editor grows instead of scrolling. */
     min-height: 0;
-    overflow-y: scroll;
+    overflow-y: auto;
+    /* Reserve the gutter so the wrapped text doesn't reflow at the moment the
+       scrollbar appears. */
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: var(--ed-scroll-thumb) transparent;
 }
+
+/* WebKit/Blink ignore the standard properties above, so repeat for them.
+   Transparent track + inset-padded thumb keeps the bar inside the editor
+   instead of reading as a separate UI element bolted to the edge. */
+.editor::-webkit-scrollbar { width: 10px; height: 10px; }
+.editor::-webkit-scrollbar-track { background: transparent; }
+.editor::-webkit-scrollbar-thumb {
+    background: var(--ed-scroll-thumb);
+    border-radius: 6px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+.editor::-webkit-scrollbar-thumb:hover { background: var(--ed-scroll-thumb-h); background-clip: content-box; }
+.editor::-webkit-scrollbar-corner { background: transparent; }
 /* The textarea's containing block. This has to be an in-flow element rather
    than .editor itself: .editor is the scroll container, so `inset: 0` there
    would size the textarea to the scrollport instead of the scrolled content,
