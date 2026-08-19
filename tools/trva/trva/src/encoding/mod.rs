@@ -518,7 +518,8 @@ macro_rules! field_type {
     ($i:ident:   xreg)    => { XRegIdent };
     ($i:ident:xreg_cr)    => { XRegIdent };
     ($i:ident:freg_cr)    => { FRegIdent };
-    (shamt)               => { u8 };
+    (shamt_xlen)          => { u8 };
+    (shamt5)              => { u8 };
     (csr)                 => { CsrIndex };
     (uimm: csr)           => { u8 };
     (imm: itype_unsigned) => { u32 };
@@ -568,7 +569,8 @@ macro_rules! field_encode {
 
     ($v:ident, rm) =>                  { ($v as u32) << 12 };
 
-    ($v:ident, shamt) =>               { (($v as u32) & 0x1F) << 20 };
+    ($v:ident, shamt_xlen) =>          { (($v as u32) & 0x3F) << 20 };
+    ($v:ident, shamt5) =>              { (($v as u32) & 0x1F) << 20 };
     ($v:ident, csr) =>                 { ($v.0 as u32) << 20 };
     ($v:ident, uimm: csr) =>           { ($v as u32) << 15 };
     ($v:ident, imm: itype_unsigned) => { ($v as u32) << 20 };
@@ -644,7 +646,8 @@ macro_rules! field_decode {
     ($bs:expr, rm)                  => { RoundingMode::take_masked($bs >> 12) };
 
 
-    ($bs:expr, shamt)               => { (($bs >> 20) & 0x1F) as u8 };
+    ($bs:expr, shamt_xlen)               => { (($bs >> 20) & 0x3F) as u8 };
+    ($bs:expr, shamt5)               => { (($bs >> 20) & 0x1F) as u8 };
     ($bs:expr, csr)                 => { CsrIndex(($bs >> 20) as u16) };
     ($bs:expr, uimm: csr)           => { (($bs >> 15) & 0x1F) as u8 };
     ($bs:expr, imm: itype_unsigned) => { ((($bs & 0xFFF0_0000) as i32) >> 20) as u32 };
@@ -1337,9 +1340,9 @@ instructions! {
     Xori  ("xori",  0b001_0011, i,                      funct3 = 0b100) (rd: xreg, rs1: xreg, imm: itype_signed),
     Ori   ("ori",   0b001_0011, i,                      funct3 = 0b110) (rd: xreg, rs1: xreg, imm: itype_signed),
     Andi  ("andi",  0b001_0011, i,                      funct3 = 0b111) (rd: xreg, rs1: xreg, imm: itype_signed),
-    Slli  ("slli",  0b001_0011, i, funct7 = 0b000_0000, funct3 = 0b001) (rd: xreg, rs1: xreg, shamt),
-    Srli  ("srli",  0b001_0011, i, funct7 = 0b000_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, shamt),
-    Srai  ("srai",  0b001_0011, i, funct7 = 0b010_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, shamt),
+    Slli  ("slli",  0b001_0011, i, funct7 = 0b000_0000, funct3 = 0b001) (rd: xreg, rs1: xreg, shamt_xlen),
+    Srli  ("srli",  0b001_0011, i, funct7 = 0b000_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, shamt_xlen),
+    Srai  ("srai",  0b001_0011, i, funct7 = 0b010_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, shamt_xlen),
 
     Add   ("add",   0b011_0011, r, funct7 = 0b000_0000, funct3 = 0b000) (rd: xreg, rs1: xreg, rs2: xreg),
     Sub   ("sub",   0b011_0011, r, funct7 = 0b010_0000, funct3 = 0b000) (rd: xreg, rs1: xreg, rs2: xreg),
@@ -1354,9 +1357,9 @@ instructions! {
 
     // RV64I
     Addiw ("addiw", 0b001_1011, i,                      funct3 = 0b000) (rd: xreg, rs1: xreg, imm: itype_signed),
-    Slliw ("slliw", 0b001_1011, i, funct7 = 0b000_0000, funct3 = 0b001) (rd: xreg, rs1: xreg, shamt),
-    Srliw ("srliw", 0b001_1011, i, funct7 = 0b000_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, shamt),
-    Sraiw ("sraiw", 0b001_1011, i, funct7 = 0b010_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, shamt),
+    Slliw ("slliw", 0b001_1011, i, funct7 = 0b000_0000, funct3 = 0b001) (rd: xreg, rs1: xreg, shamt5),
+    Srliw ("srliw", 0b001_1011, i, funct7 = 0b000_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, shamt5),
+    Sraiw ("sraiw", 0b001_1011, i, funct7 = 0b010_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, shamt5),
 
     Addw  ("addw",  0b011_1011, r, funct7 = 0b000_0000, funct3 = 0b000) (rd: xreg, rs1: xreg, rs2: xreg),
     Subw  ("subw",  0b011_1011, r, funct7 = 0b010_0000, funct3 = 0b000) (rd: xreg, rs1: xreg, rs2: xreg),
@@ -1537,14 +1540,14 @@ asm_display! {
     Xori  ("{},{},{}", i.rd(), i.rs1(), i.imm()),
     Ori   ("{},{},{}", i.rd(), i.rs1(), i.imm()),
     Andi  ("{},{},{}", i.rd(), i.rs1(), i.imm()),
-    Slli  ("{},{},{}", i.rd(), i.rs1(), i.shamt()),
-    Srli  ("{},{},{}", i.rd(), i.rs1(), i.shamt()),
-    Srai  ("{},{},{}", i.rd(), i.rs1(), i.shamt()),
+    Slli  ("{},{},{}", i.rd(), i.rs1(), i.shamt_xlen()),
+    Srli  ("{},{},{}", i.rd(), i.rs1(), i.shamt_xlen()),
+    Srai  ("{},{},{}", i.rd(), i.rs1(), i.shamt_xlen()),
 
     Addiw ("{},{},{}", i.rd(), i.rs1(), i.imm()),
-    Slliw ("{},{},{}", i.rd(), i.rs1(), i.shamt()),
-    Srliw ("{},{},{}", i.rd(), i.rs1(), i.shamt()),
-    Sraiw ("{},{},{}", i.rd(), i.rs1(), i.shamt()),
+    Slliw ("{},{},{}", i.rd(), i.rs1(), i.shamt5()),
+    Srliw ("{},{},{}", i.rd(), i.rs1(), i.shamt5()),
+    Sraiw ("{},{},{}", i.rd(), i.rs1(), i.shamt5()),
 
     Addw  ("{},{},{}", i.rd(), i.rs1(), i.rs2()),
     Subw  ("{},{},{}", i.rd(), i.rs1(), i.rs2()),

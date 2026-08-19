@@ -124,10 +124,12 @@ fn main() -> ExitCode {
     } = result;
 
     let result = (|| {
+        use io::Write;
         output_section(&mut output, "text", text.as_ref(), text_start)?;
         output_section(&mut output, "data", data.as_ref(), data_start)?;
         output_section(&mut output, "rodata", rodata.as_ref(), rodata_start)?;
-        output_section(&mut output, "bss", bss.as_ref(), bss_start)?;
+        let end = bss_start + bss as u32;
+        writeln!(&mut output, "-- .bss ({bss_start:#010X}-{end:#010X}) --")?;
         io::Result::Ok(())
     })();
 

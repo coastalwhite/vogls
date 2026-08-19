@@ -91,7 +91,7 @@ pub struct Assembled {
     pub text: Box<[u8]>,
     pub data: Box<[u8]>,
     pub rodata: Box<[u8]>,
-    pub bss: Box<[u8]>,
+    pub bss: usize,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -349,12 +349,30 @@ impl Assembler {
     ) -> AssembleResult<()> {
         self.parse_itype_instr_base(cursor, new, |cursor| cursor.take_imm12())
     }
-    fn parse_itype_shamt_instr(
+    fn parse_itype_shamt_xlen_instr(
         &mut self,
         cursor: &mut SourceCursor<'_>,
         new: fn(XRegIdent, XRegIdent, u8) -> u32,
     ) -> AssembleResult<()> {
-        self.parse_itype_instr_base(cursor, new, |cursor| cursor.take_shamt())
+        let xlen = self.isa.xlen;
+        self.parse_itype_instr_base(cursor, new, |cursor| {
+            let shamt = cursor.take_shamt()?;
+            // @TODO: Throw error.
+            let shamt = match xlen {
+                XLen::Rv32 => shamt & 0x1F,
+                XLen::Rv64 => shamt & 0x3F,
+            };
+            Ok(shamt)
+        })
+    }
+    fn parse_itype_shamt5_instr(
+        &mut self,
+        cursor: &mut SourceCursor<'_>,
+        new: fn(XRegIdent, XRegIdent, u8) -> u32,
+    ) -> AssembleResult<()> {
+        self.parse_itype_instr_base(cursor, new, |cursor| {
+            Ok(cursor.take_shamt()? & 0x1F)
+        })
     }
 
     fn parse_rtype_instr(
@@ -740,7 +758,7 @@ impl Assembler {
             text,
             data,
             rodata,
-            bss,
+            bss: bss.len(),
         }
     }
 
@@ -812,9 +830,16 @@ fn fill_handlers(
                 asm.parse_itype_instr(c, |rd, rs1, rs2| <$name>::new(rd, rs1, rs2).encode_as_u32())?;
             })
         };
-        ($fn_name:ident, @itype_shamt $name:ty) => {
+        ($fn_name:ident, @itype_shamt5 $name:ty) => {
             handler!($fn_name, |asm, c| {
-                asm.parse_itype_shamt_instr(c, |rd, rs1, rs2| {
+                asm.parse_itype_shamt5_instr(c, |rd, rs1, rs2| {
+                    <$name>::new(rd, rs1, rs2).encode_as_u32()
+                })?;
+            })
+        };
+        ($fn_name:ident, @itype_shamt_xlen $name:ty) => {
+            handler!($fn_name, |asm, c| {
+                asm.parse_itype_shamt_xlen_instr(c, |rd, rs1, rs2| {
                     <$name>::new(rd, rs1, rs2).encode_as_u32()
                 })?;
             })
@@ -1073,9 +1098,9 @@ fn fill_handlers(
     handlers.insert("xori", handler!(xori, @itype encoding::Xori));
     handlers.insert("ori", handler!(ori, @itype encoding::Ori));
     handlers.insert("andi", handler!(andi, @itype encoding::Andi));
-    handlers.insert("slli", handler!(slli, @itype_shamt encoding::Slli));
-    handlers.insert("srli", handler!(srli, @itype_shamt encoding::Srli));
-    handlers.insert("srai", handler!(srai, @itype_shamt encoding::Srai));
+    handlers.insert("slli", handler!(slli, @itype_shamt_xlen encoding::Slli));
+    handlers.insert("srli", handler!(srli, @itype_shamt_xlen encoding::Srli));
+    handlers.insert("srai", handler!(srai, @itype_shamt_xlen encoding::Srai));
 
     handlers.insert("add", handler!(add, @rtype encoding::Add));
     handlers.insert("sub", handler!(sub, @rtype encoding::Sub));
@@ -1163,9 +1188,9 @@ fn fill_handlers(
         handlers.insert("sd", handler!(sd, @store encoding::Sd));
 
         handlers.insert("addiw", handler!(addiw, @itype encoding::Addiw));
-        handlers.insert("slliw", handler!(slliw, @itype_shamt encoding::Slliw));
-        handlers.insert("srliw", handler!(srliw, @itype_shamt encoding::Srliw));
-        handlers.insert("sraiw", handler!(sraiw, @itype_shamt encoding::Sraiw));
+        handlers.insert("slliw", handler!(slliw, @itype_shamt5 encoding::Slliw));
+        handlers.insert("srliw", handler!(srliw, @itype_shamt5 encoding::Srliw));
+        handlers.insert("sraiw", handler!(sraiw, @itype_shamt5 encoding::Sraiw));
 
         handlers.insert("addw", handler!(addw, @rtype encoding::Addw));
         handlers.insert("subw", handler!(subw, @rtype encoding::Subw));
