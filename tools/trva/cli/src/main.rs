@@ -23,6 +23,10 @@ struct Args {
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
 
+    /// Target ISA specifier, e.g. `rv32im` or `rv64i`
+    #[arg(long, value_name = "ISA", default_value = "rv32im")]
+    isa: Isa,
+
     /// Start address of the `.text` section
     #[arg(long, value_name = "ADDR")]
     text: SectionPosition,
@@ -41,6 +45,7 @@ fn main() -> ExitCode {
     let Args {
         asm,
         output,
+        isa,
         text,
         data,
         rodata: ro_data,
@@ -75,7 +80,7 @@ fn main() -> ExitCode {
     };
 
     let mut b = Assembler::new(
-        Isa::RV_I | Isa::INTEGER_MULDIV,
+        isa,
         SectionPositions {
             text: text.0,
             data: data.0,

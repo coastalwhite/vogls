@@ -568,7 +568,7 @@ macro_rules! field_encode {
 
     ($v:ident, rm) =>                  { ($v as u32) << 12 };
 
-    ($v:ident, shamt) =>               { ($v as u32) << 20 };
+    ($v:ident, shamt) =>               { (($v as u32) & 0x1F) << 20 };
     ($v:ident, csr) =>                 { ($v.0 as u32) << 20 };
     ($v:ident, uimm: csr) =>           { ($v as u32) << 15 };
     ($v:ident, imm: itype_unsigned) => { ($v as u32) << 20 };
@@ -980,7 +980,7 @@ impl Instruction {
             decode_misc_mem, // 00 - 011
             decode_op_imm,   // 00 - 100
             decode_auipc,    // 00 - 101
-            opcode_00110,    // 00 - 110
+            decode_op_imm_32, // 00 - 110
             opcode_00111,    // 00 - 111
             decode_store,    // 01 - 000
             decode_store_fp,    // 01 - 001
@@ -988,7 +988,7 @@ impl Instruction {
             opcode_01011,    // 01 - 011
             decode_op,       // 01 - 100
             decode_lui,      // 01 - 101
-            opcode_01110,    // 01 - 110
+            decode_op_32,    // 01 - 110
             opcode_01111,    // 01 - 111
             decode_madd,    // 10 - 000
             decode_msub,    // 10 - 001
@@ -1027,8 +1027,8 @@ fn decode_load(bits: u32) -> Option<InstructionVariant> {
 
     #[rustfmt::skip]
     static LUT: [Option<InstructionVariant>; 8] = [
-        Some(V::Lb),  Some(V::Lh),  Some(V::Lw), None, // 000
-        Some(V::Lbu), Some(V::Lhu), None,        None, // 100
+        Some(V::Lb),  Some(V::Lh),  Some(V::Lw),  Some(V::Ld),  // 000
+        Some(V::Lbu), Some(V::Lhu), Some(V::Lwu), None,         // 100
     ];
 
     LUT[funct3 as usize]
@@ -1085,8 +1085,19 @@ fn decode_op_imm(bits: u32) -> Option<InstructionVariant> {
 fn decode_auipc(_: u32) -> Option<InstructionVariant> {
     Some(InstructionVariant::Auipc)
 }
-fn opcode_00110(_bits: u32) -> Option<InstructionVariant> {
-    None
+fn decode_op_imm_32(bits: u32) -> Option<InstructionVariant> {
+    use InstructionVariant as V;
+
+    let funct3 = funct3(bits);
+    let funct7 = funct7(bits);
+
+    match (funct3, funct7) {
+        (0b000, _) => Some(V::Addiw),
+        (0b001, 0b000_0000) => Some(V::Slliw),
+        (0b101, 0b000_0000) => Some(V::Srliw),
+        (0b101, 0b010_0000) => Some(V::Sraiw),
+        _ => None,
+    }
 }
 fn opcode_00111(_bits: u32) -> Option<InstructionVariant> {
     None
@@ -1098,8 +1109,8 @@ fn decode_store(bits: u32) -> Option<InstructionVariant> {
 
     #[rustfmt::skip]
     static LUT: [Option<InstructionVariant>; 8] = [
-        Some(V::Sb),  Some(V::Sh),  Some(V::Sw), None, // 000
-        None,         None,         None,        None, // 100
+        Some(V::Sb),  Some(V::Sh),  Some(V::Sw), Some(V::Sd), // 000
+        None,         None,         None,        None,        // 100
     ];
 
     LUT[funct3 as usize]
@@ -1155,8 +1166,20 @@ fn decode_op(bits: u32) -> Option<InstructionVariant> {
 fn decode_lui(_: u32) -> Option<InstructionVariant> {
     Some(InstructionVariant::Lui)
 }
-fn opcode_01110(_bits: u32) -> Option<InstructionVariant> {
-    None
+fn decode_op_32(bits: u32) -> Option<InstructionVariant> {
+    use InstructionVariant as V;
+
+    let funct3 = funct3(bits);
+    let funct7 = funct7(bits);
+
+    match (funct7, funct3) {
+        (0b000_0000, 0b000) => Some(V::Addw),
+        (0b010_0000, 0b000) => Some(V::Subw),
+        (0b000_0000, 0b001) => Some(V::Sllw),
+        (0b000_0000, 0b101) => Some(V::Srlw),
+        (0b010_0000, 0b101) => Some(V::Sraw),
+        _ => None,
+    }
 }
 fn opcode_01111(_bits: u32) -> Option<InstructionVariant> {
     None
@@ -1299,9 +1322,14 @@ instructions! {
     Lbu   ("lbu",   0b000_0011, i, funct3 = 0b100                     ) (rd: xreg, rs1: xreg, imm: itype_signed),
     Lhu   ("lhu",   0b000_0011, i, funct3 = 0b101                     ) (rd: xreg, rs1: xreg, imm: itype_signed),
 
+    Lwu   ("lwu",   0b000_0011, i, funct3 = 0b110                     ) (rd: xreg, rs1: xreg, imm: itype_signed),
+    Ld    ("ld",    0b000_0011, i, funct3 = 0b011                     ) (rd: xreg, rs1: xreg, imm: itype_signed),
+
     Sb    ("sb",    0b010_0011, s, funct3 = 0b000                     ) (rs1: xreg, rs2: xreg, imm: stype),
     Sh    ("sh",    0b010_0011, s, funct3 = 0b001                     ) (rs1: xreg, rs2: xreg, imm: stype),
     Sw    ("sw",    0b010_0011, s, funct3 = 0b010                     ) (rs1: xreg, rs2: xreg, imm: stype),
+
+    Sd    ("sd",    0b010_0011, s, funct3 = 0b011                     ) (rs1: xreg, rs2: xreg, imm: stype),
 
     Addi  ("addi",  0b001_0011, i,                      funct3 = 0b000) (rd: xreg, rs1: xreg, imm: itype_signed),
     Slti  ("slti",  0b001_0011, i,                      funct3 = 0b010) (rd: xreg, rs1: xreg, imm: itype_signed),
@@ -1323,6 +1351,18 @@ instructions! {
     Sra   ("sra",   0b011_0011, r, funct7 = 0b010_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, rs2: xreg),
     Or    ("or",    0b011_0011, r, funct7 = 0b000_0000, funct3 = 0b110) (rd: xreg, rs1: xreg, rs2: xreg),
     And   ("and",   0b011_0011, r, funct7 = 0b000_0000, funct3 = 0b111) (rd: xreg, rs1: xreg, rs2: xreg),
+
+    // RV64I
+    Addiw ("addiw", 0b001_1011, i,                      funct3 = 0b000) (rd: xreg, rs1: xreg, imm: itype_signed),
+    Slliw ("slliw", 0b001_1011, i, funct7 = 0b000_0000, funct3 = 0b001) (rd: xreg, rs1: xreg, shamt),
+    Srliw ("srliw", 0b001_1011, i, funct7 = 0b000_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, shamt),
+    Sraiw ("sraiw", 0b001_1011, i, funct7 = 0b010_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, shamt),
+
+    Addw  ("addw",  0b011_1011, r, funct7 = 0b000_0000, funct3 = 0b000) (rd: xreg, rs1: xreg, rs2: xreg),
+    Subw  ("subw",  0b011_1011, r, funct7 = 0b010_0000, funct3 = 0b000) (rd: xreg, rs1: xreg, rs2: xreg),
+    Sllw  ("sllw",  0b011_1011, r, funct7 = 0b000_0000, funct3 = 0b001) (rd: xreg, rs1: xreg, rs2: xreg),
+    Srlw  ("srlw",  0b011_1011, r, funct7 = 0b000_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, rs2: xreg),
+    Sraw  ("sraw",  0b011_1011, r, funct7 = 0b010_0000, funct3 = 0b101) (rd: xreg, rs1: xreg, rs2: xreg),
 
     Fence ("fence", 0b000_1111, i, funct3 = 0b000) (fm, pred, succ),
 
@@ -1482,9 +1522,14 @@ asm_display! {
     Lbu   ("{},{}({})", i.rd(), i.imm(), i.rs1()),
     Lhu   ("{},{}({})", i.rd(), i.imm(), i.rs1()),
 
+    Lwu   ("{},{}({})", i.rd(), i.imm(), i.rs1()),
+    Ld    ("{},{}({})", i.rd(), i.imm(), i.rs1()),
+
     Sb    ("{},{}({})", i.rs2(), i.imm(), i.rs1()),
     Sh    ("{},{}({})", i.rs2(), i.imm(), i.rs1()),
     Sw    ("{},{}({})", i.rs2(), i.imm(), i.rs1()),
+
+    Sd    ("{},{}({})", i.rs2(), i.imm(), i.rs1()),
 
     Addi  ("{},{},{}", i.rd(), i.rs1(), i.imm()),
     Slti  ("{},{},{}", i.rd(), i.rs1(), i.imm()),
@@ -1495,6 +1540,17 @@ asm_display! {
     Slli  ("{},{},{}", i.rd(), i.rs1(), i.shamt()),
     Srli  ("{},{},{}", i.rd(), i.rs1(), i.shamt()),
     Srai  ("{},{},{}", i.rd(), i.rs1(), i.shamt()),
+
+    Addiw ("{},{},{}", i.rd(), i.rs1(), i.imm()),
+    Slliw ("{},{},{}", i.rd(), i.rs1(), i.shamt()),
+    Srliw ("{},{},{}", i.rd(), i.rs1(), i.shamt()),
+    Sraiw ("{},{},{}", i.rd(), i.rs1(), i.shamt()),
+
+    Addw  ("{},{},{}", i.rd(), i.rs1(), i.rs2()),
+    Subw  ("{},{},{}", i.rd(), i.rs1(), i.rs2()),
+    Sllw  ("{},{},{}", i.rd(), i.rs1(), i.rs2()),
+    Srlw  ("{},{},{}", i.rd(), i.rs1(), i.rs2()),
+    Sraw  ("{},{},{}", i.rd(), i.rs1(), i.rs2()),
 
     Add   ("{},{},{}", i.rd(), i.rs1(), i.rs2()),
     Sub   ("{},{},{}", i.rd(), i.rs1(), i.rs2()),

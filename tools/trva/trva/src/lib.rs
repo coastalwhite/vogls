@@ -4,7 +4,7 @@
 use self::cursor::{SourceCursor, parse_gp_register};
 use self::encoding::{FenceMode, FenceOrder, XRegIdent};
 use self::error::AssembleResult;
-use self::isa::{Ext, Isa};
+use self::isa::{Ext, Isa, XLen};
 use self::labels::{LabelId, LabelMap, LabelTable};
 
 #[cfg(feature = "foldhash")]
@@ -840,8 +840,353 @@ fn fill_handlers(
     }
 
     handlers.clear();
+
+    handlers.insert(
+        "la",
+        handler!(la, |asm, c| {
+            c.take_separator()?;
+            let rd = c.take_gp_register()?;
+            c.take_comma_separator()?;
+            let label = asm.take_target_label(c)?;
+            asm.text
+                .push_relocation_item(RelocationItem::LoadAddress(rd, label));
+        }),
+    );
+    handlers.insert(
+        "li",
+        handler!(la, |asm, c| {
+            c.take_separator()?;
+            let rd = c.take_gp_register()?;
+            c.take_comma_separator()?;
+            let imm = c.take_signed_imm32()?;
+
+            if let Some(imm) = signed_imm_to_imm12(imm) {
+                asm.text
+                    .push_le_u32(encoding::Addi::new(rd, XRegIdent::Zero, imm).encode_as_u32());
+            } else {
+                let imm = (imm as u64 & 0xFFFF_FFFF) as u32;
+                // @TODO: Better instruction dispatch.
+                asm.text
+                    .push_le_u32(encoding::Lui::new(rd, imm & !0xFFF).encode_as_u32());
+                asm.text
+                    .push_le_u32(encoding::Addi::new(rd, rd, (imm & 0xFFF) as i16).encode_as_u32());
+            }
+        }),
+    );
+    handlers.insert(
+        "lui",
+        handler!(lui, |asm, c| {
+            c.take_separator()?;
+            let rd = c.take_gp_register()?;
+            c.take_comma_separator()?;
+            let imm = c.take_imm20()?;
+            asm.text
+                .push_le_u32(encoding::Lui::new(rd, imm).encode_as_u32());
+        }),
+    );
+    handlers.insert(
+        "auipc",
+        handler!(auipc, |asm, c| {
+            c.take_separator()?;
+            let rd = c.take_gp_register()?;
+            c.take_comma_separator()?;
+            let imm = c.take_imm20()?;
+            asm.text
+                .push_le_u32(encoding::Auipc::new(rd, imm).encode_as_u32());
+        }),
+    );
+    handlers.insert(
+        "jal",
+        handler!(jal, |asm, c| {
+            c.take_separator()?;
+            let reg = if let Some(ident) = c.peek_ident()
+                && let Some(reg) = parse_gp_register(ident)
+            {
+                c.offset += ident.len();
+                c.take_comma_separator()?;
+                reg
+            } else {
+                // jal   label  ~  jal x1, label
+                XRegIdent::Ra
+            };
+            let label = asm.take_target_label(c)?;
+            asm.text
+                .push_relocation_item(RelocationItem::Jump(reg, label));
+        }),
+    );
+    handlers.insert(
+        "j",
+        handler!(j, |asm, c| {
+            // j label      ~     jal x0, label
+            c.take_separator()?;
+            let label = asm.take_target_label(c)?;
+            asm.text
+                .push_relocation_item(RelocationItem::Jump(XRegIdent::Zero, label));
+        }),
+    );
+    handlers.insert(
+        "jalr",
+        handler!(jalr, |asm, c| {
+            c.take_separator()?;
+            let rd_or_rs = c.take_gp_register()?;
+            c.take_opt_separator();
+            let (rd, rs, imm) = if c.peek_byte().is_some_and(|b| b == b',') {
+                c.take_comma_separator()?;
+                let rs = c.take_gp_register()?;
+                c.take_comma_separator()?;
+                let imm = c.take_imm12()?;
+                (rd_or_rs, rs, imm)
+            } else {
+                // jalr rs       ~     jalr x1, rs, 0
+                (XRegIdent::Ra, rd_or_rs, 0)
+            };
+            asm.text
+                .push_le_u32(encoding::Jalr::new(rd, rs, imm).encode_as_u32());
+        }),
+    );
+    handlers.insert(
+        "jr",
+        handler!(jr, |asm, c| {
+            // jr rs     ~     jalr x0, rs, 0
+            c.take_separator()?;
+            let rs = c.take_gp_register()?;
+            asm.text
+                .push_le_u32(encoding::Jalr::new(XRegIdent::Zero, rs, 0).encode_as_u32());
+        }),
+    );
+    handlers.insert(
+        "ret",
+        handler!(ret, |asm, _c| {
+            // ret     ~     jalr x0, x1, 0
+            asm.text.push_le_u32(
+                encoding::Jalr::new(XRegIdent::Zero, XRegIdent::Ra, 0).encode_as_u32(),
+            );
+        }),
+    );
+    handlers.insert(
+        "call",
+        handler!(call, |asm, c| {
+            // call symbol    ~      auipc ra, %hi_symbol(symbol)
+            //                       jalr  ra, ra, %lo_symbol(symbol)
+            c.take_separator()?;
+            let label = asm.take_target_label(c)?;
+            asm.text.push_relocation_item(RelocationItem::PcRelJump(
+                XRegIdent::Ra,
+                XRegIdent::Ra,
+                label,
+            ));
+        }),
+    );
+    handlers.insert(
+        "tail",
+        handler!(tail, |asm, c| {
+            // tail symbol    ~      auipc t1, %hi_symbol(symbol)
+            //                       jalr  t1, x0, %lo_symbol(symbol)
+            c.take_separator()?;
+            let label = asm.take_target_label(c)?;
+            asm.text.push_relocation_item(RelocationItem::PcRelJump(
+                XRegIdent::T0,
+                XRegIdent::Zero,
+                label,
+            ));
+        }),
+    );
+    handlers.insert(
+        "jump",
+        handler!(jump, |asm, c| {
+            // jump symbol, rt    ~     auipc rt, %hi_symbol(symbol)
+            //                          jalr  rt, x0, %lo_symbol(symbol)
+            c.take_separator()?;
+            let label = asm.take_target_label(c)?;
+            c.take_comma_separator()?;
+            let rt = c.take_gp_register()?;
+            asm.text
+                .push_relocation_item(RelocationItem::PcRelJump(rt, XRegIdent::Zero, label));
+        }),
+    );
+    handlers.insert("beq", handler!(beq, @branch2 BranchKind::Eq, false));
+    handlers.insert("bne", handler!(bne, @branch2 BranchKind::NotEq, false));
+    handlers.insert("blt", handler!(blt, @branch2 BranchKind::Lt, false));
+    handlers.insert("bgt", handler!(bgt, @branch2 BranchKind::Lt, true));
+    handlers.insert("ble", handler!(ble, @branch2 BranchKind::Ge, true));
+    handlers.insert("bge", handler!(bge, @branch2 BranchKind::Ge, false));
+    handlers.insert("bltu", handler!(bltu, @branch2 BranchKind::Ltu, false));
+    handlers.insert("bgtu", handler!(bgtu, @branch2 BranchKind::Ltu, true));
+    handlers.insert("bgeu", handler!(bgeu, @branch2 BranchKind::Geu, false));
+    handlers.insert("bleu", handler!(bleu, @branch2 BranchKind::Geu, true));
+
+    handlers.insert("beqz", handler!(beqz, @branch_zero BranchKind::Eq, false));
+    handlers.insert(
+        "bnez",
+        handler!(bnez, @branch_zero BranchKind::NotEq, false),
+    );
+    handlers.insert("bltz", handler!(bltz, @branch_zero BranchKind::Lt, false));
+    handlers.insert("bgtz", handler!(bgtz, @branch_zero BranchKind::Lt, true));
+    handlers.insert("bgez", handler!(bgez, @branch_zero BranchKind::Ge, false));
+    handlers.insert("blez", handler!(blez, @branch_zero BranchKind::Ge, true));
+
+    handlers.insert("lb", handler!(lb, @load encoding::Lb));
+    handlers.insert("lh", handler!(lh, @load encoding::Lb));
+    handlers.insert("lw", handler!(lw, @load encoding::Lw));
+    handlers.insert("lbu", handler!(lbu, @load encoding::Lbu));
+    handlers.insert("lhu", handler!(lhu, @load encoding::Lhu));
+
+    handlers.insert("sb", handler!(sb, @store encoding::Sb));
+    handlers.insert("sh", handler!(sh, @store encoding::Sh));
+    handlers.insert("sw", handler!(sw, @store encoding::Sw));
+
+    handlers.insert(
+        "nop",
+        handler!(nop, |asm, _c| {
+            asm.text.push_le_u32(
+                encoding::Addi::new(XRegIdent::Zero, XRegIdent::Zero, 0).encode_as_u32(),
+            );
+        }),
+    );
+    handlers.insert(
+        "mv",
+        handler!(mv, @rd_rs |rd, rs| encoding::Addi::new(rd, rs, 0).encode_as_u32()),
+    );
+    handlers.insert(
+        "not",
+        handler!(not, @rd_rs |rd, rs| encoding::Xori::new(rd, rs, -1).encode_as_u32()),
+    );
+    handlers.insert(
+        "neg",
+        handler!(neg, @rd_rs |rd, rs| {
+            encoding::Sub::new(rd, XRegIdent::Zero, rs).encode_as_u32()
+        }),
+    );
+
+    handlers.insert("addi", handler!(addi, @itype encoding::Addi));
+    handlers.insert("slti", handler!(slti, @itype encoding::Slti));
+    handlers.insert(
+        "sltiu",
+        handler!(sltiu, |asm, c| {
+            asm.parse_itype_instr_base(
+                c,
+                |rd, rs, imm| encoding::Sltiu::new(rd, rs, imm).encode_as_u32(),
+                |c| c.take_imm12_unsigned(),
+            )?;
+        }),
+    );
+    handlers.insert("xori", handler!(xori, @itype encoding::Xori));
+    handlers.insert("ori", handler!(ori, @itype encoding::Ori));
+    handlers.insert("andi", handler!(andi, @itype encoding::Andi));
+    handlers.insert("slli", handler!(slli, @itype_shamt encoding::Slli));
+    handlers.insert("srli", handler!(srli, @itype_shamt encoding::Srli));
+    handlers.insert("srai", handler!(srai, @itype_shamt encoding::Srai));
+
+    handlers.insert("add", handler!(add, @rtype encoding::Add));
+    handlers.insert("sub", handler!(sub, @rtype encoding::Sub));
+    handlers.insert("sll", handler!(sll, @rtype encoding::Sll));
+    handlers.insert("srl", handler!(srl, @rtype encoding::Srl));
+    handlers.insert("sra", handler!(sra, @rtype encoding::Sra));
+    handlers.insert("slt", handler!(slt, @rtype encoding::Slt));
+    handlers.insert("sltu", handler!(sltu, @rtype encoding::Sltu));
+    handlers.insert("xor", handler!(xor, @rtype encoding::Xor));
+    handlers.insert("and", handler!(and, @rtype encoding::And));
+    handlers.insert("or", handler!(or, @rtype encoding::Or));
+
+    handlers.insert(
+        "fence",
+        handler!(fence, |asm, c| {
+            c.take_opt_separator();
+
+            let (pred, succ) = if c
+                .peek_byte()
+                .is_some_and(|b| matches!(b, b'i' | b'o' | b'r' | b'w'))
+            {
+                let pred = asm.parse_fence_order(c)?;
+                c.take_comma_separator()?;
+                let succ = asm.parse_fence_order(c)?;
+                (pred, succ)
+            } else {
+                (FenceOrder::ALL, FenceOrder::ALL)
+            };
+
+            asm.text
+                .push_le_u32(encoding::Fence::new(FenceMode(0b0000), pred, succ).encode_as_u32());
+        }),
+    );
+    handlers.insert(
+        "fence.tso",
+        handler!(fence_tso, |asm, c| {
+            c.take_opt_separator();
+
+            let (pred, succ) = if c
+                .peek_byte()
+                .is_some_and(|b| matches!(b, b'i' | b'o' | b'r' | b'w'))
+            {
+                let pred = asm.parse_fence_order(c)?;
+                c.take_comma_separator()?;
+                let succ = asm.parse_fence_order(c)?;
+                (pred, succ)
+            } else {
+                (FenceOrder::ALL, FenceOrder::ALL)
+            };
+
+            asm.text
+                .push_le_u32(encoding::Fence::new(FenceMode(0b1000), pred, succ).encode_as_u32());
+        }),
+    );
+    handlers.insert(
+        "pause",
+        handler!(pause, |asm, _c| {
+            asm.text.push_le_u32(
+                encoding::Fence::new(
+                    FenceMode(0b0000),
+                    FenceOrder::MEMORY_WRITE,
+                    FenceOrder::empty(),
+                )
+                .encode_as_u32(),
+            );
+        }),
+    );
+    handlers.insert(
+        "ecall",
+        handler!(ecall, |asm, _c| {
+            asm.text.push_le_u32(encoding::Ecall::new().encode_as_u32());
+        }),
+    );
+    handlers.insert(
+        "ebreak",
+        handler!(ebreak, |asm, _c| {
+            asm.text
+                .push_le_u32(encoding::Ebreak::new().encode_as_u32());
+        }),
+    );
+
+    if isa.xlen == XLen::Rv64 {
+        handlers.insert("lwu", handler!(lwu, @load encoding::Lwu));
+        handlers.insert("ld", handler!(ld, @load encoding::Ld));
+        handlers.insert("sd", handler!(sd, @store encoding::Sd));
+
+        handlers.insert("addiw", handler!(addiw, @itype encoding::Addiw));
+        handlers.insert("slliw", handler!(slliw, @itype_shamt encoding::Slliw));
+        handlers.insert("srliw", handler!(srliw, @itype_shamt encoding::Srliw));
+        handlers.insert("sraiw", handler!(sraiw, @itype_shamt encoding::Sraiw));
+
+        handlers.insert("addw", handler!(addw, @rtype encoding::Addw));
+        handlers.insert("subw", handler!(subw, @rtype encoding::Subw));
+        handlers.insert("sllw", handler!(sllw, @rtype encoding::Sllw));
+        handlers.insert("srlw", handler!(srlw, @rtype encoding::Srlw));
+        handlers.insert("sraw", handler!(sraw, @rtype encoding::Sraw));
+
+        handlers.insert(
+            "negw",
+            handler!(negw, @rd_rs |rd, rs| {
+                encoding::Subw::new(rd, XRegIdent::Zero, rs).encode_as_u32()
+            }),
+        );
+        handlers.insert(
+            "sext.w",
+            handler!(sext_w, @rd_rs |rd, rs| encoding::Addiw::new(rd, rs, 0).encode_as_u32()),
+        );
+    }
+
     use isa::Ext;
-    for ext in isa {
+    for ext in isa.exts {
         match ext {
             Ext::Atomic => return Err(ext),
             Ext::BitManipulation => return Err(ext),
@@ -850,335 +1195,15 @@ fn fill_handlers(
             Ext::Rv32E => return Err(ext),
             Ext::SinglePrecisionFp => return Err(ext),
             Ext::Hypervisor => return Err(ext),
-            Ext::RvI => {
-                handlers.insert(
-                    "la",
-                    handler!(la, |asm, c| {
-                        c.take_separator()?;
-                        let rd = c.take_gp_register()?;
-                        c.take_comma_separator()?;
-                        let label = asm.take_target_label(c)?;
-                        asm.text
-                            .push_relocation_item(RelocationItem::LoadAddress(rd, label));
-                    }),
-                );
-                handlers.insert(
-                    "li",
-                    handler!(la, |asm, c| {
-                        c.take_separator()?;
-                        let rd = c.take_gp_register()?;
-                        c.take_comma_separator()?;
-                        let imm = c.take_signed_imm32()?;
-
-                        if let Some(imm) = signed_imm_to_imm12(imm) {
-                            asm.text.push_le_u32(
-                                encoding::Addi::new(rd, XRegIdent::Zero, imm).encode_as_u32(),
-                            );
-                        } else {
-                            let imm = (imm as u64 & 0xFFFF_FFFF) as u32;
-                            // @TODO: Better instruction dispatch.
-                            asm.text
-                                .push_le_u32(encoding::Lui::new(rd, imm & !0xFFF).encode_as_u32());
-                            asm.text.push_le_u32(
-                                encoding::Addi::new(rd, rd, (imm & 0xFFF) as i16).encode_as_u32(),
-                            );
-                        }
-                    }),
-                );
-                handlers.insert(
-                    "lui",
-                    handler!(lui, |asm, c| {
-                        c.take_separator()?;
-                        let rd = c.take_gp_register()?;
-                        c.take_comma_separator()?;
-                        let imm = c.take_imm20()?;
-                        asm.text
-                            .push_le_u32(encoding::Lui::new(rd, imm).encode_as_u32());
-                    }),
-                );
-                handlers.insert(
-                    "auipc",
-                    handler!(auipc, |asm, c| {
-                        c.take_separator()?;
-                        let rd = c.take_gp_register()?;
-                        c.take_comma_separator()?;
-                        let imm = c.take_imm20()?;
-                        asm.text
-                            .push_le_u32(encoding::Auipc::new(rd, imm).encode_as_u32());
-                    }),
-                );
-                handlers.insert(
-                    "jal",
-                    handler!(jal, |asm, c| {
-                        c.take_separator()?;
-                        let reg = if let Some(ident) = c.peek_ident()
-                            && let Some(reg) = parse_gp_register(ident)
-                        {
-                            c.offset += ident.len();
-                            c.take_comma_separator()?;
-                            reg
-                        } else {
-                            // jal   label  ~  jal x1, label
-                            XRegIdent::Ra
-                        };
-                        let label = asm.take_target_label(c)?;
-                        asm.text
-                            .push_relocation_item(RelocationItem::Jump(reg, label));
-                    }),
-                );
-                handlers.insert(
-                    "j",
-                    handler!(j, |asm, c| {
-                        // j label      ~     jal x0, label
-                        c.take_separator()?;
-                        let label = asm.take_target_label(c)?;
-                        asm.text
-                            .push_relocation_item(RelocationItem::Jump(XRegIdent::Zero, label));
-                    }),
-                );
-                handlers.insert(
-                    "jalr",
-                    handler!(jalr, |asm, c| {
-                        c.take_separator()?;
-                        let rd_or_rs = c.take_gp_register()?;
-                        c.take_opt_separator();
-                        let (rd, rs, imm) = if c.peek_byte().is_some_and(|b| b == b',') {
-                            c.take_comma_separator()?;
-                            let rs = c.take_gp_register()?;
-                            c.take_comma_separator()?;
-                            let imm = c.take_imm12()?;
-                            (rd_or_rs, rs, imm)
-                        } else {
-                            // jalr rs       ~     jalr x1, rs, 0
-                            (XRegIdent::Ra, rd_or_rs, 0)
-                        };
-                        asm.text
-                            .push_le_u32(encoding::Jalr::new(rd, rs, imm).encode_as_u32());
-                    }),
-                );
-                handlers.insert(
-                    "jr",
-                    handler!(jr, |asm, c| {
-                        // jr rs     ~     jalr x0, rs, 0
-                        c.take_separator()?;
-                        let rs = c.take_gp_register()?;
-                        asm.text.push_le_u32(
-                            encoding::Jalr::new(XRegIdent::Zero, rs, 0).encode_as_u32(),
-                        );
-                    }),
-                );
-                handlers.insert(
-                    "ret",
-                    handler!(ret, |asm, _c| {
-                        // ret     ~     jalr x0, x1, 0
-                        asm.text.push_le_u32(
-                            encoding::Jalr::new(XRegIdent::Zero, XRegIdent::Ra, 0).encode_as_u32(),
-                        );
-                    }),
-                );
-                handlers.insert(
-                    "call",
-                    handler!(call, |asm, c| {
-                        // call symbol    ~      auipc ra, %hi_symbol(symbol)
-                        //                       jalr  ra, ra, %lo_symbol(symbol)
-                        c.take_separator()?;
-                        let label = asm.take_target_label(c)?;
-                        asm.text.push_relocation_item(RelocationItem::PcRelJump(
-                            XRegIdent::Ra,
-                            XRegIdent::Ra,
-                            label,
-                        ));
-                    }),
-                );
-                handlers.insert(
-                    "tail",
-                    handler!(tail, |asm, c| {
-                        // tail symbol    ~      auipc t1, %hi_symbol(symbol)
-                        //                       jalr  t1, x0, %lo_symbol(symbol)
-                        c.take_separator()?;
-                        let label = asm.take_target_label(c)?;
-                        asm.text.push_relocation_item(RelocationItem::PcRelJump(
-                            XRegIdent::T0,
-                            XRegIdent::Zero,
-                            label,
-                        ));
-                    }),
-                );
-                handlers.insert(
-                    "jump",
-                    handler!(jump, |asm, c| {
-                        // jump symbol, rt    ~     auipc rt, %hi_symbol(symbol)
-                        //                          jalr  rt, x0, %lo_symbol(symbol)
-                        c.take_separator()?;
-                        let label = asm.take_target_label(c)?;
-                        c.take_comma_separator()?;
-                        let rt = c.take_gp_register()?;
-                        asm.text.push_relocation_item(RelocationItem::PcRelJump(
-                            rt,
-                            XRegIdent::Zero,
-                            label,
-                        ));
-                    }),
-                );
-                handlers.insert("beq", handler!(beq, @branch2 BranchKind::Eq, false));
-                handlers.insert("bne", handler!(bne, @branch2 BranchKind::NotEq, false));
-                handlers.insert("blt", handler!(blt, @branch2 BranchKind::Lt, false));
-                handlers.insert("bgt", handler!(bgt, @branch2 BranchKind::Lt, true));
-                handlers.insert("ble", handler!(ble, @branch2 BranchKind::Ge, true));
-                handlers.insert("bge", handler!(bge, @branch2 BranchKind::Ge, false));
-                handlers.insert("bltu", handler!(bltu, @branch2 BranchKind::Ltu, false));
-                handlers.insert("bgtu", handler!(bgtu, @branch2 BranchKind::Ltu, true));
-                handlers.insert("bgeu", handler!(bgeu, @branch2 BranchKind::Geu, false));
-                handlers.insert("bleu", handler!(bleu, @branch2 BranchKind::Geu, true));
-
-                handlers.insert("beqz", handler!(beqz, @branch_zero BranchKind::Eq, false));
-                handlers.insert(
-                    "bnez",
-                    handler!(bnez, @branch_zero BranchKind::NotEq, false),
-                );
-                handlers.insert("bltz", handler!(bltz, @branch_zero BranchKind::Lt, false));
-                handlers.insert("bgtz", handler!(bgtz, @branch_zero BranchKind::Lt, true));
-                handlers.insert("bgez", handler!(bgez, @branch_zero BranchKind::Ge, false));
-                handlers.insert("blez", handler!(blez, @branch_zero BranchKind::Ge, true));
-
-                handlers.insert("lb", handler!(lb, @load encoding::Lb));
-                handlers.insert("lh", handler!(lh, @load encoding::Lb));
-                handlers.insert("lw", handler!(lw, @load encoding::Lw));
-                handlers.insert("lbu", handler!(lbu, @load encoding::Lbu));
-                handlers.insert("lhu", handler!(lhu, @load encoding::Lhu));
-
-                handlers.insert("sb", handler!(sb, @store encoding::Sb));
-                handlers.insert("sh", handler!(sh, @store encoding::Sh));
-                handlers.insert("sw", handler!(sw, @store encoding::Sw));
-
-                handlers.insert(
-                    "nop",
-                    handler!(nop, |asm, _c| {
-                        asm.text.push_le_u32(
-                            encoding::Addi::new(XRegIdent::Zero, XRegIdent::Zero, 0)
-                                .encode_as_u32(),
-                        );
-                    }),
-                );
-                handlers.insert(
-                    "mv",
-                    handler!(mv, @rd_rs |rd, rs| encoding::Addi::new(rd, rs, 0).encode_as_u32()),
-                );
-                handlers.insert(
-                    "not",
-                    handler!(not, @rd_rs |rd, rs| encoding::Xori::new(rd, rs, -1).encode_as_u32()),
-                );
-                handlers.insert(
-                    "neg",
-                    handler!(neg, @rd_rs |rd, rs| {
-                        encoding::Sub::new(rd, XRegIdent::Zero, rs).encode_as_u32()
-                    }),
-                );
-
-                handlers.insert("addi", handler!(addi, @itype encoding::Addi));
-                handlers.insert("slti", handler!(slti, @itype encoding::Slti));
-                handlers.insert(
-                    "sltiu",
-                    handler!(sltiu, |asm, c| {
-                        asm.parse_itype_instr_base(
-                            c,
-                            |rd, rs, imm| encoding::Sltiu::new(rd, rs, imm).encode_as_u32(),
-                            |c| c.take_imm12_unsigned(),
-                        )?;
-                    }),
-                );
-                handlers.insert("xori", handler!(xori, @itype encoding::Xori));
-                handlers.insert("ori", handler!(ori, @itype encoding::Ori));
-                handlers.insert("andi", handler!(andi, @itype encoding::Andi));
-                handlers.insert("slli", handler!(slli, @itype_shamt encoding::Slli));
-                handlers.insert("srli", handler!(srli, @itype_shamt encoding::Srli));
-                handlers.insert("srai", handler!(srai, @itype_shamt encoding::Srai));
-
-                handlers.insert("add", handler!(add, @rtype encoding::Add));
-                handlers.insert("sub", handler!(sub, @rtype encoding::Sub));
-                handlers.insert("sll", handler!(sll, @rtype encoding::Sll));
-                handlers.insert("srl", handler!(srl, @rtype encoding::Srl));
-                handlers.insert("sra", handler!(sra, @rtype encoding::Sra));
-                handlers.insert("slt", handler!(slt, @rtype encoding::Slt));
-                handlers.insert("sltu", handler!(sltu, @rtype encoding::Sltu));
-                handlers.insert("xor", handler!(xor, @rtype encoding::Xor));
-                handlers.insert("and", handler!(and, @rtype encoding::And));
-                handlers.insert("or", handler!(or, @rtype encoding::Or));
-
-                handlers.insert(
-                    "fence",
-                    handler!(fence, |asm, c| {
-                        c.take_opt_separator();
-
-                        let (pred, succ) = if c
-                            .peek_byte()
-                            .is_some_and(|b| matches!(b, b'i' | b'o' | b'r' | b'w'))
-                        {
-                            let pred = asm.parse_fence_order(c)?;
-                            c.take_comma_separator()?;
-                            let succ = asm.parse_fence_order(c)?;
-                            (pred, succ)
-                        } else {
-                            (FenceOrder::ALL, FenceOrder::ALL)
-                        };
-
-                        asm.text.push_le_u32(
-                            encoding::Fence::new(FenceMode(0b0000), pred, succ).encode_as_u32(),
-                        );
-                    }),
-                );
-                handlers.insert(
-                    "fence.tso",
-                    handler!(fence_tso, |asm, c| {
-                        c.take_opt_separator();
-
-                        let (pred, succ) = if c
-                            .peek_byte()
-                            .is_some_and(|b| matches!(b, b'i' | b'o' | b'r' | b'w'))
-                        {
-                            let pred = asm.parse_fence_order(c)?;
-                            c.take_comma_separator()?;
-                            let succ = asm.parse_fence_order(c)?;
-                            (pred, succ)
-                        } else {
-                            (FenceOrder::ALL, FenceOrder::ALL)
-                        };
-
-                        asm.text.push_le_u32(
-                            encoding::Fence::new(FenceMode(0b1000), pred, succ).encode_as_u32(),
-                        );
-                    }),
-                );
-                handlers.insert(
-                    "pause",
-                    handler!(pause, |asm, _c| {
-                        asm.text.push_le_u32(
-                            encoding::Fence::new(
-                                FenceMode(0b0000),
-                                FenceOrder::MEMORY_WRITE,
-                                FenceOrder::empty(),
-                            )
-                            .encode_as_u32(),
-                        );
-                    }),
-                );
-                handlers.insert(
-                    "ecall",
-                    handler!(ecall, |asm, _c| {
-                        asm.text.push_le_u32(encoding::Ecall::new().encode_as_u32());
-                    }),
-                );
-                handlers.insert(
-                    "ebreak",
-                    handler!(ebreak, |asm, _c| {
-                        asm.text
-                            .push_le_u32(encoding::Ebreak::new().encode_as_u32());
-                    }),
-                );
-            }
             Ext::IntegerMuldiv => {
                 handlers.insert("mul", handler!(mul, @rtype encoding::Mul));
+                handlers.insert("mulh", handler!(mul, @rtype encoding::MulH));
+                handlers.insert("mulhsu", handler!(mul, @rtype encoding::MulHsu));
+                handlers.insert("mulhu", handler!(mul, @rtype encoding::MulHu));
+                handlers.insert("div", handler!(rem, @rtype encoding::Div));
+                handlers.insert("divu", handler!(rem, @rtype encoding::DivU));
                 handlers.insert("rem", handler!(rem, @rtype encoding::Rem));
+                handlers.insert("remu", handler!(rem, @rtype encoding::RemU));
             }
             Ext::PackedSimd => return Err(ext),
             Ext::QuadPrecisionFp => return Err(ext),
