@@ -43,6 +43,15 @@ const totalCyclesElem: HTMLAnchorElement = document.getElementById(
 const procConfigDetail: HTMLAnchorElement = document.getElementById(
     "procConfigDetail",
 )!;
+const chipMenuBtn: HTMLButtonElement = document.getElementById(
+    "chipMenuBtn",
+)!;
+const chipMenuPanel: HTMLDivElement = document.getElementById(
+    "chipMenuPanel",
+)!;
+const chipMenuName: HTMLSpanElement = document.getElementById(
+    "chipMenuName",
+)!;
 let scrubber: ScrubberCanvas | null = null;
 let pipeline: PipelineCanvas | null = null;
 
@@ -180,7 +189,9 @@ function unstaggerRunSim() {
 }
 function onProcSelect() {
     const procSelectValue = procSelect.value;
-    let s = `<table><colgroup><col span="1" style="width: 50%;"><col span="1" style="width: 50%;"></colgroup>`;
+    chipMenuName.innerText =
+        procSelect.options[procSelect.selectedIndex]?.text ?? procSelectValue;
+    let s =`<table><colgroup><col span="1" style="width: 50%;"><col span="1" style="width: 50%;"></colgroup>`;
     for (const field of procConfigFields[procSelectValue]) {
         switch (field["type"]) {
             case "checkbox":
@@ -189,7 +200,9 @@ function onProcSelect() {
         }
     }
     s += '</table>'
-    procConfigDetail.innerHTML = s;
+    // Leave it truly empty when the chip has no options, so the panel's
+    // `:not(:empty)` separator stays off.
+    procConfigDetail.innerHTML = procConfigFields[procSelectValue].length ? s : "";
 
     for (const field of procConfigFields[procSelectValue]) {
         const elem = document.getElementById(`pcf-${field["id"]}`);
@@ -212,11 +225,24 @@ assemblyTextarea.addEventListener("input", staggerRunSim);
 numCyclesInput.addEventListener("input", staggerRunSim);
 procSelect.addEventListener("change", onProcSelect);
 
-document.getElementById("prevCycle")!.addEventListener(
-    "click",
-    () => setCurrentCycle(currentCycle - 1),
-);
-document.getElementById("nextCycle")!.addEventListener(
-    "click",
-    () => setCurrentCycle(currentCycle + 1),
-);
+function setChipMenuOpen(open: boolean) {
+    chipMenuPanel.hidden = !open;
+    chipMenuBtn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+chipMenuBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setChipMenuOpen(chipMenuPanel.hidden);
+});
+
+// Clicks inside the panel must not reach the document handler below, or
+// picking a chip or typing a cycle count would close the menu.
+chipMenuPanel.addEventListener("click", (e) => e.stopPropagation());
+
+document.addEventListener("click", () => setChipMenuOpen(false));
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !chipMenuPanel.hidden) {
+        setChipMenuOpen(false);
+        chipMenuBtn.focus();
+    }
+});

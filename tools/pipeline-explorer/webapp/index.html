@@ -25,30 +25,37 @@
                                   aria-label="RISC-V assembly editor" onchange="staggerRunSim"></textarea>
                       </div>
                     </div>
-                    <details class="proc-config">
-                        <summary class="proc-config-short">
-                            <div>^</div>
-                            <div class ="flex-1">
-                                <select id="procSelect">
-                                    <option value="picorv32">PicoRV32</option>
-                                    <option value="ibex">Ibex</option>
-                                    <option value="neorv32">NeoRV32</option>
-                                </select>
-                            </div>
-                            <div class ="flex-1"><input type="number" id="numCyclesInput" /></div>
-                            <div class="w-8 h-8" id="simStatus"></div>
-                        </summary>
-                        <div id="procConfigDetail">
-                        </div>
-                    </details>
 				</div>
 				<div id="pipelineContainer" />
 			</div>
 		</div>
 		<div id="footer">
-            <button class="incdec-btn" id="prevCycle"><img src="/arrow-left.svg" /></button>
-			<button class="incdec-btn" id="nextCycle"><img src="/arrow-right.svg" /></button>
-			<div id="scrubberContainer" />
+			<div id="scrubberContainer"></div>
+			<div id="simControls">
+				<div class="chip-menu">
+					<button id="chipMenuBtn" type="button" aria-haspopup="dialog" aria-expanded="false"
+					        aria-controls="chipMenuPanel">
+						<span id="chipMenuName">Ibex</span>
+						<span class="chip-menu-caret" aria-hidden="true">▾</span>
+					</button>
+					<div id="chipMenuPanel" role="dialog" aria-label="Simulation settings" hidden>
+						<label class="chip-menu-row" for="procSelect">
+							<span>Processor</span>
+							<select id="procSelect">
+								<option value="picorv32">PicoRV32</option>
+								<option value="ibex">Ibex</option>
+								<option value="neorv32">NeoRV32</option>
+							</select>
+						</label>
+						<label class="chip-menu-row" for="numCyclesInput">
+							<span>Cycles</span>
+							<input type="number" id="numCyclesInput" />
+						</label>
+						<div id="procConfigDetail"></div>
+					</div>
+				</div>
+				<div class="w-8 h-8" id="simStatus"></div>
+			</div>
 		</div>
 	</main>
     <script type="module" src="/src/main.ts"></script>
