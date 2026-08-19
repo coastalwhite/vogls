@@ -4,6 +4,7 @@ members = [
     
     "tools/pipeline-explorer",
     "tools/trva/trva",
+    "tools/trva/cli",
     "tools/trva/snapshot-tests",
 ]
 resolver = "3"

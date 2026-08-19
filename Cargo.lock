@@ -1128,6 +1128,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "trva-cli"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "trva",
+]
+
+[[package]]
 name = "unarray"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,16 @@
+[package]
+name = "trva-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "trva"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+clap.workspace = true
+trva.workspace = true
+
+[lints]
+workspace = true
