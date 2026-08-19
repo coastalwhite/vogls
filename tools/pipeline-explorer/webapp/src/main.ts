@@ -1,4 +1,5 @@
 import "./style.css";
+import { render as renderEditor } from "./editor.ts";
 import { colors } from "./colors.ts";
 import initialAsm from "./initialAsm.S?raw";
 import type { Trace } from "./types.ts";
@@ -201,7 +202,8 @@ function onProcSelect() {
 
     unstaggerRunSim();
 }
-assemblyTextarea.textContent = initialAsm;
+assemblyTextarea.value = initialAsm;
+renderEditor();
 numCyclesInput.value = "500";
 setCurrentCycle(0);
 onProcSelect();

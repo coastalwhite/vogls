@@ -11,6 +11,20 @@
   --shadow:
     rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
 
+  /* Editor / syntax highlighting */
+  --ed-bg: var(--code-bg);
+  --ed-border: var(--border);
+  --ed-text: #3b3646;
+  --ed-caret: #08060d;
+  --ed-sel: rgba(170, 59, 255, 0.22);
+  --syn-comment: #8a8496;
+  --syn-string: #4a7c26;
+  --syn-number: #b3541e;
+  --syn-instr: #8a3ffc;
+  --syn-reg: #0f7a72;
+  --syn-directive: #9a6700;
+  --syn-label: #2a5db0;
+
   --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
   --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
@@ -41,6 +55,19 @@
     --social-bg: rgba(47, 48, 58, 0.5);
     --shadow:
       rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+
+    --ed-bg: #1e2128;
+    --ed-border: #333842;
+    --ed-text: #c9d1d9;
+    --ed-caret: #d7e0ea;
+    --ed-sel: rgba(74, 124, 196, 0.4);
+    --syn-comment: #5f6773;
+    --syn-string: #c3e88d;
+    --syn-number: #f78c6c;
+    --syn-instr: #c792ea;
+    --syn-reg: #7fdbca;
+    --syn-directive: #ffcb6b;
+    --syn-label: #82aaff;
   }
 
   #social .button-icon {
@@ -83,6 +110,9 @@ main #central {
     display: flex;
     flex-direction: row;
     flex: 1;
+    /* Same reason as #content above: without this the row refuses to shrink
+       below the editor's content height and drags the whole layout taller. */
+    min-height: 0;
 }
 
 #left {
@@ -90,16 +120,9 @@ main #central {
     flex-direction: column;
     flex: 1;
     height: 100%;
+    min-height: 0;
     padding: 0.5rem;
     border-right: 1px solid var(--border);
-}
-
-#left textarea {
-    width: 100%;
-    font-family: monospace;
-    text-wrap: nowrap;
-    resize: none;
-    flex: 1;
 }
 
 .flex-1 {
@@ -223,3 +246,61 @@ main #central {
     width: 100%;
 
 }
+
+/* Editor Styling */
+.editor {
+    position: relative;
+    font: 13px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    tab-size: 4;
+    background: var(--ed-bg); border:1px solid var(--ed-border); border-radius:6px;
+    max-width: 82ch;
+    flex: 1;
+    /* Without this, `min-height: auto` lets the <pre>'s full content height
+       win over the flex share and the editor grows instead of scrolling. */
+    min-height: 0;
+    overflow-y: scroll;
+}
+/* The textarea's containing block. This has to be an in-flow element rather
+   than .editor itself: .editor is the scroll container, so `inset: 0` there
+   would size the textarea to the scrollport instead of the scrolled content,
+   and the two layers would diverge as soon as the file overflows. */
+.editor-inner {
+    position: relative;
+    min-height: 100%;
+}
+.editor pre,
+.editor textarea {
+    /* every one of these must match exactly, or the caret drifts */
+    box-sizing: border-box;
+    margin: 0;
+    padding: 12px 14px;
+    border: 0;
+    font: inherit;
+    letter-spacing: inherit;
+    tab-size: inherit;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+/* UA stylesheet sets `code { font-family: monospace }`, which would give
+   <code> different glyph metrics than the textarea and drift the caret. */
+.editor code { font: inherit; }
+.editor pre { pointer-events: none; color: var(--ed-text); min-height: 100%; }
+.editor textarea {
+    position: absolute; inset: 0;   /* fills .editor-inner, not the scrollport */
+    resize: none; overflow: hidden;
+    background: transparent;
+    color: transparent;          /* text is drawn by the <pre> underneath */
+    caret-color: var(--ed-caret);
+    outline: none;
+}
+/* Translucent so the highlighted text below shows through the selection. */
+.editor textarea::selection { background: var(--ed-sel); }
+
+.c { color: var(--syn-comment); font-style:italic } /* comment     */
+.s { color: var(--syn-string) }                     /* string      */
+.n { color: var(--syn-number) }                     /* number      */
+.i { color: var(--syn-instr) }                      /* instruction */
+.r { color: var(--syn-reg) }                        /* register    */
+.d { color: var(--syn-directive) }                  /* directive   */
+.l { color: var(--syn-label); font-weight:600 }     /* label       */

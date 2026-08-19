@@ -18,7 +18,13 @@
 		<div id="content">
 			<div id="central">
 				<div id="left">
-					<textarea id="assemblyTextarea" onchange="staggerRunSim"></textarea>
+                    <div class="editor">
+                      <div class="editor-inner">
+                        <pre aria-hidden="true"><code id="out"></code></pre>
+                        <textarea id="assemblyTextarea" spellcheck="false" autocapitalize="off" autocomplete="off"
+                                  aria-label="RISC-V assembly editor" onchange="staggerRunSim"></textarea>
+                      </div>
+                    </div>
                     <details class="proc-config">
                         <summary class="proc-config-short">
                             <div>^</div>
