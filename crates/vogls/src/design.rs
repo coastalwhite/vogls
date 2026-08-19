@@ -106,8 +106,9 @@ impl Design {
             #[cfg(not(feature = "tailcall"))]
             (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
                 state.schedule.set_max_time(time);
+                #[cfg(feature = "profile")]
                 if let Some(profile) = &design.profile {
-                    design.execute_with_tracer(
+                    return design.execute_with_tracer(
                         &mut vogls_bytecode::profile::SamplingProfiler::new(
                             design.debug_info.clone(),
                             profile.as_path(),
@@ -115,8 +116,10 @@ impl Design {
                         state,
                         &mut io.stdout,
                         &mut io.stderr,
-                    )
-                } else if design.itrace {
+                    );
+                }
+
+                if design.itrace {
                     design.execute_with_tracer(
                         &mut vogls_bytecode::InstructionTracer::new_stderr(),
                         state,
@@ -143,6 +146,8 @@ impl Design {
             (DesignBackend::Cranelift { design }, DesignState::Cranelift(state)) => design
                 .run(state, io, time)
                 .map_err(|_| "execution failed.".into()),
+
+            #[allow(unreachable_patterns)]
             _ => panic!(),
         }
     }
@@ -190,7 +195,6 @@ impl Design {
             state.runtime_mut().heap.store_bits(heap_ref, mode, bits);
 
             match (&self.backend, state) {
-                #[cfg(feature = "native")]
                 (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
                     design.poke_signal(state, signal.key)
                 }
@@ -198,6 +202,8 @@ impl Design {
                 (DesignBackend::Compiled { design }, DesignState::Compiled(state)) => {
                     design.poke_signal(state, signal.key)
                 }
+
+                #[allow(unreachable_patterns)]
                 _ => unreachable!(),
             }
         }

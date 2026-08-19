@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-libc.workspace = true
+libc = { workspace = true, optional = true }
 slotmap.workspace = true
 bytemuck.workspace = true
 vogls-ir.workspace = true
@@ -18,4 +18,6 @@ vogls-vcd.workspace = true
 workspace = true
 
 [features]
+default = []
 tailcall = []
+profile = ["dep:libc"]

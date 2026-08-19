@@ -27,6 +27,7 @@ random = ["vogls-bits/random"]
 native = ["dep:tempfile", "dep:vogls-codegen-c", "dep:vogls-codegen-clif"]
 unstable = []
 tailcall = ["vogls-bytecode/tailcall"]
+profile = ["vogls-bytecode/profile"]
 
 [lints]
 workspace = true

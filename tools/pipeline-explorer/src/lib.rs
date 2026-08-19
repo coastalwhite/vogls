@@ -3,7 +3,7 @@ use std::io::{stderr, stdout};
 
 use js_sys::{Array, Object, Reflect};
 use trva::error::AssembleError;
-use trva::isa::Isa;
+use trva::isa::{ExtensionSet, Isa};
 use trva::{Assembler, SectionPositions};
 use vogls::design::{Arena, Macro};
 use vogls::frontend::symbol_table::SymbolId;
@@ -14,6 +14,11 @@ use vogls::{
 };
 use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsError, JsValue};
+
+const RV32IM: Isa = Isa {
+    exts: ExtensionSet::INTEGER_MULDIV,
+    xlen: trva::isa::XLen::Rv32,
+};
 
 fn get_signal(design: &mut ElaboratedDesign<'_>, scope: SymbolId, ident: &str) -> SignalHandle {
     let sid = design
@@ -151,7 +156,7 @@ pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue,
         rodata: 0u32,
         bss: 1024u32,
     };
-    let program = Assembler::new(Isa::RV_I | Isa::INTEGER_MULDIV, positions)
+    let program = Assembler::new(RV32IM, positions)
         .with_source(assembly)?
         .assemble();
 
@@ -319,7 +324,7 @@ pub fn get_ibex_trace(
         rodata: 0u32,
         bss: 0u32,
     };
-    let program = Assembler::new(Isa::RV_I | Isa::INTEGER_MULDIV, positions)
+    let program = Assembler::new(RV32IM, positions)
         .with_source(assembly)?
         .assemble();
 
@@ -510,7 +515,7 @@ pub fn get_trace(
         rodata: 0u32,
         bss: 1024u32,
     };
-    let program = Assembler::new(Isa::RV_I | Isa::INTEGER_MULDIV, positions)
+    let program = Assembler::new(RV32IM, positions)
         .with_source(assembly)?
         .assemble();
 

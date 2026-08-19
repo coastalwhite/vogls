@@ -31,7 +31,6 @@ pub struct Assembler {
     positions: SectionPositions,
     current_section: SectionKind,
 
-    #[expect(unused)]
     isa: Isa,
     handlers: hashbrown::HashMap<&'static str, MnemonicHandler, RandomState>,
 }
