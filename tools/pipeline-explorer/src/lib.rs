@@ -3,6 +3,7 @@ use std::io::{stderr, stdout};
 
 use js_sys::{Array, Object, Reflect};
 use trva::error::AssembleError;
+use trva::isa::Isa;
 use trva::{Assembler, SectionPositions};
 use vogls::design::{Arena, Macro};
 use vogls::frontend::symbol_table::SymbolId;
@@ -150,7 +151,9 @@ pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue,
         rodata: 0u32,
         bss: 1024u32,
     };
-    let program = Assembler::new(positions).with_source(assembly)?.assemble();
+    let program = Assembler::new(Isa::RV_I | Isa::INTEGER_MULDIV, positions)
+        .with_source(assembly)?
+        .assemble();
 
     let mut instructions = Vec::<String>::new();
     let mut islice = &program.text[..];
@@ -316,7 +319,9 @@ pub fn get_ibex_trace(
         rodata: 0u32,
         bss: 0u32,
     };
-    let program = Assembler::new(positions).with_source(assembly)?.assemble();
+    let program = Assembler::new(Isa::RV_I | Isa::INTEGER_MULDIV, positions)
+        .with_source(assembly)?
+        .assemble();
 
     let mut instructions = Vec::<String>::new();
     let mut islice = &program.text[..];
@@ -505,7 +510,9 @@ pub fn get_trace(
         rodata: 0u32,
         bss: 1024u32,
     };
-    let program = Assembler::new(positions).with_source(assembly)?.assemble();
+    let program = Assembler::new(Isa::RV_I | Isa::INTEGER_MULDIV, positions)
+        .with_source(assembly)?
+        .assemble();
 
     let mut instructions = Vec::<String>::new();
     let mut islice = &program.text[..];

@@ -4,6 +4,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+use trva::isa::Isa;
 use trva::{Assembler, SectionPositions};
 
 const DEFAULT_POSITIONS: SectionPositions = SectionPositions {
@@ -51,7 +52,7 @@ fn main() -> ExitCode {
             let positions = parse_positions(&source);
 
             let asm_result = std::panic::catch_unwind(|| {
-                Assembler::new(positions)
+                Assembler::new(Isa::RV_I | Isa::INTEGER_MULDIV, positions)
                     .with_source(&source)
                     .map(|a| a.assemble())
             });

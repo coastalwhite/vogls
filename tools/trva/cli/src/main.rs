@@ -7,22 +7,32 @@ use clap::Parser;
 mod position;
 
 use position::SectionPosition;
+use trva::isa::Isa;
 use trva::{Assembled, Assembler, SectionPositions};
 
+/// A tiny RISC-V assembler that outputs raw section data.
+///
+/// This performs two-pass assembly with basic relaxation.
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(version)]
 struct Args {
+    /// Path to assembly file
     asm: PathBuf,
 
+    /// Path to output file (default to standard output)
     #[arg(short = 'o', long)]
     output: Option<PathBuf>,
 
+    /// Start address of the `.text` section
     #[arg(long, value_name = "ADDR")]
     text: SectionPosition,
+    /// Start address of the `.data` section
     #[arg(long, value_name = "ADDR")]
     data: SectionPosition,
+    /// Start address of the `.rodata` section
     #[arg(long, value_name = "ADDR")]
     rodata: SectionPosition,
+    /// Start address of the `.bss` section
     #[arg(long, value_name = "ADDR")]
     bss: SectionPosition,
 }
@@ -64,12 +74,15 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut b = Assembler::new(SectionPositions {
-        text: text.0,
-        data: data.0,
-        rodata: ro_data.0,
-        bss: bss.0,
-    });
+    let mut b = Assembler::new(
+        Isa::RV_I | Isa::INTEGER_MULDIV,
+        SectionPositions {
+            text: text.0,
+            data: data.0,
+            rodata: ro_data.0,
+            bss: bss.0,
+        },
+    );
 
     if let Err(err) = b.add_source(&asm_str) {
         eprintln!("Unable to assemble {}: {err}", asm.display());
