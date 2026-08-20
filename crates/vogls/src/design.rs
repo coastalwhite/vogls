@@ -108,15 +108,17 @@ impl Design {
                 state.schedule.set_max_time(time);
                 #[cfg(feature = "profile")]
                 if let Some(profile) = &design.profile {
-                    return design.execute_with_tracer(
-                        &mut vogls_bytecode::profile::SamplingProfiler::new(
-                            design.debug_info.clone(),
-                            profile.as_path(),
-                        ),
-                        state,
-                        &mut io.stdout,
-                        &mut io.stderr,
-                    );
+                    return design
+                        .execute_with_tracer(
+                            &mut vogls_bytecode::profile::SamplingProfiler::new(
+                                design.debug_info.clone(),
+                                profile.as_path(),
+                            ),
+                            state,
+                            &mut io.stdout,
+                            &mut io.stderr,
+                        )
+                        .map_err(|_| "execution failed.".into());
                 }
 
                 if design.itrace {

@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::env::temp_dir;
 use std::fmt;
 use std::fs::read_to_string;
 use std::io::{self, Write};
@@ -7,6 +8,7 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use backtrace::BacktraceFmt;
@@ -190,6 +192,7 @@ struct TestInfo {
     expect_panic: bool,
     verify_stdout: VerifyOutput,
     verify_ir: bool,
+    verify_vcd: bool,
     annotate_sdf: bool,
     timeout: Option<(u64, TimeUnit)>,
     top_level_module: Option<String>,
@@ -217,6 +220,7 @@ impl TestInfo {
             expect_panic: false,
             verify_stdout: VerifyOutput::No,
             verify_ir: false,
+            verify_vcd: false,
             annotate_sdf: false,
             top_level_module: None,
             timeout: None,
@@ -237,6 +241,7 @@ impl TestInfo {
                 "verify-stdout" => info.verify_stdout = VerifyOutput::Yes,
                 "verify-stdout[sort-lines]" => info.verify_stdout = VerifyOutput::SortLines,
                 "verify-ir" => info.verify_ir = true,
+                "verify-vcd" => info.verify_vcd = true,
                 "annotate-sdf" => info.annotate_sdf = true,
                 "panic" => info.expect_panic = true,
                 _ if line.starts_with("fail") => {
@@ -314,6 +319,10 @@ enum FailureInfo {
         expected: String,
         gotten: String,
     },
+    VcdMismatch {
+        expected: String,
+        gotten: String,
+    },
     VirMismatch {
         expected: String,
         gotten: String,
@@ -337,6 +346,7 @@ impl FailureInfo {
             Self::Panic(..) => '!',
             Self::Execution { .. } => 'E',
             Self::Mismatch { .. } => 'M',
+            Self::VcdMismatch { .. } => 'V',
             Self::VirMismatch { .. } => 'M',
             Self::VirOptMismatch { .. } => 'O',
             Self::CompileFailure(..) => 'C',
@@ -647,6 +657,12 @@ fn report_fails(o: &mut io::Stdout, fails: Vec<Fail>, num_tests: usize) -> io::R
                 }
                 FailureInfo::Mismatch { expected, gotten } => {
                     writeln!(o, ": Mismatch")?;
+                    writeln!(o)?;
+                    display_section(o, "EXPECTED", &expected)?;
+                    display_section(o, "GOTTEN", &gotten)?;
+                }
+                FailureInfo::VcdMismatch { expected, gotten } => {
+                    writeln!(o, ": VCD Mismatch")?;
                     writeln!(o)?;
                     display_section(o, "EXPECTED", &expected)?;
                     display_section(o, "GOTTEN", &gotten)?;
@@ -986,6 +1002,75 @@ fn run_test(
             return Err(FailureInfo::Mismatch {
                 expected: s,
                 gotten: stdout.to_string(),
+            });
+        }
+    }
+
+    if test_information.verify_vcd {
+        static CTR: AtomicU64 = AtomicU64::new(0);
+        let idx = CTR.fetch_add(1, Ordering::Relaxed);
+        let vcd_path_dir = temp_dir();
+        let vcd_path = vcd_path_dir.join(format!("trace-{idx}.vcd"));
+
+        let arena = Arena::new();
+        let mut builder = DesignBuilder::new();
+        match logic_mode {
+            LogicMode::TwoValue => {
+                builder.define_macro("__VOGLS__TWO_VALUE_LOGIC", Macro::default());
+            }
+            LogicMode::FourValue => {}
+        }
+        builder.add_source(path).expect("failed to tokenize");
+        let parsed = builder.parse(&arena).expect("failed to parse");
+        let mut elab = parsed
+            .elaborate(logic_mode, test_information.top_level_module.as_deref())
+            .expect("failed to elaborate");
+        if let Some(sdf) = sdf.as_deref() {
+            elab.annotate_sdf(sdf).expect("failed to annotate SDF");
+        }
+        elab.annotate_specify().expect("failed to annotate specify");
+        let mut design = match elab.lower(vec![]) {
+            Ok(d) => d,
+            Err(_) => panic!("failed to lower"),
+        };
+        design.trace_vcd(vcd_path.clone());
+        design.optimize(opts);
+
+        let (design, mut state) = match backend {
+            Backend::Compile => design.compile(),
+            Backend::Bytecode => design.to_bytecode(),
+            Backend::Cranelift => design.to_cranelift(),
+        }
+        .expect("failed to convert to execution format");
+        let timeout = test_information.timeout.map_or(u64::MAX, |(v, unit)| {
+            TimeResolution {
+                unit,
+                size: TimeSize::N1,
+            }
+            .truncate_or_multiply_to(v, design.time_resolution())
+        });
+        design
+            .run(
+                &mut state,
+                &mut SimulationIo {
+                    stdout: Box::new(stdout.clone()) as _,
+                    stderr: Box::new(stderr.clone()) as _,
+                },
+                timeout,
+            )
+            .expect("failed to execute");
+
+        let mut fixture_vcd_path = path.to_path_buf();
+        fixture_vcd_path.add_extension("vcd");
+        let fixture = std::fs::read_to_string(&fixture_vcd_path)?;
+        let generated = std::fs::read_to_string(&vcd_path)?;
+
+        std::fs::remove_file(&vcd_path)?;
+
+        if fixture != generated {
+            return Err(FailureInfo::VcdMismatch {
+                expected: fixture,
+                gotten: generated,
             });
         }
     }

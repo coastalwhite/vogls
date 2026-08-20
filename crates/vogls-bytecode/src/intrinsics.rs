@@ -174,6 +174,9 @@ impl BytecodeInstruction for Intrinsic {
             O::Finish => {
                 cldctx.return_value = 0;
                 *pc = u64::MAX;
+                for plugin in cldctx.plugins.iter_mut() {
+                    plugin.finish(state);
+                }
                 cldctx.stdout.write_all(b"[FINISH]\n").unwrap();
             }
             O::Random(kind) => {

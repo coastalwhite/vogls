@@ -47,8 +47,6 @@ mod profiler {
     use crate::{Bytecode, BytecodeListeners, BytecodeOpcode, Regs, Schedule, Tracer};
     use vogls_runtime::RuntimeState;
 
-    pub const DEFAULT_PROFILE_OUTPUT: &str = "vogls-profile.vir";
-
     static SAMPLES_PENDING: AtomicU32 = AtomicU32::new(0);
     extern "C" fn sigprof_handler(_sig: libc::c_int) {
         SAMPLES_PENDING.fetch_add(1, Ordering::Relaxed);

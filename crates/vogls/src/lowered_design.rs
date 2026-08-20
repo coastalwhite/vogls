@@ -146,14 +146,21 @@ impl LoweredDesign {
             let scope = vcd_scope(&self.table, tlm, &self.ident_table);
             let (children, map) = vogls_vcd::VcdScope::lower(&scope, &rt_signal_map);
             let rtvcdoutput = match &self.vcd {
-                Some(path) => {
-                    vogls_vcd::RtVcdOutput::new_path(path, signal_to_heap.clone(), children, map)
-                }
+                Some(path) => vogls_vcd::RtVcdOutput::new_path(
+                    path,
+                    signal_to_heap.clone(),
+                    children,
+                    map,
+                    self.time_resolution,
+                    signal_mode.clone(),
+                ),
                 None => vogls_vcd::RtVcdOutput::new(
                     Box::new(Vec::new()),
                     signal_to_heap.clone(),
                     Vec::new(),
                     map,
+                    self.time_resolution,
+                    signal_mode.clone(),
                 ),
             };
             plugins.push(Box::new(rtvcdoutput));
@@ -364,12 +371,8 @@ impl LoweredDesign {
             lupdt_indexes: &lupdt_indexes,
         };
 
-        let compiled = vogls_codegen_clif::lower::compile(
-            &self.gl,
-            info,
-            &mut heap_builder,
-            num_plugins,
-        )?;
+        let compiled =
+            vogls_codegen_clif::lower::compile(&self.gl, info, &mut heap_builder, num_plugins)?;
 
         // Reserve a heap scratch region for wide values too large for a stack
         // slot (sized to the largest TR's spilled footprint); pass its base word
