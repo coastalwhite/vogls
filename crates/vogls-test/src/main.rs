@@ -1062,6 +1062,14 @@ fn run_test(
 
         let mut fixture_vcd_path = path.to_path_buf();
         fixture_vcd_path.add_extension("vcd");
+
+        if !fixture_vcd_path.exists() {
+            match logic_mode {
+                LogicMode::TwoValue => _ = fixture_vcd_path.add_extension(".tv"),
+                LogicMode::FourValue => _ = fixture_vcd_path.add_extension(".fv"),
+            }
+        }
+
         let fixture = std::fs::read_to_string(&fixture_vcd_path)?;
         let generated = std::fs::read_to_string(&vcd_path)?;
 
