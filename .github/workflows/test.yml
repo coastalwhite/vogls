@@ -40,4 +40,4 @@ jobs:
         run: cargo generate-lockfile
 
       - name: Tests
-        run: just test
+        run: just test -B --cranelift
