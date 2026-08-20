@@ -18,20 +18,19 @@ slotmap = "1"
 bytemuck = "1"
 libc = "0.2"
 proptest = "1"
-hashbrown = "0.16"
+hashbrown = "0.17"
 foldhash = "0.2.0"
 rayon = "1.12.0"
 rand = "0.10"
 clap = { version = "4.5", features = ["derive"] }
 bumpalo = "3.20"
-tempfile = "3.27.0"
 pyo3 = { version = "0.28.1", features = ["abi3-py311"] }
 
-cranelift-codegen = "0.134"
-cranelift-frontend = "0.134"
-cranelift-module = "0.134"
-cranelift-jit = "0.134"
-cranelift-native = "0.134"
+cranelift-codegen = { version = "0.134", default-features = false }
+cranelift-frontend = { version = "0.134", default-features = false }
+cranelift-module = { version = "0.134", default-features = false }
+cranelift-jit = { version = "0.134", default-features = false }
+cranelift-native = { version = "0.134", default-features = false }
 
 vogls = { path = "crates/vogls", default-features = false }
 vogls-frontend.path = "crates/vogls-frontend"

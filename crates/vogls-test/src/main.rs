@@ -11,7 +11,6 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use backtrace::BacktraceFmt;
 use clap::Parser;
 use vogls::design::{Arena, Macro};
 use vogls::{DesignBuilder, SimulationIo, VirDesignBuilder};
@@ -482,7 +481,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let hook = panic::take_hook();
     panic::set_hook(Box::new(|info| {
         PANIC_INFO.set(Some(PanicInfo {
-            backtrace: backtrace::Backtrace::new(),
+            backtrace: std::backtrace::Backtrace::force_capture(),
             message: info.payload_as_str().unwrap_or("<no info>").to_string(),
         }));
     }));
@@ -622,20 +621,12 @@ fn report_fails(o: &mut io::Stdout, fails: Vec<Fail>, num_tests: usize) -> io::R
                         mut backtrace,
                         message,
                     } = panic;
-                    backtrace.resolve();
-                    struct X(String, backtrace::Backtrace);
+                    struct X(String, std::backtrace::Backtrace);
                     impl fmt::Display for X {
                         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                            let mut pfmt = |pf: &mut fmt::Formatter<'_>, p: backtrace::BytesOrWideString<'_>| p.fmt(pf);
-                            let mut fmt =
-                                BacktraceFmt::new(f, backtrace::PrintFmt::Full, &mut pfmt);
-                            fmt.add_context()?;
-                            fmt.message(&self.0)?;
-                            writeln!(fmt.formatter())?;
-                            for frame in self.1.frames() {
-                                fmt.frame().backtrace_frame(frame)?;
-                            }
-                            fmt.finish()
+                            self.1.fmt(f)?;
+                            f.write_str(&self.0)?;
+                            Ok(())
                         }
                     }
                     let output = X(message, backtrace).to_string();

@@ -3,21 +3,6 @@
 version = 4
 
 [[package]]
-name = "addr2line"
-version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b5d307320b3181d6d7954e663bd7c774a838b8220fe0593c86d9fb09f498b4b"
-dependencies = [
- "gimli 0.32.3",
-]
-
-[[package]]
-name = "adler2"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -99,21 +84,6 @@ name = "autocfg"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ace50bade8e6234aa140d9a2f552bbee1db4d353f69b8217bc503490fc1a9f26"
-
-[[package]]
-name = "backtrace"
-version = "0.3.76"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb531853791a215d7c62a30daf0dde835f381ab5de4589cfe7c649d2cbe92bd6"
-dependencies = [
- "addr2line",
- "cfg-if",
- "libc",
- "miniz_oxide",
- "object",
- "rustc-demangle",
- "windows-link",
-]
 
 [[package]]
 name = "bit-set"
@@ -281,7 +251,7 @@ dependencies = [
  "cranelift-control",
  "cranelift-entity",
  "cranelift-isle",
- "gimli 0.33.0",
+ "gimli",
  "hashbrown 0.17.1",
  "libm",
  "log",
@@ -497,12 +467,6 @@ dependencies = [
 
 [[package]]
 name = "gimli"
-version = "0.32.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
-
-[[package]]
-name = "gimli"
 version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0bf7f043f89559805f8c7cacc432749b2fa0d0a0a9ee46ce47164ed5ba7f126c"
@@ -527,11 +491,6 @@ name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
-dependencies = [
- "allocator-api2",
- "equivalent",
- "foldhash 0.2.0",
-]
 
 [[package]]
 name = "hashbrown"
@@ -539,6 +498,8 @@ version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.2.0",
 ]
 
@@ -643,30 +604,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "miniz_oxide"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fa76a2c86f704bdb222d66965fb3d63269ce38518b83cb0575fca855ebb6316"
-dependencies = [
- "adler2",
-]
-
-[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "object"
-version = "0.37.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
-dependencies = [
- "memchr",
 ]
 
 [[package]]
@@ -955,12 +898,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustc-demangle"
-version = "0.1.27"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b50b8869d9fc858ce7266cce0194bd74df58b9d0e3f6df3a9fc8eb470d95c09d"
-
-[[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1159,9 +1096,8 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 name = "vogls"
 version = "0.0.1"
 dependencies = [
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "slotmap",
- "tempfile",
  "vogls-bits",
  "vogls-bytecode",
  "vogls-codegen",
@@ -1213,7 +1149,7 @@ name = "vogls-codegen"
 version = "0.0.1"
 dependencies = [
  "bytemuck",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "slotmap",
  "vogls-bits",
  "vogls-ir",
@@ -1241,7 +1177,7 @@ name = "vogls-frontend"
 version = "0.0.1"
 dependencies = [
  "foldhash 0.2.0",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "vogls-ir",
  "vogls-utils",
 ]
@@ -1251,7 +1187,7 @@ name = "vogls-fuse-signals"
 version = "0.0.1"
 dependencies = [
  "foldhash 0.2.0",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "slotmap",
  "vogls-bits",
  "vogls-ir",
@@ -1263,7 +1199,7 @@ name = "vogls-ir"
 version = "0.0.1"
 dependencies = [
  "bytemuck",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "slotmap",
  "vogls-bits",
  "vogls-utils",
@@ -1274,7 +1210,7 @@ name = "vogls-plan"
 version = "0.0.1"
 dependencies = [
  "foldhash 0.2.0",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "pyo3",
  "rand 0.10.0",
  "rayon",
@@ -1286,7 +1222,7 @@ dependencies = [
 name = "vogls-python"
 version = "0.0.1"
 dependencies = [
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "pyo3",
  "vogls",
  "vogls-plan",
@@ -1318,7 +1254,6 @@ dependencies = [
 name = "vogls-test"
 version = "0.0.1"
 dependencies = [
- "backtrace",
  "clap",
  "rayon",
  "regex",
@@ -1333,7 +1268,7 @@ dependencies = [
 name = "vogls-trace"
 version = "0.0.1"
 dependencies = [
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "vogls",
  "vogls-bits",
  "vogls-codegen",
@@ -1347,7 +1282,7 @@ name = "vogls-utils"
 version = "0.0.1"
 dependencies = [
  "foldhash 0.2.0",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -1367,7 +1302,7 @@ version = "0.0.1"
 dependencies = [
  "bumpalo",
  "foldhash 0.2.0",
- "hashbrown 0.16.1",
+ "hashbrown 0.17.1",
  "slotmap",
  "vogls-frontend",
  "vogls-fuse-signals",
