@@ -1,0 +1,43 @@
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+name: test
+jobs:
+  required:
+    runs-on: ubuntu-latest
+    name: ubuntu / ${{ matrix.toolchain }}
+    strategy:
+      matrix:
+        # run on stable and beta to ensure that tests won't break on the next version of the rust
+        # toolchain
+        toolchain: [stable, beta]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Install ${{ matrix.toolchain }}
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+
+      - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # tag=v3
+        with:
+          just-version: 1.5.0
+
+      - name: cargo generate-lockfile
+        if: hashFiles('Cargo.lock') == ''
+        run: cargo generate-lockfile
+
+      - name: Tests
+        run: just test
