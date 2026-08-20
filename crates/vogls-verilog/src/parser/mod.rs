@@ -158,7 +158,7 @@ impl ParseContext {
         let minimum_time_precision = timescale.precision;
         Self {
             timescale,
-            default_nettype: None,
+            default_nettype: Some(DefaultNettype::Wire),
             min_time_precision: minimum_time_precision,
         }
     }

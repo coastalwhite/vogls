@@ -410,7 +410,7 @@ impl BasicBlockBuilder {
         }
     }
     pub fn next_builder_temporal(&mut self, gl: &mut GlobalContext) -> BasicBlockBuilder {
-        let next_key = self.next_bb_non_temporal(gl);
+        let next_key = self.next_bb_temporal(gl);
         BasicBlockBuilder {
             key: next_key,
             instrs: Vec::new(),
@@ -1098,7 +1098,7 @@ impl BasicBlockBuilder {
         )
     }
 
-    fn finalize(&mut self, gl: &mut GlobalContext, terminator: BasicBlockTerminator) {
+    pub fn finalize(&mut self, gl: &mut GlobalContext, terminator: BasicBlockTerminator) {
         let bb = &mut gl.bbs[self.key];
         bb.instrs = std::mem::take(&mut self.instrs);
         bb.terminator = terminator;
@@ -1233,6 +1233,9 @@ impl BasicBlockBuilder {
     pub fn watch_to(self, gl: &mut GlobalContext, signals: Vec<SignalKey>, bb: BasicBlockKey) {
         self.temporal_term_to(gl, bb, |key| BasicBlockTerminator::Watch(key, signals))
     }
+    pub fn watch_to_next(self, gl: &mut GlobalContext, signals: Vec<SignalKey>, bb: BasicBlockKey) {
+        self.temporal_term_to(gl, bb, |key| BasicBlockTerminator::Watch(key, signals))
+    }
 
     pub fn intrinsic(
         &mut self,
@@ -1339,7 +1342,30 @@ impl BasicBlockBuilder {
         }
     }
 
-    pub fn posedge(&mut self, gl: &mut GlobalContext, lhs: VariableKey, rhs: VariableKey) -> VariableKey {
+    pub fn posedge(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
         self.negedge(gl, rhs, lhs)
+    }
+
+    pub fn finalize_and_switch_to(
+        &mut self,
+        gl: &mut GlobalContext,
+        terminator: BasicBlockTerminator,
+        bb: BasicBlockKey,
+    ) {
+        self.finalize(gl, terminator);
+        self.key = bb;
+        self.instrs = std::mem::take(&mut gl.bbs[bb].instrs);
+    }
+
+    pub fn switch_to(&mut self, gl: &mut GlobalContext, bb: BasicBlockKey) {
+        std::mem::swap(&mut gl.bbs[self.key].instrs, &mut self.instrs);
+
+        self.key = bb;
+        self.instrs = std::mem::take(&mut gl.bbs[bb].instrs);
     }
 }

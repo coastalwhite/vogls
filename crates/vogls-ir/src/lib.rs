@@ -1682,10 +1682,6 @@ impl BinaryImmOp {
         match self {
             O::And => {
                 let num_special = imm.count_special();
-                if num_special == imm.size().get() {
-                    return S::Constant(Bits::new_unknown(imm.size()));
-                }
-
                 let num_ones = imm.count_ones();
                 if num_ones == imm.size().get() && src.mode() == LogicMode::TwoValue {
                     return S::Source;
@@ -1697,10 +1693,6 @@ impl BinaryImmOp {
             }
             O::Or => {
                 let num_special = imm.count_special();
-                if num_special == imm.size().get() {
-                    return S::Constant(Bits::new_unknown(imm.size()));
-                }
-
                 let num_ones = imm.count_ones();
                 if num_ones == imm.size().get() {
                     return S::Immediate;
