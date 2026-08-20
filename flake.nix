@@ -42,7 +42,7 @@
             };
             rustToolchain = pkgs.rust-bin.stable.latest.default.override {
               targets = [ buildTarget ];
-              extensions = [ "rust-src" ];
+              extensions = [ "rust-src" "llvm-tools-preview" ];
             };
             rustPlatform = pkgs.makeRustPlatform {
               cargo = rustToolchain;

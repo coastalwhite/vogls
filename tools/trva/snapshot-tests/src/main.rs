@@ -4,9 +4,13 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-use trva::isa::Isa;
+use trva::isa::{ExtensionSet, Isa, XLen};
 use trva::{Assembler, SectionPositions};
 
+const RV32IM: Isa = Isa {
+    exts: ExtensionSet::INTEGER_MULDIV,
+    xlen: XLen::Rv32,
+};
 const DEFAULT_POSITIONS: SectionPositions = SectionPositions {
     text: 0x8000_0000,
     data: 0x8000_0100,
@@ -52,7 +56,7 @@ fn main() -> ExitCode {
             let positions = parse_positions(&source);
 
             let asm_result = std::panic::catch_unwind(|| {
-                Assembler::new(Isa::RV_I | Isa::INTEGER_MULDIV, positions)
+                Assembler::new(RV32IM, positions)
                     .with_source(&source)
                     .map(|a| a.assemble())
             });
@@ -156,7 +160,7 @@ fn build_snapshot(name: &str, asm: &trva::Assembled) -> String {
     writeln!(out, "text:   {} bytes", asm.text.len()).unwrap();
     writeln!(out, "data:   {} bytes", asm.data.len()).unwrap();
     writeln!(out, "rodata: {} bytes", asm.rodata.len()).unwrap();
-    writeln!(out, "bss:    {} bytes", asm.bss.len()).unwrap();
+    writeln!(out, "bss:    {} bytes", asm.bss).unwrap();
 
     if !asm.text.is_empty() {
         writeln!(out, "\n=== Disassembly (text) ===").unwrap();

@@ -481,7 +481,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let hook = panic::take_hook();
     panic::set_hook(Box::new(|info| {
         PANIC_INFO.set(Some(PanicInfo {
-            backtrace: std::backtrace::Backtrace::force_capture(),
+            backtrace: Arc::new(std::backtrace::Backtrace::force_capture()),
             message: info.payload_as_str().unwrap_or("<no info>").to_string(),
         }));
     }));
@@ -617,11 +617,8 @@ fn report_fails(o: &mut io::Stdout, fails: Vec<Fail>, num_tests: usize) -> io::R
                 FailureInfo::Panic(panic) => {
                     writeln!(o, ": Panic")?;
                     writeln!(o)?;
-                    let PanicInfo {
-                        mut backtrace,
-                        message,
-                    } = panic;
-                    struct X(String, std::backtrace::Backtrace);
+                    let PanicInfo { backtrace, message } = panic;
+                    struct X(String, Arc<std::backtrace::Backtrace>);
                     impl fmt::Display for X {
                         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                             self.1.fmt(f)?;
@@ -696,7 +693,7 @@ pub enum PassKind {
 
 #[derive(Clone)]
 struct PanicInfo {
-    backtrace: backtrace::Backtrace,
+    backtrace: Arc<std::backtrace::Backtrace>,
     message: String,
 }
 thread_local! {

@@ -16,8 +16,8 @@ test *FLAGS:
 
 coverage:
     cargo llvm-cov clean --workspace
-    cargo llvm-cov --no-report test
-    cargo llvm-cov --no-report run --bin vogls-test -- -I --opt-rounds=2 --skip=aes
+    # cargo llvm-cov --no-report test
+    cargo llvm-cov --no-report run --bin vogls-test -- --skip aes
     cargo llvm-cov report --html
 
 build-site: build-site-pipeline-explorer build-site-python-docs build-site-docs
