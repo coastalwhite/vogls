@@ -5,8 +5,8 @@ use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    ConnectionDirection, GlobalContext, INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, SignalFlags,
-    SignalKey, TIME_VSIZE,
+    ConnectionDirection, GlobalContext, INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, Signal,
+    SignalFlags, SignalKey, TIME_VSIZE,
 };
 use vogls_utils::{IndexMap, VgHashMap, VgHashSet};
 
@@ -14,21 +14,21 @@ use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::{Expr, Replication};
 use crate::ast::module::{
     AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem,
-    CaseGeneratePattern, Dimension, FunctionDeclaration, FunctionRangeOrType, GenerateBlock,
-    GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, InitialConstruct, IntegerDeclaration,
-    LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstantiation, ModuleItem,
-    ModuleOrGenerateItem, ModuleOrGenerateItemContent, ModuleOrGenerateItemDeclaration,
-    ModulePorts, NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
-    NetIdent, NetType, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
-    ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
-    PortReference, Range, RealDeclaration, RealtimeDeclaration, RegDeclaration, TaskDeclaration,
-    TaskPortItem, TaskPortItemContent, TfType, TimeDeclaration, TimeScale, VariableType,
-    VariableTypeVariant,
+    CaseGeneratePattern, Dimension, FunctionDeclaration, FunctionRangeOrType, GateInstantiation,
+    GenerateBlock, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, InitialConstruct,
+    IntegerDeclaration, ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct,
+    Module, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemContent,
+    ModuleOrGenerateItemDeclaration, ModulePorts, NamedParameterAssignment, NetDeclAssignment,
+    NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, ParamAssignment,
+    ParameterDeclaration, ParameterDeclarationTyping, ParameterValueAssignment, Port,
+    PortDeclaration, PortExpression, PortReference, Range, RealDeclaration, RealtimeDeclaration,
+    RegDeclaration, TaskDeclaration, TaskPortItem, TaskPortItemContent, TfType, TimeDeclaration,
+    TimeScale, VariableType, VariableTypeVariant,
 };
 use crate::ast::statement::{
     Block, BlockingAssignment, CaseStatement, ConditionalStatement, LoopStatement,
-    LoopStatementVariant, ParBlock, SeqBlock, Statement, StatementContent, StatementOrNull,
-    WaitStatement,
+    LoopStatementVariant, NetLValue, ParBlock, SeqBlock, Statement, StatementContent,
+    StatementOrNull, WaitStatement,
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::elaborate::{FunctionSymbol, TaskSymbol};
@@ -37,6 +37,7 @@ use crate::lower::{
     try_resolve_hident, unwrap_get_module, unwrap_get_module_mut, unwrap_get_net_mut,
     unwrap_get_param_mut,
 };
+use crate::parser::DefaultNettype;
 
 use super::{
     ModuleSymbol, Net, NetSymbol, VSymbol, VSymbolTable, VectorTransform, evaluate_net_msb_lsb,
@@ -94,7 +95,8 @@ pub struct PortInLevelSymbol<'a> {
 
 pub struct ElaborationState<'a, 'b> {
     lvl_symbols: IndexMap<SymbolId, InLevelSymbol<'a>>,
-    next_levels: VecDeque<(SymbolId, ElabLevel<'a>, TimeScale)>,
+    next_levels: VecDeque<(SymbolId, ElabLevel<'a>, Option<DefaultNettype>, TimeScale)>,
+    implicit_nets: IndexMap<IdentId, (AstItem<Identifier>, DefaultNettype)>,
     marked: VgHashSet<SymbolId>,
 
     needs_adjacency_list: Vec<(SymbolId, usize, usize)>,
@@ -107,6 +109,7 @@ pub struct ElaborationState<'a, 'b> {
     stmt_dispatch_stack: Vec<(SymbolId, AstIdRange<'a, Statement<'a>>)>,
 
     module_lut: &'b VgHashMap<IdentId, AstId<'a, Module<'a>>>,
+    default_nettype: Option<DefaultNettype>,
 }
 
 impl<'a, 'b> ElaborationState<'a, 'b> {
@@ -157,6 +160,7 @@ pub fn elaborate<'a>(
     gl.signals.remove(dummy_signal);
     let mut st = ElaborationState {
         lvl_symbols: Default::default(),
+        implicit_nets: Default::default(),
         next_levels: VecDeque::new(),
         marked: VgHashSet::default(),
         needs_adjacency_list: Vec::new(),
@@ -165,6 +169,7 @@ pub fn elaborate<'a>(
         dispatch_stack: Vec::new(),
         stmt_dispatch_stack: Vec::new(),
         module_lut,
+        default_nettype: None,
     };
 
     assert!(ctx.table.is_empty());
@@ -188,12 +193,17 @@ pub fn elaborate<'a>(
         )
         .expect("No collisions possible, first symbol.");
 
-    st.next_levels
-        .push_back((tlm_sid, ElabLevel::Module(top_level), top_level.time_scale));
+    st.next_levels.push_back((
+        tlm_sid,
+        ElabLevel::Module(top_level),
+        top_level.default_nettype,
+        top_level.time_scale,
+    ));
 
     let mut error = false;
-    while let Some((scope, lvl, time_scale)) = st.next_levels.pop_front() {
+    while let Some((scope, lvl, default_nettype, time_scale)) = st.next_levels.pop_front() {
         ctx.time_scale = time_scale;
+        st.default_nettype = default_nettype;
 
         st.lvl_symbols.clear();
         st.needs_adjacency_list_items.clear();
@@ -233,6 +243,61 @@ pub fn elaborate<'a>(
             error = true;
             continue;
         }
+
+        for (&ident, &(ast_ident, nettype)) in st.implicit_nets.iter() {
+            if ctx.table.resolve(scope, ident).is_none() {
+                let origin = ctx.arenas.get_item_span(ast_ident);
+                if !matches!(nettype, DefaultNettype::Wire) {
+                    diagnostics.not_yet_implemented(
+                        origin,
+                        "given default_nettype is not yet implemented",
+                    );
+                    error = true;
+                    continue;
+                }
+
+                // @TODO: Warn for implicitly generated nets.
+
+                let signal = gl.signals.insert(Signal {
+                    name: ctx.arenas.ident_table[ident].to_string(),
+                    size: SCALAR_VSIZE,
+                    initialize: None,
+                    mode: ctx.logic_mode,
+                    flags: SignalFlags::EMPTY,
+                    origin,
+                });
+                let net = Net {
+                    width: SCALAR_VSIZE,
+                    specify: None,
+                    ba: signal,
+                    nba: None,
+                };
+                let symbol = NetSymbol {
+                    ty: VType::SCALAR_NET,
+                    dims: Vec::new(),
+                    net,
+                    transform: VectorTransform::default(),
+                    port_idx: None,
+                };
+                let symbol = VSymbol::Net(symbol);
+
+                let Ok(_) = try_table_insert(
+                    ctx.arenas,
+                    &mut ctx.table,
+                    scope,
+                    ast_ident,
+                    symbol,
+                    diagnostics,
+                ) else {
+                    error = true;
+                    continue;
+                };
+
+                // @NOTE: We don't have to add them to the level symbols, because they are already
+                // finalized.
+            }
+        }
+        st.implicit_nets.clear();
 
         // Evaluate the level symbols in the topological order.
         {
@@ -525,6 +590,7 @@ fn extend_generate_loop_sids<'a, 'b>(
         st.next_levels.push_back((
             iter_sid,
             ElabLevel::GenerateBlock(mod_or_gen_items),
+            st.default_nettype,
             ctx.time_scale,
         ));
 
@@ -1180,9 +1246,100 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
             )
         }
         ModuleOrGenerateItemContent::ParameterOverride => todo!(),
-        ModuleOrGenerateItemContent::ContinuousAssign(_)
-        | ModuleOrGenerateItemContent::GateInstantiation(_)
-        | ModuleOrGenerateItemContent::UdpInstantiation(_) => Ok(()),
+        ModuleOrGenerateItemContent::ContinuousAssign(id) => {
+            let Some(nettype) = st.default_nettype else {
+                return Ok(());
+            };
+
+            for assignment in id.list_of_net_assignments {
+                define_implicit_net_lvalue(
+                    ctx,
+                    scope,
+                    st,
+                    assignment.net_lvalue,
+                    nettype,
+                    diagnostics,
+                )?;
+            }
+
+            Ok(())
+        }
+        ModuleOrGenerateItemContent::GateInstantiation(id) => {
+            let Some(nettype) = st.default_nettype else {
+                return Ok(());
+            };
+
+            use GateInstantiation as G;
+            match &*id {
+                G::NInput(id) => {
+                    for instantiation in id.instances.iter() {
+                        define_implicit_net_lvalue(
+                            ctx,
+                            scope,
+                            st,
+                            instantiation.output_terminal,
+                            nettype,
+                            diagnostics,
+                        )?;
+                        for input_expr in instantiation.input_terminals.iter() {
+                            define_implicit_net_expr(
+                                ctx,
+                                scope,
+                                st,
+                                input_expr,
+                                nettype,
+                                diagnostics,
+                            )?;
+                        }
+                    }
+                }
+                G::NOutput(id) => {
+                    for instantiation in id.instances.iter() {
+                        for output_terminal in instantiation.output_terminals.iter() {
+                            define_implicit_net_lvalue(
+                                ctx,
+                                scope,
+                                st,
+                                output_terminal,
+                                nettype,
+                                diagnostics,
+                            )?;
+                        }
+                        define_implicit_net_expr(
+                            ctx,
+                            scope,
+                            st,
+                            instantiation.input_terminal,
+                            nettype,
+                            diagnostics,
+                        )?;
+                    }
+                }
+            }
+
+            Ok(())
+        }
+        ModuleOrGenerateItemContent::UdpInstantiation(id) => {
+            let Some(net_type) = st.default_nettype else {
+                return Ok(());
+            };
+
+            for instantiation in id.instances {
+                define_implicit_net_lvalue(
+                    ctx,
+                    scope,
+                    st,
+                    instantiation.output_terminal,
+                    net_type,
+                    diagnostics,
+                )?;
+                for input_expr in instantiation.input_terminals.iter() {
+                    define_implicit_net_expr(ctx, scope, st, input_expr, net_type, diagnostics)?;
+                }
+            }
+
+            Ok(())
+        }
         ModuleOrGenerateItemContent::ModuleInstantiation(id) => {
             let ModuleInstantiation {
                 module_identifier,
@@ -1230,6 +1387,37 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                         *module,
                     ),
                 );
+
+                if let Some(nettype) = st.default_nettype {
+                    match &*module_instance.list_of_port_connections {
+                        ListOfPortConnections::Ordered(exprs) => {
+                            for expr in exprs.iter() {
+                                define_implicit_net_expr(
+                                    ctx,
+                                    scope,
+                                    st,
+                                    expr,
+                                    nettype,
+                                    diagnostics,
+                                )?;
+                            }
+                        }
+                        ListOfPortConnections::Named(named_ports) => {
+                            for named_port in named_ports.iter() {
+                                if let Some(expr) = named_port.expression {
+                                    define_implicit_net_expr(
+                                        ctx,
+                                        scope,
+                                        st,
+                                        expr,
+                                        nettype,
+                                        diagnostics,
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                }
             }
             if error { Err(()) } else { Ok(()) }
         }
@@ -1243,17 +1431,20 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
         }
         ModuleOrGenerateItemContent::LoopGenerateConstruct(id) => {
             let lvl = ElabLevel::GenerateLoop(id);
-            st.next_levels.push_back((scope, lvl, ctx.time_scale));
+            st.next_levels
+                .push_back((scope, lvl, st.default_nettype, ctx.time_scale));
             Ok(())
         }
         ModuleOrGenerateItemContent::IfGenerateConstruct(id) => {
             let lvl = ElabLevel::GenerateIf(id);
-            st.next_levels.push_back((scope, lvl, ctx.time_scale));
+            st.next_levels
+                .push_back((scope, lvl, st.default_nettype, ctx.time_scale));
             Ok(())
         }
         ModuleOrGenerateItemContent::CaseGenerateConstruct(id) => {
             let lvl = ElabLevel::GenerateCase(id);
-            st.next_levels.push_back((scope, lvl, ctx.time_scale));
+            st.next_levels
+                .push_back((scope, lvl, st.default_nettype, ctx.time_scale));
             Ok(())
         }
     }
@@ -1852,7 +2043,7 @@ pub fn finalize_symbol<'a>(
     sid: SymbolId,
     scope: SymbolId,
     ctx: &mut LowerContext<'a, '_>,
-    next_levels: &mut VecDeque<(SymbolId, ElabLevel<'a>, TimeScale)>,
+    next_levels: &mut VecDeque<(SymbolId, ElabLevel<'a>, Option<DefaultNettype>, TimeScale)>,
     diagnostics: &mut Diagnostics,
 ) -> Result<(), ()> {
     match symbol {
@@ -2262,7 +2453,12 @@ pub fn finalize_symbol<'a>(
                     let module_symbol = unwrap_get_module_mut(&mut ctx.table, sid);
                     module_symbol.parameter_overrides = Arc::new(parameter_overrides);
                     module_symbol.parameter_override_values = Arc::new(parameter_override_values);
-                    next_levels.push_back((sid, ElabLevel::Module(*module), module.time_scale));
+                    next_levels.push_back((
+                        sid,
+                        ElabLevel::Module(*module),
+                        module.default_nettype,
+                        module.time_scale,
+                    ));
                 }
                 Some(range) => {
                     let msb = eval_constant_expr(
@@ -2306,6 +2502,7 @@ pub fn finalize_symbol<'a>(
                     next_levels.push_back((
                         sid,
                         ElabLevel::ModuleRange(*module, num_instances),
+                        module.default_nettype,
                         module.time_scale,
                     ));
                 }
@@ -2351,5 +2548,75 @@ fn extend_block_sids<'a, 'b>(
         }
     }
     st.stmt_dispatch_stack.push((scope, stmts));
+    Ok(())
+}
+
+fn define_implicit_net_lvalue<'a>(
+    ctx: &mut LowerContext<'a, '_>,
+    scope: SymbolId,
+    st: &mut ElaborationState<'a, '_>,
+    net_lvalue: AstId<'a, NetLValue<'a>>,
+    nettype: DefaultNettype,
+    diagnostics: &mut Diagnostics,
+) -> Result<(), ()> {
+    for net_lvalue in net_lvalue.0.iter() {
+        if resolve_hident(scope, &ctx.table, net_lvalue.ident).is_none() {
+            if !net_lvalue.ident.components.is_empty() {
+                diagnostics
+                    .not_yet_implemented(ctx.arenas.get_span(net_lvalue), "net is not defined.");
+                return Err(());
+            }
+
+            if !net_lvalue.constant_exprs.is_empty()
+                || net_lvalue.constant_range_expression.is_some()
+            {
+                diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(net_lvalue),
+                    "cannot perform a part-select on an implicitly defined net.",
+                );
+                return Err(());
+            }
+
+            _ = st.implicit_nets.insert(
+                net_lvalue.ident.ident.item.0,
+                (net_lvalue.ident.ident, nettype),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn define_implicit_net_expr<'a>(
+    ctx: &mut LowerContext<'a, '_>,
+    scope: SymbolId,
+    st: &mut ElaborationState<'a, '_>,
+    expr: AstId<'a, Expr<'a>>,
+    nettype: DefaultNettype,
+    diagnostics: &mut Diagnostics,
+) -> Result<(), ()> {
+    let Expr::Ident(ident, exprs, range_expr) = *expr else {
+        return Ok(());
+    };
+
+    if resolve_hident(scope, &ctx.table, ident).is_none() {
+        if !ident.components.is_empty() {
+            diagnostics.not_yet_implemented(ctx.arenas.get_span(expr), "net is not defined.");
+            return Err(());
+        }
+
+        if !exprs.is_empty() || range_expr.is_some() {
+            diagnostics.not_yet_implemented(
+                ctx.arenas.get_span(expr),
+                "cannot perform a part-select on an implicitly defined net.",
+            );
+            return Err(());
+        }
+
+        _ = st
+            .implicit_nets
+            .insert(ident.ident.item.0, (ident.ident, nettype));
+    }
+
     Ok(())
 }

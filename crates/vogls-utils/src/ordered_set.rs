@@ -3,10 +3,19 @@ use std::{fmt, hash};
 use crate::VgHashSet;
 
 /// A list of unique values that can be recalled in insertion order.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct OrderedSet<T> {
     pub items: Vec<T>,
     pub set: VgHashSet<T>,
+}
+
+impl<T> Default for OrderedSet<T> {
+    fn default() -> Self {
+        Self {
+            items: Default::default(),
+            set: Default::default(),
+        }
+    }
 }
 
 impl<T: fmt::Debug> fmt::Debug for OrderedSet<T> {
