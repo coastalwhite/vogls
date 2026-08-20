@@ -11,7 +11,7 @@ proc other {
 proc other {
 *TR0:
   %t0 = prb $c
-  %t1 = negate %t0
+  %t1 = not %t0
   %t2 = drv $d, %t1
   halt
 }

@@ -3,7 +3,7 @@
 proc other {
 *TR0:
     %t0 = tv.const 1'h0
-    %t1 = negate %t0
+    %t1 = not %t0
     branch %t1, <L0>, <L1>
 .L0:
     %_1 = vogls.display "Never!\n"
