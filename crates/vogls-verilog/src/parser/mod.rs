@@ -648,3 +648,41 @@ impl<'a> Consumable<'a> for HIdent<'a> {
         }
     }
 }
+
+impl<'a> Consumable<'a> for f64 {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
+        _arenas: &mut AstArenas,
+        _ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        let token = tkw.next_expect(T::Real, diagnostics.as_deref_mut())?;
+        let file = *token.file;
+        let span = *token.span;
+        let content = &tkw.content(file)[span.as_range()];
+        // @NOTE
+        // Real's can contain underscores (`_`) which the default Rust parser
+        // cannot parse. Therefore, we remove them here if they are present.
+        let content = if content.contains('_') {
+            std::borrow::Cow::Owned(content.replace('_', ""))
+        } else {
+            std::borrow::Cow::Borrowed(content)
+        };
+
+        // @Correctness
+        // We use Rust's default floating-point parser here. I am not confident
+        // that this gives the expected results all the time, but it should produce
+        // acceptable results 99% of the time.
+        let Ok(content) = content.parse() else {
+            if let Some(diagnostics) = diagnostics {
+                diagnostics.incomplete(tkw.offset, "wrong real literal");
+            }
+            return Err(());
+        };
+
+        Ok(content)
+    }
+}

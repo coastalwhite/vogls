@@ -785,15 +785,16 @@ impl<'a> Consumable<'a> for DelayValue {
         // | real_number
         // | identifier
 
-        // @Incomplete: | real_number
-        // @Incomplete: | identifier
-
         let peeked = tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?;
         match peeked.kind {
             T::Decimal => {
                 let decimal =
                     DecimalRef::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
                 Ok(Self::UnsignedNumber(decimal))
+            }
+            T::Real => {
+                let real = f64::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+                Ok(Self::RealNumber(real))
             }
             T::Ident => {
                 let ident = Identifier::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;

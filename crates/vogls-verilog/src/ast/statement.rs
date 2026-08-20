@@ -162,6 +162,7 @@ pub struct EventExpression<'a>(pub AstIdRange<'a, EventExpressionPrimary<'a>>);
 #[derive(Clone, Copy)]
 pub enum DelayValue {
     UnsignedNumber(DecimalRef),
+    RealNumber(f64),
     Identifier(Identifier),
 }
 

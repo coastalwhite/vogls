@@ -1022,7 +1022,7 @@ pub fn lower_expr<'a>(
 
                 let num_args = exprs.map_or(0, |e| e.len());
                 let result = system_function_call::lower_system_function_call(
-                    ctx.arenas,
+                    ctx,
                     mctx,
                     builder,
                     expr,
