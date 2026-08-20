@@ -184,7 +184,7 @@ mod vogls {
         pub fn compile(&self) -> PyResult<(Design, Snapshot)> {
             self.inner
                 .clone()
-                .compile()
+                .to_cranelift()
                 .map(|(design, state)| {
                     let design = Design { inner: design };
                     let state = Snapshot {

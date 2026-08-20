@@ -36,11 +36,9 @@ struct Args {
     tv: bool,
     #[arg(short = 'F')]
     fv: bool,
-    #[arg(short = 'B')]
+    #[arg(short = 'B', long)]
     bytecode: bool,
-    #[arg(short = 'C')]
-    compiled: bool,
-    #[arg(long)]
+    #[arg(short = 'C', long)]
     cranelift: bool,
     #[arg(long)]
     opt_rounds: Option<u8>,
@@ -64,7 +62,6 @@ impl io::Write for Io {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Backend {
-    Compile,
     Bytecode,
     Cranelift,
 }
@@ -101,9 +98,6 @@ impl SelectBackend {
             Self::All => input,
             Self::Only(Backend::Bytecode) if input.contains(&Backend::Bytecode) => {
                 &[Backend::Bytecode]
-            }
-            Self::Only(Backend::Compile) if input.contains(&Backend::Compile) => {
-                &[Backend::Compile]
             }
             Self::Only(Backend::Cranelift) if input.contains(&Backend::Cranelift) => {
                 &[Backend::Cranelift]
@@ -283,7 +277,6 @@ impl TestInfo {
                 },
                 _ if line.starts_with("backend=") => match &line["backend=".len()..] {
                     "bytecode" => info.backend = SelectBackend::Only(Backend::Bytecode),
-                    "compile" => info.backend = SelectBackend::Only(Backend::Compile),
                     "cranelift" => info.backend = SelectBackend::Only(Backend::Cranelift),
                     _ => return Err("failed to parse 'backend'".into()),
                 },
@@ -444,14 +437,11 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     if args.bytecode {
         backends.push(Backend::Bytecode);
     }
-    if args.compiled {
-        backends.push(Backend::Compile);
-    }
     if args.cranelift {
         backends.push(Backend::Cranelift);
     }
-    if !(args.bytecode | args.compiled | args.cranelift) {
-        backends.extend([Backend::Bytecode, Backend::Compile]);
+    if !(args.bytecode | args.cranelift) {
+        backends.extend([Backend::Bytecode, Backend::Cranelift]);
     }
 
     let mut num_tests = 0;
@@ -618,7 +608,6 @@ fn report_fails(o: &mut io::Stdout, fails: Vec<Fail>, num_tests: usize) -> io::R
                 LogicMode::FourValue => "fvl",
             };
             let backend = match backend {
-                Backend::Compile => "compile",
                 Backend::Bytecode => "bytecode",
                 Backend::Cranelift => "cranelift",
             };
@@ -914,7 +903,6 @@ fn run_test(
             }?;
 
             let (design, mut state) = match backend {
-                Backend::Compile => design.compile(),
                 Backend::Bytecode => design.to_bytecode(),
                 Backend::Cranelift => design.to_cranelift(),
             }
@@ -1040,7 +1028,6 @@ fn run_test(
         design.optimize(opts);
 
         let (design, mut state) = match backend {
-            Backend::Compile => design.compile(),
             Backend::Bytecode => design.to_bytecode(),
             Backend::Cranelift => design.to_cranelift(),
         }

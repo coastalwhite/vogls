@@ -22,10 +22,6 @@ pub enum DesignBackend {
         design: vogls_bytecode::Design,
     },
     #[cfg(feature = "native")]
-    Compiled {
-        design: vogls_codegen_c::runtime::CDesign,
-    },
-    #[cfg(feature = "native")]
     Cranelift {
         design: vogls_codegen_clif::runtime::ClifDesign,
     },
@@ -47,8 +43,6 @@ pub struct Design {
 pub enum DesignState {
     Bytecode(vogls_bytecode::State),
     #[cfg(feature = "native")]
-    Compiled(vogls_codegen_c::runtime::CDesignState),
-    #[cfg(feature = "native")]
     Cranelift(vogls_codegen_clif::runtime::ClifDesignState),
 }
 
@@ -57,16 +51,12 @@ impl DesignState {
         match self {
             DesignState::Bytecode(s) => &mut s.runtime,
             #[cfg(feature = "native")]
-            DesignState::Compiled(s) => &mut s.runtime,
-            #[cfg(feature = "native")]
             DesignState::Cranelift(s) => &mut s.runtime,
         }
     }
     pub fn runtime(&self) -> &RuntimeState {
         match self {
             DesignState::Bytecode(s) => &s.runtime,
-            #[cfg(feature = "native")]
-            DesignState::Compiled(s) => &s.runtime,
             #[cfg(feature = "native")]
             DesignState::Cranelift(s) => &s.runtime,
         }
@@ -75,16 +65,12 @@ impl DesignState {
         match self {
             DesignState::Bytecode(s) => &mut s.plugins,
             #[cfg(feature = "native")]
-            DesignState::Compiled(s) => &mut s.plugins,
-            #[cfg(feature = "native")]
             DesignState::Cranelift(s) => &mut s.plugins,
         }
     }
     pub fn plugins(&self) -> &[RuntimePluginState] {
         match self {
             DesignState::Bytecode(s) => &s.plugins,
-            #[cfg(feature = "native")]
-            DesignState::Compiled(s) => &s.plugins,
             #[cfg(feature = "native")]
             DesignState::Cranelift(s) => &s.plugins,
         }
@@ -140,10 +126,6 @@ impl Design {
                 }
                 .map_err(|_| "execution failed.".into())
             }
-            #[cfg(feature = "native")]
-            (DesignBackend::Compiled { design }, DesignState::Compiled(state)) => design
-                .run(state, io, time)
-                .map_err(|_| "execution failed.".into()),
             #[cfg(feature = "native")]
             (DesignBackend::Cranelift { design }, DesignState::Cranelift(state)) => design
                 .run(state, io, time)
@@ -201,7 +183,7 @@ impl Design {
                     design.poke_signal(state, signal.key)
                 }
                 #[cfg(feature = "native")]
-                (DesignBackend::Compiled { design }, DesignState::Compiled(state)) => {
+                (DesignBackend::Cranelift { design }, DesignState::Cranelift(state)) => {
                     design.poke_signal(state, signal.key)
                 }
 

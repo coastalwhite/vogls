@@ -1,6 +1,4 @@
 use std::fmt;
-#[cfg(feature = "native")]
-use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -18,11 +16,7 @@ use vogls_ir::time::TimeResolution;
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{GlobalContext, LogicMode, SCALAR_VSIZE, Signal, SignalKey};
 use vogls_runtime::plugins::RuntimePlugin;
-#[cfg(feature = "native")]
-use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState, TimeFormat};
-#[cfg(feature = "native")]
-use vogls_utils::TimerStack;
 use vogls_utils::{TableKey as _, VgHashMap};
 use vogls_verilog::lower::Diagnostics;
 use vogls_verilog::tokenizer::Tokenized;
@@ -174,51 +168,6 @@ impl LoweredDesign {
             lupdt_indexes,
             plugins,
         }
-    }
-
-    #[cfg(feature = "native")]
-    pub fn compile(mut self) -> Result<(Design, DesignState), Box<dyn std::error::Error>> {
-        use crate::design::{DesignBackend, DesignState};
-
-        let CodegenPreparation {
-            heap_builder,
-            signal_to_heap,
-            signal_mode,
-            rt_signal_map,
-            lupdt_indexes,
-            plugins,
-        } = self.prepare_codegen();
-
-        let (initial_state, design) = lower_to_shared_object(
-            &self.gl,
-            &rt_signal_map,
-            heap_builder,
-            &signal_to_heap,
-            lupdt_indexes,
-            &mut TimerStack::new(false),
-            self.itrace,
-            self.stats,
-            self.debug_symbols,
-            self.output_source.as_deref(),
-            plugins,
-            NUM_REGIONS,
-            self.time_resolution,
-        )?;
-        let state = DesignState::Compiled(initial_state);
-
-        Ok((
-            Design {
-                gl: self.gl,
-                ident_table: self.ident_table,
-                elab_table: self.table,
-                backend: DesignBackend::Compiled { design },
-                rt_signal_map,
-                signal_to_heap,
-                signal_mode,
-                time_resolution: self.time_resolution,
-            },
-            state,
-        ))
     }
 
     pub fn to_bytecode(mut self) -> Result<(Design, DesignState), Box<dyn std::error::Error>> {
@@ -521,186 +470,6 @@ pub fn find_lupdt_signals(
             }
         }
     }
-}
-
-#[cfg(feature = "native")]
-pub fn lower_to_shared_object(
-    gl: &GlobalContext,
-    signal_map: &VgHashMap<SignalKey, RtSignalKey>,
-    mut heap_builder: HeapBuilder,
-    heap_refs: &[HeapRef],
-    lupdt_indexes: VgHashMap<RtSignalKey, u64>,
-    timers: &mut TimerStack,
-
-    itrace: bool,
-    stats: bool,
-    debug_symbols: bool,
-    output_source: Option<&Path>,
-    plugins: Vec<RuntimePluginState>,
-    num_additional_regions: u8,
-    time_resolution: TimeResolution,
-) -> Result<
-    (
-        vogls_codegen_c::runtime::CDesignState,
-        vogls_codegen_c::runtime::CDesign,
-    ),
-    Box<dyn std::error::Error>,
-> {
-    use std::process::Command;
-
-    use vogls_codegen_c::runtime::{CDesign, SharedObjectContainer};
-    use vogls_codegen_c::{
-        CLowerOptions, ListenerBuilder, StateBuilder, lower_process_array, lower_signal_drive_fn,
-        lower_signal_drive_header,
-    };
-    use vogls_ir::ProcessKind;
-
-    timers.start("lower to C");
-    let mut listener_builder = ListenerBuilder::default();
-    let mut out = Vec::new();
-    let mut state_builder = StateBuilder::default();
-    let mut index = 0u64;
-    let signal_to_tv_index =
-        VgHashMap::from_iter(gl.signals.iter().filter_map(|(key, s)| match s.mode {
-            LogicMode::TwoValue => {
-                let i = index;
-                index += 1;
-                Some((signal_map[&key], i))
-            }
-            LogicMode::FourValue => None,
-        }));
-
-    for signal in gl.signals.keys() {
-        lower_signal_drive_header(&mut out, signal, signal_map)?;
-    }
-
-    let lower_options = CLowerOptions {
-        itrace,
-        stats,
-        num_plugins: plugins.len(),
-    };
-    let mut byte_count = [0u64; ProcessKind::NUM_KINDS];
-    for (i, process) in gl.processes.keys().enumerate() {
-        let start_length = out.len();
-        vogls_codegen_c::lower_process(
-            &mut out,
-            process,
-            i,
-            gl,
-            &mut heap_builder,
-            &mut listener_builder,
-            &mut state_builder,
-            signal_map,
-            &lupdt_indexes,
-            heap_refs,
-            &signal_to_tv_index,
-            &lower_options,
-        )?;
-        byte_count[gl.processes[process].kind as usize] += (out.len() - start_length) as u64;
-    }
-
-    if false {
-        println!("Process C Bytecount:");
-        for (kind, count) in ProcessKind::KINDS.into_iter().zip(byte_count) {
-            if count == 0 {
-                continue;
-            }
-            println!("  {}: {}", kind.into_static_str(), count);
-        }
-    }
-
-    lower_process_array(&mut out, gl)?;
-
-    for signal in gl.signals.keys() {
-        lower_signal_drive_fn(
-            &mut out,
-            gl,
-            signal,
-            &listener_builder,
-            signal_map,
-            &lupdt_indexes,
-            &mut state_builder,
-            &lower_options,
-        )?;
-    }
-
-    let mut c_file = Vec::new();
-    let mut tempdir = tempfile::TempDir::with_prefix("vogls")?;
-
-    vogls_codegen_c::prologue(&mut c_file)?;
-    c_file.extend(&out);
-    vogls_codegen_c::epilogue(&mut c_file)?;
-    if let Some(output_source) = output_source {
-        std::fs::write(output_source, &c_file)?;
-    }
-    if debug_symbols {
-        tempdir.disable_cleanup(debug_symbols);
-        std::fs::write(tempdir.path().join("design.c"), &c_file)?;
-        println!("Output directory: {}", tempdir.path().display());
-    }
-    timers.stop();
-
-    timers.start("compile C");
-    let code_path = tempdir.path().join("code.so");
-    let mut command = Command::new("clang");
-    command.args(["-x", "c", "-O1", "-fPIC", "-shared"]);
-    if debug_symbols {
-        command.arg("-g3").arg(tempdir.path().join("design.c"));
-    } else {
-        command.arg("-");
-    }
-    command.arg("-o").arg(&code_path);
-    let mut command = command.stdin(std::process::Stdio::piped()).spawn()?;
-    if !debug_symbols {
-        use std::io::Write as _;
-        command.stdin.take().unwrap().write_all(&c_file)?;
-    }
-    if !command.wait()?.success() {
-        return Err("compilation failed!".into());
-    }
-    timers.stop();
-
-    struct SharedObject {
-        code_path: PathBuf,
-
-        // Kept around so it isn't dropped.
-        #[allow(unused)]
-        tempdir: tempfile::TempDir,
-    }
-    impl SharedObjectContainer for SharedObject {
-        fn as_path(&self) -> &Path {
-            self.code_path.as_path()
-        }
-    }
-
-    let mut heap = heap_builder.finish();
-    let mut lupdt_updated = vec![false; lupdt_indexes.len()];
-    let mut updated = vec![false; gl.signals.len()];
-
-    for (key, signal) in &gl.signals {
-        if let Some(initialize) = &signal.initialize {
-            let rt_key = signal_map[&key];
-            assert_eq!(initialize.size(), signal.size);
-            heap.store_bits(heap_refs[rt_key.as_usize()], signal.mode, initialize);
-            if let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
-                lupdt_updated[*lupdt_idx as usize] = true;
-            }
-            updated[rt_key.as_usize()] = true;
-        }
-    }
-
-    let design = CDesign::new(
-        Box::new(SharedObject { code_path, tempdir }),
-        state_builder,
-        num_additional_regions,
-    );
-    let time_format = TimeFormat::new(time_resolution);
-    let runtime = RuntimeState::new(gl, heap, &updated, &lupdt_updated, time_format);
-    let mut initial_state =
-        design.new_state(listener_builder.top, num_additional_regions, runtime, gl);
-    initial_state.plugins = plugins;
-
-    Ok((initial_state, design))
 }
 
 #[cfg(feature = "unstable")]
