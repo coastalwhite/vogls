@@ -6,7 +6,7 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
     ConnectionDirection, GlobalContext, INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, SignalFlags,
-    SignalKey,
+    SignalKey, TIME_VSIZE,
 };
 use vogls_utils::{IndexMap, VgHashMap, VgHashSet};
 
@@ -21,8 +21,9 @@ use crate::ast::module::{
     ModulePorts, NamedParameterAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets,
     NetIdent, NetType, NonPortModuleItem, ParamAssignment, ParameterDeclaration,
     ParameterDeclarationTyping, ParameterValueAssignment, Port, PortDeclaration, PortExpression,
-    PortReference, Range, RealDeclaration, RegDeclaration, TaskDeclaration, TaskPortItem,
-    TaskPortItemContent, TfType, TimeScale, VariableType, VariableTypeVariant,
+    PortReference, Range, RealDeclaration, RealtimeDeclaration, RegDeclaration, TaskDeclaration,
+    TaskPortItem, TaskPortItemContent, TfType, TimeDeclaration, TimeScale, VariableType,
+    VariableTypeVariant,
 };
 use crate::ast::statement::{
     Block, BlockingAssignment, CaseStatement, ConditionalStatement, LoopStatement,
@@ -64,6 +65,7 @@ pub enum InLevelSymbol<'a> {
         AstId<'a, Module<'a>>,
     ),
     Integer(AstId<'a, VariableType<'a>>),
+    Time(AstId<'a, VariableType<'a>>),
     Real(AstId<'a, VariableType<'a>>),
     Reg(RegInLevelSymbol<'a>),
     Net(NetInLevelSymbol<'a>),
@@ -1021,8 +1023,30 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                     diagnostics,
                 )
             }
+            ModuleOrGenerateItemDeclaration::Time(id) => {
+                let TimeDeclaration { variable_types } = &**id;
+                extend_variable_type_sids(
+                    *variable_types,
+                    InLevelSymbol::Time,
+                    scope,
+                    ctx,
+                    st,
+                    diagnostics,
+                )
+            }
             ModuleOrGenerateItemDeclaration::Real(id) => {
                 let RealDeclaration { variable_types } = &**id;
+                extend_variable_type_sids(
+                    *variable_types,
+                    InLevelSymbol::Real,
+                    scope,
+                    ctx,
+                    st,
+                    diagnostics,
+                )
+            }
+            ModuleOrGenerateItemDeclaration::Realtime(id) => {
+                let RealtimeDeclaration { variable_types } = &**id;
                 extend_variable_type_sids(
                     *variable_types,
                     InLevelSymbol::Real,
@@ -1541,6 +1565,7 @@ impl<'a> InLevelSymbol<'a> {
                 extend_var_type_needs(scope, table, st, *variable_type)
             }
             InLevelSymbol::Integer(var_type) => extend_var_type_needs(scope, table, st, *var_type),
+            InLevelSymbol::Time(var_type) => extend_var_type_needs(scope, table, st, *var_type),
             InLevelSymbol::Real(var_type) => extend_var_type_needs(scope, table, st, *var_type),
             InLevelSymbol::Port(PortInLevelSymbol { decl, ident: _ }) => {
                 let range = match &**decl {
@@ -2043,7 +2068,55 @@ pub fn finalize_symbol<'a>(
                 initialize,
             );
             net.dims = dims;
-            net.ty = VType::SignedNet(INTEGER_VSIZE);
+            net.ty = ty;
+        }
+        InLevelSymbol::Time(id) => {
+            let VariableType {
+                identifier,
+                variant,
+            } = &**id;
+            let parent = ctx.table[sid].parent().unwrap();
+            let ty = VType::UnsignedNet(TIME_VSIZE);
+            let (dims, initialize) = match variant {
+                VariableTypeVariant::Dimensions(dimensions) => (
+                    super::dims_to_array_elab(
+                        gl,
+                        ctx.arenas,
+                        parent,
+                        &ctx.table,
+                        diagnostics,
+                        *dimensions,
+                    )?,
+                    None,
+                ),
+                VariableTypeVariant::ConstantExpr(expr) => (
+                    Vec::new(),
+                    Some(
+                        eval_constant_expr(
+                            gl,
+                            ctx.arenas,
+                            &ctx.table,
+                            scope,
+                            diagnostics,
+                            *expr,
+                            Some(ty.bit_length()),
+                        )?
+                        .coerce(&ty),
+                    ),
+                ),
+            };
+            let net = unwrap_get_net_mut(&mut ctx.table, sid);
+            net.net = super::new_net(
+                gl,
+                ctx.logic_mode,
+                ctx.arenas,
+                &ty,
+                &dims,
+                *identifier,
+                initialize,
+            );
+            net.dims = dims;
+            net.ty = ty;
         }
         InLevelSymbol::Real(id) => {
             let VariableType {

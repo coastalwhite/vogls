@@ -498,8 +498,8 @@ pub enum ModuleOrGenerateItemDeclaration<'a> {
     Reg(AstId<'a, RegDeclaration<'a>>),
     Integer(AstId<'a, IntegerDeclaration<'a>>),
     Real(AstId<'a, RealDeclaration<'a>>),
-    // Time(AstId<TimeDeclaration>),
-    // Realtime(AstId<RealtimeDeclaration>),
+    Time(AstId<'a, TimeDeclaration<'a>>),
+    Realtime(AstId<'a, RealtimeDeclaration<'a>>),
     // Event(AstId<EventDeclaration>),
     Genvar(AstId<'a, GenvarDeclaration<'a>>),
     Task(AstId<'a, TaskDeclaration<'a>>),
@@ -582,6 +582,20 @@ pub struct IntegerDeclaration<'a> {
 // real_declaration ::= real list_of_real_identifiers ;
 #[derive(Clone, Copy)]
 pub struct RealDeclaration<'a> {
+    pub variable_types: AstIdRange<'a, VariableType<'a>>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
+// time_declaration ::= time list_of_variable_identifiers ;
+#[derive(Clone, Copy)]
+pub struct TimeDeclaration<'a> {
+    pub variable_types: AstIdRange<'a, VariableType<'a>>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490
+// realtime_declaration ::= realtime list_of_real_identifiers ;
+#[derive(Clone, Copy)]
+pub struct RealtimeDeclaration<'a> {
     pub variable_types: AstIdRange<'a, VariableType<'a>>,
 }
 

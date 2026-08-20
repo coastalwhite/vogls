@@ -1033,10 +1033,12 @@ impl UnaryOp {
             O::FvToTv => src.special_to_zero(),
             O::LeadingZeros => Bits::from_u64(INTEGER_VSIZE, src.leading_zeroes().into()),
             O::RealToLogical => Bits::from(f64::from_bits(src.extract_exact_u64().unwrap()) != 0.0),
-            O::RealToU64 => Bits::new_u64(f64::from_bits(src.extract_exact_u64().unwrap()) as u64),
-            O::RealToI64 => {
-                Bits::new_u64(f64::from_bits(src.extract_exact_u64().unwrap()) as i64 as u64)
+            O::RealToU64 => {
+                Bits::new_u64(f64::from_bits(src.extract_exact_u64().unwrap()).round() as u64)
             }
+            O::RealToI64 => Bits::new_u64(
+                f64::from_bits(src.extract_exact_u64().unwrap()).round() as i64 as u64
+            ),
             O::RealFromSignedDecimal => Bits::new_u64(src.as_signed_f64().to_bits()),
             O::RealFromUnsignedDecimal => Bits::new_u64(src.as_unsigned_f64().to_bits()),
             O::RealNeg => {
@@ -1842,9 +1844,9 @@ impl BinaryImmOp {
                 }
             }
             O::CaseEquality => S::Keep,
-            O::BitwiseCaseEquality if src.mode().is_two_value() => S::Instruction(
-                Instruction::BinaryImm(dst, O::Xor, src, imm.bitwise_not()),
-            ),
+            O::BitwiseCaseEquality if src.mode().is_two_value() => {
+                S::Instruction(Instruction::BinaryImm(dst, O::Xor, src, imm.bitwise_not()))
+            }
             O::BitwiseCaseEquality => S::Keep,
         }
     }

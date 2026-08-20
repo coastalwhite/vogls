@@ -43,7 +43,19 @@ pub fn lower<'a>(
                         let delay = match &**ast_delay_value {
                             DelayValue::UnsignedNumber(value) => {
                                 let value = &ctx.arenas.decimals[value.at];
-                                value.as_u64().unwrap()
+                                let delay = value.as_u64().unwrap_or(0);
+                                let delay = ctx
+                                    .time_scale
+                                    .unit
+                                    .truncate_or_multiply_to(delay, ctx.time_resolution);
+                                delay
+                            }
+                            DelayValue::RealNumber(value) => {
+                                ctx.time_scale.unit.real_to_ticks(
+                                    *value,
+                                    ctx.time_scale.precision,
+                                    ctx.time_resolution,
+                                ).unwrap_or(u64::MAX)
                             }
                             DelayValue::Identifier(ident) => {
                                 let ident = AstItem {
@@ -57,13 +69,14 @@ pub fn lower<'a>(
                                     ident,
                                     &mut mctx.diagnostics,
                                 )?;
-                                value.as_integer().unwrap() as u64
+                                let delay = value.as_integer().unwrap() as u64;
+                                let delay = ctx
+                                    .time_scale
+                                    .unit
+                                    .truncate_or_multiply_to(delay, ctx.time_resolution);
+                                delay
                             }
                         };
-                        let delay = ctx
-                            .time_scale
-                            .unit
-                            .truncate_or_multiply_to(delay, ctx.time_resolution);
                         builder = builder.wait(mctx.gl(), Time(delay));
                     }
                 }

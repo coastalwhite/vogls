@@ -18,8 +18,8 @@ use crate::parser::AstArenas;
 
 use super::get_expr_type;
 
-pub fn lower_system_function_call(
-    arenas: &AstArenas,
+pub fn lower_system_function_call<'a, 'b>(
+    ctx: &LowerContext<'a, 'b>,
     mctx: &mut MutLowerContext,
     builder: &mut BasicBlockBuilder,
     expr: AstId<Expr>,
@@ -31,8 +31,10 @@ pub fn lower_system_function_call(
         ($expected:expr) => {
             let num_args = arguments.len();
             if num_args != $expected {
-                mctx.diagnostics
-                    .not_yet_implemented(arenas.get_span(expr), "intrinsic not expected amount");
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(expr),
+                    "intrinsic not expected amount",
+                );
                 return Err(());
             }
         };
@@ -62,7 +64,7 @@ pub fn lower_system_function_call(
     }
 
     // @Performance: Use a perfect hashmap here.
-    match &arenas.ident_table[ident.item.0] {
+    match &ctx.arenas.ident_table[ident.item.0] {
         "signed" => {
             ensure_num_args_equal!(1);
             let (e, e_ty) = arguments[0].ok_or(())?;
@@ -77,7 +79,32 @@ pub fn lower_system_function_call(
         }
         "time" => {
             ensure_num_args_equal!(0);
-            Ok((builder.time(mctx.gl()), VType::UnsignedNet(TIME_VSIZE)))
+            let ticks = builder.time(mctx.gl());
+            let ticks_per_unit = ctx
+                .time_scale
+                .unit
+                .truncate_or_multiply_to(1, ctx.time_resolution);
+            let ticks = if ticks_per_unit > 1 {
+                // Round half away from zero
+                let biased =
+                    builder.plus_constant(mctx.gl(), ticks, Bits::new_u64(ticks_per_unit / 2));
+                builder.divide_constant(mctx.gl(), biased, Bits::new_u64(ticks_per_unit))
+            } else {
+                ticks
+            };
+            Ok((ticks, VType::UnsignedNet(TIME_VSIZE)))
+        }
+        "realtime" => {
+            ensure_num_args_equal!(0);
+            let ticks = builder.time(mctx.gl());
+            let ticks = builder.real_from_unsigned_decimal(mctx.gl(), ticks);
+            let ticks_per_unit = ctx
+                .time_scale
+                .unit
+                .truncate_or_multiply_f64_to(1.0, ctx.time_resolution);
+            let ticks_per_unit = builder.constant_u64(mctx.gl(), ticks_per_unit.to_bits());
+            let ticks = builder.real_div(mctx.gl(), ticks, ticks_per_unit);
+            Ok((ticks, VType::Real))
         }
         "clog2" => {
             ensure_num_args_equal!(1);
@@ -135,7 +162,7 @@ pub fn lower_system_function_call(
             let (e, e_ty) = arguments[0].ok_or(())?;
             if e_ty.is_real() {
                 mctx.diagnostics
-                    .not_yet_implemented(arenas.get_span(expr), "cannot call on real");
+                    .not_yet_implemented(ctx.arenas.get_span(expr), "cannot call on real");
                 return Err(());
             }
             let e = truncate_or_extend(mctx.gl(), builder, e, e_ty, VSIZE_64);
@@ -168,6 +195,10 @@ pub fn lower_system_function_call(
         }
 
         // VoGLS specific system function calls
+        "vogls_rawticks" => {
+            ensure_num_args_equal!(0);
+            Ok((builder.time(mctx.gl()), VType::UnsignedNet(TIME_VSIZE)))
+        }
         "vogls_dbg" => {
             ensure_num_args_equal!(1);
             let (e, e_ty) = arguments[0].ok_or(())?;
@@ -258,7 +289,7 @@ pub fn lower_system_function_call(
 
             if cond_ty.bit_length() != SCALAR_VSIZE {
                 mctx.diagnostics.not_yet_implemented(
-                    arenas.get_span(expr),
+                    ctx.arenas.get_span(expr),
                     "select condition has to be scalar",
                 );
                 return Err(());
@@ -274,7 +305,7 @@ pub fn lower_system_function_call(
 
         _ => {
             mctx.diagnostics
-                .not_yet_implemented(arenas.get_span(expr), "unknown system function call");
+                .not_yet_implemented(ctx.arenas.get_span(expr), "unknown system function call");
             Err(())
         }
     }
@@ -314,6 +345,10 @@ pub fn get_system_function_call_output_ty(
             ensure_num_args_equal!(0);
             Ok(VType::UnsignedNet(TIME_VSIZE))
         }
+        "realtime" => {
+            ensure_num_args_equal!(0);
+            Ok(VType::Real)
+        }
         "clog2" => {
             ensure_num_args_equal!(1);
             Ok(VType::UnsignedNet(VSIZE_32))
@@ -347,6 +382,10 @@ pub fn get_system_function_call_output_ty(
         }
 
         // VoGLS specific system function calls
+        "vogls_rawticks" => {
+            ensure_num_args_equal!(0);
+            Ok(VType::UnsignedNet(TIME_VSIZE))
+        }
         "vogls_dbg" => {
             ensure_num_args_equal!(1);
             let e_ty = arguments[0].ok_or(())?;
@@ -724,6 +763,12 @@ pub fn eval_constant(
             diagnostics.not_yet_implemented(arenas.get_span(expr), "time is not yet implemented");
             Err(())
         }
+        "realtime" => {
+            ensure_num_args_equal!(0);
+            diagnostics
+                .not_yet_implemented(arenas.get_span(expr), "realtime is not yet implemented");
+            Err(())
+        }
         "random" => {
             ensure_num_args_equal!(0);
             diagnostics.not_yet_implemented(
@@ -796,6 +841,11 @@ pub fn eval_constant(
             ensure_num_args_equal!(1);
             diagnostics
                 .not_yet_implemented(arenas.get_span(expr), "vogls_dbg is not yet implemented");
+            Err(())
+        }
+        "vogls_rawticks" => {
+            ensure_num_args_equal!(0);
+            diagnostics.not_yet_implemented(arenas.get_span(expr), "vogls_rawticks is not yet implemented");
             Err(())
         }
 
