@@ -443,11 +443,14 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
     let mut backends = Vec::new();
     if args.bytecode {
         backends.push(Backend::Bytecode);
-    } else if args.compiled {
+    }
+    if args.compiled {
         backends.push(Backend::Compile);
-    } else if args.cranelift {
+    }
+    if args.cranelift {
         backends.push(Backend::Cranelift);
-    } else {
+    }
+    if !(args.bytecode | args.compiled | args.cranelift) {
         backends.extend([Backend::Bytecode, Backend::Compile]);
     }
 
@@ -1065,8 +1068,8 @@ fn run_test(
 
         if !fixture_vcd_path.exists() {
             match logic_mode {
-                LogicMode::TwoValue => _ = fixture_vcd_path.add_extension(".tv"),
-                LogicMode::FourValue => _ = fixture_vcd_path.add_extension(".fv"),
+                LogicMode::TwoValue => _ = fixture_vcd_path.add_extension("tv"),
+                LogicMode::FourValue => _ = fixture_vcd_path.add_extension("fv"),
             }
         }
 
