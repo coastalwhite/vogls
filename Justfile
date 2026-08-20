@@ -5,8 +5,10 @@ check:
     cargo check --workspace
 
 test-bytecode *FLAGS:
-    cargo build --bin vogls-test --profile=fast-dev
-    ./target/fast-dev/vogls-test -B {{FLAGS}}
+    {{just_executable()}} --justfile {{justfile()}} test -B
+
+test-cranelift *FLAGS:
+    {{just_executable()}} --justfile {{justfile()}} test --cranelift
 
 test *FLAGS:
     cargo build --bin vogls-test --profile=fast-dev
