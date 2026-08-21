@@ -4,7 +4,8 @@ use std::io;
 use vogls_bits::format::{BitsFormatBase, BitsFormatOptions, BitsFormatWidth};
 use vogls_utils::NonMaxU32;
 
-use crate::Bits;
+use crate::time::{TimeFormat, TimeResolution};
+use crate::{Bits, VSIZE_64};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DynFormatString {
@@ -31,10 +32,17 @@ pub enum Base {
     Exponential,
     Float,
     FloatAdaptive,
+    /// `%t` applied to an integer time value (e.g. `$time`).
+    Time,
+    /// `%t` applied to a real time value (e.g. `$realtime`).
+    TimeReal,
 }
 impl Base {
     pub fn is_fp_representation(self) -> bool {
         matches!(self, Self::Exponential | Self::Float | Self::FloatAdaptive)
+    }
+    pub fn is_time(self) -> bool {
+        matches!(self, Self::Time | Self::TimeReal)
     }
 }
 
@@ -46,6 +54,11 @@ pub struct DynFormatArgument {
     pub precision: Option<NonMaxU32>,
     pub signed: bool,
     pub prefix: bool,
+    /// Time unit the argument value is expressed in. Only meaningful for the
+    /// `Time`/`TimeReal` bases: `%t` arguments (`$time`/`$realtime`) are scaled
+    /// to the module's `timescale` unit at lowering, so `%t` formatting must
+    /// interpret them relative to that unit rather than the global resolution.
+    pub time_unit: TimeResolution,
 }
 
 impl Default for DynFormatArgument {
@@ -56,6 +69,9 @@ impl Default for DynFormatArgument {
             precision: None,
             signed: false,
             prefix: true,
+            // Only meaningful for the `Time`/`TimeReal` bases; the value is a
+            // placeholder for every other base.
+            time_unit: TimeResolution::S1,
         }
     }
 }
@@ -78,6 +94,8 @@ impl DynFormatString {
         &self,
         f: &mut impl io::Write,
         arguments: impl ExactSizeIterator<Item = Bits>,
+        time_format: &TimeFormat,
+        time_resolution: TimeResolution,
     ) -> io::Result<()> {
         assert_eq!(self.arguments.len(), arguments.len());
         let mut at = 0;
@@ -92,6 +110,9 @@ impl DynFormatString {
                 arg_fmt.precision,
                 arg_fmt.signed,
                 arg_fmt.prefix,
+                arg_fmt.time_unit,
+                time_format,
+                time_resolution,
             )?;
         }
 
@@ -215,6 +236,7 @@ impl fmt::Display for FormatReal {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn format_bits(
     f: &mut impl io::Write,
     bits: &Bits,
@@ -223,6 +245,9 @@ pub fn format_bits(
     precision: Option<NonMaxU32>,
     signed: bool,
     prefix: bool,
+    time_unit: TimeResolution,
+    time_format: &TimeFormat,
+    time_resolution: TimeResolution,
 ) -> io::Result<()> {
     let base = match base {
         Base::Adaptive => {
@@ -306,6 +331,109 @@ pub fn format_bits(
                     }
                 }
             }
+            return Ok(());
+        }
+        Base::Time | Base::TimeReal => {
+            const POW10_U128: [u128; 39] = {
+                let mut v = [0u128; _];
+                let mut i = 0u32;
+                while i < 39 {
+                    v[i as usize] = 10u128.pow(i);
+                    i += 1;
+                }
+                v
+            };
+
+            // %t provides the value in ticks of the module's time unit
+            let unit_to_reso =
+                (time_unit.pow10_over_fs() as i32 - time_resolution.pow10_over_fs() as i32).max(0);
+            let ticks_per_unit = POW10_U128[unit_to_reso as usize];
+
+            let ticks: u128 = match base {
+                Base::TimeReal => {
+                    let v = bits
+                        .extract_exact_f64()
+                        .expect("Should get a genuine f64 for this base");
+
+                    let scaled = (v * ticks_per_unit as f64).round();
+                    if !scaled.is_finite() || scaled <= 0.0 {
+                        0
+                    } else if scaled >= u128::MAX as f64 {
+                        u128::MAX
+                    } else {
+                        scaled as u128
+                    }
+                }
+                Base::Time => {
+                    // @Incorrect. This truncates values that are too big. I am not
+                    // sure what to do with those.
+                    let value = bits.clone().truncate_or_zero_extend(VSIZE_64);
+                    let Some(units) = value.extract_exact_u64() else {
+                        if value.contains_unknown() {
+                            write!(f, "x")?;
+                        } else {
+                            write!(f, "z")?;
+                        }
+                        return Ok(());
+                    };
+                    units as u128 * ticks_per_unit
+                }
+                _ => unreachable!(),
+            };
+
+            let d = time_format.time_unit.pow10_over_fs() as i32
+                - time_resolution.pow10_over_fs() as i32;
+            let req_p = time_format.precision_number as i32;
+            let eff_p = req_p.min(d.max(0)); // digits we actually compute
+            let zeros = (req_p - eff_p) as usize; // digits that are always '0'
+            let e = eff_p - d; // e <= 15, so u128 is always enough
+
+            let scaled: u128 = if e >= 0 {
+                ticks * POW10_U128[e as usize]
+            } else {
+                let div = POW10_U128[(-e) as usize];
+                (ticks + div / 2) / div // round half up; time is non-negative
+            };
+
+            let unit = POW10_U128[eff_p as usize];
+            let (int_part, frac_part) = (scaled / unit, scaled % unit);
+
+            let mut int_part_num_digits = 1;
+            let mut v = int_part;
+            while v >= 10 {
+                v /= 10;
+                int_part_num_digits += 1;
+            }
+            let len = int_part_num_digits
+                + if req_p > 0 { 1 + req_p as usize } else { 0 }
+                + time_format.suffix_string.len();
+
+            let width_override = match padding {
+                Padding::ZeroPaddedToSize => None,
+                Padding::ZeroPaddedTo(n) => Some(n),
+                Padding::NoPadding => Some(0),
+            };
+            let width = width_override.unwrap_or(time_format.minimum_field_width) as usize;
+
+            for _ in len..width {
+                f.write_all(b" ")?;
+            }
+
+            write!(f, "{int_part}")?;
+            if req_p > 0 {
+                f.write_all(b".")?;
+                // Emit exactly `req_p` fractional digits: `eff_p` computed ones
+                // followed by `zeros` always-zero ones. Guard `eff_p == 0`, since
+                // formatting an integer still prints a leading "0" at width 0.
+                if eff_p > 0 {
+                    write!(f, "{frac_part:0>eff$}", eff = eff_p as usize)?;
+                }
+                for _ in 0..zeros {
+                    f.write_all(b"0")?;
+                }
+            }
+            write!(f, "{}", &time_format.suffix_string)?;
+
             return Ok(());
         }
     };

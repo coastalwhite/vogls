@@ -2,6 +2,7 @@ use core::fmt;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Write};
 
+use crate::time::TimeFormat;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
     Instruction, IntrinsicOp, LogicMode, Process, RandomKind, ResizeOp, ShiftImmOp, Signal, Time,
@@ -363,6 +364,7 @@ impl IntrinsicOp {
             Self::VcdResume => "vcd.resume",
             Self::BlackBox => "vogls.black_box",
             Self::ReadMem(_) => "readmem",
+            Self::SetTimeFormat(_) => "settimeformat",
         }
     }
 }
@@ -529,6 +531,18 @@ impl ContextFormat for Instruction {
                     IntrinsicOp::VcdPause => {}
                     IntrinsicOp::VcdResume => {}
                     IntrinsicOp::BlackBox => {}
+                    IntrinsicOp::SetTimeFormat(fmt) => {
+                        let TimeFormat {
+                            time_unit,
+                            precision_number,
+                            suffix_string,
+                            minimum_field_width,
+                        } = fmt;
+                        write!(
+                            f,
+                            "{time_unit:?}, {precision_number}, {suffix_string}, {minimum_field_width}"
+                        )?;
+                    }
                     IntrinsicOp::ReadMem(_) => {}
                 }
                 if let Some(arg) = args.first() {

@@ -1,10 +1,11 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::dyn_format_string::{Base, DynFormatArgument, DynFormatString, Padding};
-use vogls_ir::{BasicBlockBuilder, IntrinsicOp, ReadMem, VariableKey};
+use vogls_ir::time::{TimeFormat, TimeResolution, TimeSize, TimeUnit};
+use vogls_ir::{BasicBlockBuilder, Bits, IntrinsicOp, ReadMem, VariableKey};
 use vogls_utils::NonMaxU32;
 
 use crate::ast::AstId;
-use crate::ast::expr::Expr;
+use crate::ast::expr::{Expr, UnaryOperator};
 use crate::ast::statement::SystemTaskEnable;
 use crate::elaborate::{VSymbol, determine_module_context};
 use crate::lower::expression::{get_expr_type, lower_expr, to_real};
@@ -113,6 +114,7 @@ pub fn lower_system_task_enable<'a>(
                             precision: None,
                             signed: false,
                             prefix: false,
+                            time_unit: ctx.time_scale.unit,
                         },
                     ),
                     (27, DynFormatArgument::default()),
@@ -186,6 +188,113 @@ pub fn lower_system_task_enable<'a>(
                 module.time_scale.precision.unit.as_str(),
             ));
             builder.intrinsic(mctx.gl(), IntrinsicOp::Display(Box::new(fmt)), [].into());
+        }
+        "timeformat" => {
+            if expressions.len() != 4 {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(system_task_enable),
+                    "timeformat requires 4 arguments",
+                );
+                return Err(());
+            }
+
+            let units_number = expressions.get(0);
+            let precision_number = expressions.get(1);
+            let suffix_string = expressions.get(2);
+            let minimum_field_width = expressions.get(3);
+
+            fn decimal_to_time_resolution(v: i64) -> Option<TimeResolution> {
+                use TimeSize as S;
+                use TimeUnit as U;
+                let (unit, size) = match v {
+                    0 => (U::Seconds, S::N1),
+                    -1 => (U::Milliseconds, S::N100),
+                    -2 => (U::Milliseconds, S::N10),
+                    -3 => (U::Milliseconds, S::N1),
+                    -4 => (U::Microseconds, S::N100),
+                    -5 => (U::Microseconds, S::N10),
+                    -6 => (U::Microseconds, S::N1),
+                    -7 => (U::Nanoseconds, S::N100),
+                    -8 => (U::Nanoseconds, S::N10),
+                    -9 => (U::Nanoseconds, S::N1),
+                    -10 => (U::Picoseconds, S::N100),
+                    -11 => (U::Picoseconds, S::N10),
+                    -12 => (U::Picoseconds, S::N1),
+                    -13 => (U::Femtoseconds, S::N100),
+                    -14 => (U::Femtoseconds, S::N10),
+                    -15 => (U::Femtoseconds, S::N1),
+                    _ => return None,
+                };
+                Some(TimeResolution { unit, size })
+            }
+
+            let mut neg = false;
+            let mut expr = units_number;
+            while let Expr::Unary(op @ (UnaryOperator::SignMinus | UnaryOperator::SignPlus), e) =
+                &*expr
+            {
+                neg ^= matches!(op, UnaryOperator::SignMinus);
+                expr = *e;
+            }
+            let Some(units_number) = expr
+                .into_decimal_literal()
+                .map(|d| &ctx.arenas.decimals[d.at])
+                .and_then(|value| {
+                    let mut value = value.as_i64()?;
+                    if neg {
+                        value = -value;
+                    }
+                    Some(value)
+                })
+                .and_then(decimal_to_time_resolution)
+            else {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(system_task_enable),
+                    "timeformat first argument `units_number` is a decimal between -15 and 0",
+                );
+                return Err(());
+            };
+            let Some(precision_number) = precision_number
+                .into_decimal_literal()
+                .map(|d| &ctx.arenas.decimals[d.at])
+                .and_then(Bits::as_unsigned_i64)
+                .and_then(|v| u8::try_from(v).ok())
+            else {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(system_task_enable),
+                    "timeformat second argument `precision_number` is a decimal between 0 and 255",
+                );
+                return Err(());
+            };
+            let Some(suffix_string) = suffix_string.into_str_literal() else {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(system_task_enable),
+                    "timeformat third argument `suffix_string` is a string",
+                );
+                return Err(());
+            };
+            let suffix_string = ctx.arenas.get_ident(suffix_string.0).to_string();
+            let Some(minimum_field_width) = minimum_field_width
+                .into_decimal_literal()
+                .map(|d| &ctx.arenas.decimals[d.at])
+                .and_then(Bits::as_unsigned_i64)
+                .and_then(|v| u32::try_from(v).ok())
+            else {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(system_task_enable),
+                    "timeformat fourth argument `minimum_field_width` is an unsigned decimal",
+                );
+                return Err(());
+            };
+
+            let format = TimeFormat {
+                time_unit: units_number,
+                precision_number,
+                suffix_string,
+                minimum_field_width,
+            };
+
+            builder.intrinsic(mctx.gl(), IntrinsicOp::SetTimeFormat(format), [].into());
         }
 
         "dumpfile" => {
@@ -427,13 +536,7 @@ pub fn lower_write_arguments<'a>(
                     b'b' | b'B' => Base::Binary,
                     b'c' | b'C' => Base::Ascii,
                     b's' | b'S' => Base::Ascii,
-                    b't' | b'T' => {
-                        mctx.diagnostics.warn_not_yet_implemented(
-                            ctx.arenas.get_span(expr),
-                            "format specifier redirect to Decimal",
-                        );
-                        Base::Decimal
-                    }
+                    b't' | b'T' => Base::Time,
                     b'l' | b'L' | b'v' | b'V' | b'u' | b'U' | b'z' | b'Z' => {
                         mctx.diagnostics.not_yet_implemented(
                             ctx.arenas.get_span(expr),
@@ -477,6 +580,8 @@ pub fn lower_write_arguments<'a>(
                         precision,
                         signed: false,
                         prefix: false,
+                        // `%t` is scaled relative to the module's time unit.
+                        time_unit: ctx.time_scale.unit,
                     },
                 ));
             }
@@ -496,6 +601,7 @@ pub fn lower_write_arguments<'a>(
                         signed: var_ty.is_signed(),
                         precision: None,
                         prefix: false,
+                        time_unit: ctx.time_scale.unit,
                     },
                 ));
             } else {
@@ -509,6 +615,11 @@ pub fn lower_write_arguments<'a>(
                     return Err(());
                 };
                 dyn_fmt.signed = var_ty.is_signed();
+                // `%t` on a real value (e.g. `$realtime`) needs the real-aware
+                // time formatter; the integer path would read the raw f64 bits.
+                if dyn_fmt.base == Base::Time && var_ty.is_real() {
+                    dyn_fmt.base = Base::TimeReal;
+                }
                 if dyn_fmt.base.is_fp_representation() {
                     var = to_real(mctx.gl(), builder, var, var_ty);
                 }

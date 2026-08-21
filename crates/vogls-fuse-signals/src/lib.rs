@@ -264,7 +264,8 @@ impl FuseGraph {
                         | IntrinsicOp::VcdAppendModule(..)
                         | IntrinsicOp::VcdPause
                         | IntrinsicOp::BlackBox
-                        | IntrinsicOp::VcdResume => {}
+                        | IntrinsicOp::VcdResume
+                        | IntrinsicOp::SetTimeFormat(_) => {}
                         IntrinsicOp::ReadMem(read_mem) => {
                             _ = g
                                 .signal_to_node

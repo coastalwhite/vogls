@@ -166,3 +166,23 @@ impl TimeResolution {
         (value_in_prec as u64).checked_mul(prec_to_reso_f)
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TimeFormat {
+    pub time_unit: TimeResolution,
+    pub precision_number: u8,
+    pub suffix_string: String,
+    pub minimum_field_width: u32,
+}
+
+impl TimeFormat {
+    pub fn new(time_unit: TimeResolution) -> Self {
+        Self {
+            time_unit,
+            precision_number: 0,
+            suffix_string: String::new(),
+            minimum_field_width: 20,
+        }
+    }
+}
+

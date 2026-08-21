@@ -3,6 +3,7 @@ use std::fmt;
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_codegen::HeapOffset;
 use vogls_ir::dyn_format_string::DynFormatString;
+use vogls_ir::time::TimeFormat;
 use vogls_ir::vcd::VcdVariableKey;
 use vogls_ir::{
     Bits, LogicMode, Mode, RandomKind, SCALAR_VSIZE, SignalSlice, VSIZE_32, VSIZE_64, VectorSize,
@@ -53,6 +54,7 @@ pub enum IntrinsicOp {
     VcdPause,
     VcdResume,
     ReadMem(Box<ReadMem>),
+    SetTimeFormat(TimeFormat),
 }
 
 impl BytecodeInstruction for PushArgument {
@@ -314,6 +316,8 @@ impl BytecodeInstruction for Intrinsic {
                             state.heap.load_fv_bits(value)
                         }
                     }),
+                    &state.time_format,
+                    cldctx.time_resolution,
                 )
                 .unwrap();
             }
@@ -370,6 +374,8 @@ impl BytecodeInstruction for Intrinsic {
                                     state.heap.load_fv_bits(value)
                                 }
                             }),
+                        &state.time_format,
+                        cldctx.time_resolution,
                     )
                     .unwrap();
                     cldctx.return_value = 1;
@@ -451,6 +457,7 @@ impl BytecodeInstruction for Intrinsic {
                 )
                 .unwrap()
             }
+            O::SetTimeFormat(fmt) => state.time_format = fmt.clone(),
         }
         cldctx.stack_args.clear();
         cldctx.stack.clear();

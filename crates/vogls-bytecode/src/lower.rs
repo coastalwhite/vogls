@@ -2650,6 +2650,7 @@ fn convert_intrinsic(
         }
         O::VcdPause => VO::VcdPause,
         O::VcdResume => VO::VcdResume,
+        O::SetTimeFormat(fmt) => VO::SetTimeFormat(fmt.clone()),
         O::BlackBox => unreachable!(),
         O::ReadMem(readmem) => VO::ReadMem(Box::new(super::ReadMem {
             offset: signal_address(readmem.signal, signals, io_signals),

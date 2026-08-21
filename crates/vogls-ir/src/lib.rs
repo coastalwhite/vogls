@@ -24,6 +24,7 @@ use slotmap::{SlotMap, new_key_type};
 use vogls_utils::NonMaxU32;
 
 use self::dyn_format_string::DynFormatString;
+use self::time::TimeFormat;
 use self::token_range::TokenRange;
 pub use self::variable::{VariableKey, VariableMap};
 use self::vcd::VcdOutput;
@@ -365,6 +366,8 @@ pub enum IntrinsicOp {
     VcdAppendModule(VcdOutput),
     VcdPause,
     VcdResume,
+
+    SetTimeFormat(TimeFormat),
 
     /// This is a no-op instruction that prevents optimization through it.
     BlackBox,
