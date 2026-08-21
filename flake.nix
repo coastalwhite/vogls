@@ -117,7 +117,7 @@
 
               postVenvCreation = ''
                 unset CONDA_PREFIX 
-                uv sync --project crates/vogls-python --no-install-project --active
+                uv sync --project crates/vogls-python --active
                 export LD_LIBRARY_PATH="${stdenv.cc.cc.lib}/lib:$PYTHON_SHARED_LIB"
               '';
               venvDir = ".venv";
