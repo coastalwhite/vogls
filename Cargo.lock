@@ -1312,6 +1312,7 @@ dependencies = [
  "vogls-fuse-signals",
  "vogls-ir",
  "vogls-utils",
+ "vogls-world",
 ]
 
 [[package]]

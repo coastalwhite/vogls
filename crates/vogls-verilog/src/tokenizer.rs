@@ -4,6 +4,8 @@ use std::sync::Arc;
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_utils::{TableMap, VgHashMap, new_table_key};
+use vogls_world::std::StdWorld;
+use vogls_world::{World, WorldError};
 
 use crate::number::{
     Base, skip_binary, skip_decimal, skip_hexadecimal, skip_octal, skip_scientific_exp, skip_sign,
@@ -144,7 +146,7 @@ impl std::error::Error for TokenizeError {}
 
 #[derive(Debug)]
 pub enum TokenizeErrorReason {
-    FailedToOpenFile(PathBuf, std::io::Error),
+    FailedToOpenFile(PathBuf, WorldError),
     IncludeInMacro,
     NestedDefine,
     DefineWithoutName,
@@ -163,12 +165,13 @@ impl Tokenized {
         content: Arc<str>,
         path: Option<Arc<Path>>,
     ) -> Result<Self, Box<TokenizeError>> {
-        Self::tokenize_with_macros(content, path, &mut Macros::default())
+        Self::tokenize_with_macros(content, path, &mut StdWorld::new(), &mut Macros::default())
     }
 
     pub fn tokenize_with_macros(
         content: Arc<str>,
         path: Option<Arc<Path>>,
+        world: &mut dyn World,
         macros: &mut Macros,
     ) -> Result<Self, Box<TokenizeError>> {
         let mut ts = Self {
@@ -179,7 +182,7 @@ impl Tokenized {
             contents: Vec::new(),
             file_line_offsets: Vec::new(),
         };
-        ts.append_tokenize_with_macros(content, path, macros)?;
+        ts.append_tokenize_with_macros(content, path, world, macros)?;
         Ok(ts)
     }
 
@@ -187,6 +190,7 @@ impl Tokenized {
         &mut self,
         content: Arc<str>,
         path: Option<Arc<Path>>,
+        world: &mut dyn World,
         macros: &mut Macros,
     ) -> Result<(), Box<TokenizeError>> {
         let Self {
@@ -958,13 +962,13 @@ impl Tokenized {
                                                 file: self.paths[file_idx as usize].clone(),
                                                 reason: TokenizeErrorReason::FailedToOpenFile(
                                                     PathBuf::default(),
-                                                    err,
+                                                    err.into(),
                                                 ),
                                             }));
                                         }
                                         Ok(path) => path,
                                     };
-                                    let content: Arc<str> = match std::fs::read_to_string(&path) {
+                                    let content: Arc<str> = match world.read_to_string(&path) {
                                         Ok(content) => content.into(),
                                         Err(err) => {
                                             return Err(Box::new(TokenizeError {

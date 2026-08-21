@@ -7,6 +7,8 @@ use vogls_verilog::parser::{
     AstArenas, Diagnostics, ParseContext, ParserScratches, TokenWalker, parse_file,
 };
 use vogls_verilog::tokenizer::{Macro, Macros, TokenizeError, Tokenized};
+use vogls_world::std::StdWorld;
+use vogls_world::{World, WorldError};
 
 use crate::{ParseError, ParsedDesign};
 
@@ -20,6 +22,7 @@ pub struct DesignBuilder {
 pub enum DesignBuilderError {
     Io(io::Error),
     Tokenize(Box<TokenizeError>),
+    Unknown,
 }
 
 impl fmt::Display for DesignBuilderError {
@@ -27,6 +30,7 @@ impl fmt::Display for DesignBuilderError {
         match self {
             DesignBuilderError::Io(err) => err.fmt(f),
             DesignBuilderError::Tokenize(err) => err.fmt(f),
+            DesignBuilderError::Unknown => f.write_str("unknown error"),
         }
     }
 }
@@ -42,24 +46,72 @@ impl From<io::Error> for DesignBuilderError {
         Self::Io(value)
     }
 }
+impl From<WorldError> for DesignBuilderError {
+    fn from(value: WorldError) -> Self {
+        match value {
+            WorldError::RecloseFile => Self::Unknown,
+            WorldError::Io(error) => Self::Io(error),
+        }
+    }
+}
 
 impl DesignBuilder {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn add_source(&mut self, path: impl AsRef<Path>) -> Result<&mut Self, DesignBuilderError> {
-        let path = path.as_ref();
-        let source = std::fs::read_to_string(path)?;
-        self.add_source_str_with_name(source, path)?;
+    fn add_source_str_in_world_with_opt_name(
+        &mut self,
+        world: &mut dyn World,
+        source: impl Into<Arc<str>>,
+        name: Option<impl Into<Arc<Path>>>,
+    ) -> Result<&mut Self, Box<TokenizeError>> {
+        self.token_buffer.append_tokenize_with_macros(
+            source.into(),
+            name.map(Into::into),
+            world,
+            &mut self.macros,
+        )?;
         Ok(self)
+    }
+
+
+    pub fn add_source_in_world(
+        &mut self,
+        world: &mut dyn World,
+        path: impl AsRef<Path>,
+    ) -> Result<&mut Self, DesignBuilderError> {
+        let path = path.as_ref();
+        let source = world.read_to_string(path)?;
+        Ok(self.add_source_str_in_world_with_opt_name(world, source, Some(path))?)
+    }
+
+    pub fn add_source_str_in_world(
+        &mut self,
+        world: &mut dyn World,
+        source: impl Into<Arc<str>>,
+    ) -> Result<&mut Self, Box<TokenizeError>> {
+        self.add_source_str_in_world_with_opt_name(world, source, <Option<Arc<Path>>>::None)
+    }
+
+    pub fn add_source_str_in_world_with_name(
+        &mut self,
+        world: &mut dyn World,
+        source: impl Into<Arc<str>>,
+        name: impl Into<Arc<Path>>,
+    ) -> Result<&mut Self, Box<TokenizeError>> {
+        self.add_source_str_in_world_with_opt_name(world, source, Some(name))
+    }
+
+    pub fn add_source(&mut self, path: impl AsRef<Path>) -> Result<&mut Self, DesignBuilderError> {
+        self.add_source_in_world(&mut StdWorld::new(), path)
     }
 
     pub fn add_source_str(
         &mut self,
         source: impl Into<Arc<str>>,
     ) -> Result<&mut Self, Box<TokenizeError>> {
-        self.add_source_str_with_opt_name(source, <Option<Arc<Path>>>::None)
+        self.add_source_str_in_world(&mut StdWorld::new(), source)
     }
 
     pub fn add_source_str_with_name(
@@ -67,21 +119,7 @@ impl DesignBuilder {
         source: impl Into<Arc<str>>,
         name: impl Into<Arc<Path>>,
     ) -> Result<&mut Self, Box<TokenizeError>> {
-        self.add_source_str_with_opt_name(source, Some(name))?;
-        Ok(self)
-    }
-
-    pub fn add_source_str_with_opt_name(
-        &mut self,
-        source: impl Into<Arc<str>>,
-        name: Option<impl Into<Arc<Path>>>,
-    ) -> Result<&mut Self, Box<TokenizeError>> {
-        self.token_buffer.append_tokenize_with_macros(
-            source.into(),
-            name.map(Into::into),
-            &mut self.macros,
-        )?;
-        Ok(self)
+        self.add_source_str_in_world_with_name(&mut StdWorld::new(), source, name)
     }
 
     pub fn define_macro(&mut self, name: impl AsRef<str>, value: Macro) -> &mut Self {

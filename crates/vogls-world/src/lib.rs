@@ -8,7 +8,6 @@ mod file;
 #[cfg(feature = "std")]
 pub mod std;
 
-#[non_exhaustive]
 #[derive(Debug)]
 pub enum WorldError {
     RecloseFile,
