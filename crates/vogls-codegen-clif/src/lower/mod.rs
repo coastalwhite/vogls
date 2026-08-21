@@ -162,6 +162,8 @@ pub struct Compiled {
     pub entry: FuncId,
     pub procs: Vec<FuncId>,
     pub drive_fns: Vec<FuncId>,
+    pub watch_offsets: Vec<u32>,
+    pub watch_entries: Vec<(u32, FuncId)>,
     pub num_listening: usize,
     pub dyn_fmt_strs: Vec<DynFormatString>,
     pub read_mems: Vec<(HeapRef, vogls_ir::ReadMem)>,
@@ -171,12 +173,14 @@ pub struct Compiled {
 
 impl Compiled {
     pub fn into_design(self, heap_wide_ptr: u64, num_regions: u8) -> crate::runtime::ClifDesign {
-        use crate::runtime::{ClifDesign, DriveFn, EmptyActiveEventQueueFn, EventT};
+        use crate::runtime::{ClifDesign, ClifWatchers, DriveFn, EmptyActiveEventQueueFn, EventT};
         let Compiled {
             module,
             entry: entry_id,
             procs: proc_ids,
             drive_fns: drive_ids,
+            watch_offsets,
+            watch_entries,
             dyn_fmt_strs,
             read_mems,
             standing_procs,
@@ -195,11 +199,17 @@ impl Compiled {
                 std::mem::transmute::<*const u8, DriveFn>(module.get_finalized_function(id))
             })
             .collect();
+        let watch_entries = watch_entries
+            .iter()
+            .map(|&(offset, id)| (offset, EventT::from_ptr(module.get_finalized_function(id))))
+            .collect();
+        let watchers = ClifWatchers::new(watch_offsets, watch_entries);
         ClifDesign::from_parts(
             module,
             entry,
             procs,
             drive_fns,
+            watchers,
             dyn_fmt_strs,
             read_mems,
             heap_wide_ptr,
@@ -2990,11 +3000,24 @@ pub fn compile<'a>(
 
     c.module.finalize_definitions().unwrap();
 
+    // Flatten the per-signal listener sets into CSR form for `ClifWatchers`.
+    let mut watch_offsets = Vec::with_capacity(c.listeners.len() + 1);
+    let mut watch_entries = Vec::new();
+    watch_offsets.push(0u32);
+    for sig_listeners in &c.listeners {
+        for l in sig_listeners {
+            watch_entries.push((l.offset, l.target));
+        }
+        watch_offsets.push(watch_entries.len() as u32);
+    }
+
     Ok(Compiled {
         module: c.module,
         entry: c.entry,
         procs,
         drive_fns: drive_fn_ids,
+        watch_offsets,
+        watch_entries,
         num_listening: c.num_listening as usize,
         dyn_fmt_strs: c.dyn_fmt_strs,
         read_mems: c.read_mems,

@@ -591,6 +591,25 @@ impl Drop for JITCode {
     }
 }
 
+pub struct ClifWatchers {
+    offsets: Vec<u32>,
+    entries: Vec<(u32, EventT)>,
+}
+
+impl ClifWatchers {
+    pub fn new(offsets: Vec<u32>, entries: Vec<(u32, EventT)>) -> Self {
+        debug_assert!(!offsets.is_empty());
+        debug_assert_eq!(offsets[offsets.len() - 1] as usize, entries.len());
+        Self { offsets, entries }
+    }
+
+    fn get(&self, signal: usize) -> &[(u32, EventT)] {
+        let start = self.offsets[signal] as usize;
+        let end = self.offsets[signal + 1] as usize;
+        &self.entries[start..end]
+    }
+}
+
 /// The compiled design: owns the JIT module (keeping code pages mapped) plus the
 /// resolved entry / process / drive function pointers.
 pub struct ClifDesign {
@@ -601,8 +620,10 @@ pub struct ClifDesign {
     /// One process entry-point per process, in process order (the `PROCS` array
     /// equivalent).
     procs: Vec<EventT>,
-    /// Per-signal poke routine, indexed by `RtSignalKey::as_usize`.
+    #[expect(dead_code)]
     drive_fns: Vec<DriveFn>,
+    /// Per-signal listener wake sets, consulted by [`Self::poke_signal`].
+    watchers: ClifWatchers,
     dyn_fmt_strs: Vec<DynFormatString>,
     read_mems: Vec<(HeapRef, ReadMem)>,
     heap_wide_ptr: u64,
@@ -622,6 +643,7 @@ impl ClifDesign {
         entry: EmptyActiveEventQueueFn,
         procs: Vec<EventT>,
         drive_fns: Vec<DriveFn>,
+        watchers: ClifWatchers,
         dyn_fmt_strs: Vec<DynFormatString>,
         read_mems: Vec<(HeapRef, ReadMem)>,
         heap_wide_ptr: u64,
@@ -634,6 +656,7 @@ impl ClifDesign {
             entry,
             procs,
             drive_fns,
+            watchers,
             dyn_fmt_strs,
             heap_wide_ptr,
             read_mems,
@@ -803,49 +826,14 @@ impl ClifDesign {
     }
 
     pub fn poke_signal(&self, state: &mut ClifDesignState, signal: RtSignalKey) {
-        let drive = self.drive_fns[signal.as_usize()];
-        // Bind the IO sinks to locals so they outlive the `drive` call below.
-        // (The C reference passes the address of a temporary here, which
-        // dangles; harmless while drive routines are stubs but a
-        // use-after-free once they format output. @TODO: passthrough IO.)
-        let mut out: Box<dyn std::io::Write + Send + Sync> = Box::new(stdout());
-        let mut err: Box<dyn std::io::Write + Send + Sync> = Box::new(stderr());
-        let heap_wide_ptr = unsafe {
-            state
-                .runtime
-                .heap
-                .0
-                .as_mut_ptr()
-                .add(self.heap_wide_ptr as usize)
-        };
-        let mut cldctx = ColdContextT {
-            fn_table: FnTable::new(),
-            fmt_strs: self.dyn_fmt_strs.as_ptr(),
-
-            plugins: state.plugins.as_mut_ptr().cast(),
-            plugin_poke_signal,
-
-            heap_len: state.runtime.heap.0.len(),
-            readmems: self.read_mems.as_ptr(),
-            readmem: read_mem,
-            heap_wide_ptr,
-
-            fst_poke: state.runtime.tvl_first_write.as_mut_ptr(),
-
-            icount: 0,
-
-            stdout: NonNull::from_mut(&mut out),
-            stderr: NonNull::from_mut(&mut err),
-        };
-        state.schedule.with_t(|schedule| {
-            (drive)(
-                NonNull::from_mut(schedule),
-                state.runtime.time,
-                NonNull::new(state.listening.as_mut_ptr()),
-                NonNull::new(state.runtime.last_active_time.as_mut_ptr()),
-                NonNull::from_mut(&mut cldctx),
-            );
-        });
+        for &(offset, ref target) in self.watchers.get(signal.as_usize()) {
+            let word = offset as usize / 64;
+            let bit = 1u64 << (offset % 64);
+            if state.listening[word] & bit != 0 {
+                state.listening[word] ^= bit;
+                state.schedule.active_region.push(target.clone());
+            }
+        }
     }
 }
 
