@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-vogls = { workspace = true, features = ["unstable", "random", "native"] }
+vogls = { workspace = true, features = ["unstable", "random", "native", "stdworld"] }
 vogls-trace.workspace = true
 hashbrown.workspace = true
 foldhash.workspace = true
