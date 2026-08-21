@@ -8,6 +8,7 @@ vogls-ir.workspace = true
 vogls-frontend.workspace = true
 vogls-utils.workspace = true
 vogls-fuse-signals.workspace = true
+vogls-world.workspace = true
 slotmap.workspace = true
 foldhash.workspace = true
 hashbrown.workspace = true

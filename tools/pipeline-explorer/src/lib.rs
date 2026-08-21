@@ -106,12 +106,14 @@ pub struct PicoRV32Config {
 pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue, TraceError> {
     let mut builder = vogls::DesignBuilder::new();
     let mut arena = Arena::default();
+    let mut world = NeverWorld::new();
     builder
-        .add_source_str(include_str!(
-            "../instances/neorv32/neorv32_verilog_wrapper.v"
-        ))
+        .add_source_str_in_world(
+            &mut world,
+            include_str!("../instances/neorv32/neorv32_verilog_wrapper.v"),
+        )
         .map_err(|_| TraceError::Build("failed to tokenize"))?
-        .add_source_str(include_str!("../instances/neorv32/tb.v"))
+        .add_source_str_in_world(&mut world, include_str!("../instances/neorv32/tb.v"))
         .map_err(|_| TraceError::Build("failed to tokenize"))?;
     let parsed = builder
         .parse(&arena)
@@ -196,7 +198,7 @@ pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue,
     design.set_signal(&mut state, rstn, &false.into());
 
     design
-        .run(&mut state, &mut NeverWorld::new(), CYCLE * 10)
+        .run(&mut state, &mut world, CYCLE * 10)
         .expect("failed to run");
     design.set_signal(&mut state, rstn, &true.into());
 
@@ -215,7 +217,7 @@ pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue,
     for i in 0..num_cycles {
         let time = state.runtime().time;
         design
-            .run(&mut state, &mut NeverWorld::new(), time + CYCLE)
+            .run(&mut state, &mut world, time + CYCLE)
             .expect("failed to run");
 
         let pc = design.get_signal(&state, pc_q).extract_exact_u32().unwrap();
@@ -254,13 +256,14 @@ pub fn get_ibex_trace(
 ) -> Result<ReturnValue, TraceError> {
     let mut builder = vogls::DesignBuilder::new();
     let mut arena = Arena::default();
+    let mut world = NeverWorld::new();
     if cfg.wb_stage {
         builder.define_macro("WRITEBACK_STAGE", Macro::default());
     }
     builder
-        .add_source_str(include_str!("../instances/ibex/ibex_fixed.v"))
+        .add_source_str_in_world(&mut world, include_str!("../instances/ibex/ibex_fixed.v"))
         .map_err(|_| TraceError::Build("failed to tokenize"))?
-        .add_source_str(include_str!("../instances/ibex/tb.v"))
+        .add_source_str_in_world(&mut world, include_str!("../instances/ibex/tb.v"))
         .map_err(|_| TraceError::Build("failed to tokenize"))?;
     let parsed = builder
         .parse(&arena)
@@ -361,7 +364,7 @@ pub fn get_ibex_trace(
     design.set_signal(&mut state, memory_signal, &memory_bits);
     design.set_signal(&mut state, rst_n, &false.into());
     design
-        .run(&mut state, &mut NeverWorld::new(), CYCLE * 10)
+        .run(&mut state, &mut world, CYCLE * 10)
         .expect("failed to run");
     design.set_signal(&mut state, rst_n, &true.into());
 
@@ -376,7 +379,7 @@ pub fn get_ibex_trace(
     for i in 0..num_cycles {
         let time = state.runtime().time;
         design
-            .run(&mut state, &mut NeverWorld::new(), time + CYCLE)
+            .run(&mut state, &mut world, time + CYCLE)
             .expect("failed to run");
 
         let to_slot = |pc: u32, active: bool| -> u32 {
@@ -435,6 +438,7 @@ pub fn get_trace(
 ) -> Result<ReturnValue, TraceError> {
     let mut builder = vogls::DesignBuilder::new();
     let mut arena = Arena::default();
+    let mut world = NeverWorld::new();
     if config.enable_mul {
         builder.define_macro("ENABLE_MUL", Macro::default());
     }
@@ -457,9 +461,12 @@ pub fn get_trace(
         builder.define_macro("ENABLE_FAST_MUL", Macro::default());
     }
     builder
-        .add_source_str(include_str!("../../../submodules/picorv32/picorv32.v"))
+        .add_source_str_in_world(
+            &mut world,
+            include_str!("../../../submodules/picorv32/picorv32.v"),
+        )
         .map_err(|_| TraceError::Build("failed to tokenize"))?
-        .add_source_str(include_str!("../instances/picorv32/tb.v"))
+        .add_source_str_in_world(&mut world, include_str!("../instances/picorv32/tb.v"))
         .map_err(|_| TraceError::Build("failed to tokenize"))?;
     let parsed = builder
         .parse(&arena)
@@ -532,7 +539,7 @@ pub fn get_trace(
     design.set_signal(&mut state, memory_signal, &memory);
     design.set_signal(&mut state, nrst, &false.into());
     design
-        .run(&mut state, &mut NeverWorld::new(), CYCLE * 10)
+        .run(&mut state, &mut world, CYCLE * 10)
         .expect("failed to run");
     design.set_signal(&mut state, nrst, &true.into());
 
@@ -545,7 +552,7 @@ pub fn get_trace(
     for i in 0..num_cycles {
         let time = state.runtime().time;
         design
-            .run(&mut state, &mut NeverWorld::new(), time + CYCLE)
+            .run(&mut state, &mut world, time + CYCLE)
             .expect("failed to run");
 
         let pc = design
