@@ -47,7 +47,7 @@ vogls-vcd.path = "crates/vogls-vcd"
 vogls-sdf.path = "crates/vogls-sdf"
 vogls-trace.path = "crates/vogls-trace"
 vogls-plan.path = "crates/vogls-plan"
-vogls-world.path = "crates/vogls-world"
+vogls-world = { path = "crates/vogls-world", default-features = false }
 
 pipeline-explorer.path = "tools/pipeline-explorer"
 trva.path = "tools/trva/trva"

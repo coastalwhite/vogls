@@ -21,12 +21,13 @@ vogls-sdf.workspace = true
 vogls-world.workspace = true
 
 [features]
-default = ["native"]
+default = ["native", "stdworld"]
 random = ["vogls-bits/random"]
 native = ["dep:vogls-codegen-clif"]
 unstable = []
 tailcall = ["vogls-bytecode/tailcall"]
 profile = ["vogls-bytecode/profile"]
+stdworld = ["vogls-world/std"]
 
 [lints]
 workspace = true
