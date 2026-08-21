@@ -440,6 +440,7 @@ impl BytecodeInstruction for Intrinsic {
 
                 vogls_runtime::readmem::read_mem(
                     &readmem.path,
+                    cldctx.world,
                     state.heap.0.as_mut(),
                     dst,
                     (*mode).into(),
