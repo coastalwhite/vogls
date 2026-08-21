@@ -453,7 +453,13 @@ pub struct ColdContextT<'a> {
 
     heap_len: usize,
     readmems: *const (HeapRef, ReadMem),
-    readmem: extern "C" fn(*mut u64, usize, u8, NonNull<(HeapRef, ReadMem)>),
+    readmem: extern "C" fn(
+        *mut u64,
+        usize,
+        u8,
+        NonNull<(HeapRef, ReadMem)>,
+        world: NonNull<&mut dyn World>,
+    ),
 
     pub heap_wide_ptr: *mut u64,
 
@@ -825,8 +831,10 @@ extern "C" fn read_mem(
     heap_len: usize,
     mode: u8,
     ptr: NonNull<(HeapRef, ReadMem)>,
+    mut world: NonNull<&mut dyn World>,
 ) {
     let (heap_ref, read_mem) = unsafe { ptr.as_ref() };
+    let world = unsafe { world.as_mut() };
     let heap = unsafe { std::slice::from_raw_parts_mut(heap, heap_len) };
     let mode = if mode == 0 {
         Mode::TwoValue
@@ -835,6 +843,7 @@ extern "C" fn read_mem(
     };
     vogls_runtime::readmem::read_mem(
         &read_mem.path,
+        *world,
         heap,
         *heap_ref,
         mode,

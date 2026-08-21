@@ -1,5 +1,6 @@
 use ::std::io;
 use ::std::path::Path;
+use core::fmt;
 
 use self::file::{FileId, FileOpenOptions};
 
@@ -8,6 +9,7 @@ mod file;
 pub mod std;
 
 #[non_exhaustive]
+#[derive(Debug)]
 pub enum WorldError {
     RecloseFile,
     Io(io::Error),
@@ -19,7 +21,18 @@ impl From<io::Error> for WorldError {
     }
 }
 
-type WorldResult<T> = ::std::result::Result<T, WorldError>;
+impl fmt::Display for WorldError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RecloseFile => f.write_str("tried to close a file that is already closed"),
+            Self::Io(err) => err.fmt(f),
+        }
+    }
+}
+
+impl ::std::error::Error for WorldError {}
+
+pub type WorldResult<T> = ::std::result::Result<T, WorldError>;
 
 /// Dynamic container for the operating environment of Vogls.
 ///

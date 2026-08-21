@@ -1240,6 +1240,7 @@ dependencies = [
  "vogls-codegen",
  "vogls-ir",
  "vogls-utils",
+ "vogls-world",
 ]
 
 [[package]]

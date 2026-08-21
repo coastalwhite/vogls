@@ -1,6 +1,7 @@
 use vogls_bits::set_subslice::tv_l_set;
 use vogls_bits::{Bits, BitsDataRef, Mode, VectorSize};
 use vogls_codegen::{HeapOffset, HeapRef};
+use vogls_world::{World, WorldResult};
 
 fn trim_start_sep(s: &str) -> &str {
     s.trim_start()
@@ -14,6 +15,7 @@ fn split_sep(s: &str) -> (&str, &str) {
 #[expect(clippy::too_many_arguments)]
 pub fn read_mem(
     path: &str,
+    world: &mut dyn World,
     heap: &mut [u64],
     heap_ref: HeapRef,
     mode: Mode,
@@ -22,9 +24,9 @@ pub fn read_mem(
     _limit: u32,
     stride: VectorSize,
     binary: bool,
-) -> std::io::Result<()> {
+) -> WorldResult<()> {
     // @Performance. Don't read into a string.
-    let s = std::fs::read_to_string(path)?;
+    let s = world.read_to_string(std::path::Path::new(path))?;
     let mut s = &s[..];
     let mut elem = HeapRef {
         offset: HeapOffset {

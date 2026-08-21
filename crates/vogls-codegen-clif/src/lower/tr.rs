@@ -2190,6 +2190,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 self.compiler.read_mems.push((href, (**rm).clone()));
                                 let cldctx = params.cldctx;
                                 let heap = params.heap_ptr;
+                                let world =
+                                    b.ins().load(ptr, mem(), cldctx, layout::CTX_WORLD as i32);
                                 let heap_len =
                                     b.ins()
                                         .load(I64, mem(), cldctx, layout::CTX_HEAP_LEN as i32);
@@ -2211,7 +2213,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 b.ins().call_indirect(
                                     sr,
                                     readmem_ptr,
-                                    &[heap, heap_len, mode_c, entry],
+                                    &[heap, heap_len, mode_c, entry, world],
                                 );
                                 let z = b.ins().iconst(I64, 0);
                                 b.def_var(vmap[dst], z);
