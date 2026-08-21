@@ -108,6 +108,7 @@
                 pythonPlatform.build
 
                 just
+								uv
                 rustToolchain
                 wasm-bindgen-cli_0_2_114
 
