@@ -52,6 +52,7 @@ pub use set_aligned::*;
 pub use set_unaligned::*;
 pub use stack::*;
 pub use temporal::*;
+use vogls_world::World;
 
 use std::sync::Arc;
 
@@ -117,8 +118,7 @@ pub struct ColdContext<'a> {
 
     intrinsics: &'a [IntrinsicOp],
 
-    stdout: &'a mut (dyn std::io::Write + Send + Sync),
-    stderr: &'a mut (dyn std::io::Write + Send + Sync),
+    world: &'a mut dyn World,
 
     watchers: &'a BytecodeWatchers,
     plugins: &'a mut [RuntimePluginState],
@@ -132,15 +132,13 @@ impl<'a> ColdContext<'a> {
         intrinsics: &'a [IntrinsicOp],
         watchers: &'a BytecodeWatchers,
         plugins: &'a mut [RuntimePluginState],
-        stdout: &'a mut (dyn std::io::Write + Send + Sync),
-        stderr: &'a mut (dyn std::io::Write + Send + Sync),
+        world: &'a mut dyn World,
     ) -> Self {
         Self {
             stack: Vec::new(),
             stack_args: Vec::new(),
             intrinsics,
-            stdout,
-            stderr,
+            world,
             watchers,
             heap_scratch: Vec::new(),
             plugins,
@@ -1137,18 +1135,16 @@ impl Design {
     pub fn execute(
         &self,
         state: &mut State,
-        stdout: &mut (dyn std::io::Write + Send + Sync),
-        stderr: &mut (dyn std::io::Write + Send + Sync),
+        world: &mut dyn World,
     ) -> Result<(), ()> {
-        self.execute_with_tracer(&mut (), state, stdout, stderr)
+        self.execute_with_tracer(&mut (), state, world)
     }
 
     pub fn execute_with_tracer(
         &self,
         tracer: &mut impl Tracer,
         state: &mut State,
-        stdout: &mut (dyn std::io::Write + Send + Sync),
-        stderr: &mut (dyn std::io::Write + Send + Sync),
+        world: &mut dyn World,
     ) -> Result<(), ()> {
         let code = &self.bytecode;
         let Some(entry) = state
@@ -1163,8 +1159,7 @@ impl Design {
             &self.intrinsics,
             &self.watchers,
             &mut state.plugins,
-            stdout,
-            stderr,
+            world,
         );
         let mut regs = Regs::new(self.stack_offset);
 
@@ -1230,12 +1225,11 @@ impl Design {
     pub fn execute_inner_tailcall(
         &self,
         state: &mut State,
-        stdout: &mut (dyn std::io::Write + Send + Sync),
-        stderr: &mut (dyn std::io::Write + Send + Sync),
+        world: &mut dyn World,
     ) -> Result<(), ()> {
         #[cfg(not(nightly))]
         {
-            return self.execute(state, stdout, stderr);
+            return self.execute(state, world);
         }
 
         #[cfg(nightly)]
@@ -1253,8 +1247,7 @@ impl Design {
                 &self.intrinsics,
                 &self.watchers,
                 state.plugins.as_mut(),
-                stdout,
-                stderr,
+                world,
             );
             let mut regs = Regs::new(self.stack_offset);
             let Some(c) = code.get(pc as usize) else {

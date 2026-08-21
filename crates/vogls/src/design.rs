@@ -6,13 +6,13 @@ use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId};
 use vogls_ir::time::TimeResolution;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariableKey};
 use vogls_ir::{Bits, GlobalContext, LogicMode, SignalKey, SignalSlice, VectorSize};
-use vogls_runtime::SimulationIo;
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_utils::{Table, VgHashMap};
 pub use vogls_verilog::arena::Arena;
 pub use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
 pub use vogls_verilog::tokenizer::Macro;
+use vogls_world::World;
 
 use crate::elaborated_design::SignalHandle;
 use crate::symbol::{NetSignal, NetSymbol, NetValue, Symbol};
@@ -81,13 +81,13 @@ impl Design {
     pub fn run(
         &self,
         state: &mut DesignState,
-        io: &mut SimulationIo,
+        world: &mut dyn World,
         time: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
         match (&self.backend, state) {
             #[cfg(feature = "tailcall")]
             (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => design
-                .execute_inner_tailcall(state, &mut io.stdout, &mut io.stderr)
+                .execute_inner_tailcall(state, world)
                 .map_err(|_| "execution failed.".into()),
             #[cfg(not(feature = "tailcall"))]
             (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
@@ -101,8 +101,7 @@ impl Design {
                                 profile.as_path(),
                             ),
                             state,
-                            &mut io.stdout,
-                            &mut io.stderr,
+                            world,
                         )
                         .map_err(|_| "execution failed.".into());
                 }
@@ -111,24 +110,22 @@ impl Design {
                     design.execute_with_tracer(
                         &mut vogls_bytecode::InstructionTracer::new_stderr(),
                         state,
-                        &mut io.stdout,
-                        &mut io.stderr,
+                        world,
                     )
                 } else if design.stats {
                     design.execute_with_tracer(
                         &mut vogls_bytecode::ICountTracer::default(),
                         state,
-                        &mut io.stdout,
-                        &mut io.stderr,
+                        world,
                     )
                 } else {
-                    design.execute(state, &mut io.stdout, &mut io.stderr)
+                    design.execute(state, world)
                 }
                 .map_err(|_| "execution failed.".into())
             }
             #[cfg(feature = "native")]
             (DesignBackend::Cranelift { design }, DesignState::Cranelift(state)) => design
-                .run(state, io, time)
+                .run(state, world, time)
                 .map_err(|_| "execution failed.".into()),
 
             #[allow(unreachable_patterns)]

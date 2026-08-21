@@ -13,6 +13,7 @@ vogls-utils.workspace = true
 vogls-codegen.workspace = true
 vogls-runtime.workspace = true
 vogls-vcd.workspace = true
+vogls-world.workspace = true
 
 [lints]
 workspace = true

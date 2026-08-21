@@ -2,7 +2,7 @@ use std::hash::Hash as _;
 use std::sync::Arc;
 
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
-use vogls::SimulationIo;
+use vogls::StdWorld;
 use vogls::design::DesignState;
 use vogls::utils::{IndexMap, VgHashMap};
 use vogls_trace::Trace;
@@ -211,10 +211,7 @@ impl LazyStep {
                 .design
                 .run(
                     state,
-                    &mut SimulationIo {
-                        stdout: Box::new(std::io::stdout()),
-                        stderr: Box::new(std::io::stderr()),
-                    },
+                    &mut StdWorld::new(),
                     time.value,
                 )
                 .map_err(|_| ComputeError::FailedToRun),

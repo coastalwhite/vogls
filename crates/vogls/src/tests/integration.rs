@@ -1,6 +1,6 @@
 use crate::design::Arena;
 use crate::ir::{Bits, LogicMode, VectorSize};
-use crate::{DesignBuilder, SimulationIo};
+use crate::{DesignBuilder, StdWorld};
 
 #[test]
 fn constant_signal_7() -> Result<(), Box<dyn std::error::Error>> {
@@ -70,7 +70,7 @@ endmodule
 
     let rt = design.resolve_handle(result_handle);
 
-    design.run(&mut state, &mut SimulationIo::default(), 1)?;
+    design.run(&mut state, &mut StdWorld::new(), 1)?;
 
     assert_eq!(
         design.get_signal(&state, rt),

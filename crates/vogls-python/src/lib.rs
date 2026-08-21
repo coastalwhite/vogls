@@ -2,7 +2,6 @@ mod anonymous_map;
 
 #[pyo3::pymodule]
 mod vogls {
-    use std::io::{stderr, stdout};
     use std::num::NonZeroU32;
     use std::ops::Deref;
     use std::path::PathBuf;
@@ -12,7 +11,7 @@ mod vogls {
     use pyo3::types::PyDict;
     use pyo3::{FromPyObject, IntoPyObjectExt, PyAny, PyResult, prelude::*};
     use vogls::utils::{IndexMap, VgHashSet};
-    use vogls::{BitsFormatOptions, SimulationIo, VectorSize};
+    use vogls::{BitsFormatOptions, StdWorld, VectorSize};
 
     use vogls_plan::agg::{build_array_agg, build_run_vector_agg};
     use vogls_plan::array::{Array, ArrayGet, DslLazyArray, LazyArray};
@@ -271,14 +270,7 @@ mod vogls {
             let snapshot = snapshot.borrow(py).inner.clone();
             py.detach(|| {
                 self.inner
-                    .run(
-                        &mut snapshot.lock().unwrap(),
-                        &mut SimulationIo {
-                            stdout: Box::new(stdout()) as _,
-                            stderr: Box::new(stderr()) as _,
-                        },
-                        time,
-                    )
+                    .run(&mut snapshot.lock().unwrap(), &mut StdWorld::new(), time)
                     .map_err(|e| PyException::new_err(e.to_string()))
             })
         }
