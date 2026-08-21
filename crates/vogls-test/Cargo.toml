@@ -8,7 +8,7 @@ slotmap.workspace = true
 clap.workspace = true
 rayon.workspace = true
 regex = "1.13.1"
-vogls = { workspace = true, features = ["native"] }
+vogls = { workspace = true, features = ["native", "stdworld"] }
 vogls-ir.workspace = true
 vogls-bytecode.workspace = true
 vogls-verilog.workspace = true

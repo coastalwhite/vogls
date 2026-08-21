@@ -4,7 +4,7 @@ use core::fmt;
 
 use self::file::{FileId, FileOpenOptions};
 
-mod file;
+pub mod file;
 #[cfg(feature = "std")]
 pub mod std;
 

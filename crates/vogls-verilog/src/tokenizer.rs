@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_utils::{TableMap, VgHashMap, new_table_key};
-use vogls_world::std::StdWorld;
 use vogls_world::{World, WorldError};
 
 use crate::number::{
@@ -161,13 +160,6 @@ pub enum TokenizeErrorReason {
 }
 
 impl Tokenized {
-    pub fn tokenize(
-        content: Arc<str>,
-        path: Option<Arc<Path>>,
-    ) -> Result<Self, Box<TokenizeError>> {
-        Self::tokenize_with_macros(content, path, &mut StdWorld::new(), &mut Macros::default())
-    }
-
     pub fn tokenize_with_macros(
         content: Arc<str>,
         path: Option<Arc<Path>>,
@@ -1293,7 +1285,7 @@ macro_rules! define_tokens {
         #[test]
         fn tokenizer_examples() {
             $(
-            let consumed = Tokenized::tokenize($example.into(), None).unwrap();
+            let consumed = Tokenized::tokenize_with_macros($example.into(), None, &mut vogls_world::std::StdWorld::new(), &mut Macros::default()).unwrap();
             assert_eq!(consumed.tokens.len(), 1);
             assert_eq!(consumed.tokens[0], Token::$ident, "Example \"{}\" of token {} had the invalid kind", $example, stringify!($ident));
             )+

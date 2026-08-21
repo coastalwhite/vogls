@@ -7,6 +7,7 @@ use vogls_verilog::parser::{
     AstArenas, Diagnostics, ParseContext, ParserScratches, TokenWalker, parse_file,
 };
 use vogls_verilog::tokenizer::{Macro, Macros, TokenizeError, Tokenized};
+#[cfg(feature = "stdworld")]
 use vogls_world::std::StdWorld;
 use vogls_world::{World, WorldError};
 
@@ -75,7 +76,6 @@ impl DesignBuilder {
         Ok(self)
     }
 
-
     pub fn add_source_in_world(
         &mut self,
         world: &mut dyn World,
@@ -103,10 +103,12 @@ impl DesignBuilder {
         self.add_source_str_in_world_with_opt_name(world, source, Some(name))
     }
 
+    #[cfg(feature = "stdworld")]
     pub fn add_source(&mut self, path: impl AsRef<Path>) -> Result<&mut Self, DesignBuilderError> {
         self.add_source_in_world(&mut StdWorld::new(), path)
     }
 
+    #[cfg(feature = "stdworld")]
     pub fn add_source_str(
         &mut self,
         source: impl Into<Arc<str>>,
@@ -114,6 +116,7 @@ impl DesignBuilder {
         self.add_source_str_in_world(&mut StdWorld::new(), source)
     }
 
+    #[cfg(feature = "stdworld")]
     pub fn add_source_str_with_name(
         &mut self,
         source: impl Into<Arc<str>>,
