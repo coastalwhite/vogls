@@ -12,11 +12,11 @@ use vogls_frontend::symbol_table::FrozenSymbolTable;
 #[cfg(feature = "unstable")]
 use vogls_ir::ProcessKind;
 use vogls_ir::optimize::Optimizations;
-use vogls_ir::time::TimeResolution;
+use vogls_ir::time::{TimeFormat, TimeResolution};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{GlobalContext, LogicMode, SCALAR_VSIZE, Signal, SignalKey};
 use vogls_runtime::plugins::RuntimePlugin;
-use vogls_runtime::{RtSignalKey, RuntimeState, TimeFormat};
+use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_utils::{TableKey as _, VgHashMap};
 use vogls_verilog::lower::Diagnostics;
 use vogls_verilog::tokenizer::Tokenized;
@@ -281,6 +281,7 @@ impl LoweredDesign {
             stats: self.stats,
             profile: self.profile.clone(),
             debug_info: debug_info.map(std::sync::Arc::new),
+            time_resolution: self.time_resolution,
         };
         let state = DesignState::Bytecode(state);
 
@@ -335,7 +336,7 @@ impl LoweredDesign {
         let mut heap = heap_builder.finish();
 
         let num_listening = compiled.num_listening;
-        let design = compiled.into_design(scratch_base_word, NUM_REGIONS);
+        let design = compiled.into_design(self.time_resolution, scratch_base_word, NUM_REGIONS);
 
         let mut lupdt_updated = vec![false; lupdt_indexes.len()];
         let mut updated = vec![false; self.gl.signals.len()];
@@ -351,7 +352,7 @@ impl LoweredDesign {
             }
         }
 
-        let time_format = vogls_runtime::TimeFormat::new(self.time_resolution);
+        let time_format = vogls_ir::time::TimeFormat::new(self.time_resolution);
         let runtime =
             vogls_runtime::RuntimeState::new(&self.gl, heap, &updated, &lupdt_updated, time_format);
         let mut state = design.new_state(num_listening, NUM_REGIONS, runtime, &self.gl);

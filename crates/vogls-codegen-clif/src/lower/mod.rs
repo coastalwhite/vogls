@@ -31,6 +31,7 @@ use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 
 use vogls_codegen::{HeapBuilder, HeapRef, SixBitSize};
 use vogls_ir::dyn_format_string::DynFormatString;
+use vogls_ir::time::{TimeFormat, TimeResolution};
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction,
     IntrinsicOp, LogicMode, ResizeOp, ShiftImmOp, SignalKey, TemporalRegionKey, UnaryOp,
@@ -148,7 +149,7 @@ impl Sigs {
             sfe: sysv(&[ptr, I64, ptr], None),
             grow: sysv(&[ptr], None),
             plugin_poke: sysv(&[ptr, I64], None),
-            fmt: sysv(&[ptr, ptr, ptr], None),
+            fmt: sysv(&[ptr, I64, ptr], None),
         }
     }
 }
@@ -167,12 +168,18 @@ pub struct Compiled {
     pub num_listening: usize,
     pub dyn_fmt_strs: Vec<DynFormatString>,
     pub read_mems: Vec<(HeapRef, vogls_ir::ReadMem)>,
+    pub time_fmts: Vec<TimeFormat>,
     pub standing_procs: vogls_utils::VgHashSet<usize>,
     pub standing_arm_offsets: Vec<u32>,
 }
 
 impl Compiled {
-    pub fn into_design(self, heap_wide_ptr: u64, num_regions: u8) -> crate::runtime::ClifDesign {
+    pub fn into_design(
+        self,
+        time_resolution: TimeResolution,
+        heap_wide_ptr: u64,
+        num_regions: u8,
+    ) -> crate::runtime::ClifDesign {
         use crate::runtime::{ClifDesign, ClifWatchers, DriveFn, EmptyActiveEventQueueFn, EventT};
         let Compiled {
             module,
@@ -183,9 +190,10 @@ impl Compiled {
             watch_entries,
             dyn_fmt_strs,
             read_mems,
+            time_fmts,
             standing_procs,
             standing_arm_offsets,
-            ..
+            num_listening: _,
         } = self;
         let entry: EmptyActiveEventQueueFn =
             unsafe { std::mem::transmute(module.get_finalized_function(entry_id)) };
@@ -212,6 +220,8 @@ impl Compiled {
             watchers,
             dyn_fmt_strs,
             read_mems,
+            time_fmts,
+            time_resolution,
             heap_wide_ptr,
             num_regions,
             standing_procs,
@@ -337,6 +347,7 @@ struct Compiler<'a> {
     num_plugins: usize,
     dyn_fmt_strs: Vec<DynFormatString>,
     read_mems: Vec<(HeapRef, vogls_ir::ReadMem)>,
+    time_fmts: Vec<TimeFormat>,
     /// Process indices that are "standing": their listeners are armed at startup
     /// but their body must NOT run at t=0, so they are not seeded into the
     /// active region (mirrors the bytecode backend).
@@ -394,6 +405,7 @@ impl<'a> Compiler<'a> {
             num_plugins,
             dyn_fmt_strs: Vec::new(),
             read_mems: Vec::new(),
+            time_fmts: Vec::new(),
             standing_procs: vogls_utils::VgHashSet::default(),
             standing_arm_offsets: Vec::new(),
             scratch_base: 0,
@@ -790,19 +802,11 @@ impl<'a> Compiler<'a> {
             cldctx,
             (layout::CTX_FN_TABLE + layout::FN_FMT) as i32,
         );
-        let world = b
-            .ins()
-            .load(self.ptr, mem(), cldctx, layout::CTX_WORLD as i32);
-        let fmt_strs = b
-            .ins()
-            .load(self.ptr, mem(), cldctx, layout::CTX_FMT_STRS as i32);
-        let fmt_str_ptr = b
-            .ins()
-            .iadd_imm_u(fmt_strs, (fmt_index * layout::DYN_FMT_STRING_SIZEOF) as i64);
+        let fmt_index = b.ins().iconst(I64, fmt_index as i64);
         let args_ptr = b.ins().stack_addr(self.ptr, arr_slot, 0);
         let sig = b.import_signature(self.sigs.fmt.clone());
         b.ins()
-            .call_indirect(sig, fmt_ptr, &[world, fmt_str_ptr, args_ptr]);
+            .call_indirect(sig, fmt_ptr, &[cldctx, fmt_index, args_ptr]);
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -3021,6 +3025,7 @@ pub fn compile<'a>(
         num_listening: c.num_listening as usize,
         dyn_fmt_strs: c.dyn_fmt_strs,
         read_mems: c.read_mems,
+        time_fmts: c.time_fmts,
         standing_procs: c.standing_procs,
         standing_arm_offsets: c.standing_arm_offsets,
     })

@@ -7,6 +7,7 @@ use crate::ffi::FfiVec;
 use cranelift_jit::JITModule;
 use vogls_codegen::HeapRef;
 use vogls_ir::dyn_format_string::DynFormatString;
+use vogls_ir::time::{TimeFormat, TimeResolution};
 use vogls_ir::{Bits, GlobalContext, Mode, ReadMem, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_runtime::{RtSignalKey, RuntimeState};
@@ -120,7 +121,7 @@ pub struct BitsRefT {
 
 #[repr(C)]
 pub struct FnTable {
-    fmt: extern "C" fn(NonNull<&mut dyn World>, *const DynFormatString, *const BitsRefT),
+    fmt: extern "C" fn(NonNull<ColdContextT>, fmt_index: i64, *const BitsRefT),
 
     rtl_dist_uniform:
         extern "C" fn(seed: i32, start: i32, end: i32, world: NonNull<&mut dyn World>) -> u64,
@@ -147,6 +148,8 @@ pub struct FnTable {
 
     /// Extract dsize bits at offset from a wide source: (dst, src, offset, dsize, ssize, src_is_fv, fill_with_x).
     wide_slice: extern "C" fn(*mut u64, *const u64, u32, u32, u32, u32, u32),
+
+    pub set_time_format: extern "C" fn(cldctx: NonNull<ColdContextT>, idx: i64),
 }
 
 /// Op codes for the [`real_op`] shim, shared with the lowering.
@@ -423,6 +426,12 @@ extern "C" fn wide_slice(
     }
 }
 
+extern "C" fn set_time_format(mut cldctx: NonNull<ColdContextT>, idx: i64) {
+    let cldctx = unsafe { cldctx.as_mut() };
+    let fmt = cldctx.time_fmts[idx as usize].clone();
+    cldctx.time_format = fmt;
+}
+
 impl FnTable {
     fn new() -> Self {
         Self {
@@ -438,13 +447,17 @@ impl FnTable {
             wide_binop,
             wide_drive,
             wide_slice,
+            set_time_format,
         }
     }
 }
 
 #[repr(C)]
 pub struct ColdContextT<'a> {
-    fn_table: FnTable,
+    pub fn_table: FnTable,
+
+    time_format: TimeFormat,
+    time_resolution: TimeResolution,
 
     fmt_strs: *const DynFormatString,
 
@@ -460,6 +473,7 @@ pub struct ColdContextT<'a> {
         NonNull<(HeapRef, ReadMem)>,
         world: NonNull<&mut dyn World>,
     ),
+    time_fmts: &'a [TimeFormat],
 
     pub heap_wide_ptr: *mut u64,
 
@@ -612,6 +626,8 @@ pub struct ClifDesign {
     watchers: ClifWatchers,
     dyn_fmt_strs: Vec<DynFormatString>,
     read_mems: Vec<(HeapRef, ReadMem)>,
+    time_fmts: Vec<TimeFormat>,
+    time_resolution: TimeResolution,
     heap_wide_ptr: u64,
     num_regions: u8,
     /// Standing processes: armed at startup but not seeded into the active
@@ -632,6 +648,8 @@ impl ClifDesign {
         watchers: ClifWatchers,
         dyn_fmt_strs: Vec<DynFormatString>,
         read_mems: Vec<(HeapRef, ReadMem)>,
+        time_fmts: Vec<TimeFormat>,
+        time_resolution: TimeResolution,
         heap_wide_ptr: u64,
         num_regions: u8,
         standing_procs: vogls_utils::VgHashSet<usize>,
@@ -646,6 +664,8 @@ impl ClifDesign {
             dyn_fmt_strs,
             heap_wide_ptr,
             read_mems,
+            time_fmts,
+            time_resolution,
             num_regions,
             standing_procs,
             standing_arm_offsets,
@@ -712,8 +732,11 @@ impl ClifDesign {
             fmt_strs: self.dyn_fmt_strs.as_ptr(),
             plugins: state.plugins.as_mut_ptr().cast(),
             plugin_poke_signal,
+            time_format: state.runtime.time_format.clone(),
+            time_resolution: self.time_resolution,
             heap_len: state.runtime.heap.0.len(),
             readmems: self.read_mems.as_ptr(),
+            time_fmts: &self.time_fmts,
             heap_wide_ptr,
             readmem: read_mem,
             fst_poke: state.runtime.tvl_first_write.as_mut_ptr(),
@@ -795,6 +818,7 @@ impl ClifDesign {
             }
         });
 
+        state.runtime.time_format = cldctx.time_format;
         state.runtime.instruction_count = cldctx.icount;
         for plugin in state.plugins.iter_mut() {
             plugin.finish(&mut state.runtime);
@@ -855,13 +879,9 @@ extern "C" fn read_mem(
     .unwrap();
 }
 
-extern "C" fn fmt(
-    mut world: NonNull<&mut dyn World>,
-    dyn_fmt: *const DynFormatString,
-    bits: *const BitsRefT,
-) {
-    let world = unsafe { world.as_mut() };
-    let dyn_fmt = unsafe { dyn_fmt.as_ref() }.unwrap();
+extern "C" fn fmt(mut cldctx: NonNull<ColdContextT>, fmt_index: i64, bits: *const BitsRefT) {
+    let cldctx = unsafe { cldctx.as_mut() };
+    let dyn_fmt = unsafe { cldctx.fmt_strs.add(fmt_index as usize).as_ref() }.unwrap();
     let args = (0..dyn_fmt.arguments().len()).map(|i| {
         let ref_t = unsafe { bits.add(i).as_ref() }.unwrap();
         let size = VectorSize::new(ref_t.size).unwrap();
@@ -891,8 +911,15 @@ extern "C" fn fmt(
             )
         }
     });
-    let mut stdout = world.stdout();
-    dyn_fmt.write_to(&mut stdout, args).unwrap();
+    let mut stdout = cldctx.world.stdout();
+    dyn_fmt
+        .write_to(
+            &mut stdout,
+            args,
+            &cldctx.time_format,
+            cldctx.time_resolution,
+        )
+        .unwrap();
 }
 
 mod random_shims {

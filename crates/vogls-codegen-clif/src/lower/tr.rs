@@ -24,7 +24,7 @@ use crate::lower::{
     F64, I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, cast, dyn_slice_read, fv_load, mask_of,
     maskv, maskvsbs, mem, nwords, var_words,
 };
-use crate::runtime::{EventT, ScheduleT, layout};
+use crate::runtime::{ColdContextT, EventT, FnTable, ScheduleT, layout};
 
 use super::{Compiler, WideMap, wide_load, wide_store};
 
@@ -2237,6 +2237,21 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                         wide_copy(b, dst_ptr, src_ptr, nwords);
                                     }
                                 }
+                            }
+                            IntrinsicOp::SetTimeFormat(fmt) => {
+                                let idx = self.compiler.time_fmts.len();
+                                self.compiler.time_fmts.push(fmt.clone());
+                                let cldctx = params.cldctx;
+                                let idx = b.ins().iconst(types::I64, idx as u64 as i64);
+                                let off = offset_of!(ColdContextT, fn_table)
+                                    + offset_of!(FnTable, set_time_format);
+                                let fn_ptr = b.ins().load(ptr, mem(), cldctx, off as i32);
+                                let mut sig = Signature::new(CallConv::SystemV);
+                                sig.params.extend([ptr, I64].map(AbiParam::new));
+                                let sr = b.import_signature(sig);
+                                b.ins().call_indirect(sr, fn_ptr, &[cldctx, idx]);
+                                let z = b.ins().iconst(I64, 0);
+                                b.def_var(vmap[dst], z);
                             }
                             // VCD dump intrinsics ($dumpfile/$dumpvars/$dumpoff/$dumpon) are
                             // a bytecode-only feature; the compiled backends (this one and

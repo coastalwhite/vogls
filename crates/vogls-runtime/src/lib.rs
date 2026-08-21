@@ -2,7 +2,7 @@ use std::io;
 
 use vogls_codegen::Heap;
 use vogls_ir::GlobalContext;
-use vogls_ir::time::TimeResolution;
+use vogls_ir::time::TimeFormat;
 use vogls_utils::{TableKey, new_table_key};
 
 pub mod plugins;
@@ -18,25 +18,6 @@ impl RtSignalKey {
 
     pub fn as_u64(self) -> u64 {
         self.get() as u64
-    }
-}
-
-#[derive(Clone)]
-pub struct TimeFormat {
-    pub time_unit: TimeResolution,
-    pub precision_number: u8,
-    pub suffix_string: String,
-    pub minimum_field_width: u32,
-}
-
-impl TimeFormat {
-    pub fn new(time_unit: TimeResolution) -> Self {
-        Self {
-            time_unit,
-            precision_number: 0,
-            suffix_string: String::new(),
-            minimum_field_width: 20,
-        }
     }
 }
 

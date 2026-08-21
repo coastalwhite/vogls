@@ -31,6 +31,7 @@ mod temporal;
 use reg::{Reg, Regs};
 use vogls_bits::BitsDataRef;
 use vogls_codegen::{Heap, HeapOffset, HeapRef, SixBitSize};
+use vogls_ir::time::TimeResolution;
 use vogls_ir::{Bits, LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_runtime::{RtSignalKey, RuntimeState};
@@ -69,6 +70,7 @@ pub struct Design {
     pub watchers: BytecodeWatchers,
     pub profile: Option<PathBuf>,
     pub debug_info: Option<Arc<BytecodeDebugInfo>>,
+    pub time_resolution: TimeResolution,
 }
 pub struct State {
     pub runtime: RuntimeState,
@@ -125,6 +127,7 @@ pub struct ColdContext<'a> {
     heap_scratch: Vec<u64>,
 
     return_value: u32,
+    time_resolution: TimeResolution,
 }
 
 impl<'a> ColdContext<'a> {
@@ -133,6 +136,7 @@ impl<'a> ColdContext<'a> {
         watchers: &'a BytecodeWatchers,
         plugins: &'a mut [RuntimePluginState],
         world: &'a mut dyn World,
+        time_resolution: TimeResolution,
     ) -> Self {
         Self {
             stack: Vec::new(),
@@ -143,6 +147,7 @@ impl<'a> ColdContext<'a> {
             heap_scratch: Vec::new(),
             plugins,
             return_value: 0,
+            time_resolution,
         }
     }
 }
@@ -821,6 +826,7 @@ impl std::hash::Hash for IntrinsicOpEqWrap {
             IntrinsicOp::Display(f) | IntrinsicOp::Assert(f) => f.hash(state),
             IntrinsicOp::VcdOpenFile(_) | IntrinsicOp::VcdAppendModule(_) => {}
             IntrinsicOp::VcdPause | IntrinsicOp::VcdResume | IntrinsicOp::ReadMem(_) => {}
+            IntrinsicOp::SetTimeFormat(fmt) => fmt.hash(state),
         }
     }
 }
@@ -832,6 +838,7 @@ impl PartialEq for IntrinsicOpEqWrap {
         match (&self.0, &other.0) {
             (IntrinsicOp::Time | IntrinsicOp::Finish, _) => true,
             (IntrinsicOp::Random(l), IntrinsicOp::Random(r)) => l == r,
+            (IntrinsicOp::SetTimeFormat(l), IntrinsicOp::SetTimeFormat(r)) => l == r,
             (
                 IntrinsicOp::Display(f) | IntrinsicOp::Assert(f),
                 IntrinsicOp::Display(fo) | IntrinsicOp::Assert(fo),
@@ -1160,6 +1167,7 @@ impl Design {
             &self.watchers,
             &mut state.plugins,
             world,
+            self.time_resolution,
         );
         let mut regs = Regs::new(self.stack_offset);
 

@@ -42,7 +42,7 @@
             };
             rustToolchain = pkgs.rust-bin.stable.latest.default.override {
               targets = [ buildTarget ];
-              extensions = [ "rust-src" "llvm-tools-preview" ];
+              extensions = [ "rust-src" "llvm-tools-preview" "rust-analyzer" ];
             };
             rustPlatform = pkgs.makeRustPlatform {
               cargo = rustToolchain;
@@ -93,6 +93,9 @@
                 export LD_LIBRARY_PATH="${stdenv.cc.cc.lib}/lib:$PYTHON_SHARED_LIB"
               '';
               venvDir = ".venv";
+              shellHook = ''
+                export RUST_SRC_PATH="${rustToolchain}/lib/rustlib/src/rust/library"
+              '';
             };
 
             devShells.bench = pkgs.mkShell {
