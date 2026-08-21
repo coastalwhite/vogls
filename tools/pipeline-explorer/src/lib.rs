@@ -1,5 +1,4 @@
 use std::fmt;
-use std::io::{stderr, stdout};
 
 use js_sys::{Array, Object, Reflect};
 use trva::error::AssembleError;
@@ -9,7 +8,7 @@ use vogls::design::{Arena, Macro};
 use vogls::frontend::symbol_table::SymbolId;
 use vogls::ir::Mode;
 use vogls::{
-    Bits, ElaboratedDesign, LogicMode, OptFlags, Optimizations, SignalHandle, SimulationIo,
+    Bits, ElaboratedDesign, LogicMode, NeverWorld, OptFlags, Optimizations, SignalHandle,
     VectorSize,
 };
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -196,13 +195,11 @@ pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue,
     design.set_signal(&mut state, memory_signal, &memory_bits);
     design.set_signal(&mut state, rstn, &false.into());
 
-    let mut io = SimulationIo::new(Box::new(stdout()), Box::new(stderr()));
     design
-        .run(&mut state, &mut io, CYCLE * 10)
+        .run(&mut state, &mut NeverWorld::new(), CYCLE * 10)
         .expect("failed to run");
     design.set_signal(&mut state, rstn, &true.into());
 
-    let mut io = SimulationIo::new(Box::new(stdout()), Box::new(stderr()));
     const STAGES: &[&str] = &["IF", "IS", "EX", "ALU", "BR", "MA"];
 
     let to_slot = |pc: u32, active: bool| -> u32 {
@@ -218,7 +215,7 @@ pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue,
     for i in 0..num_cycles {
         let time = state.runtime().time;
         design
-            .run(&mut state, &mut io, time + CYCLE)
+            .run(&mut state, &mut NeverWorld::new(), time + CYCLE)
             .expect("failed to run");
 
         let pc = design.get_signal(&state, pc_q).extract_exact_u32().unwrap();
@@ -364,15 +361,9 @@ pub fn get_ibex_trace(
     design.set_signal(&mut state, memory_signal, &memory_bits);
     design.set_signal(&mut state, rst_n, &false.into());
     design
-        .run(
-            &mut state,
-            &mut SimulationIo::new(Box::new(stdout()), Box::new(stderr())),
-            CYCLE * 10,
-        )
+        .run(&mut state, &mut NeverWorld::new(), CYCLE * 10)
         .expect("failed to run");
     design.set_signal(&mut state, rst_n, &true.into());
-
-    let mut io = SimulationIo::new(Box::new(stdout()), Box::new(stderr()));
 
     let stages: &[&str] = if cfg.wb_stage {
         &["IF", "ID", "WB"]
@@ -385,7 +376,7 @@ pub fn get_ibex_trace(
     for i in 0..num_cycles {
         let time = state.runtime().time;
         design
-            .run(&mut state, &mut io, time + CYCLE)
+            .run(&mut state, &mut NeverWorld::new(), time + CYCLE)
             .expect("failed to run");
 
         let to_slot = |pc: u32, active: bool| -> u32 {
@@ -541,15 +532,9 @@ pub fn get_trace(
     design.set_signal(&mut state, memory_signal, &memory);
     design.set_signal(&mut state, nrst, &false.into());
     design
-        .run(
-            &mut state,
-            &mut SimulationIo::new(Box::new(stdout()), Box::new(stderr())),
-            CYCLE * 10,
-        )
+        .run(&mut state, &mut NeverWorld::new(), CYCLE * 10)
         .expect("failed to run");
     design.set_signal(&mut state, nrst, &true.into());
-
-    let mut io = SimulationIo::new(Box::new(stdout()), Box::new(stderr()));
 
     let stages = &["TR", "IF", "L1", "L2", "EX", "SH", "ST", "LD"];
 
@@ -560,7 +545,7 @@ pub fn get_trace(
     for i in 0..num_cycles {
         let time = state.runtime().time;
         design
-            .run(&mut state, &mut io, time + CYCLE)
+            .run(&mut state, &mut NeverWorld::new(), time + CYCLE)
             .expect("failed to run");
 
         let pc = design

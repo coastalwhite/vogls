@@ -9,6 +9,7 @@ vogls-bits.workspace = true
 vogls-utils.workspace = true
 vogls-codegen.workspace = true
 vogls-runtime.workspace = true
+vogls-world.workspace = true
 
 cranelift-codegen.workspace = true
 cranelift-frontend.workspace = true

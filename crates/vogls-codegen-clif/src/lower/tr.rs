@@ -2158,8 +2158,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     cldctx,
                                     (layout::CTX_FN_TABLE + off) as i32,
                                 );
-                                let stderr =
-                                    b.ins().load(ptr, mem(), cldctx, layout::CTX_STDERR as i32);
+                                let world =
+                                    b.ins().load(ptr, mem(), cldctx, layout::CTX_WORLD as i32);
                                 // seed + distribution params, each passed as i32, then the io ptr.
                                 let mut args = Vec::new();
                                 let mut sig = Signature::new(CallConv::SystemV);
@@ -2169,7 +2169,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     args.push(v32);
                                     sig.params.push(AbiParam::new(I32));
                                 }
-                                args.push(stderr);
+                                args.push(world);
                                 sig.params.push(AbiParam::new(ptr));
                                 sig.returns.push(AbiParam::new(I64));
                                 let sr = b.import_signature(sig);

@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::io::{Write as _, stderr, stdout};
+use std::io::Write as _;
 use std::mem::ManuallyDrop;
 use std::ptr::NonNull;
 
@@ -9,8 +9,9 @@ use vogls_codegen::HeapRef;
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::{Bits, GlobalContext, Mode, ReadMem, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
-use vogls_runtime::{RtSignalKey, RuntimeState, SimulationIo};
+use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_utils::{SyncWrapper, TableKey};
+use vogls_world::World;
 
 type Time = u64;
 type HeapPtr = Option<NonNull<u64>>;
@@ -48,8 +49,7 @@ pub mod layout {
     pub const CTX_READMEM: usize = offset_of!(ColdContextT, readmem);
     pub const CTX_FST_POKE: usize = offset_of!(ColdContextT, fst_poke);
     pub const CTX_ICOUNT: usize = offset_of!(ColdContextT, icount);
-    pub const CTX_STDOUT: usize = offset_of!(ColdContextT, stdout);
-    pub const CTX_STDERR: usize = offset_of!(ColdContextT, stderr);
+    pub const CTX_WORLD: usize = offset_of!(ColdContextT, world);
 
     pub const BITSREF_SIZEOF: usize = size_of::<super::BitsRefT>();
     pub const BITSREF_SIZE_OFF: usize = offset_of!(super::BitsRefT, size);
@@ -120,38 +120,19 @@ pub struct BitsRefT {
 
 #[repr(C)]
 pub struct FnTable {
-    fmt: extern "C" fn(
-        NonNull<Box<dyn std::io::Write + Send + Sync>>,
-        *const DynFormatString,
-        *const BitsRefT,
-    ),
+    fmt: extern "C" fn(NonNull<&mut dyn World>, *const DynFormatString, *const BitsRefT),
 
-    rtl_dist_uniform: extern "C" fn(
-        seed: i32,
-        start: i32,
-        end: i32,
-        NonNull<Box<dyn std::io::Write + Send + Sync>>,
-    ) -> u64,
-    rtl_dist_normal: extern "C" fn(
-        seed: i32,
-        mean: i32,
-        df: i32,
-        NonNull<Box<dyn std::io::Write + Send + Sync>>,
-    ) -> u64,
+    rtl_dist_uniform:
+        extern "C" fn(seed: i32, start: i32, end: i32, world: NonNull<&mut dyn World>) -> u64,
+    rtl_dist_normal:
+        extern "C" fn(seed: i32, mean: i32, df: i32, world: NonNull<&mut dyn World>) -> u64,
     rtl_dist_exponential:
-        extern "C" fn(seed: i32, mean: i32, NonNull<Box<dyn std::io::Write + Send + Sync>>) -> u64,
-    rtl_dist_poisson:
-        extern "C" fn(seed: i32, mean: i32, NonNull<Box<dyn std::io::Write + Send + Sync>>) -> u64,
-    rtl_dist_chi_square:
-        extern "C" fn(seed: i32, dof: i32, NonNull<Box<dyn std::io::Write + Send + Sync>>) -> u64,
-    rtl_dist_t:
-        extern "C" fn(seed: i32, dof: i32, NonNull<Box<dyn std::io::Write + Send + Sync>>) -> u64,
-    rtl_dist_erlang: extern "C" fn(
-        seed: i32,
-        k_stage: i32,
-        mean: i32,
-        NonNull<Box<dyn std::io::Write + Send + Sync>>,
-    ) -> u64,
+        extern "C" fn(seed: i32, mean: i32, world: NonNull<&mut dyn World>) -> u64,
+    rtl_dist_poisson: extern "C" fn(seed: i32, mean: i32, world: NonNull<&mut dyn World>) -> u64,
+    rtl_dist_chi_square: extern "C" fn(seed: i32, dof: i32, world: NonNull<&mut dyn World>) -> u64,
+    rtl_dist_t: extern "C" fn(seed: i32, dof: i32, world: NonNull<&mut dyn World>) -> u64,
+    rtl_dist_erlang:
+        extern "C" fn(seed: i32, k_stage: i32, mean: i32, world: NonNull<&mut dyn World>) -> u64,
 
     /// Transcendental real ops, dispatched by [`real_code`] on the f64 bit
     /// patterns `a`/`b` (b unused for unary ops).
@@ -462,7 +443,7 @@ impl FnTable {
 }
 
 #[repr(C)]
-pub struct ColdContextT {
+pub struct ColdContextT<'a> {
     fn_table: FnTable,
 
     fmt_strs: *const DynFormatString,
@@ -480,8 +461,7 @@ pub struct ColdContextT {
 
     icount: u64,
 
-    stdout: NonNull<Box<dyn std::io::Write + Send + Sync>>,
-    stderr: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    world: Box<&'a mut dyn World>,
 }
 
 #[repr(C)]
@@ -709,7 +689,7 @@ impl ClifDesign {
     pub fn run(
         &self,
         state: &mut ClifDesignState,
-        io: &mut SimulationIo,
+        world: &mut dyn World,
         max_time: u64,
     ) -> Result<(), ()> {
         let empty_active_event_queue_fn = self.entry;
@@ -732,8 +712,7 @@ impl ClifDesign {
             readmem: read_mem,
             fst_poke: state.runtime.tvl_first_write.as_mut_ptr(),
             icount: state.runtime.instruction_count,
-            stdout: NonNull::from_mut(&mut io.stdout),
-            stderr: NonNull::from_mut(&mut io.stderr),
+            world: Box::new(world),
         };
         let return_value = state.schedule.with_t(|schedule| {
             'main_loop: loop {
@@ -816,7 +795,7 @@ impl ClifDesign {
         }
         if return_value.should_exit() {
             if return_value.is_ok() {
-                writeln!(io.stdout, "[FINISH]").unwrap();
+                writeln!(world.stdout(), "[FINISH]").unwrap();
                 return Ok(());
             } else {
                 return Err(());
@@ -868,11 +847,11 @@ extern "C" fn read_mem(
 }
 
 extern "C" fn fmt(
-    mut file: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+    mut world: NonNull<&mut dyn World>,
     dyn_fmt: *const DynFormatString,
     bits: *const BitsRefT,
 ) {
-    let file = unsafe { file.as_mut() };
+    let world = unsafe { world.as_mut() };
     let dyn_fmt = unsafe { dyn_fmt.as_ref() }.unwrap();
     let args = (0..dyn_fmt.arguments().len()).map(|i| {
         let ref_t = unsafe { bits.add(i).as_ref() }.unwrap();
@@ -903,11 +882,14 @@ extern "C" fn fmt(
             )
         }
     });
-    dyn_fmt.write_to(file, args).unwrap();
+    let mut stdout = world.stdout();
+    dyn_fmt.write_to(&mut stdout, args).unwrap();
 }
 
 mod random_shims {
     use std::ptr::NonNull;
+
+    use vogls_world::World;
 
     fn combine_seed_result(seed: i32, result: i32) -> u64 {
         (u64::from(seed.cast_unsigned()) << 32) | u64::from(result.cast_unsigned())
@@ -917,7 +899,7 @@ mod random_shims {
         mut seed: i32,
         start: i32,
         end: i32,
-        _io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+        _world: NonNull<&mut dyn World>,
     ) -> u64 {
         let result = vogls_runtime::random::rtl_dist_uniform(&mut seed, start, end);
         combine_seed_result(seed, result)
@@ -926,7 +908,7 @@ mod random_shims {
         mut seed: i32,
         mean: i32,
         df: i32,
-        _io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+        _world: NonNull<&mut dyn World>,
     ) -> u64 {
         let result = vogls_runtime::random::rtl_dist_normal(&mut seed, mean, df);
         combine_seed_result(seed, result)
@@ -934,56 +916,56 @@ mod random_shims {
     pub extern "C" fn rtl_dist_exponential(
         mut seed: i32,
         mean: i32,
-        mut io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+        mut world: NonNull<&mut dyn World>,
     ) -> u64 {
         let mut warning = None;
         let result = vogls_runtime::random::rtl_dist_exponential(&mut seed, mean, &mut warning);
         if let Some(warning) = warning {
             use std::io::Write;
-            let io = unsafe { io.as_mut() };
-            _ = writeln!(io, "WARNING: {}", warning.as_str());
+            let world = unsafe { world.as_mut() };
+            _ = writeln!(world.stderr(), "WARNING: {}", warning.as_str());
         }
         combine_seed_result(seed, result)
     }
     pub extern "C" fn rtl_dist_poisson(
         mut seed: i32,
         mean: i32,
-        mut io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+        mut world: NonNull<&mut dyn World>,
     ) -> u64 {
         let mut warning = None;
         let result = vogls_runtime::random::rtl_dist_poisson(&mut seed, mean, &mut warning);
         if let Some(warning) = warning {
             use std::io::Write;
-            let io = unsafe { io.as_mut() };
-            _ = writeln!(io, "WARNING: {}", warning.as_str());
+            let world = unsafe { world.as_mut() };
+            _ = writeln!(world.stderr(), "WARNING: {}", warning.as_str());
         }
         combine_seed_result(seed, result)
     }
     pub extern "C" fn rtl_dist_chi_square(
         mut seed: i32,
         dof: i32,
-        mut io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+        mut world: NonNull<&mut dyn World>,
     ) -> u64 {
         let mut warning = None;
         let result = vogls_runtime::random::rtl_dist_chi_square(&mut seed, dof, &mut warning);
         if let Some(warning) = warning {
             use std::io::Write;
-            let io = unsafe { io.as_mut() };
-            _ = writeln!(io, "WARNING: {}", warning.as_str());
+            let world = unsafe { world.as_mut() };
+            _ = writeln!(world.stderr(), "WARNING: {}", warning.as_str());
         }
         combine_seed_result(seed, result)
     }
     pub extern "C" fn rtl_dist_t(
         mut seed: i32,
         dof: i32,
-        mut io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+        mut world: NonNull<&mut dyn World>,
     ) -> u64 {
         let mut warning = None;
         let result = vogls_runtime::random::rtl_dist_t(&mut seed, dof, &mut warning);
         if let Some(warning) = warning {
             use std::io::Write;
-            let io = unsafe { io.as_mut() };
-            _ = writeln!(io, "WARNING: {}", warning.as_str());
+            let world = unsafe { world.as_mut() };
+            _ = writeln!(world.stderr(), "WARNING: {}", warning.as_str());
         }
         combine_seed_result(seed, result)
     }
@@ -991,14 +973,14 @@ mod random_shims {
         mut seed: i32,
         k_stage: i32,
         mean: i32,
-        mut io: NonNull<Box<dyn std::io::Write + Send + Sync>>,
+        mut world: NonNull<&mut dyn World>,
     ) -> u64 {
         let mut warning = None;
         let result = vogls_runtime::random::rtl_dist_erlang(&mut seed, k_stage, mean, &mut warning);
         if let Some(warning) = warning {
             use std::io::Write;
-            let io = unsafe { io.as_mut() };
-            _ = writeln!(io, "WARNING: {}", warning.as_str());
+            let world = unsafe { world.as_mut() };
+            _ = writeln!(world.stderr(), "WARNING: {}", warning.as_str());
         }
         combine_seed_result(seed, result)
     }

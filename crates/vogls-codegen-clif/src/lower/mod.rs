@@ -790,9 +790,9 @@ impl<'a> Compiler<'a> {
             cldctx,
             (layout::CTX_FN_TABLE + layout::FN_FMT) as i32,
         );
-        let stdout = b
+        let world = b
             .ins()
-            .load(self.ptr, mem(), cldctx, layout::CTX_STDOUT as i32);
+            .load(self.ptr, mem(), cldctx, layout::CTX_WORLD as i32);
         let fmt_strs = b
             .ins()
             .load(self.ptr, mem(), cldctx, layout::CTX_FMT_STRS as i32);
@@ -802,7 +802,7 @@ impl<'a> Compiler<'a> {
         let args_ptr = b.ins().stack_addr(self.ptr, arr_slot, 0);
         let sig = b.import_signature(self.sigs.fmt.clone());
         b.ins()
-            .call_indirect(sig, fmt_ptr, &[stdout, fmt_str_ptr, args_ptr]);
+            .call_indirect(sig, fmt_ptr, &[world, fmt_str_ptr, args_ptr]);
     }
 
     #[expect(clippy::too_many_arguments)]

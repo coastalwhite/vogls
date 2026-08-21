@@ -313,7 +313,7 @@ impl BytecodeInstruction for RescheduleWait {
 #[cold]
 fn time_overflow(cldctx: &mut ColdContext) {
     cldctx.return_value = 1;
-    cldctx.stderr.write_all(b"Time overflow!").unwrap();
+    cldctx.world.stderr().write_all(b"Time overflow!").unwrap();
 }
 
 impl BytecodeInstruction for RescheduleRegion {

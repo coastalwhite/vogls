@@ -8,12 +8,12 @@ use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use clap::Parser;
 use vogls::design::{Arena, Macro};
-use vogls::{DesignBuilder, SimulationIo, VirDesignBuilder};
+use vogls::{DesignBuilder, StdWorldCaptured, VirDesignBuilder};
 use vogls_ir::LogicMode;
 use vogls_ir::optimize::{OptFlags, Optimizations};
 use vogls_ir::time::{TimeResolution, TimeSize, TimeUnit};
@@ -44,19 +44,6 @@ struct Args {
 
     #[arg(short = 'n', long, default_value_t = 0)]
     num_threads: usize,
-}
-
-#[derive(Default, Clone)]
-struct Io(Arc<Mutex<Vec<u8>>>);
-
-impl io::Write for Io {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0.lock().unwrap().write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.0.lock().unwrap().flush()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -711,9 +698,6 @@ fn run_test(
         .annotate_sdf
         .then(|| path.with_extension("sdf"));
 
-    let stdout = Io::default();
-    let stderr = Io::default();
-
     if test_information.verify_ir {
         let design = std::panic::catch_unwind(AssertUnwindSafe(|| {
             let arena = Arena::new();
@@ -800,8 +784,9 @@ fn run_test(
         }
     }
 
+    let mut world = StdWorldCaptured::default();
     let result: Result<Result<(), FailureInfo>, Box<dyn std::any::Any + Send + 'static>> =
-        std::panic::catch_unwind(|| {
+        std::panic::catch_unwind(AssertUnwindSafe(|| {
             let arena = Arena::new();
             let design = if path
                 .extension()
@@ -907,26 +892,12 @@ fn run_test(
                 }
                 .truncate_or_multiply_to(v, design.time_resolution())
             });
-            design
-                .run(
-                    &mut state,
-                    &mut SimulationIo {
-                        stdout: Box::new(stdout.clone()) as _,
-                        stderr: Box::new(stderr.clone()) as _,
-                    },
-                    timeout,
-                )
-                .map_err(|_| {
-                    let stdout = stdout.0.lock().unwrap();
-                    let stdout = std::str::from_utf8(&stdout).unwrap();
-                    let stderr = stderr.0.lock().unwrap();
-                    let stderr = std::str::from_utf8(&stderr).unwrap();
-                    FailureInfo::Execution {
-                        stdout: stdout.to_string(),
-                        stderr: stderr.to_string(),
-                    }
-                })
-        });
+            design.run(&mut state, &mut world, timeout).map_err(|_| {
+                let stdout = world.stdout.read_to_string().unwrap();
+                let stderr = world.stderr.read_to_string().unwrap();
+                FailureInfo::Execution { stdout, stderr }
+            })
+        }));
 
     let result = match result {
         Ok(_) if test_information.expect_panic => return Err(FailureInfo::ExpectPanic),
@@ -962,8 +933,7 @@ fn run_test(
         test_information.verify_stdout,
         VerifyOutput::Yes | VerifyOutput::SortLines
     ) {
-        let stdout = stdout.0.lock().unwrap();
-        let stdout = std::str::from_utf8(&stdout).unwrap();
+        let stdout = world.stdout.read_to_string().unwrap();
 
         let mut stdout_path = path.to_path_buf();
         stdout_path.add_extension("stdout");
@@ -1027,15 +997,9 @@ fn run_test(
             }
             .truncate_or_multiply_to(v, design.time_resolution())
         });
+        let mut world = StdWorldCaptured::default();
         design
-            .run(
-                &mut state,
-                &mut SimulationIo {
-                    stdout: Box::new(stdout.clone()) as _,
-                    stderr: Box::new(stderr.clone()) as _,
-                },
-                timeout,
-            )
+            .run(&mut state, &mut world, timeout)
             .expect("failed to execute");
 
         let mut fixture_vcd_path = path.to_path_buf();

@@ -8,7 +8,7 @@ use vogls::design::{Arena, Macro};
 use vogls::ir::LogicMode;
 use vogls::ir::optimize::OptFlags;
 use vogls::utils::TimerStack;
-use vogls::{DesignBuilder, DesignBuilderError, Optimizations, SimulationIo, VirDesignBuilder};
+use vogls::{DesignBuilder, DesignBuilderError, Optimizations, StdWorld, VirDesignBuilder};
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -265,11 +265,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     timers.start("simulation");
     design
-        .run(
-            &mut state,
-            &mut SimulationIo::new(Box::new(std::io::stdout()), Box::new(std::io::stderr())),
-            time,
-        )
+        .run(&mut state, &mut StdWorld::new(), time)
         .map_err(|_| "simulation failed")?;
     timers.stop();
 

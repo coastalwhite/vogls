@@ -1110,6 +1110,7 @@ dependencies = [
  "vogls-utils",
  "vogls-vcd",
  "vogls-verilog",
+ "vogls-world",
 ]
 
 [[package]]
@@ -1134,6 +1135,7 @@ dependencies = [
  "vogls-runtime",
  "vogls-utils",
  "vogls-vcd",
+ "vogls-world",
 ]
 
 [[package]]
@@ -1170,6 +1172,7 @@ dependencies = [
  "vogls-ir",
  "vogls-runtime",
  "vogls-utils",
+ "vogls-world",
 ]
 
 [[package]]
@@ -1307,6 +1310,16 @@ dependencies = [
  "vogls-frontend",
  "vogls-fuse-signals",
  "vogls-ir",
+ "vogls-utils",
+]
+
+[[package]]
+name = "vogls-world"
+version = "0.0.1"
+dependencies = [
+ "foldhash 0.2.0",
+ "hashbrown 0.17.1",
+ "libc",
  "vogls-utils",
 ]
 

@@ -177,7 +177,7 @@ impl BytecodeInstruction for Intrinsic {
                 for plugin in cldctx.plugins.iter_mut() {
                     plugin.finish(state);
                 }
-                cldctx.stdout.write_all(b"[FINISH]\n").unwrap();
+                cldctx.world.stdout().write_all(b"[FINISH]\n").unwrap();
             }
             O::Random(kind) => {
                 let mut has_fv = false;
@@ -265,7 +265,7 @@ impl BytecodeInstruction for Intrinsic {
 
                 if let Some(warning) = warning {
                     use std::io::Write;
-                    writeln!(&mut cldctx.stderr, "WARNING: {}", warning.as_str()).unwrap();
+                    writeln!(&mut cldctx.world.stderr(), "WARNING: {}", warning.as_str()).unwrap();
                 }
 
                 let result =
@@ -280,8 +280,9 @@ impl BytecodeInstruction for Intrinsic {
             }
             O::Display(f) => {
                 let mut stack_offset = 0;
+                let mut stdout = cldctx.world.stdout();
                 f.write_to(
-                    &mut cldctx.stdout,
+                    &mut stdout,
                     cldctx.stack_args.iter().map(|&(size, mode)| match mode {
                         LogicMode::TwoValue if size <= VSIZE_64 => {
                             let value = cldctx.stack[stack_offset];
@@ -333,8 +334,9 @@ impl BytecodeInstruction for Intrinsic {
                 };
 
                 if !condition {
+                    let mut stderr = cldctx.world.stderr();
                     f.write_to(
-                        &mut cldctx.stderr,
+                        &mut stderr,
                         cldctx.stack_args[1..]
                             .iter()
                             .map(|&(size, mode)| match mode {
@@ -379,7 +381,8 @@ impl BytecodeInstruction for Intrinsic {
                     .downcast_mut::<vogls_vcd::RtVcdOutput>()
                     .unwrap();
                 if !vcd.children.is_empty() {
-                    writeln!(&mut cldctx.stderr, "ERR! VCD opened a second file").unwrap();
+                    let mut stderr = cldctx.world.stderr();
+                    writeln!(&mut stderr, "ERR! VCD opened a second file").unwrap();
                     cldctx.return_value = 1;
                     *pc = u64::MAX;
                     return;
@@ -394,8 +397,9 @@ impl BytecodeInstruction for Intrinsic {
                     .unwrap();
 
                 if vcd.start_ts != state.time {
+                    let mut stderr = cldctx.world.stderr();
                     writeln!(
-                        &mut cldctx.stderr,
+                        &mut stderr,
                         "ERR! Dumping vars over several simulation times"
                     )
                     .unwrap();
