@@ -3,14 +3,26 @@ on:
   workflow_dispatch:
   pull_request:
   push:
+    branches: [main]
+
+# Only allow one concurrent deployment, but don't cancel in-progress runs — let
+# them finish so a production deploy is never left half-done.
+concurrency:
+  group: "pages-${{ github.head_ref || github.ref }}"
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
       with:
+        persist-credentials: false
         submodules: true
-    - uses: cachix/install-nix-action@v31
+    - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # tag=v31
       with:
         github_access_token: ${{ secrets.GITHUB_TOKEN }}
     - name: Build static files
@@ -18,12 +30,14 @@ jobs:
       run: nix develop .#docs --command just build-site
 
     - name: Upload static files as artifact
-      id: deployment
-      uses: actions/upload-pages-artifact@v3
+      uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # tag=v3
       with:
         path: site
 
+  # Only deploy from main. On pull requests the build job above still runs as a
+  # check, but we never publish PR content to the live site.
   deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     permissions:
       pages: write
       id-token: write
@@ -36,4 +50,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # tag=v4
