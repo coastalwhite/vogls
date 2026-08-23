@@ -1,7 +1,7 @@
-Failed to read file. Reason: DuplicateDefinition(IdentId(3))
-[/home/johndoe/Projects/vogls/crates/vogls-test/tests/diagnostics/duplicate-register.v:5]:
-| module tb();
-|     reg x;
->     reg x;
-          ^
-| endmodule
+error: duplication definition of `x`
+  --> {path}:7
+ 5 | module tb();
+ 6 |     reg x;
+ 7 >     reg x;
+             ^
+ 8 | endmodule

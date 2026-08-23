@@ -18,7 +18,7 @@ use crate::number::{
     take_octal_bits, take_size,
 };
 use crate::tokenizer::Token;
-pub use diagnostics::{Diagnostics, report, report_error};
+pub use diagnostics::{Diagnostics, ReportKind, SpanError};
 pub use token_walker::TokenWalker;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{Bits, INTEGER_VSIZE};

@@ -12,6 +12,14 @@ impl TokenRange {
             end: tr + 1,
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.start >= self.end
+    }
+
+    pub fn len(&self) -> usize {
+        self.end.saturating_sub(self.start)
+    }
 }
 
 impl BitOr for TokenRange {

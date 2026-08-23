@@ -69,7 +69,9 @@ pub(crate) enum LowerErrorStage {
 
 impl<'a> fmt::Display for LowerError<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.diagnostics.report(&self.design.token_buffer).fmt(f)
+        self.diagnostics
+            .report(&self.design.token_buffer, &self.design.arenas)
+            .fmt(f)
     }
 }
 

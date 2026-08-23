@@ -13,7 +13,7 @@ use vogls_verilog::ast::module::{Module, ModuleItem, NonPortModuleItem, TimeScal
 use vogls_verilog::ast::udp::UdpDeclaration;
 use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable, determine_module_context};
 use vogls_verilog::lower::{Diagnostics, LowerContext, MutLowerContext, lower_module_to_ir};
-use vogls_verilog::parser::{Ast, AstArenas, report};
+use vogls_verilog::parser::{Ast, AstArenas, ReportKind, SpanError};
 use vogls_verilog::tokenizer::Tokenized;
 
 use crate::lowered_design::LowerErrorStage;
@@ -69,18 +69,30 @@ impl<'a> fmt::Display for ElaborationError<'a> {
                     "[ERR]: Found {} possible top-level modules: {names:?}",
                     modules.len()
                 )?;
-                let mut out = String::new();
-                for (m, _) in modules {
-                    out.clear();
-                    let span = self.design.arenas.get_item_span(m.module_identifier);
-                    report(&self.design.token_buffer, span, &mut out)?;
-                    writeln!(f, "{out}")?;
+                let t = &self.design.token_buffer;
+                for (m, n) in modules {
+                    let location = self.design.arenas.get_item_span(m.module_identifier);
+                    SpanError {
+                        spans: &t.spans,
+                        file_idxs: &t.file_idxs,
+                        paths: &t.paths,
+                        contents: &t.contents,
+                        error: format!(
+                            "possible top-level module `{}`",
+                            &self.design.arenas.ident_table[*n]
+                        ),
+                        kind: ReportKind::Info,
+                        code: None,
+                        location,
+                    }
+                    .fmt(f)?;
+                    writeln!(f)?;
                 }
                 Ok(())
             }
-            ElaborationErrorKind::Diagnostics(diagnostics) => {
-                diagnostics.report(&self.design.token_buffer).fmt(f)
-            }
+            ElaborationErrorKind::Diagnostics(diagnostics) => diagnostics
+                .report(&self.design.token_buffer, &self.design.arenas)
+                .fmt(f),
         }
     }
 }
@@ -106,7 +118,9 @@ pub struct AnnotationError<'a, 'b> {
 
 impl<'a, 'b> fmt::Display for AnnotationError<'a, 'b> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.diagnostics.report(&self.design.token_buffer).fmt(f)
+        self.diagnostics
+            .report(&self.design.token_buffer, &self.design.arenas)
+            .fmt(f)
     }
 }
 impl<'a, 'b> fmt::Debug for AnnotationError<'a, 'b> {
