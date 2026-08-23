@@ -1,9 +1,11 @@
 use std::fmt::{self, Write};
+use std::path::Path;
+use std::sync::Arc;
 
 use vogls_ir::token_range::TokenRange;
 
 use crate::span::Span;
-use crate::tokenizer::{Token, Tokenized};
+use crate::tokenizer::Token;
 
 use super::ParseErrorReason;
 
@@ -42,106 +44,159 @@ impl Diagnostics {
     }
 }
 
-pub fn report_error(
-    tokenized: &Tokenized,
-    reason: impl fmt::Debug,
-    location: TokenRange,
-    out: &mut String,
-) -> std::fmt::Result {
-    writeln!(out, "Failed to read file. Reason: {:?}", reason)?;
-    report(tokenized, location, out)
+pub struct SpanError<'a, T> {
+    pub spans: &'a [Span],
+    pub file_idxs: &'a [u32],
+
+    pub paths: &'a [Option<Arc<Path>>],
+    pub contents: &'a [Arc<str>],
+
+    pub error: T,
+    pub kind: ReportKind,
+    pub code: Option<u32>,
+    pub location: TokenRange,
 }
 
-pub fn report(tokenized: &Tokenized, location: TokenRange, out: &mut String) -> std::fmt::Result {
-    use std::fmt::Write;
-    if location.start == 0 && location.end == 0 {
-        return Ok(());
-    }
+#[derive(Clone, Copy)]
+pub enum ReportKind {
+    Error,
+    Warning,
+    Info,
+}
 
-    if tokenized.file_idxs[location.start] != tokenized.file_idxs[location.end - 1] {
-        // @TODO
-        return Ok(());
-    }
+const CTX_LINES: usize = 2;
+const TAB_WIDTH: usize = 4;
 
-    let path = &tokenized.paths[tokenized.file_idxs[location.start] as usize];
-    let content = tokenized.contents[tokenized.file_idxs[location.start] as usize].as_ref();
-    let location = Span::new(
-        tokenized.spans[location.start].start(),
-        tokenized.spans[location.end - 1].end(),
-    );
+impl<'a, T: fmt::Display> fmt::Display for SpanError<'a, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let file_idx = self.file_idxs[self.location.start];
+        let path = self.paths[file_idx as usize].as_deref();
+        let content = self.contents[file_idx as usize].as_ref();
 
-    // @Performance: Cache lines per file.
-    let lines = lines_with_offset(content);
-    let start_line = match lines.binary_search_by_key(&location.start(), |(offset, _)| *offset) {
-        Ok(v) => v,
-        Err(v) => v - 1,
-    };
-    let end_line = match lines.binary_search_by_key(&location.end(), |(offset, _)| *offset) {
-        Ok(v) => v,
-        Err(v) => v - 1,
-    };
+        // @Performance: Cache lines per file.
+        let lines = lines_with_offset(content);
+        let start_line = match lines
+            .binary_search_by_key(&self.spans[self.location.start].start(), |(offset, _)| {
+                *offset
+            }) {
+            Ok(v) => v,
+            Err(v) => v - 1,
+        };
 
-    const CTX_LINES: usize = 2;
-    const TAB_WIDTH: usize = 4;
-    let ctx_start_line = start_line.saturating_sub(CTX_LINES);
-    let ctx_end_line = end_line.saturating_add(1 + CTX_LINES).min(lines.len());
+        let path = match path {
+            None => "<unknown>".to_string(),
+            Some(p) => p.display().to_string(),
+        };
+        let kind = match self.kind {
+            ReportKind::Error => "error",
+            ReportKind::Warning => "warning",
+            ReportKind::Info => "info",
+        };
+        f.write_str(kind)?;
+        if let Some(code) = self.code {
+            write!(f, "[{code}]")?;
+        }
+        f.write_str(": ")?;
+        writeln!(f.with_tab_width(), "{}", self.error)?;
 
-    let path = match path {
-        None => "<unknown>".to_string(),
-        Some(p) => p.as_ref().display().to_string(),
-    };
-    writeln!(out, "[{path}:{}]:", ctx_start_line + 1)?;
-    for line in ctx_start_line..start_line {
-        let (_, line) = lines[line];
-        out.write_str("| ")?;
-        display_with_tab_width(line, out, TAB_WIDTH)?;
-        writeln!(out)?;
-    }
+        // TokenSpan across single file.
+        if !self.location.is_empty() && file_idx == self.file_idxs[self.location.end - 1] {
+            let file_span = Span::new(
+                self.spans[self.location.start].start(),
+                self.spans[self.location.end - 1].end(),
+            );
 
-    if start_line == end_line {
-        let (offset, line) = lines[start_line];
-        out.write_str("> ")?;
-        display_with_tab_width(line, out, TAB_WIDTH)?;
+            let end_line = match lines.binary_search_by_key(&file_span.end(), |(offset, _)| *offset)
+            {
+                Ok(v) => v,
+                Err(v) => v - 1,
+            };
 
-        let start_pad = display_width(&line[..location.start() - offset], TAB_WIDTH);
-        let len = display_width(&content[location.as_range()], TAB_WIDTH);
-        writeln!(out)?;
-        writeln!(out, "  {:start_pad$}{:^>len$}", "", "")?;
-    } else {
-        let (offset, line) = lines[start_line];
-        out.write_str("> ")?;
-        display_with_tab_width(line, out, TAB_WIDTH)?;
-        let start_pad = display_width(&line[..location.start() - offset], TAB_WIDTH);
-        let len = line.len() - (location.start() - offset);
-        writeln!(out)?;
-        writeln!(out, "  {:start_pad$}{:^>len$}", "", "",)?;
+            let ctx_start_line = start_line.saturating_sub(CTX_LINES);
+            let ctx_end_line = end_line.saturating_add(1 + CTX_LINES).min(lines.len());
 
-        for line in start_line + 1..end_line {
-            let (_, line) = lines[line];
-            out.write_str("> ")?;
-            display_with_tab_width(line, out, TAB_WIDTH)?;
-            let start_pad = display_width(&line[..line.len() - line.trim_start().len()], TAB_WIDTH);
-            let len = display_width(line, TAB_WIDTH) - start_pad;
-            writeln!(out)?;
-            writeln!(out, "  {:start_pad$}{:^>len$}", "", "")?;
+            let max_number_width = ceil_ilog10(ctx_end_line + 1) as usize;
+
+            writeln!(f, "{:max_number_width$} --> {path}:{}", "", start_line + 1)?;
+            for line_nr in ctx_start_line..start_line {
+                let (_, line) = lines[line_nr];
+                write!(f, " {:>max_number_width$}", line_nr + 1)?;
+                f.write_str(" | ")?;
+                f.with_tab_width().write_str(line)?;
+                writeln!(f)?;
+            }
+            if start_line == end_line {
+                let (offset, line) = lines[start_line];
+                write!(f, " {:>max_number_width$}", start_line + 1)?;
+                f.write_str(" > ")?;
+                f.with_tab_width().write_str(line)?;
+                writeln!(f)?;
+
+                let start_pad = display_width(&line[..file_span.start() - offset], TAB_WIDTH);
+                let len = display_width(&content[file_span.as_range()], TAB_WIDTH);
+                writeln!(
+                    f,
+                    "{:max_number_width$}    {:start_pad$}{:^>len$}",
+                    "", "", ""
+                )?;
+            } else {
+                let (offset, line) = lines[start_line];
+                write!(f, " {:>max_number_width$}", start_line + 1)?;
+                f.write_str(" > ")?;
+                f.with_tab_width().write_str(line)?;
+                let start_pad = display_width(&line[..file_span.start() - offset], TAB_WIDTH);
+                let len = line.len() - (file_span.start() - offset);
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "{:max_number_width$}    {:start_pad$}{:^>len$}",
+                    "", "", "",
+                )?;
+
+                for line_nr in start_line + 1..end_line {
+                    let (_, line) = lines[line_nr];
+                    write!(f, " {:>max_number_width$}", line_nr + 1)?;
+                    f.write_str(" > ")?;
+                    f.with_tab_width().write_str(line)?;
+                    let start_pad =
+                        display_width(&line[..line.len() - line.trim_start().len()], TAB_WIDTH);
+                    let len = display_width(line, TAB_WIDTH) - start_pad;
+                    writeln!(f)?;
+                    writeln!(
+                        f,
+                        "{:max_number_width$}    {:start_pad$}{:^>len$}",
+                        "", "", ""
+                    )?;
+                }
+
+                let (offset, line) = lines[end_line];
+                write!(f, " {:>max_number_width$}", end_line + 1)?;
+                f.write_str(" > ")?;
+                f.with_tab_width().write_str(line)?;
+                let start_pad =
+                    display_width(&line[..line.len() - line.trim_start().len()], TAB_WIDTH);
+                let len = display_width(&line[..file_span.end() - offset], TAB_WIDTH) - start_pad;
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "{:max_number_width$}    {:start_pad$}{:^>len$}",
+                    "", "", ""
+                )?;
+            }
+
+            for line_nr in end_line.saturating_add(1).min(ctx_end_line)..ctx_end_line {
+                let (_, line) = lines[line_nr];
+                write!(f, " {:>max_number_width$}", line_nr + 1)?;
+                f.write_str(" | ")?;
+                f.with_tab_width().write_str(line)?;
+                writeln!(f)?;
+            }
+        } else {
+            writeln!(f, "  --> {path}:{}", start_line + 1)?;
         }
 
-        let (offset, line) = lines[end_line];
-        out.write_str("> ")?;
-        display_with_tab_width(line, out, TAB_WIDTH)?;
-        let start_pad = display_width(&line[..line.len() - line.trim_start().len()], TAB_WIDTH);
-        let len = display_width(&line[..location.end() - offset], TAB_WIDTH) - start_pad;
-        writeln!(out)?;
-        writeln!(out, "  {:start_pad$}{:^>len$}", " ", " ")?;
+        Ok(())
     }
-
-    for line in end_line.saturating_add(1).min(ctx_end_line)..ctx_end_line {
-        let (_, line) = lines[line];
-        out.write_str("| ")?;
-        display_with_tab_width(line, out, TAB_WIDTH)?;
-        writeln!(out)?;
-    }
-    Ok(())
 }
 
 fn lines_with_offset(mut s: &str) -> Vec<(usize, &str)> {
@@ -175,15 +230,43 @@ pub fn display_width(mut s: &str, tab_width: usize) -> usize {
     n + s.len()
 }
 
-pub fn display_with_tab_width(mut s: &str, f: &mut String, tab_width: usize) -> fmt::Result {
-    // @TODO: This is horrible.
-    while let Some(i) = s.find('\t') {
-        f.write_str(&s[..i])?;
-        for _ in 0..tab_width {
-            f.write_char(' ')?;
+trait IntoDisplay: Sized {
+    fn with_tab_width<'a>(&'a mut self) -> DisplayWithTabWidth<'a, Self>;
+}
+
+impl<T: fmt::Write> IntoDisplay for T {
+    fn with_tab_width<'a>(&'a mut self) -> DisplayWithTabWidth<'a, Self> {
+        DisplayWithTabWidth {
+            writer: self,
+            tab_width: TAB_WIDTH,
         }
-        s = &s[i + 1..];
     }
-    f.write_str(s)?;
-    Ok(())
+}
+
+struct DisplayWithTabWidth<'a, W> {
+    writer: &'a mut W,
+    tab_width: usize,
+}
+
+impl<'a, W: fmt::Write> fmt::Write for DisplayWithTabWidth<'a, W> {
+    fn write_str(&mut self, mut s: &str) -> fmt::Result {
+        while let Some(split) = s.split_once('\t') {
+            let prefix;
+            (prefix, s) = split;
+
+            self.writer.write_str(prefix)?;
+            for _ in 0..self.tab_width {
+                self.writer.write_char(' ')?;
+            }
+        }
+        self.writer.write_str(s)
+    }
+}
+
+fn ceil_ilog10(n: usize) -> u32 {
+    match n {
+        0 => panic!("ceil_ilog10(0) is undefined"),
+        1 => 0,
+        n => (n - 1).ilog10() + 1,
+    }
 }

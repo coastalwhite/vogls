@@ -4,7 +4,7 @@ use vogls_ir::token_range::TokenRange;
 
 use crate::ast::{AstItem, Identifier};
 use crate::elaborate::ModuleSymbol;
-use crate::parser::AstArenas;
+use crate::parser::{AstArenas, ReportKind, SpanError};
 use crate::tokenizer::Tokenized;
 use vogls_frontend::ident_table::IdentId;
 
@@ -129,37 +129,86 @@ impl Diagnostics {
             .push((at, LowerErrorReason::ZeroWidthNet, Vec::new()));
     }
 
-    pub fn report<'a>(&'a self, tokens: &'a Tokenized) -> DiagnosticsReport<'a> {
-        DiagnosticsReport(self, tokens)
+    pub fn report<'a>(&'a self, tokens: &'a Tokenized, arenas: &'a AstArenas) -> DiagnosticsReport<'a> {
+        DiagnosticsReport(self, tokens, arenas)
     }
 }
 
-pub struct DiagnosticsReport<'a>(&'a Diagnostics, &'a Tokenized);
+pub struct DiagnosticsReport<'a>(&'a Diagnostics, &'a Tokenized, &'a AstArenas);
 
 impl<'a> fmt::Display for DiagnosticsReport<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if !self.0.warnings.is_empty() {
             for (location, warning) in &self.0.warnings {
-                writeln!(f, "[WARN]: {warning}")?;
-                let mut out = String::new();
-                crate::parser::report(self.1, *location, &mut out)?;
-                writeln!(f, "{out}")?;
+                SpanError {
+                    spans: &self.1.spans,
+                    file_idxs: &self.1.file_idxs,
+                    paths: &self.1.paths,
+                    contents: &self.1.contents,
+                    error: warning,
+                    kind: ReportKind::Warning,
+                    code: None,
+                    location: *location,
+                }
+                .fmt(f)?;
             }
         }
 
-        for (location, err, context) in &self.0.errors {
-            let mut out = String::new();
-            crate::parser::report_error(self.1, err.clone(), *location, &mut out)?;
-            write!(f, "{out}")?;
-            if !context.is_empty() {
-                writeln!(f, "context:")?;
-                for c in context {
-                    writeln!(f, "- {c}")?;
-                }
+        for (location, err, _context) in &self.0.errors {
+            SpanError {
+                spans: &self.1.spans,
+                file_idxs: &self.1.file_idxs,
+                paths: &self.1.paths,
+                contents: &self.1.contents,
+                error: LowerErrorDisplay {
+                    error: err,
+                    arenas: self.2,
+                },
+                kind: ReportKind::Error,
+                code: None,
+                location: *location,
             }
-            writeln!(f)?;
+            .fmt(f)?;
         }
 
         Ok(())
+    }
+}
+
+struct LowerErrorDisplay<'a> {
+    error: &'a LowerErrorReason,
+    arenas: &'a AstArenas,
+}
+
+impl<'a> fmt::Display for LowerErrorDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let ident_table = &self.arenas.ident_table;
+        match self.error {
+            LowerErrorReason::VariableNotFound(iid) => {
+                write!(f, "variable `{}` not found", &ident_table[*iid])
+            }
+            LowerErrorReason::PortNotFound(iid) => {
+                write!(f, "port `{}` not found", &ident_table[*iid])
+            }
+            LowerErrorReason::PortNotDefined(iid) => {
+                write!(f, "port `{}` is not defined", &ident_table[*iid])
+            }
+            LowerErrorReason::NotYetImplemented(reason) => {
+                write!(f, "not yet implemented or no specialized error: {reason}")
+            }
+            LowerErrorReason::OutputExprNotAllowed => write!(f, "not allowed as output expression"),
+            LowerErrorReason::InvalidNumArguments(_) => write!(f, "invalid number of arguments"),
+            LowerErrorReason::DuplicateDefinition(iid) => {
+                write!(f, "duplication definition of `{}`", &ident_table[*iid])
+            }
+            LowerErrorReason::ModuleNotFound(iid) => {
+                write!(f, "module `{}` is not found", &ident_table[*iid])
+            }
+            LowerErrorReason::UdpNotFound(iid) => {
+                write!(f, "UDP `{}` is not found", &ident_table[*iid])
+            }
+            LowerErrorReason::NetWidthOverflow => write!(f, "bit length overflow"),
+            LowerErrorReason::ZeroWidthNet => write!(f, "zero bit length"),
+        }
     }
 }

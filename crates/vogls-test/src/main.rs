@@ -917,7 +917,9 @@ fn run_test(
         let mut diagnostics_path = path.to_path_buf();
         diagnostics_path.add_extension("diagnostics");
         let expected = std::fs::read_to_string(&diagnostics_path)?;
-        let expected = expected.trim();
+        let expected = expected
+            .trim()
+            .replace("{path}", &path.display().to_string());
         let gotten = gotten_diagnostics.trim();
 
         if expected != gotten {
