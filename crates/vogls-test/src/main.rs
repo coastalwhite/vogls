@@ -173,6 +173,7 @@ struct TestInfo {
     verify_stdout: VerifyOutput,
     verify_ir: bool,
     verify_vcd: bool,
+    verify_diagnostics: bool,
     annotate_sdf: bool,
     timeout: Option<(u64, TimeUnit)>,
     top_level_module: Option<String>,
@@ -201,6 +202,7 @@ impl TestInfo {
             verify_stdout: VerifyOutput::No,
             verify_ir: false,
             verify_vcd: false,
+            verify_diagnostics: false,
             annotate_sdf: false,
             top_level_module: None,
             timeout: None,
@@ -222,6 +224,7 @@ impl TestInfo {
                 "verify-stdout[sort-lines]" => info.verify_stdout = VerifyOutput::SortLines,
                 "verify-ir" => info.verify_ir = true,
                 "verify-vcd" => info.verify_vcd = true,
+                "verify-diagnostics" => info.verify_diagnostics = true,
                 "annotate-sdf" => info.annotate_sdf = true,
                 "panic" => info.expect_panic = true,
                 _ if line.starts_with("fail") => {
@@ -784,6 +787,8 @@ fn run_test(
         }
     }
 
+    let mut gotten_diagnostics = test_information.verify_diagnostics.then_some(String::new());
+
     let mut world = StdWorldCaptured::default();
     let result: Result<Result<(), FailureInfo>, Box<dyn std::any::Any + Send + 'static>> =
         std::panic::catch_unwind(AssertUnwindSafe(|| {
@@ -834,14 +839,20 @@ fn run_test(
                     FailureInfo::CompileFailure(TestPhase::LEXING, "failed to tokenize".into())
                 })?;
 
-                let parsed = builder.parse(&arena).map_err(|_| {
+                let parsed = builder.parse(&arena).map_err(|err| {
+                    if let Some(d) = gotten_diagnostics.as_mut() {
+                        d.push_str(&err.to_string());
+                    }
                     FailureInfo::CompileFailure(TestPhase::PARSING, "failed to parse".into())
                 })?;
                 let mut elab = match parsed
                     .elaborate(logic_mode, test_information.top_level_module.as_deref())
                 {
                     Ok(v) => v,
-                    Err(_) => {
+                    Err(err) => {
+                        if let Some(d) = gotten_diagnostics.as_mut() {
+                            d.push_str(&err.to_string());
+                        }
                         return Err(FailureInfo::CompileFailure(
                             TestPhase::ELABORATION,
                             "failed to elaborate".into(),
@@ -864,7 +875,10 @@ fn run_test(
                 }
                 let mut lowered = match elab.lower(vec![]) {
                     Ok(l) => l,
-                    Err(_) => {
+                    Err(err) => {
+                        if let Some(d) = gotten_diagnostics.as_mut() {
+                            d.push_str(&err.to_string());
+                        }
                         return Err(FailureInfo::CompileFailure(
                             TestPhase::LOWERING,
                             "failed to lower".into(),
@@ -898,6 +912,21 @@ fn run_test(
                 FailureInfo::Execution { stdout, stderr }
             })
         }));
+
+    if let Some(gotten_diagnostics) = gotten_diagnostics {
+        let mut diagnostics_path = path.to_path_buf();
+        diagnostics_path.add_extension("diagnostics");
+        let expected = std::fs::read_to_string(&diagnostics_path)?;
+        let expected = expected.trim();
+        let gotten = gotten_diagnostics.trim();
+
+        if expected != gotten {
+            return Err(FailureInfo::Mismatch {
+                expected: expected.to_string(),
+                gotten: gotten.to_string(),
+            });
+        }
+    }
 
     let result = match result {
         Ok(_) if test_information.expect_panic => return Err(FailureInfo::ExpectPanic),

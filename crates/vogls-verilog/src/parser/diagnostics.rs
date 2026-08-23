@@ -106,7 +106,7 @@ pub fn report(tokenized: &Tokenized, location: TokenRange, out: &mut String) -> 
         let start_pad = display_width(&line[..location.start() - offset], TAB_WIDTH);
         let len = display_width(&content[location.as_range()], TAB_WIDTH);
         writeln!(out)?;
-        writeln!(out, "  {:start_pad$}{:^>len$}", " ", " ",)?;
+        writeln!(out, "  {:start_pad$}{:^>len$}", "", "")?;
     } else {
         let (offset, line) = lines[start_line];
         out.write_str("> ")?;
@@ -114,7 +114,7 @@ pub fn report(tokenized: &Tokenized, location: TokenRange, out: &mut String) -> 
         let start_pad = display_width(&line[..location.start() - offset], TAB_WIDTH);
         let len = line.len() - (location.start() - offset);
         writeln!(out)?;
-        writeln!(out, "  {:start_pad$}{:^>len$}", "", "^",)?;
+        writeln!(out, "  {:start_pad$}{:^>len$}", "", "",)?;
 
         for line in start_line + 1..end_line {
             let (_, line) = lines[line];
