@@ -341,6 +341,7 @@ pub fn parse_file<'a>(
                         tkw.offset += 1;
                         ctx.default_nettype = nettype;
                     }
+                    "endcelldefine" | "celldefine" => tkw.offset += 1,
                     "resetall" => {
                         tkw.offset += 1;
                         *ctx = ParseContext::new();
