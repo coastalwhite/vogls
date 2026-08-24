@@ -1932,6 +1932,8 @@ fn extend_fn_statement_needs<'a, 'b>(
 
     st.stmt_dispatch_stack.push((scope, stmts));
 
+    let needs_start_length = st.needs_adjacency_list_items.len();
+
     while let Some((scope, stmts)) = st.stmt_dispatch_stack.pop() {
         macro_rules! dispatch_stmt_or_null {
             ($stmt_or_null:expr) => {
@@ -2034,6 +2036,13 @@ fn extend_fn_statement_needs<'a, 'b>(
             }
         }
     }
+
+    // @NOTE:
+    // Inside a function, the function name can be used an identifier refering to the currently
+    // assigned result.
+    st.needs_adjacency_list_items
+        .extract_if(needs_start_length.., |sid| *sid == scope)
+        .for_each(drop);
 }
 
 pub fn finalize_symbol<'a>(
