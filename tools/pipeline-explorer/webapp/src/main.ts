@@ -136,6 +136,15 @@ const procConfigFields = {
     ],
     "neorv32": [
     ],
+    "hazard3": [
+        { "id": "extension_m", "type": "checkbox", "title": "Enable M Extension", "default": true },
+        { "id": "mul_fast", "type": "checkbox", "title": "Single-Cycle Multiply", "default": false },
+        { "id": "mulh_fast", "type": "checkbox", "title": "Single-Cycle Mulh", "default": false },
+        { "id": "muldiv_unroll_2", "type": "checkbox", "title": "Two Muldiv Steps per Cycle", "default": false },
+        { "id": "reduced_bypass", "type": "checkbox", "title": "Reduced Bypass Network", "default": false },
+        { "id": "branch_predictor", "type": "checkbox", "title": "Branch Predictor", "default": false },
+        { "id": "fast_branchcmp", "type": "checkbox", "title": "Fast Branch Compare", "default": true },
+    ],
 };
 
 function runSim() {
@@ -150,6 +159,8 @@ function runSim() {
         proc = "ibex";
     } else if (procSelectValue === "neorv32") {
         proc = "neorv32";
+    } else if (procSelectValue === "hazard3") {
+        proc = "hazard3";
     }
 
     const config = {};

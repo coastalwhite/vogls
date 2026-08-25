@@ -1,0 +1,17 @@
+hazard3_hdl := justfile_directory() / "../../../../submodules/hazard3/hdl"
+
+# Flatten the Hazard3 RTL into a single Verilog-2005 source file.
+#
+# Vogls resolves `include relative to the file it appears in, but the pipeline
+# explorer embeds its sources with `include_str!` and so has no path to resolve
+# against. The `include directives (and the `ifdef blocks guarding the RISC-V
+# Formal hooks) are therefore expanded ahead of time with iverilog's
+# preprocessor. The result is still plain Verilog-2005.
+build:
+    grep '^file' {{hazard3_hdl}}/hazard3.f | sed 's/^file //' > file_list.txt
+    xargs -a file_list.txt -I{} echo {{hazard3_hdl}}/{} > file_paths.txt
+    xargs -a file_paths.txt iverilog -E -I{{hazard3_hdl}} -o hazard3.v
+    rm file_list.txt file_paths.txt
+
+clean:
+    rm -f hazard3.v file_list.txt file_paths.txt

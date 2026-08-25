@@ -102,6 +102,15 @@ pub struct PicoRV32Config {
     pub two_cycle_alu: bool,
     pub enable_fast_mul: bool,
 }
+pub struct Hazard3Config {
+    pub extension_m: bool,
+    pub mul_fast: bool,
+    pub mulh_fast: bool,
+    pub muldiv_unroll_2: bool,
+    pub reduced_bypass: bool,
+    pub branch_predictor: bool,
+    pub fast_branchcmp: bool,
+}
 
 pub fn get_neorv32_trace(assembly: &str, num_cycles: u32) -> Result<ReturnValue, TraceError> {
     let mut builder = vogls::DesignBuilder::new();
@@ -431,6 +440,169 @@ pub fn get_ibex_trace(
     })
 }
 
+pub fn get_hazard3_trace(
+    assembly: &str,
+    num_cycles: u32,
+    cfg: &Hazard3Config,
+) -> Result<ReturnValue, TraceError> {
+    let mut builder = vogls::DesignBuilder::new();
+    let mut arena = Arena::default();
+    let mut world = NeverWorld::new();
+    if cfg.extension_m {
+        builder.define_macro("EXTENSION_M", Macro::default());
+    }
+    if cfg.mul_fast {
+        builder.define_macro("MUL_FAST", Macro::default());
+    }
+    if cfg.mulh_fast {
+        builder.define_macro("MULH_FAST", Macro::default());
+    }
+    if cfg.muldiv_unroll_2 {
+        builder.define_macro("MULDIV_UNROLL_2", Macro::default());
+    }
+    if cfg.reduced_bypass {
+        builder.define_macro("REDUCED_BYPASS", Macro::default());
+    }
+    if cfg.branch_predictor {
+        builder.define_macro("BRANCH_PREDICTOR", Macro::default());
+    }
+    if cfg.fast_branchcmp {
+        builder.define_macro("FAST_BRANCHCMP", Macro::default());
+    }
+    builder
+        .add_source_str_in_world(&mut world, include_str!("../instances/hazard3/hazard3.v"))
+        .map_err(|_| TraceError::Build("failed to tokenize"))?
+        .add_source_str_in_world(&mut world, include_str!("../instances/hazard3/tb.v"))
+        .map_err(|_| TraceError::Build("failed to tokenize"))?;
+    let parsed = builder
+        .parse(&arena)
+        .map_err(|_| TraceError::Build("failed to parse"))?;
+    let mut design = parsed
+        .elaborate(LogicMode::TwoValue, Some("tb"))
+        .map_err(|_| TraceError::Build("failed to elaborate"))?;
+
+    // The testbench exposes the pipeline state of all three stages at its own
+    // scope, so nothing below has to reach into the core hierarchy.
+    let root = design.table().roots()[0];
+    let memory_signal_h = get_signal(&mut design, root, "memory");
+    let rst_n_h = get_signal(&mut design, root, "rst_n");
+    let trap_h = get_signal(&mut design, root, "trap_q");
+    let f_active_h = get_signal(&mut design, root, "f_active");
+    let f_pc_h = get_signal(&mut design, root, "f_pc");
+    let x_active_h = get_signal(&mut design, root, "x_active");
+    let x_pc_h = get_signal(&mut design, root, "x_pc");
+    let m_active_h = get_signal(&mut design, root, "m_active");
+    let m_pc_h = get_signal(&mut design, root, "m_pc");
+
+    let mut design = design
+        .lower(Vec::new())
+        .map_err(|_| TraceError::Build("failed to lower"))?;
+    design.optimize(Optimizations {
+        rounds: 2,
+        flags: OptFlags::ALL,
+    });
+    let (design, mut state) = design
+        .to_bytecode()
+        .map_err(|_| TraceError::Build("failed to convert to bytecode"))?;
+    arena.reset();
+
+    const CYCLE: u64 = 2;
+    // Matches RESET_VECTOR in instances/hazard3/tb.v.
+    const BOOT_OFFSET: usize = 0x0000_0000;
+    const MEMORY_SIZE: usize = 256 * 4;
+
+    let positions = SectionPositions {
+        text: 0x0000_0000u32,
+        data: 1024u32,
+        rodata: 0u32,
+        bss: 1024u32,
+    };
+    let program = Assembler::new(RV32IM, positions)
+        .with_source(assembly)?
+        .assemble();
+
+    let mut instructions = Vec::<String>::new();
+    let mut islice = &program.text[..];
+    while !islice.is_empty() {
+        let i = trva::encoding::Instruction::decode(&mut islice).unwrap();
+        instructions.push(match i {
+            None => "unknown".into(),
+            Some(i) => i.to_string(),
+        });
+    }
+
+    assert!(BOOT_OFFSET + program.text.len() <= MEMORY_SIZE);
+    let mut target_memory = vec![0u64; MEMORY_SIZE / 8];
+    bytemuck::cast_slice_mut(&mut target_memory)[BOOT_OFFSET..BOOT_OFFSET + program.text.len()]
+        .copy_from_slice(&program.text);
+    let memory_bits = Bits::from_boxed_slice(
+        Mode::TwoValue,
+        VectorSize::new((MEMORY_SIZE * 8) as u32).unwrap(),
+        target_memory.into_boxed_slice(),
+    );
+
+    let memory_signal = design.resolve_handle(memory_signal_h);
+    let rst_n = design.resolve_handle(rst_n_h);
+    let trap = design.resolve_handle(trap_h);
+    let f_active = design.resolve_handle(f_active_h);
+    let f_pc = design.resolve_handle(f_pc_h);
+    let x_active = design.resolve_handle(x_active_h);
+    let x_pc = design.resolve_handle(x_pc_h);
+    let m_active = design.resolve_handle(m_active_h);
+    let m_pc = design.resolve_handle(m_pc_h);
+
+    design.set_signal(&mut state, memory_signal, &memory_bits);
+    design.set_signal(&mut state, rst_n, &false.into());
+    design
+        .run(&mut state, &mut world, CYCLE * 10)
+        .expect("failed to run");
+    design.set_signal(&mut state, rst_n, &true.into());
+
+    // Fetch, decode/execute, and memory/writeback.
+    const STAGES: &[&str] = &["F", "X", "M"];
+
+    let to_slot = |pc: u32, active: bool| -> u32 {
+        if active && pc >= BOOT_OFFSET as u32 {
+            (pc - BOOT_OFFSET as u32) / 4 + 1
+        } else {
+            0
+        }
+    };
+
+    let mut output_cycles = num_cycles;
+    let mut traces = vec![Vec::with_capacity(num_cycles as usize); STAGES.len()];
+    for i in 0..num_cycles {
+        let time = state.runtime().time;
+        design
+            .run(&mut state, &mut world, time + CYCLE)
+            .expect("failed to run");
+
+        let stage = |pc_handle, active_handle| {
+            let pc = design.get_signal(&state, pc_handle).extract_exact_u32();
+            let active = design.get_signal(&state, active_handle).is_one();
+            to_slot(pc.unwrap_or(0), active && pc.is_some())
+        };
+
+        traces[0].push(stage(f_pc, f_active));
+        traces[1].push(stage(x_pc, x_active));
+        traces[2].push(stage(m_pc, m_active));
+
+        if design.get_signal(&state, trap).is_one() {
+            output_cycles = i;
+            break;
+        }
+    }
+
+    Ok(ReturnValue {
+        instructions,
+        pipeline: Pipeline {
+            traces,
+            keys: STAGES,
+            cycles: output_cycles as usize,
+        },
+    })
+}
+
 pub fn get_trace(
     assembly: &str,
     config: &PicoRV32Config,
@@ -620,6 +792,25 @@ pub fn get_js_neorv32_trace(
     num_cycles: u32,
 ) -> Result<Object, JsError> {
     let trace = get_neorv32_trace(assembly, num_cycles)?;
+    Ok(trace.into_object())
+}
+
+#[wasm_bindgen]
+pub fn get_js_hazard3_trace(
+    assembly: &str,
+    config: Object,
+    num_cycles: u32,
+) -> Result<Object, JsError> {
+    let config = Hazard3Config {
+        extension_m: get_bool!(config, "extension_m"),
+        mul_fast: get_bool!(config, "mul_fast"),
+        mulh_fast: get_bool!(config, "mulh_fast"),
+        muldiv_unroll_2: get_bool!(config, "muldiv_unroll_2"),
+        reduced_bypass: get_bool!(config, "reduced_bypass"),
+        branch_predictor: get_bool!(config, "branch_predictor"),
+        fast_branchcmp: get_bool!(config, "fast_branchcmp"),
+    };
+    let trace = get_hazard3_trace(assembly, num_cycles, &config)?;
     Ok(trace.into_object())
 }
 
