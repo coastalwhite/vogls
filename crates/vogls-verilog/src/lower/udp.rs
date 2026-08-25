@@ -60,6 +60,26 @@ pub fn lower_udp<'a>(
 
     let (process, mut builder) =
         ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, ctx.arenas.get_span(id));
+
+    // Initial output terminal.
+    if let UdpBody::Sequential(Some(initial), _) = body {
+        let initial = match initial.init_val.item {
+            UdpInitVal::L0 => builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE)),
+            UdpInitVal::L1 => builder.constant(mctx.gl(), Bits::new_ones(SCALAR_VSIZE)),
+            UdpInitVal::X => builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE)),
+        };
+        assign_net_lvalue(
+            ctx,
+            mctx,
+            scope,
+            &mut builder,
+            output_terminal,
+            initial,
+            VType::UnsignedNet(SCALAR_VSIZE),
+        )?;
+        builder = builder.jump(mctx.gl());
+    }
+
     let entry_bb = builder.key();
 
     let mut ins = OrderedSet::new();
@@ -228,11 +248,12 @@ pub fn lower_udp<'a>(
                     );
                     return Err(());
                 }
-                mctx.gl.signals[output].initialize = match init_val.item {
+                let initial = match init_val.item {
                     UdpInitVal::L0 => Some(Bits::new_zeroed(SCALAR_VSIZE)),
                     UdpInitVal::L1 => Some(Bits::new_ones(SCALAR_VSIZE)),
                     UdpInitVal::X => None,
                 };
+                mctx.gl.signals[output].initialize = initial;
             }
 
             // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 114 - 8.7
