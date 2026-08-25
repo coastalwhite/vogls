@@ -658,6 +658,7 @@ pub enum BinaryImmOp {
 
     BitwiseCaseEquality,
     CaseEquality,
+    CaseInequality,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1662,6 +1663,7 @@ impl BinaryImmOp {
             O::UnsignedGreaterEqual => Bits::from(Bits::is_unsigned_leq(imm, src)),
             O::BitwiseCaseEquality => Bits::bitwise_case_equality(src, imm),
             O::CaseEquality => Bits::from(src == imm),
+            O::CaseInequality => Bits::from(src != imm),
             O::ConcatLeft => Bits::concatenate(imm, src),
             O::ConcatRight => Bits::concatenate(src, imm),
 
@@ -1838,7 +1840,7 @@ impl BinaryImmOp {
                     S::Source
                 }
             }
-            O::CaseEquality => S::Keep,
+            O::CaseEquality | O::CaseInequality => S::Keep,
             O::BitwiseCaseEquality if src.mode().is_two_value() => {
                 S::Instruction(Instruction::BinaryImm(dst, O::Xor, src, imm.bitwise_not()))
             }
@@ -1872,7 +1874,10 @@ impl BinaryImmOp {
                 }
                 Some(src_size)
             }
-            O::UnsignedLessEqual | O::UnsignedGreaterEqual | O::CaseEquality => {
+            O::UnsignedLessEqual
+            | O::UnsignedGreaterEqual
+            | O::CaseEquality
+            | O::CaseInequality => {
                 if src_size != imm_size {
                     return None;
                 }
@@ -1917,7 +1922,7 @@ impl BinaryImmOp {
                     src: convert,
                 }
             }
-            O::CaseEquality | O::BitwiseCaseEquality => {
+            O::CaseEquality | O::CaseInequality | O::BitwiseCaseEquality => {
                 let convert = src.max(imm);
                 BinaryImmOutputMode {
                     dst: LogicMode::TwoValue,
@@ -1949,7 +1954,9 @@ impl BinaryImmOp {
             | Self::Min
             | Self::Max => Some(TvPushdownVariant::CastOutput),
 
-            Self::BitwiseCaseEquality | Self::CaseEquality => Some(TvPushdownVariant::KeepOutput),
+            Self::BitwiseCaseEquality | Self::CaseInequality | Self::CaseEquality => {
+                Some(TvPushdownVariant::KeepOutput)
+            }
             Self::RevDivideX | Self::RevModulusX => None,
         }
     }

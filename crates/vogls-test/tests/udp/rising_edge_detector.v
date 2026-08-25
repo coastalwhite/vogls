@@ -4,7 +4,7 @@ primitive rising_edge_detector(
 );
 table
     (01) : ? : 1 ;
-    ?    : ? : 0 ;
+    (??)    : ? : 0 ;
 endtable
 endprimitive
 

@@ -13,7 +13,7 @@ use crate::ast::udp::{
 use crate::ast::{AstIdRange, AstItem, Identifier};
 use crate::parser::utils::{
     item_parse, parse, parse_one_or_more_while, parse_one_or_more_while_next,
-    parse_zero_or_more_while, parse_zero_or_more_while_next,
+    parse_zero_or_more_while_next,
 };
 use crate::tokenizer::Token;
 
@@ -311,14 +311,8 @@ impl<'a> Consumable<'a> for UdpCombinationalEntry<'a> {
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
         // combinational_entry ::= level_input_list : output_symbol ;
 
-        let level_input_list = parse_one_or_more_while_next::<UdpLevelSymbol>(
-            tkw,
-            sc,
-            arenas,
-            ast,
-            diagnostics.as_deref_mut(),
-            |t| !matches!(t, T::Colon),
-        )?;
+        let level_input_list =
+            parse_udp_level_symbols(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         tkw.next_expect(T::Colon, diagnostics.as_deref_mut())?;
         let output_symbol =
             item_parse::<UdpOutputSymbol>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
@@ -345,34 +339,31 @@ impl<'a> Consumable<'a> for UdpSequentialEntry<'a> {
         // seq_input_list ::= level_input_list | edge_input_list
         // edge_input_list ::= { level_symbol } edge_indicator { level_symbol }
 
-        let level_list = parse_zero_or_more_while::<UdpLevelSymbol>(
-            tkw,
-            sc,
-            arenas,
-            ast,
-            diagnostics.as_deref_mut(),
-            |tkw| {
-                tkw.token_content(tkw.offset).is_some_and(|t| {
-                    t.len() == 1 && byte_to_level_symbol(t.as_bytes()[0]).is_some()
-                })
-            },
-        )?;
-        let mut edge_list = None;
-        if tkw.is_next_equal_to(T::LeftParen)
-            || tkw
-                .token_content(tkw.offset)
-                .is_some_and(|t| t.len() == 1 && byte_to_edge_symbol(t.as_bytes()[0]).is_some())
+        // @Hack. Level and edge indicators are a bit strange in that they allow the same lexer
+        // token to create multiple symbols. We hack around this here. We can probably think of
+        // something better though.
+        let (level_list, edge_list) =
+            parse_udp_seq_symbols(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+
+        let mut edge_list = edge_list.map(|(l, r)| {
+            let l = crate::parser::utils::push(
+                arenas,
+                ast,
+                UdpEdgeIndicator::Edge(l),
+                arenas.spans[l.loc],
+            );
+            (l, r)
+        });
+        if edge_list.is_none()
+            && (tkw.is_next_equal_to(T::LeftParen)
+                || tkw.token_content(tkw.offset).is_some_and(|t| {
+                    t.len() == 1 && byte_to_edge_symbol(t.as_bytes()[0]).is_some()
+                }))
         {
             let edge_indicator =
                 parse::<UdpEdgeIndicator>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-            let after_level_list = parse_zero_or_more_while_next::<UdpLevelSymbol>(
-                tkw,
-                sc,
-                arenas,
-                ast,
-                diagnostics.as_deref_mut(),
-                |t| !matches!(t, T::Colon),
-            )?;
+            let after_level_list =
+                parse_udp_level_symbols(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
             edge_list = Some((edge_indicator, after_level_list));
         }
 
@@ -491,6 +482,166 @@ impl<'a> Consumable<'a> for UdpLevelSymbol {
             }
         }
     }
+}
+
+fn parse_udp_level_symbols<'a>(
+    tkw: &mut TokenWalker<'_>,
+    _sc: &mut ParserScratches<'a>,
+    arenas: &mut AstArenas,
+    ast: &'a Arena,
+    diagnostics: Option<&mut Diagnostics>,
+) -> Result<AstIdRange<'a, UdpLevelSymbol>, ()> {
+    use Token as T;
+
+    // @Optimize: Scratchpad this.
+    let mut items = Vec::new();
+    let mut spans = Vec::new();
+
+    while let Some(t) = tkw.get(tkw.offset) {
+        let (span, file) = (*t.span, *t.file);
+        match *t.kind {
+            tkind @ (T::Ident | T::Decimal) => {
+                for &b in tkw.content(file)[span.as_range()].as_bytes() {
+                    let Some(s) = byte_to_level_symbol(b) else {
+                        if let Some(d) = diagnostics {
+                            d.unexpected_token(tkw.offset, tkind);
+                        }
+                        return Err(());
+                    };
+                    items.push(s);
+                    spans.push(TokenRange {
+                        start: tkw.offset,
+                        end: tkw.offset + 1,
+                    });
+                }
+            }
+            T::QuestionMark => {
+                items.push(UdpLevelSymbol::QuestionMark);
+                spans.push(TokenRange {
+                    start: tkw.offset,
+                    end: tkw.offset + 1,
+                });
+            }
+            _ => break,
+        }
+
+        tkw.offset += 1;
+    }
+
+    let item = ast.extend(items);
+    let spans = arenas.add_tr_range(spans);
+
+    Ok(AstIdRange {
+        node: item,
+        loc: spans,
+    })
+}
+
+fn parse_udp_seq_symbols<'a>(
+    tkw: &mut TokenWalker<'_>,
+    _sc: &mut ParserScratches<'a>,
+    arenas: &mut AstArenas,
+    ast: &'a Arena,
+    diagnostics: Option<&mut Diagnostics>,
+) -> Result<
+    (
+        AstIdRange<'a, UdpLevelSymbol>,
+        Option<(AstItem<UdpEdgeSymbol>, AstIdRange<'a, UdpLevelSymbol>)>,
+    ),
+    (),
+> {
+    use Token as T;
+
+    // @Optimize: Scratchpad this.
+    let mut items = Vec::new();
+    let mut spans = Vec::new();
+
+    let mut edge_point = None;
+
+    while let Some(t) = tkw.get(tkw.offset) {
+        let (span, file) = (*t.span, *t.file);
+        let tr = TokenRange {
+            start: tkw.offset,
+            end: tkw.offset + 1,
+        };
+        match *t.kind {
+            tkind @ (T::Ident | T::Decimal) => {
+                for &b in tkw.content(file)[span.as_range()].as_bytes() {
+                    let Some(s) = byte_to_level_symbol(b) else {
+                        let Some(edge) = byte_to_edge_symbol(b).filter(|_| edge_point.is_none())
+                        else {
+                            if let Some(d) = diagnostics {
+                                d.unexpected_token(tkw.offset, tkind);
+                            }
+                            return Err(());
+                        };
+
+                        let span = arenas.add_tr(tr);
+                        edge_point = Some((
+                            AstItem {
+                                item: edge,
+                                loc: span,
+                            },
+                            items.len(),
+                        ));
+                        continue;
+                    };
+                    items.push(s);
+                    spans.push(tr);
+                }
+            }
+            T::QuestionMark => {
+                items.push(UdpLevelSymbol::QuestionMark);
+                spans.push(tr);
+            }
+            T::Star => {
+                if edge_point.is_some() {
+                    if let Some(d) = diagnostics {
+                        d.unexpected_token(tkw.offset, T::Star);
+                    }
+                    return Err(());
+                }
+                let span = arenas.add_tr(tr);
+                edge_point = Some((
+                    AstItem {
+                        item: UdpEdgeSymbol::Star,
+                        loc: span,
+                    },
+                    items.len(),
+                ));
+            }
+            _ => break,
+        }
+
+        tkw.offset += 1;
+    }
+
+    let after = match edge_point {
+        None => None,
+
+        Some((edge, split)) => {
+            let item = ast.extend(items.drain(split..));
+            let spans = arenas.add_tr_range(spans.drain(split..));
+
+            let after = AstIdRange {
+                node: item,
+                loc: spans,
+            };
+
+            Some((edge, after))
+        }
+    };
+
+    let item = ast.extend(items);
+    let spans = arenas.add_tr_range(spans);
+
+    Ok((
+        AstIdRange {
+            node: item,
+            loc: spans,
+        },
+        after,
+    ))
 }
 
 impl<'a> Consumable<'a> for UdpOutputSymbol {

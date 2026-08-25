@@ -1610,6 +1610,23 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             (O::CaseEquality, _, _, _, _, _) => self
                                 .compiler
                                 .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::CaseInequality, _, M::TwoValue, _, Some(_), _) => {
+                                imap!(sval, ival => @tv {
+                                    let eq = b.ins().icmp(IntCC::NotEqual, sval, ival);
+                                    b.ins().uextend(I64, eq)
+                                })
+                            }
+                            (O::CaseInequality, _, M::FourValue, _, Some(_), _) => {
+                                imap!((sval, sspc), (ival, ispc) => @tv {
+                                    let vm = b.ins().icmp(IntCC::NotEqual, sval, ival);
+                                    let sm = b.ins().icmp(IntCC::NotEqual, sspc, ispc);
+                                    let eq = b.ins().bor(vm, sm);
+                                    b.ins().uextend(I64, eq)
+                                })
+                            }
+                            (O::CaseInequality, _, _, _, _, _) => self
+                                .compiler
+                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             // BitwiseCaseEquality (per-bit ===): bit = 1 iff operand and
                             // immediate agree in BOTH planes. Same-width, fully-known,
                             // two-value result.

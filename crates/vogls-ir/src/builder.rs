@@ -607,6 +607,7 @@ impl BasicBlockBuilder {
         (unsigned_le_constant, UnsignedLessEqual)
         (unsigned_ge_constant, UnsignedGreaterEqual)
         (case_equals_constant, CaseEquality)
+        (not_case_equals_constant, CaseInequality)
     }
 
     shift_imm_ops! {

@@ -46,6 +46,7 @@ pub struct TvAndNot(pub SbsBitwiseRType);
 pub struct TvOrNot(pub SbsBitwiseRType);
 pub struct TvXnor(pub SbsBitwiseRType);
 pub struct TvCeq(pub BitwiseRType);
+pub struct TvCne(pub BitwiseRType);
 pub struct TvAdd(pub SbsBitwiseRType);
 pub struct TvSub(pub SbsBitwiseRType);
 pub struct TvMul(pub SbsBitwiseRType);
@@ -71,6 +72,7 @@ pub struct FvAndNot(pub BitwiseRType);
 pub struct FvOrNot(pub BitwiseRType);
 pub struct FvXnor(pub BitwiseRType);
 pub struct FvCeq(pub BitwiseRType);
+pub struct FvCne(pub BitwiseRType);
 pub struct FvBitwiseCeq(pub SbsBitwiseRType);
 pub struct FvAdd(pub SbsBitwiseRType);
 pub struct FvSub(pub SbsBitwiseRType);
@@ -443,6 +445,24 @@ impl BytecodeInstruction for TvCeq {
     ) {
         let BitwiseRType { rd, rs1, rs2 } = self.0;
         regs[rd] = u64::from(regs[rs1] == regs[rs2]);
+    }
+}
+impl BytecodeInstruction for TvCne {
+    impl_bitwise!(TvCne, "tv.cne", TwoValue, TwoValue, TwoValue);
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        regs[rd] = u64::from(regs[rs1] != regs[rs2]);
     }
 }
 impl BytecodeInstruction for TvAdd {
@@ -914,6 +934,26 @@ impl BytecodeInstruction for FvCeq {
         let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
         let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
         regs[rd] = u64::from((regs[rs1_spc] == regs[rs2_spc]) & (regs[rs1_val] == regs[rs2_val]));
+    }
+}
+impl BytecodeInstruction for FvCne {
+    impl_bitwise!(FvCne, "fv.cne", TwoValue, FourValue, FourValue);
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        regs[rd] = u64::from((regs[rs1_spc] != regs[rs2_spc]) | (regs[rs1_val] != regs[rs2_val]));
     }
 }
 impl BytecodeInstruction for FvBitwiseCeq {
@@ -1616,6 +1656,7 @@ impl_bytecode_methods! {
     (or, TvOr)
     (xor, TvXor)
     (ceq, TvCeq)
+    (cne, TvCne)
     (uleq, TvUnsignedLeq)
     (ugt, TvUnsignedGt)
     (min, TvMin)
@@ -1627,6 +1668,7 @@ impl_bytecode_methods! {
     (fv_ornot, FvOrNot)
     (fv_xnor, FvXnor)
     (fv_ceq, FvCeq)
+    (fv_cne, FvCne)
     (fv_posedge, FvPosedge)
     (fv_negedge, FvNegedge)
 }
