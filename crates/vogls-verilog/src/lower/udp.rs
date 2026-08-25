@@ -284,75 +284,19 @@ pub fn lower_udp<'a>(
                         }
                         UdpEdgeIndicator::Edge(edge) => match edge.item {
                             UdpEdgeSymbol::R => {
-                                let is_before = lower_level(
-                                    mctx.gl(),
-                                    &mut builder,
-                                    prb_before,
-                                    UdpLevelSymbol::L0,
-                                );
-                                acc = builder.and(mctx.gl(), acc, is_before);
-                                let is_after = lower_level(
-                                    mctx.gl(),
-                                    &mut builder,
-                                    prb_after,
-                                    UdpLevelSymbol::L1,
-                                );
-                                acc = builder.and(mctx.gl(), acc, is_after);
+                                let is_r = builder.andnot(mctx.gl(), prb_after, prb_before);
+                                acc = builder.and(mctx.gl(), acc, is_r);
                             }
                             UdpEdgeSymbol::F => {
-                                let is_before = lower_level(
-                                    mctx.gl(),
-                                    &mut builder,
-                                    prb_before,
-                                    UdpLevelSymbol::L1,
-                                );
-                                acc = builder.and(mctx.gl(), acc, is_before);
-                                let is_after = lower_level(
-                                    mctx.gl(),
-                                    &mut builder,
-                                    prb_after,
-                                    UdpLevelSymbol::L0,
-                                );
-                                acc = builder.and(mctx.gl(), acc, is_after);
+                                let is_f = builder.andnot(mctx.gl(), prb_before, prb_after);
+                                acc = builder.and(mctx.gl(), acc, is_f);
                             }
                             UdpEdgeSymbol::P => {
-                                // @Performance. I suspect there is a better lowering of this.
-                                let not_equal =
-                                    builder.not_case_equals(mctx.gl(), prb_before, prb_after);
-                                acc = builder.and(mctx.gl(), acc, not_equal);
-
-                                let l0 =
-                                    builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
-                                let l1 = builder.constant(mctx.gl(), Bits::new_ones(SCALAR_VSIZE));
-                                let x =
-                                    builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE));
-
-                                let b0_is_zero = builder.case_equals(mctx.gl(), l0, prb_before);
-                                let b0_is_x = builder.case_equals(mctx.gl(), x, prb_before);
-                                let b1_is_one = builder.case_equals(mctx.gl(), l1, prb_after);
-
-                                let is_x1 = builder.and(mctx.gl(), b0_is_x, b1_is_one);
-                                let is_p = builder.or(mctx.gl(), b0_is_zero, is_x1);
+                                let is_p = builder.posedge(mctx.gl(), prb_before, prb_after);
                                 acc = builder.and(mctx.gl(), acc, is_p);
                             }
                             UdpEdgeSymbol::N => {
-                                // @Performance. I suspect there is a better lowering of this.
-                                let not_equal =
-                                    builder.not_case_equals(mctx.gl(), prb_before, prb_after);
-                                acc = builder.and(mctx.gl(), acc, not_equal);
-
-                                let l0 =
-                                    builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
-                                let l1 = builder.constant(mctx.gl(), Bits::new_ones(SCALAR_VSIZE));
-                                let x =
-                                    builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE));
-
-                                let b1_is_zero = builder.case_equals(mctx.gl(), l0, prb_before);
-                                let b1_is_x = builder.case_equals(mctx.gl(), x, prb_before);
-                                let b0_is_one = builder.case_equals(mctx.gl(), l1, prb_after);
-
-                                let is_1x = builder.and(mctx.gl(), b1_is_x, b0_is_one);
-                                let is_n = builder.or(mctx.gl(), b1_is_zero, is_1x);
+                                let is_n = builder.negedge(mctx.gl(), prb_before, prb_after);
                                 acc = builder.and(mctx.gl(), acc, is_n);
                             }
                             UdpEdgeSymbol::Star => {}
