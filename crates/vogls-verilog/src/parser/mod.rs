@@ -10,8 +10,9 @@ use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::module::{Description, Module, TimeScale};
 use crate::ast::udp::UdpDeclaration;
 use crate::ast::{
-    AstId, AstIdRange, AstItem, AttrSpec, AttributeInstance, DecimalRef, HIdent, HIdentComponent,
-    Identifier, SizedNumber, SizedNumberRef, StringRef, TextRef,
+    AstId, AstIdRange, AstItem, AttrSpec, AttributeInstance, DecimalRef, DriveStrength, HIdent,
+    HIdentComponent, Identifier, SizedNumber, SizedNumberRef, Strength0, Strength1, StringRef,
+    TextRef,
 };
 use crate::number::{
     Base, Sign, parse_decimal_bits, skip_sign, take_base, take_binary_bits, take_hexadecimal_bits,
@@ -685,5 +686,127 @@ impl<'a> Consumable<'a> for f64 {
         };
 
         Ok(content)
+    }
+}
+
+impl<'a> Consumable<'a> for DriveStrength {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
+        arenas: &mut AstArenas,
+        ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490-491
+        // drive_strength ::=
+        //    ( strength0 , strength1 )
+        //  | ( strength1 , strength0 )
+        //  | ( strength0 , highz1 )
+        //  | ( strength1 , highz0 )
+        //  | ( highz0 , strength1 )
+        //  | ( highz1 , strength0 )
+
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+
+        let drive_strength = match tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
+            T::KeywordStrong0 | T::KeywordSupply0 | T::KeywordWeak0 | T::KeywordPull0 => {
+                let lhs = Strength0::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+                if tkw.next_if_equals(T::KeywordHighz0) {
+                    DriveStrength::Strength0Highz1(lhs)
+                } else {
+                    let rhs = Strength1::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+                    DriveStrength::Strength01(lhs, rhs)
+                }
+            }
+            T::KeywordStrong1 | T::KeywordSupply1 | T::KeywordWeak1 | T::KeywordPull1 => {
+                let lhs = Strength1::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+                if tkw.next_if_equals(T::KeywordHighz0) {
+                    DriveStrength::Strength1Highz0(lhs)
+                } else {
+                    let rhs = Strength0::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+                    DriveStrength::Strength10(lhs, rhs)
+                }
+            }
+            T::KeywordHighz0 => {
+                tkw.offset += 1;
+                let strength1 =
+                    Strength1::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+                DriveStrength::Highz0Strength1(strength1)
+            }
+            T::KeywordHighz1 => {
+                tkw.offset += 1;
+                let strength0 =
+                    Strength0::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+                DriveStrength::Highz1Strength0(strength0)
+            }
+            t => {
+                if let Some(diagnostics) = diagnostics {
+                    diagnostics.unexpected_token(tkw.offset, *t);
+                }
+                return Err(());
+            }
+        };
+
+        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+
+        Ok(drive_strength)
+    }
+}
+
+impl<'a> Consumable<'a> for Strength0 {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
+        _arenas: &mut AstArenas,
+        _ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+        // strength0 ::= supply0 | strong0 | pull0 | weak0
+
+        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+            T::KeywordStrong0 => Ok(Self::Strong0),
+            T::KeywordSupply0 => Ok(Self::Supply0),
+            T::KeywordWeak0 => Ok(Self::Weak0),
+            T::KeywordPull0 => Ok(Self::Pull0),
+            t => {
+                if let Some(diagnostics) = diagnostics {
+                    diagnostics.unexpected_token(tkw.offset, t);
+                }
+                Err(())
+            }
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for Strength1 {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
+        _arenas: &mut AstArenas,
+        _ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+        // strength1 ::= supply1 | strong1 | pull1 | weak1
+
+        match *tkw.try_next(diagnostics.as_deref_mut())?.kind {
+            T::KeywordStrong1 => Ok(Self::Strong1),
+            T::KeywordSupply1 => Ok(Self::Supply1),
+            T::KeywordWeak1 => Ok(Self::Weak1),
+            T::KeywordPull1 => Ok(Self::Pull1),
+            t => {
+                if let Some(diagnostics) = diagnostics {
+                    diagnostics.unexpected_token(tkw.offset, t);
+                }
+                Err(())
+            }
+        }
     }
 }

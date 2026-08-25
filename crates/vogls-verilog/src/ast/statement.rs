@@ -155,6 +155,38 @@ pub enum EventExpressionPrimary<'a> {
 pub struct EventExpression<'a>(pub AstIdRange<'a, EventExpressionPrimary<'a>>);
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+// delay3 ::=
+//   # delay_value
+// | # ( mintypmax_expression [ , mintypmax_expression [ , mintypmax_expression ] ] )
+#[derive(Clone, Copy)]
+pub enum Delay3<'a> {
+    Value(AstId<'a, DelayValue>),
+    Single(AstId<'a, MinTypMaxExpression<'a>>),
+    Double(
+        AstId<'a, MinTypMaxExpression<'a>>,
+        AstId<'a, MinTypMaxExpression<'a>>,
+    ),
+    Triple(
+        AstId<'a, MinTypMaxExpression<'a>>,
+        AstId<'a, MinTypMaxExpression<'a>>,
+        AstId<'a, MinTypMaxExpression<'a>>,
+    ),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+// delay2 ::=
+//   # delay_value
+// | # ( mintypmax_expression [ , mintypmax_expression ] )
+#[derive(Clone, Copy)]
+pub enum Delay2<'a> {
+    Value(AstId<'a, DelayValue>),
+    Tuple(
+        AstId<'a, MinTypMaxExpression<'a>>,
+        Option<AstId<'a, MinTypMaxExpression<'a>>>,
+    ),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
 // delay_value ::=
 //   unsigned_number
 // | real_number
