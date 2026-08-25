@@ -3,14 +3,14 @@ use vogls_ir::token_range::TokenRange;
 use crate::arena::Arena;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::module::Range;
-use crate::ast::statement::NetLValue;
+use crate::ast::statement::{Delay2, NetLValue};
 use crate::ast::udp::{
     UdpBody, UdpCombinationalEntry, UdpDeclaration, UdpDeclarationPortList, UdpEdgeIndicator,
     UdpEdgeSymbol, UdpInitVal, UdpInitialStatement, UdpInputDeclaration, UdpInstance,
     UdpInstantiation, UdpLevelSymbol, UdpNextState, UdpOutputDeclaration, UdpOutputSymbol,
     UdpPortDeclaration, UdpPorts, UdpRegDeclaration, UdpSequentialEntry,
 };
-use crate::ast::{AstIdRange, AstItem, Identifier};
+use crate::ast::{AstIdRange, AstItem, DriveStrength, Identifier};
 use crate::parser::utils::{
     item_parse, parse, parse_one_or_more_while, parse_one_or_more_while_next,
     parse_zero_or_more_while_next,
@@ -846,7 +846,45 @@ impl<'a> Consumable<'a> for UdpInstantiation<'a> {
 
         let identifier =
             item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        // @Incomplete
+
+        let mut drive_strength = None;
+        if tkw.is_next_equal_to(T::LeftParen)
+            && tkw.get(tkw.offset + 1).is_some_and(|t| {
+                matches!(
+                    *t.kind,
+                    T::KeywordHighz0
+                        | T::KeywordHighz1
+                        | T::KeywordPull0
+                        | T::KeywordPull1
+                        | T::KeywordWeak1
+                        | T::KeywordWeak0
+                        | T::KeywordSupply1
+                        | T::KeywordSupply0
+                        | T::KeywordStrong0
+                        | T::KeywordStrong1
+                )
+            })
+        {
+            drive_strength = Some(item_parse::<DriveStrength>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
+
+        let mut delay = None;
+        if tkw.is_next_equal_to(T::Hash) {
+            delay = Some(parse::<Delay2>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
+
         let instances = parse_one_or_more_while::<UdpInstance>(
             tkw,
             sc,
@@ -859,6 +897,8 @@ impl<'a> Consumable<'a> for UdpInstantiation<'a> {
 
         Ok(Self {
             identifier,
+            drive_strength,
+            delay,
             instances,
         })
     }

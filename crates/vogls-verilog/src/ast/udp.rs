@@ -1,8 +1,8 @@
 use super::constant_expr::ConstantExpr;
 use super::expr::Expr;
 use super::module::Range;
-use super::statement::NetLValue;
-use super::{AstId, AstIdRange, AstItem, AttributeInstance, Identifier};
+use super::statement::{Delay2, NetLValue};
+use super::{AstId, AstIdRange, AstItem, AttributeInstance, DriveStrength, Identifier};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 496
 // udp_declaration ::=
@@ -194,6 +194,8 @@ pub enum UdpInitVal {
 #[derive(Clone, Copy)]
 pub struct UdpInstantiation<'a> {
     pub identifier: AstItem<Identifier>,
+    pub drive_strength: Option<AstItem<DriveStrength>>,
+    pub delay: Option<AstId<'a, Delay2<'a>>>,
     pub instances: AstIdRange<'a, UdpInstance<'a>>,
 }
 

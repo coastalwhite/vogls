@@ -6,10 +6,10 @@ use crate::ast::expr::{BitSlice, BitSliceKind, Expr};
 use crate::ast::module::BlockItemDeclaration;
 use crate::ast::statement::{
     Block, BlockingAssignment, CaseItem, CaseItemPattern, CaseStatement, CaseStatementVariant,
-    ConditionalStatement, DelayControl, DelayOrEventControl, DelayValue, EventControl,
-    EventExpression, EventExpressionPrimary, IfBranch, LoopStatement, LoopStatementVariant,
-    MinTypMaxExpression, NetLValue, NetLValueFlat, NonBlockingAssignment, ParBlock,
-    ProceduralTimingControl, ProceduralTimingControlStatement, SeqBlock, Statement,
+    ConditionalStatement, Delay2, Delay3, DelayControl, DelayOrEventControl, DelayValue,
+    EventControl, EventExpression, EventExpressionPrimary, IfBranch, LoopStatement,
+    LoopStatementVariant, MinTypMaxExpression, NetLValue, NetLValueFlat, NonBlockingAssignment,
+    ParBlock, ProceduralTimingControl, ProceduralTimingControlStatement, SeqBlock, Statement,
     StatementContent, StatementOrNull, SystemTaskEnable, SystemTaskIdentifier, TaskEnable,
     VariableAssignment, VariableLValue, VariableLValueFlat, WaitStatement,
 };
@@ -765,6 +765,103 @@ impl<'a> Consumable<'a> for DelayControl<'a> {
         } else {
             let delay_value = parse::<DelayValue>(tkw, sc, arenas, ast, diagnostics)?;
             Ok(Self::DelayValue(delay_value))
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for Delay3<'a> {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
+        arenas: &mut AstArenas,
+        ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+        // delay3 ::=
+        //   # delay_value
+        // | # ( mintypmax_expression [ , mintypmax_expression [ , mintypmax_expression ] ] )
+
+        tkw.next_expect(T::Hash, diagnostics.as_deref_mut())?;
+
+        if tkw.next_if_equals(T::LeftParen) {
+            let fst =
+                parse::<MinTypMaxExpression>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+
+            if tkw.next_if_equals(T::RightParen) {
+                return Ok(Self::Single(fst));
+            }
+
+            tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
+            let snd =
+                parse::<MinTypMaxExpression>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+
+            if tkw.next_if_equals(T::RightParen) {
+                return Ok(Self::Double(fst, snd));
+            }
+
+            tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
+            let trd =
+                parse::<MinTypMaxExpression>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+            tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+
+            Ok(Self::Triple(fst, snd, trd))
+        } else {
+            Ok(Self::Value(parse::<DelayValue>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics,
+            )?))
+        }
+    }
+}
+
+impl<'a> Consumable<'a> for Delay2<'a> {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
+        arenas: &mut AstArenas,
+        ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+        // delay2 ::=
+        //   # delay_value
+        // | # ( mintypmax_expression [ , mintypmax_expression ] )
+
+        tkw.next_expect(T::Hash, diagnostics.as_deref_mut())?;
+
+        if tkw.next_if_equals(T::LeftParen) {
+            let lhs =
+                parse::<MinTypMaxExpression>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+            let mut rhs = None;
+            if tkw.next_if_equals(T::Comma) {
+                rhs = Some(parse::<MinTypMaxExpression>(
+                    tkw,
+                    sc,
+                    arenas,
+                    ast,
+                    diagnostics.as_deref_mut(),
+                )?);
+            }
+
+            tkw.next_expect(T::RightParen, diagnostics)?;
+
+            Ok(Self::Tuple(lhs, rhs))
+        } else {
+            Ok(Self::Value(parse::<DelayValue>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics,
+            )?))
         }
     }
 }

@@ -236,3 +236,41 @@ pub struct SizedNumber {
     pub base: Base,
     pub value: Bits,
 }
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 490-491
+// drive_strength ::=
+//    ( strength0 , strength1 )
+//  | ( strength1 , strength0 )
+//  | ( strength0 , highz1 )
+//  | ( strength1 , highz0 )
+//  | ( highz0 , strength1 )
+//  | ( highz1 , strength0 )
+#[derive(Clone, Copy)]
+pub enum DriveStrength {
+    Strength01(Strength0, Strength1),
+    Strength10(Strength1, Strength0),
+    Strength0Highz1(Strength0),
+    Strength1Highz0(Strength1),
+    Highz1Strength0(Strength0),
+    Highz0Strength1(Strength1),
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+// strength0 ::= supply0 | strong0 | pull0 | weak0
+#[derive(Clone, Copy)]
+pub enum Strength0 {
+    Supply0,
+    Strong0,
+    Pull0,
+    Weak0,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 491
+// strength1 ::= supply1 | strong1 | pull1 | weak1
+#[derive(Clone, Copy)]
+pub enum Strength1 {
+    Supply1,
+    Strong1,
+    Pull1,
+    Weak1,
+}
