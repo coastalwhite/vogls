@@ -3,6 +3,7 @@
 use core::fmt;
 use std::collections::VecDeque;
 
+use hashbrown::hash_map::Entry;
 use slotmap::SlotMap;
 use vogls_bits::Bits;
 use vogls_bits::arithmetic::FvLogicValue;
@@ -119,6 +120,7 @@ impl StackTracker {
 
 #[derive(Clone, Copy)]
 struct Interval {
+    // start..=end
     start: u64,
     end: u64,
     size: VectorSize,
@@ -136,7 +138,7 @@ impl fmt::Debug for Interval {
 impl Interval {
     pub fn empty(size: VectorSize, mode: LogicMode) -> Self {
         Self {
-            start: 0,
+            start: u64::MAX,
             end: 0,
             size,
             mode,
@@ -144,7 +146,7 @@ impl Interval {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.start >= self.end
+        self.start > self.end
     }
 
     pub fn add_range(&mut self, other: Interval) {
@@ -242,13 +244,21 @@ pub fn linear_scan_register_allocation(
             }
             let dst = i.get_destination_variable();
             k.get_mut().set(vars.get_index(&dst).unwrap(), true);
-            i.for_each_src(|src| {
-                // Constant variables might be None here.
-                if let Some(src) = vars.get_index(&src) {
-                    g.get_mut().set(src, true);
-                }
-            });
+            if !matches!(i, Instruction::Phi(..)) {
+                i.for_each_src(|src| {
+                    // Constant variables might be None here.
+                    if let Some(src) = vars.get_index(&src) {
+                        g.get_mut().set(src, true);
+                    }
+                });
+            }
         }
+        bbs[bb].terminator.for_each_var_src(|src| {
+            // Constant variables might be None here.
+            if let Some(src) = vars.get_index(&src) {
+                g.get_mut().set(src, true);
+            }
+        });
     }
 
     let mut changed = true;
@@ -285,8 +295,8 @@ pub fn linear_scan_register_allocation(
         bb_inums.insert(bb, inum);
 
         inum += bbs[bb].instrs.len() as u64 * 2;
-        // Add an instruction for the terminator.
-        inum += 2;
+        // Add an instruction offset for the phi sentinels and terminator.
+        inum += 4;
     }
 
     let mut intervals = VgHashMap::<VariableKey, Interval>::default();
@@ -304,7 +314,7 @@ pub fn linear_scan_register_allocation(
         });
 
         let block_from = bb_inums[&bb];
-        let block_to = block_from + bbs[bb].instrs.len() as u64 * 2 + 2;
+        let block_to = block_from + bbs[bb].instrs.len() as u64 * 2 + 4;
 
         // @Q? Reference implementation contains this. I don't think this applies to us.
         // live |= block.out_vregs.map { |vreg| 1 << vreg.num }.reduce(0, :|)
@@ -334,31 +344,68 @@ pub fn linear_scan_register_allocation(
             // Don't insert intervals for large constants.
             if !assignment.contains_key(&dst) {
                 let size = var_map.size(dst);
-                let interval = intervals
-                    .entry(dst)
-                    .or_insert(Interval::empty(size, dst.mode()));
-                interval.start = inum;
-                if interval.is_empty() {
-                    interval.end = inum;
+                match intervals.entry(dst) {
+                    Entry::Occupied(mut entry) => {
+                        let entry = entry.get_mut();
+                        entry.start = inum;
+                    }
+                    Entry::Vacant(entry) => {
+                        _ = entry.insert(Interval {
+                            start: inum,
+                            end: inum,
+                            size,
+                            mode: dst.mode(),
+                        })
+                    }
                 }
             }
-            instr.for_each_src(|src| {
-                // Don't handle temporal variables.
-                if assignment.contains_key(&src) {
-                    return;
-                }
 
-                let size = var_map.size(src);
-                let interval = intervals
-                    .entry(src)
-                    .or_insert(Interval::empty(size, src.mode()));
-                interval.add_range(Interval {
-                    start: block_from,
-                    end: inum,
-                    size,
-                    mode: src.mode(),
+            if let Instruction::Phi(dst, srcs) = instr {
+                if !assignment.contains_key(dst) {
+                    let size = var_map.size(*dst);
+                    for (tgt_bb, src) in srcs {
+                        let block_from = bb_inums[tgt_bb];
+                        let block_phi = block_from + bbs[*tgt_bb].instrs.len() as u64 * 2;
+
+                        let phi_interval = Interval {
+                            start: block_phi,
+                            end: block_phi,
+                            size,
+                            mode: dst.mode(),
+                        };
+
+                        // Make sure the destination interval is alive here and we can assign to it.
+                        intervals
+                            .get_mut(dst)
+                            .expect("should be inserted before")
+                            .add_range(phi_interval.clone());
+
+                        // Make sure the source interval is still alive here and we can use it.
+                        intervals
+                            .entry(*src)
+                            .or_insert(Interval::empty(size, dst.mode()))
+                            .add_range(phi_interval);
+                    }
+                }
+            } else {
+                instr.for_each_src(|src| {
+                    // Don't handle temporal variables.
+                    if assignment.contains_key(&src) {
+                        return;
+                    }
+
+                    let size = var_map.size(src);
+                    let interval = intervals
+                        .entry(src)
+                        .or_insert(Interval::empty(size, src.mode()));
+                    interval.add_range(Interval {
+                        start: inum,
+                        end: inum,
+                        size,
+                        mode: src.mode(),
+                    });
                 });
-            });
+            }
         }
 
         let terminator_inum = block_to - 2;
@@ -373,7 +420,7 @@ pub fn linear_scan_register_allocation(
                 .entry(src)
                 .or_insert(Interval::empty(size, src.mode()));
             interval.add_range(Interval {
-                start: block_from,
+                start: terminator_inum,
                 end: terminator_inum,
                 size,
                 mode: src.mode(),
