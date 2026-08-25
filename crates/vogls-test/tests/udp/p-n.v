@@ -4,7 +4,7 @@ primitive pdet(z, a);
     input a;
 table
     p : ? : 1 ;
-    ? : ? : 0 ;
+    (??) : ? : 0 ;
 endtable
 endprimitive
 
@@ -13,7 +13,7 @@ primitive ndet(z, a);
     input a;
 table
     n : ? : 1 ;
-    ? : ? : 0 ;
+    (??) : ? : 0 ;
 endtable
 endprimitive
 

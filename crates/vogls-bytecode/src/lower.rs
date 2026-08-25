@@ -1590,6 +1590,34 @@ fn lower_instruction(
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
                     bce.heap_fv_ceq(rd, rs, T4, src_size);
                 }
+                (O::CaseInequality, _, _, M::TwoValue, _, Some(src_size)) => {
+                    match SignedImmediate::new_from_bits(imm) {
+                        None => {
+                            bce.load_bits_into_register(T4, M::TwoValue, imm);
+                            bce.cne(rd, rs, T4);
+                        }
+                        Some(imm) => bce.cnei(rd, rs, imm, src_size),
+                    }
+                }
+                (O::CaseInequality, _, _, M::TwoValue, _, None) => {
+                    let imm = heap_builder.claim_constant(M::TwoValue, imm.clone());
+                    bce.load_u64(T4, imm.offset.bit_offset as u64);
+                    bce.heap_tv_cne(rd, rs, T4, src_size);
+                }
+                (O::CaseInequality, _, _, M::FourValue, _, Some(src_size)) => {
+                    match SignedImmediate::new_from_bits(imm) {
+                        None => {
+                            bce.load_bits_into_register(T4, M::FourValue, imm);
+                            bce.fv_cne(rd, rs, T4);
+                        }
+                        Some(imm) => bce.fv_cnei(rd, rs, imm, src_size),
+                    }
+                }
+                (O::CaseInequality, _, _, M::FourValue, _, None) => {
+                    let imm = heap_builder.claim_constant(M::FourValue, imm.clone());
+                    bce.load_u64(T4, imm.offset.bit_offset as u64);
+                    bce.heap_fv_cne(rd, rs, T4, src_size);
+                }
                 (O::BitwiseCaseEquality, _, _, M::TwoValue, _, Some(src_size)) => {
                     match SignedImmediate::new_from_bits(&imm.bitwise_not()) {
                         None => {

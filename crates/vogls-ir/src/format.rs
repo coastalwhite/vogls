@@ -287,6 +287,7 @@ impl BinaryImmOp {
             Self::Max => "maxi",
 
             Self::CaseEquality => "ceqi",
+            Self::CaseInequality => "cnei",
             Self::BitwiseCaseEquality => "bitwise_ceqi",
         }
     }

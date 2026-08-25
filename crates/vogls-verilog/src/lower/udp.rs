@@ -28,23 +28,17 @@ fn lower_level(
 ) -> VariableKey {
     match level {
         UdpLevelSymbol::L0 => {
-            let l0 = builder.constant(gl, Bits::new_zeroed(SCALAR_VSIZE));
-            builder.case_equals(gl, input, l0)
+            builder.case_equals_constant(gl, input, Bits::new_zeroed(SCALAR_VSIZE))
         }
-        UdpLevelSymbol::L1 => {
-            let l1 = builder.constant(gl, Bits::new_ones(SCALAR_VSIZE));
-            builder.case_equals(gl, input, l1)
-        }
+        UdpLevelSymbol::L1 => builder.case_equals_constant(gl, input, Bits::new_ones(SCALAR_VSIZE)),
         UdpLevelSymbol::X => {
-            let x = builder.constant(gl, Bits::new_unknown(SCALAR_VSIZE));
-            let input = builder.and(gl, input, x); // Z -> X
-            builder.case_equals(gl, input, x)
+            let input = builder.x_to_z(gl, input);
+            builder.case_equals_constant(gl, input, Bits::new_unknown(SCALAR_VSIZE))
         }
         UdpLevelSymbol::QuestionMark => builder.constant(gl, Bits::new_ones(SCALAR_VSIZE)),
         UdpLevelSymbol::B => {
-            let x = builder.constant(gl, Bits::new_unknown(SCALAR_VSIZE));
-            let input = builder.and(gl, input, x); // Z -> X
-            builder.not_case_equals(gl, input, x)
+            let input = builder.x_to_z(gl, input);
+            builder.not_case_equals_constant(gl, input, Bits::new_unknown(SCALAR_VSIZE))
         }
     }
 }
@@ -241,111 +235,122 @@ pub fn lower_udp<'a>(
                 };
             }
 
-            for entry in entries.iter() {
-                let UdpSequentialEntry {
-                    level_list,
-                    edge_list,
-                    current_state,
-                    next_state,
-                } = &*entry;
-
-                if level_list.len() + edge_list.map_or(0, |(_, after_list)| 1 + after_list.len())
-                    != inputs.len()
-                {
-                    let mut tr = ctx.arenas.get_range_span(*level_list);
-                    if let Some((edge_indicator, after_list)) = edge_list {
-                        tr |= ctx.arenas.get_span(*edge_indicator);
-                        if !after_list.is_empty() {
-                            tr |= ctx.arenas.get_range_span(*after_list);
-                        }
+            // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 114 - 8.7
+            // > When the input changes, the edge-sensitive cases are processed first, followed by
+            //   level-sensitive cases. Thus, when level-sensitive and edge-sensitive cases specify
+            //   different output values, the result is specified by the level-sensitive case.
+            for allow_edge_list in [false, true] {
+                for entry in entries.iter() {
+                    let UdpSequentialEntry {
+                        level_list,
+                        edge_list,
+                        current_state,
+                        next_state,
+                    } = &*entry;
+                    if edge_list.is_some() != allow_edge_list {
+                        continue;
                     }
-                    mctx.diagnostics
-                        .not_yet_implemented(tr, "invalid amount of values");
-                    return Err(());
-                }
 
-                let mut acc = builder.constant(mctx.gl(), Bits::from(true));
-                for (i, level) in level_list.iter().enumerate() {
-                    let is_level = lower_level(mctx.gl(), &mut builder, input_vars[i], *level);
-                    acc = builder.and(mctx.gl(), acc, is_level);
-                }
-                if let Some((edge_indicator, after_level_list)) = edge_list {
-                    let prb_before =
-                        builder.probe(mctx.gl(), before_inputs[level_list.len()].unwrap());
-                    let prb_after = input_vars[level_list.len()];
-                    match &**edge_indicator {
-                        UdpEdgeIndicator::Levels(before, after) => {
-                            let is_before =
-                                lower_level(mctx.gl(), &mut builder, prb_before, before.item);
-                            acc = builder.and(mctx.gl(), acc, is_before);
-                            let is_after =
-                                lower_level(mctx.gl(), &mut builder, prb_after, after.item);
-                            acc = builder.and(mctx.gl(), acc, is_after);
+                    if level_list.len()
+                        + edge_list.map_or(0, |(_, after_list)| 1 + after_list.len())
+                        != inputs.len()
+                    {
+                        let mut tr = ctx.arenas.get_range_span(*level_list);
+                        if let Some((edge_indicator, after_list)) = edge_list {
+                            tr |= ctx.arenas.get_span(*edge_indicator);
+                            if !after_list.is_empty() {
+                                tr |= ctx.arenas.get_range_span(*after_list);
+                            }
                         }
-                        UdpEdgeIndicator::Edge(edge) => match edge.item {
-                            UdpEdgeSymbol::R => {
-                                let is_r = builder.andnot(mctx.gl(), prb_after, prb_before);
-                                acc = builder.and(mctx.gl(), acc, is_r);
-                            }
-                            UdpEdgeSymbol::F => {
-                                let is_f = builder.andnot(mctx.gl(), prb_before, prb_after);
-                                acc = builder.and(mctx.gl(), acc, is_f);
-                            }
-                            UdpEdgeSymbol::P => {
-                                let is_p = builder.posedge(mctx.gl(), prb_before, prb_after);
-                                acc = builder.and(mctx.gl(), acc, is_p);
-                            }
-                            UdpEdgeSymbol::N => {
-                                let is_n = builder.negedge(mctx.gl(), prb_before, prb_after);
-                                acc = builder.and(mctx.gl(), acc, is_n);
-                            }
-                            UdpEdgeSymbol::Star => {}
-                        },
+                        mctx.diagnostics
+                            .not_yet_implemented(tr, "invalid amount of values");
+                        return Err(());
                     }
-                    for (i, level) in after_level_list.iter().enumerate() {
-                        let is_level = lower_level(
-                            mctx.gl(),
-                            &mut builder,
-                            input_vars[level_list.len() + 1 + i],
-                            *level,
-                        );
+
+                    let mut acc = builder.constant(mctx.gl(), Bits::from(true));
+                    for (i, level) in level_list.iter().enumerate() {
+                        let is_level = lower_level(mctx.gl(), &mut builder, input_vars[i], *level);
                         acc = builder.and(mctx.gl(), acc, is_level);
                     }
+                    if let Some((edge_indicator, after_level_list)) = edge_list {
+                        let prb_before =
+                            builder.probe(mctx.gl(), before_inputs[level_list.len()].unwrap());
+                        let prb_after = input_vars[level_list.len()];
+                        match &**edge_indicator {
+                            UdpEdgeIndicator::Levels(before, after) => {
+                                let is_before =
+                                    lower_level(mctx.gl(), &mut builder, prb_before, before.item);
+                                acc = builder.and(mctx.gl(), acc, is_before);
+                                let is_after =
+                                    lower_level(mctx.gl(), &mut builder, prb_after, after.item);
+                                acc = builder.and(mctx.gl(), acc, is_after);
+                            }
+                            UdpEdgeIndicator::Edge(edge) => {
+                                let condition = match edge.item {
+                                    UdpEdgeSymbol::R => {
+                                        builder.andnot(mctx.gl(), prb_after, prb_before)
+                                    }
+                                    UdpEdgeSymbol::F => {
+                                        builder.andnot(mctx.gl(), prb_before, prb_after)
+                                    }
+                                    UdpEdgeSymbol::P => {
+                                        builder.posedge(mctx.gl(), prb_before, prb_after)
+                                    }
+                                    UdpEdgeSymbol::N => {
+                                        builder.negedge(mctx.gl(), prb_before, prb_after)
+                                    }
+                                    UdpEdgeSymbol::Star => {
+                                        builder.not_case_equals(mctx.gl(), prb_before, prb_after)
+                                    }
+                                };
+                                acc = builder.and(mctx.gl(), acc, condition);
+                            }
+                        }
+                        for (i, level) in after_level_list.iter().enumerate() {
+                            let is_level = lower_level(
+                                mctx.gl(),
+                                &mut builder,
+                                input_vars[level_list.len() + 1 + i],
+                                *level,
+                            );
+                            acc = builder.and(mctx.gl(), acc, is_level);
+                        }
+                    }
+                    let prb = builder.probe(mctx.gl(), output);
+                    let is_level = lower_level(mctx.gl(), &mut builder, prb, current_state.item);
+                    acc = builder.and(mctx.gl(), acc, is_level);
+
+                    let start_bb = builder.key();
+                    builder = builder.next_terminate_later(mctx.gl());
+
+                    let drive_bb = builder.key();
+
+                    if let UdpNextState::Output(next_state) = next_state.item {
+                        let output_value = match next_state {
+                            UdpOutputSymbol::L0 => Bits::new_zeroed(SCALAR_VSIZE),
+                            UdpOutputSymbol::L1 => Bits::new_ones(SCALAR_VSIZE),
+                            UdpOutputSymbol::X => Bits::new_unknown(SCALAR_VSIZE),
+                        };
+                        let output_value = builder.constant(mctx.gl(), output_value);
+                        builder.drive(mctx.gl(), output, output_value);
+                        assign_net_lvalue(
+                            ctx,
+                            mctx,
+                            scope,
+                            &mut builder,
+                            output_terminal,
+                            output_value,
+                            VType::SCALAR_NET,
+                        )?;
+                    }
+
+                    let current_entry_bb = builder.key();
+                    builder = builder.next_terminate_later(mctx.gl());
+
+                    mctx.gl.bbs[start_bb].terminator =
+                        BasicBlockTerminator::Branch(acc, drive_bb, builder.key());
+                    mctx.gl.bbs[current_entry_bb].terminator = BasicBlockTerminator::Jump(watch_bb);
                 }
-                let prb = builder.probe(mctx.gl(), output);
-                let is_level = lower_level(mctx.gl(), &mut builder, prb, current_state.item);
-                acc = builder.and(mctx.gl(), acc, is_level);
-
-                let start_bb = builder.key();
-                builder = builder.next_terminate_later(mctx.gl());
-
-                let drive_bb = builder.key();
-
-                if let UdpNextState::Output(next_state) = next_state.item {
-                    let output_value = match next_state {
-                        UdpOutputSymbol::L0 => Bits::new_zeroed(SCALAR_VSIZE),
-                        UdpOutputSymbol::L1 => Bits::new_ones(SCALAR_VSIZE),
-                        UdpOutputSymbol::X => Bits::new_unknown(SCALAR_VSIZE),
-                    };
-                    let output_value = builder.constant(mctx.gl(), output_value);
-                    builder.drive(mctx.gl(), output, output_value);
-                    assign_net_lvalue(
-                        ctx,
-                        mctx,
-                        scope,
-                        &mut builder,
-                        output_terminal,
-                        output_value,
-                        VType::SCALAR_NET,
-                    )?;
-                }
-
-                let current_entry_bb = builder.key();
-                builder = builder.next_terminate_later(mctx.gl());
-
-                mctx.gl.bbs[start_bb].terminator =
-                    BasicBlockTerminator::Branch(acc, drive_bb, builder.key());
-                mctx.gl.bbs[current_entry_bb].terminator = BasicBlockTerminator::Jump(watch_bb);
             }
 
             let output_value = builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE));
