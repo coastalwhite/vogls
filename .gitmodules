@@ -10,3 +10,6 @@
 [submodule "submodules/opentitan"]
 	path = submodules/opentitan
 	url = https://github.com/lowRISC/opentitan
+[submodule "submodules/hazard3"]
+	path = submodules/hazard3
+	url = https://github.com/wren6991/hazard3

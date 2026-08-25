@@ -1,6 +1,7 @@
 import init, {
     get_js_ibex_trace,
     get_js_neorv32_trace,
+    get_js_hazard3_trace,
     get_js_trace,
 } from "./pipeline_explorer.js";
 
@@ -25,6 +26,9 @@ self.onmessage = async (e: MessageEvent) => {
         self.postMessage(trace);
     } else if (proc === "neorv32") {
         const trace = get_js_neorv32_trace(asm, config, numCycles);
+        self.postMessage(trace);
+    } else if (proc === "hazard3") {
+        const trace = get_js_hazard3_trace(asm, config, numCycles);
         self.postMessage(trace);
     }
 };
