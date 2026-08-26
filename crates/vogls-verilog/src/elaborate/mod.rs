@@ -200,10 +200,20 @@ impl VectorTransform {
     }
 }
 
+/// Verilog arrays can have any positive, negative or zero upper and lower bound. We make that into
+/// 0..length everywhere.
+#[derive(Clone, Copy)]
+pub struct ArrayDim {
+    /// The lower bound on the array.
+    pub offset: i64,
+    /// The number of elements in the array.
+    pub num_elements: NonZeroU32,
+}
+
 #[derive(Clone)]
 pub struct NetSymbol {
     pub ty: VType,
-    pub dims: Vec<NonZeroU32>,
+    pub dims: Vec<ArrayDim>,
     pub transform: VectorTransform,
     pub net: Net,
     pub port_idx: Option<usize>,
@@ -326,13 +336,13 @@ fn new_net(
     mode: LogicMode,
     arenas: &AstArenas,
     ty: &VType,
-    dims: &[NonZeroU32],
+    dims: &[ArrayDim],
     name: AstItem<Identifier>,
     initialize: Option<VValue>,
 ) -> Net {
     let mut size = ty.bit_length();
     for dim in dims {
-        size = size.checked_mul(*dim).unwrap();
+        size = size.checked_mul(dim.num_elements).unwrap();
     }
     let origin = arenas.get_item_span(name);
     let name = arenas.ident_table[name.item.0].to_string();
@@ -396,7 +406,7 @@ pub fn dims_to_array_elab<'a>(
     table: &VSymbolTable,
     diagnostics: &mut Diagnostics,
     dimensions: AstIdRange<'a, Dimension<'a>>,
-) -> Result<Vec<NonZeroU32>, ()> {
+) -> Result<Vec<ArrayDim>, ()> {
     let mut dims = Vec::with_capacity(dimensions.len());
     for dim in dimensions.iter() {
         let Dimension { lhs, rhs } = &*dim;
@@ -406,12 +416,13 @@ pub fn dims_to_array_elab<'a>(
         let lhs = lhs?.into_bits().as_i64().unwrap();
         let rhs = rhs?.into_bits().as_i64().unwrap();
 
-        let val = lhs.abs_diff(rhs) + 1;
-        let Some(val) = u32::try_from(val).ok().and_then(VectorSize::new) else {
+        let offset = lhs.min(rhs);
+        let num_elements = lhs.abs_diff(rhs) + 1;
+        let Some(num_elements) = u32::try_from(num_elements).ok().and_then(VectorSize::new) else {
             diagnostics.not_yet_implemented(arenas.get_span(dim), "array overflow");
             return Err(());
         };
-        dims.push(val);
+        dims.push(ArrayDim { offset, num_elements });
     }
     Ok(dims)
 }

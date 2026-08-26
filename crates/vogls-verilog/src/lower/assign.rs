@@ -1,12 +1,10 @@
-use std::num::NonZeroU32;
-
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{BasicBlockBuilder, VariableKey, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::expr::{BitSlice, BitSliceKind};
 use crate::ast::statement::{NetLValue, NetLValueFlat, VariableLValue, VariableLValueFlat};
-use crate::elaborate::{VSymbol, VectorTransform};
+use crate::elaborate::{ArrayDim, VSymbol, VectorTransform};
 use crate::lower::addressing::{
     Address, AddressingConstantExprWidthContext, LValueAddressingContext, RangeExpr,
     lower_addressing,
@@ -153,7 +151,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         try_resolve_hident(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
 
     let (ty, array_dims, transform) = match &ctx.table[symbol_key].content {
-        VSymbol::Parameter(v) => (v.ty(), &[] as &[NonZeroU32], VectorTransform::default()),
+        VSymbol::Parameter(v) => (v.ty(), &[] as &[ArrayDim], VectorTransform::default()),
         VSymbol::Net(s) => (s.ty, s.dims.as_slice(), s.transform),
         v => todo!("lvalue assign: {v:?}"),
     };
@@ -297,7 +295,7 @@ pub fn net_lvalue_flat_ty<'a>(
         try_resolve_hident(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
 
     let (ty, dims, transform) = match &ctx.table[symbol_key].content {
-        VSymbol::Parameter(v) => (v.ty(), &[] as &[NonZeroU32], VectorTransform::default()),
+        VSymbol::Parameter(v) => (v.ty(), &[] as &[ArrayDim], VectorTransform::default()),
         VSymbol::Net(s) => (s.ty, s.dims.as_slice(), s.transform),
         _ => todo!(),
     };
