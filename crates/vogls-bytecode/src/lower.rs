@@ -2151,7 +2151,7 @@ fn lower_instruction(
 
             let dslot = assignment[dst];
             let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0, true);
-            let mut roffset = to_reg(
+            let roffset = to_reg(
                 bce,
                 *offset,
                 &gl.vars,
@@ -2163,7 +2163,6 @@ fn lower_instruction(
 
             let dst_size = gl.vars.size(*dst);
             let signal_size = gl.signals[*signal].size;
-            let roffsize = SixBitSize::from_vector_size(gl.vars.size(*offset)).unwrap();
             assert!(dst_size <= signal_size);
 
             let rsignal = T4;
@@ -2171,51 +2170,13 @@ fn lower_instruction(
             // @Performance: Better lowering.
             bce.load_u64(rsignal, signal_addr);
 
-            let mut jump_offset = None;
-            match offset.mode() {
-                M::TwoValue => {}
-                M::FourValue => {
-                    let (roffspc, roffval) = roffset.to_spc_and_val();
-
-                    // TempReg: Destructs OFFSET (SPC). No longer assessible.
-                    bce.contains_no_special(T2, roffspc, roffsize);
-
-                    let branch_offset = bce.data.len();
-                    bce.panic();
-
-                    use LogicMode as M;
-                    assert_eq!(dst.mode(), M::FourValue);
-                    match SixBitSize::from_vector_size(dst_size) {
-                        None => {
-                            bce.fv_heap_fill(rd, FvLogicValue::X, dst_size);
-                        }
-                        Some(_) => {
-                            let (spc, val) = rd.to_spc_and_val();
-                            bce.load_u64(spc, 0);
-                            bce.load_u64(val, 0);
-                        }
-                    }
-
-                    jump_offset = Some(bce.data.len());
-                    bce.panic();
-
-                    bce.data[branch_offset] = BranchTrue {
-                        rcond: T2,
-                        imm: SignedImmediate::new((bce.data.len() - branch_offset) as i64 - 1)
-                            .unwrap(),
-                    }
-                    .encode();
-
-                    roffset = roffval;
-                }
-            }
-
             use LogicMode as M;
             match (
                 gl.signals[*signal].mode,
+                offset.mode(),
                 SixBitSize::from_vector_size(dst_size),
             ) {
-                (M::TwoValue, None) => {
+                (M::TwoValue, _, None) => {
                     bce.heap_slice(
                         rd,
                         rsignal,
@@ -2227,10 +2188,13 @@ fn lower_instruction(
                         offset.mode() == M::FourValue,
                     );
                 }
-                (M::TwoValue, Some(size)) => {
+                (M::TwoValue, M::TwoValue, Some(size)) => {
                     bce.tvtv_heap_slicex(rd, rsignal, roffset, size, signal_size);
                 }
-                (M::FourValue, None) => {
+                (M::TwoValue, M::FourValue, Some(size)) => {
+                    bce.tvfv_heap_slicex(rd, rsignal, roffset, size, signal_size);
+                }
+                (M::FourValue, _, None) => {
                     // TempReg: dst_size > 64 => T1 is free.
 
                     bce.heap_slice(
@@ -2244,15 +2208,12 @@ fn lower_instruction(
                         offset.mode() == M::FourValue,
                     );
                 }
-                (M::FourValue, Some(size)) => {
+                (M::FourValue, M::TwoValue, Some(size)) => {
                     bce.fvtv_heap_slicex(rd, rsignal, roffset, size, signal_size);
                 }
-            }
-
-            if let Some(jump_offset) = jump_offset {
-                bce.data[jump_offset] =
-                    Jump(SignedImmediate::new((bce.data.len() - jump_offset) as i64 - 1).unwrap())
-                        .encode();
+                (M::FourValue, M::FourValue, Some(size)) => {
+                    bce.fvfv_heap_slicex(rd, rsignal, roffset, size, signal_size);
+                }
             }
 
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T3);
