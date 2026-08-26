@@ -17,6 +17,13 @@ pub fn lower<'a>(
     id: AstId<'a, GateInstantiation<'a>>,
 ) -> Result<(), ()> {
     match &*id {
+        GateInstantiation::Enable(_) | GateInstantiation::Mos(_) => {
+            mctx.diagnostics.not_yet_implemented(
+                ctx.arenas.get_span(id),
+                "gate instantiation type not yet implemented",
+            );
+            return Err(());
+        }
         GateInstantiation::NInput(id) => {
             use NInputGateType as G;
             for instance in id.instances.iter() {

@@ -4,9 +4,9 @@ use vogls_ir::time::TimeResolution;
 use super::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression, ConstantRangeExpression};
 use super::expr::Expr;
 use super::specify::SpecifyBlock;
-use super::statement::{NetLValue, Statement, StatementOrNull};
+use super::statement::{Delay3, NetLValue, Statement, StatementOrNull};
 use super::udp::{UdpDeclaration, UdpInstantiation};
-use super::{AstId, AstIdRange, AstItem, AttributeInstance, Identifier};
+use super::{AstId, AstIdRange, AstItem, AttributeInstance, DriveStrength, Identifier};
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 487
 // description ::=
@@ -231,8 +231,8 @@ pub enum ModuleOrGenerateItemContent<'a> {
 pub enum GateInstantiation<'a> {
     // @Incomplete
     // Cmos(CmosGateInstantiation),
-    // Enable(EnableGateInstantiation),
-    // Mos(MosGateInstantiation),
+    Enable(AstId<'a, EnableGateInstantiation<'a>>),
+    Mos(AstId<'a, MosSwitchInstantiation<'a>>),
     NInput(AstId<'a, NInputGateInstantiation<'a>>),
     NOutput(AstId<'a, NOutputGateInstantiation<'a>>),
     // PassEn(PassEnGateInstantiation),
@@ -241,8 +241,44 @@ pub enum GateInstantiation<'a> {
     // Pullup(PullupGateInstantiation),
 }
 
-// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
-// udp_instantiation ::= udp_identifier [ drive_strength ] [ delay2 ] udp_instance { , udp_instance } ;
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+// enable_gatetype [drive_strength] [delay3] enable_gate_instance { , enable_gate_instance } ;
+#[derive(Clone, Copy)]
+pub struct EnableGateInstantiation<'a> {
+    pub gatetype: AstItem<EnableGateType>,
+    pub drive_strength: Option<AstItem<DriveStrength>>,
+    pub delay: Option<AstId<'a, Delay3<'a>>>,
+    pub instances: AstIdRange<'a, EnableGateInstance<'a>>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+// enable_gate_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal , enable_terminal )
+#[derive(Clone, Copy)]
+pub struct EnableGateInstance<'a> {
+    pub name: Option<AstId<'a, NameOfGateInstance<'a>>>,
+    pub output_terminal: AstId<'a, NetLValue<'a>>,
+    pub input_terminal: AstId<'a, Expr<'a>>,
+    pub enable_terminal: AstId<'a, Expr<'a>>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+// mos_switchtype [delay3] mos_switch_instance { , mos_switch_instance } ;
+#[derive(Clone, Copy)]
+pub struct MosSwitchInstantiation<'a> {
+    pub gatetype: AstItem<MosSwitchType>,
+    pub delay: Option<AstId<'a, Delay3<'a>>>,
+    pub instances: AstIdRange<'a, EnableGateInstance<'a>>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+// mos_switch_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal , enable_terminal )
+#[derive(Clone, Copy)]
+pub struct MosSwitchInstance<'a> {
+    pub name: Option<AstId<'a, NameOfGateInstance<'a>>>,
+    pub output_terminal: AstId<'a, NetLValue<'a>>,
+    pub input_terminal: AstId<'a, Expr<'a>>,
+    pub enable_terminal: AstId<'a, Expr<'a>>,
+}
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
 // n_input_gatetype [drive_strength] [delay2] n_input_gate_instance { , n_input_gate_instance }
@@ -256,7 +292,7 @@ pub struct NInputGateInstantiation<'a> {
 // n_input_gate_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal { , input_terminal } )
 #[derive(Clone, Copy)]
 pub struct NInputGateInstance<'a> {
-    pub name: Option<AstId<'a, NameOfGateInstance>>,
+    pub name: Option<AstId<'a, NameOfGateInstance<'a>>>,
     pub output_terminal: AstId<'a, NetLValue<'a>>,
     pub input_terminals: AstIdRange<'a, Expr<'a>>,
 }
@@ -264,10 +300,29 @@ pub struct NInputGateInstance<'a> {
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
 // name_of_gate_instance ::= gate_instance_identifier [ range ]
 #[derive(Clone, Copy)]
-pub struct NameOfGateInstance {
+pub struct NameOfGateInstance<'a> {
     pub identifier: AstItem<Identifier>,
-    // @Incomplete
-    // range:
+    pub range: Option<AstId<'a, Range<'a>>>,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+// enable_gatetype ::= enable_gatetype ::= bufif0 | bufif1 | notif0 | notif1
+#[derive(Clone, Copy)]
+pub enum EnableGateType {
+    BufIf0,
+    BufIf1,
+    NotIf0,
+    NotIf1,
+}
+
+// IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+// mos_switchtype ::= nmos | pmos | rnmos | rpmos
+#[derive(Clone, Copy)]
+pub enum MosSwitchType {
+    NMos,
+    PMos,
+    RNMos,
+    RPMos,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
@@ -294,7 +349,7 @@ pub struct NOutputGateInstantiation<'a> {
 // n_output_gate_instance ::= [ name_of_gate_instance ] ( output_terminal { , output_terminal } , input_terminal )
 #[derive(Clone, Copy)]
 pub struct NOutputGateInstance<'a> {
-    pub name: Option<AstId<'a, NameOfGateInstance>>,
+    pub name: Option<AstId<'a, NameOfGateInstance<'a>>>,
     pub output_terminals: AstIdRange<'a, NetLValue<'a>>,
     pub input_terminal: AstId<'a, Expr<'a>>,
 }

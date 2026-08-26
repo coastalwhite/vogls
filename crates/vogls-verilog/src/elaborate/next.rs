@@ -1271,6 +1271,13 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
 
             use GateInstantiation as G;
             match &*id {
+                G::Enable(_) | G::Mos(_) => {
+                    diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(id),
+                        "gate instantiation type not yet implemented",
+                    );
+                    return Err(());
+                }
                 G::NInput(id) => {
                     for instantiation in id.instances.iter() {
                         define_implicit_net_lvalue(
