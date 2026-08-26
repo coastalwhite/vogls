@@ -367,10 +367,12 @@ impl FuseGraphOptimizer {
                                     }
                                 },
                                 FuseTarget::Constant(value) => {
-                                    builder.push_raw_instruction(I::Constant(
-                                        *dst,
-                                        value.slicex(*offset, gl.vars.size(*dst)),
-                                    ));
+                                    let mut value = value.slicex(*offset, gl.vars.size(*dst));
+                                    // Lower mode when needed.
+                                    if dst.mode().is_two_value() {
+                                        value = value.special_to_zero();
+                                    }
+                                    builder.push_raw_instruction(I::Constant(*dst, value));
                                 }
                             }
                             continue;
