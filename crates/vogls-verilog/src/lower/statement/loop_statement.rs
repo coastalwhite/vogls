@@ -34,7 +34,23 @@ pub fn lower_loop_statement<'a>(
                 flags: SignalFlags::EMPTY,
                 origin: TokenRange::default(),
             });
-            repeat = Some((signal, size));
+            // IEEE Std 1364-2005 p. 130:
+            //
+            // """
+            // If the expression evaluates to unknown or high impedance, it shall be treated as
+            // zero, and no statement shall be executed.
+            // """
+            let size = builder.convert_mode(mctx.gl(), size, LogicMode::TwoValue);
+            let size_signal = mctx.gl.signals.insert(Signal {
+                name: String::from("__REPEAT_BOUND"),
+                size: mctx.gl.vars.size(size),
+                initialize: None,
+                mode: LogicMode::TwoValue,
+                flags: SignalFlags::EMPTY,
+                origin: TokenRange::default(),
+            });
+            builder.drive(mctx.gl(), size_signal, size);
+            repeat = Some((signal, size_signal));
         }
         V::For(initialization, _, _) => {
             let initialization = &*initialization;
@@ -70,8 +86,9 @@ pub fn lower_loop_statement<'a>(
     let condition = match ls.variant {
         V::Forever => None,
         V::Repeat(_) => {
-            let (signal, size) = repeat.unwrap();
+            let (signal, size_signal) = repeat.unwrap();
             let v = builder.probe(mctx.gl(), signal);
+            let size = builder.probe(mctx.gl(), size_signal);
             Some(builder.unsigned_lt(mctx.gl(), v, size))
         }
         V::While(condition) => Some(lower_expr(ctx, mctx, scope, &mut builder, condition, None)?.0),
@@ -141,6 +158,7 @@ pub fn lower_loop_statement<'a>(
     let exit_bb = match exit_bb {
         Some(exit_bb) => exit_bb,
         None => {
+            // Forever loops don't have an exit block: dummy block.
             let region = mctx.gl.bbs[loop_start].region;
             mctx.gl.bbs.insert(BasicBlock {
                 instrs: Vec::new(),
