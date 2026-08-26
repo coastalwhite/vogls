@@ -1,8 +1,8 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessBuilder, ProcessKind,
-    SCALAR_VSIZE, Signal, SignalFlags, TemporalRegionKey, VariableKey,
+    BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, Bits, GlobalContext, ProcessBuilder,
+    ProcessKind, SCALAR_VSIZE, Signal, SignalFlags, TemporalRegionKey, VariableKey,
 };
 use vogls_utils::OrderedSet;
 
@@ -18,7 +18,7 @@ use crate::lower::VType;
 use crate::lower::assign::assign_net_lvalue;
 use crate::lower::expression::{get_used_signals, lower_expr, truncate_or_extend};
 
-use super::{LowerContext, MutLowerContext};
+use super::{LowerContext, MutLowerContext, eval_constant_expr};
 
 fn lower_level(
     gl: &mut GlobalContext,
@@ -62,22 +62,12 @@ pub fn lower_udp<'a>(
         ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, ctx.arenas.get_span(id));
 
     // Initial output terminal.
-    if let UdpBody::Sequential(Some(initial), _) = body {
-        let initial = match initial.init_val.item {
-            UdpInitVal::L0 => builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE)),
-            UdpInitVal::L1 => builder.constant(mctx.gl(), Bits::new_ones(SCALAR_VSIZE)),
-            UdpInitVal::X => builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE)),
-        };
-        assign_net_lvalue(
-            ctx,
-            mctx,
-            scope,
-            &mut builder,
-            output_terminal,
-            initial,
-            VType::UnsignedNet(SCALAR_VSIZE),
-        )?;
-        builder = builder.jump(mctx.gl());
+    let mut setup_bb = BasicBlockKey::default();
+    if matches!(body, UdpBody::Sequential(Some(_), _))
+        || matches!(ports, UdpPorts::DeclarationPortList(ports) if ports.output_decl.constant_expr.is_some())
+    {
+        setup_bb = builder.key();
+        builder = builder.next_terminate_later(mctx.gl());
     }
 
     let entry_bb = builder.key();
@@ -216,13 +206,6 @@ pub fn lower_udp<'a>(
                 }
                 UdpPorts::DeclarationPortList(decl_list) => {
                     let output = *decl_list.output_decl;
-                    if let Some(constant_expr) = output.constant_expr {
-                        mctx.diagnostics.not_yet_implemented(
-                            ctx.arenas.get_span(constant_expr),
-                            "constant expr here",
-                        );
-                    }
-
                     let output_name = output.port_identifier.item.0;
                     let output_signal = mctx.gl.signals.insert(vogls_ir::Signal {
                         name: ctx.arenas.ident_table[output_name].to_string(),
@@ -232,6 +215,40 @@ pub fn lower_udp<'a>(
                         origin: ctx.arenas.get_item_span(output.port_identifier),
                         mode: ctx.logic_mode,
                     });
+
+                    if let Some(constant_expr) = output.constant_expr {
+                        let mut initial = eval_constant_expr(
+                            &mctx.gl,
+                            ctx.arenas,
+                            &ctx.table,
+                            scope,
+                            &mut mctx.diagnostics,
+                            constant_expr,
+                            Some(SCALAR_VSIZE),
+                        )?
+                        .into_bits();
+                        initial = initial.truncate(SCALAR_VSIZE);
+                        if mctx.gl.signals[output_signal].mode.is_two_value() {
+                            initial = initial.special_to_zero();
+                        };
+                        mctx.gl.signals[output_signal].initialize = Some(initial.clone());
+                        builder.switch_to(mctx.gl(), setup_bb);
+                        let initial = builder.constant(mctx.gl(), initial);
+                        assign_net_lvalue(
+                            ctx,
+                            mctx,
+                            scope,
+                            &mut builder,
+                            output_terminal,
+                            initial,
+                            VType::UnsignedNet(SCALAR_VSIZE),
+                        )?;
+                        builder.finalize_and_switch_to(
+                            mctx.gl(),
+                            BasicBlockTerminator::Jump(entry_bb),
+                            entry_bb,
+                        );
+                    }
                     (output_signal, output_name)
                 }
             };
@@ -248,12 +265,30 @@ pub fn lower_udp<'a>(
                     );
                     return Err(());
                 }
+                let mode = mctx.gl.signals[output].mode;
                 let initial = match init_val.item {
-                    UdpInitVal::L0 => Some(Bits::new_zeroed(SCALAR_VSIZE)),
-                    UdpInitVal::L1 => Some(Bits::new_ones(SCALAR_VSIZE)),
-                    UdpInitVal::X => None,
+                    UdpInitVal::L0 => Bits::new_zeroed(SCALAR_VSIZE),
+                    UdpInitVal::L1 => Bits::new_ones(SCALAR_VSIZE),
+                    UdpInitVal::X if mode.is_four_value() => Bits::new_unknown(SCALAR_VSIZE),
+                    UdpInitVal::X => Bits::new_zeroed(SCALAR_VSIZE),
                 };
-                mctx.gl.signals[output].initialize = initial;
+                mctx.gl.signals[output].initialize = Some(initial.clone());
+                builder.switch_to(mctx.gl(), setup_bb);
+                let initial = builder.constant(mctx.gl(), initial);
+                assign_net_lvalue(
+                    ctx,
+                    mctx,
+                    scope,
+                    &mut builder,
+                    output_terminal,
+                    initial,
+                    VType::UnsignedNet(SCALAR_VSIZE),
+                )?;
+                builder.finalize_and_switch_to(
+                    mctx.gl(),
+                    BasicBlockTerminator::Jump(entry_bb),
+                    entry_bb,
+                );
             }
 
             // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 114 - 8.7
