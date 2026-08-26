@@ -925,41 +925,6 @@ impl Instruction {
             Self::Constant(_, _) | Self::LastUpdateTime(_, _) | Self::Probe(_, _, _) => {}
         }
     }
-    fn map_src_vars(&mut self, mut f: impl FnMut(VariableKey) -> VariableKey) {
-        match self {
-            Self::Unary(_, _, src)
-            | Self::Resize(_, _, src)
-            | Self::BinaryImm(_, _, src, _)
-            | Self::SliceImm(_, src, _)
-            | Self::ShiftImm(_, _, src, _)
-            | Self::ProbeSlice(_, _, src)
-            | Self::Drive(_, _, src, _) => *src = f(*src),
-            Self::Binary(_, _, src1, src2) | Self::Slice(_, src1, src2) => {
-                *src1 = f(*src1);
-                *src2 = f(*src2);
-            }
-            Self::Phi(_, srcs) => {
-                for (_, s) in srcs {
-                    *s = f(*s);
-                }
-            }
-            Self::Intrinsic(_, _, srcs) => {
-                for s in srcs {
-                    *s = f(*s);
-                }
-            }
-            Self::DriveSlice(_dst, _, src, partial) => {
-                *src = f(*src);
-                *partial = f(*partial);
-            }
-            Self::Select(_, cond, truthy, falsy) => {
-                *cond = f(*cond);
-                *truthy = f(*truthy);
-                *falsy = f(*falsy);
-            }
-            Self::Constant(_, _) | Self::LastUpdateTime(_, _) | Self::Probe(_, _, _) => {}
-        }
-    }
 
     fn map_signals(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
         match self {

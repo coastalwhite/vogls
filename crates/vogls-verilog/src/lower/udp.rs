@@ -1,8 +1,8 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, Bits, GlobalContext, ProcessBuilder,
-    ProcessKind, SCALAR_VSIZE, Signal, SignalFlags, VariableKey,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessBuilder, ProcessKind,
+    SCALAR_VSIZE, Signal, SignalFlags, VariableKey,
 };
 use vogls_utils::OrderedSet;
 
@@ -60,70 +60,23 @@ pub fn lower_udp<'a>(
 
     let (mut proc_builder, mut builder) =
         ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, ctx.arenas.get_span(id));
-    let mut entry_tr = proc_builder.entry();
-
-    // Initial output terminal.
-    let mut setup_bb = BasicBlockKey::default();
-    if matches!(body, UdpBody::Sequential(Some(_), _))
-        || matches!(ports, UdpPorts::DeclarationPortList(ports) if ports.output_decl.constant_expr.is_some())
-    {
-        setup_bb = builder.key();
-        entry_tr = proc_builder.next_temporal_region(mctx.gl());
-        builder.temporal_jump_to(mctx.gl(), entry_tr);
-        builder.switch_to(mctx.gl(), entry_tr.entry());
-    }
 
     let mut ins = OrderedSet::new();
+    let mut input_vars = Vec::with_capacity(inputs.len());
     for input in inputs.iter() {
         get_used_signals(ctx, mctx, scope, &mut ins, input)?;
     }
 
-    let mut before_inputs = vec![None; inputs.len()];
-    if let UdpBody::Sequential(_, entries) = body {
-        for entry in entries.iter() {
-            let UdpSequentialEntry {
-                level_list,
-                edge_list,
-                current_state: _,
-                next_state: _,
-            } = &*entry;
-            if level_list.len() < inputs.len() && edge_list.is_some() {
-                let i = level_list.len();
-                if before_inputs[i].is_none() {
-                    let signal = Signal {
-                        name: String::from("__UDP_INPUT"),
-                        size: SCALAR_VSIZE,
-                        initialize: None,
-                        mode: ctx.logic_mode,
-                        flags: SignalFlags::EMPTY,
-                        origin: TokenRange::default(),
-                    };
-                    let signal = mctx.gl.signals.insert(signal);
-                    before_inputs[i] = Some(signal);
-                }
-            }
-        }
-    }
-
-    let mut input_vars = Vec::with_capacity(inputs.len());
-    for input in inputs.iter() {
-        let (input, input_ty) = lower_expr(ctx, mctx, scope, &mut builder, input, None)?;
-        let input = truncate_or_extend(mctx.gl(), &mut builder, input, input_ty, SCALAR_VSIZE);
-        input_vars.push(input);
-    }
-
-    builder = builder.next_terminate_later(mctx.gl());
-    let watch_bb = builder.key();
-    for (input, before_input) in input_vars.iter().zip(&before_inputs) {
-        if let Some(before_input) = before_input {
-            builder.drive(mctx.gl(), *before_input, *input);
-        }
-    }
-    builder.watch_to(mctx.gl(), ins.items, entry_tr);
-    builder.finished_switch_to(mctx.gl(), entry_tr.entry());
-
     match body {
         UdpBody::Combinational(entries) => {
+            let entry_tr = proc_builder.entry();
+            for input in inputs.iter() {
+                let (input, input_ty) = lower_expr(ctx, mctx, scope, &mut builder, input, None)?;
+                let input =
+                    truncate_or_extend(mctx.gl(), &mut builder, input, input_ty, SCALAR_VSIZE);
+                input_vars.push(input);
+            }
+
             for entry in entries.iter() {
                 let UdpCombinationalEntry {
                     level_input_list,
@@ -168,13 +121,11 @@ pub fn lower_udp<'a>(
                 builder = builder.next_terminate_later(mctx.gl());
 
                 debug_assert_eq!(mctx.gl.bbs[start_bb].region, mctx.gl.bbs[drive_bb].region);
-                debug_assert_eq!(
-                    mctx.gl.bbs[current_entry_bb].region,
-                    mctx.gl.bbs[watch_bb].region
-                );
+                debug_assert_eq!(mctx.gl.bbs[current_entry_bb].region, entry_tr);
                 mctx.gl.bbs[start_bb].terminator =
                     BasicBlockTerminator::Branch(acc, drive_bb, builder.key());
-                mctx.gl.bbs[current_entry_bb].terminator = BasicBlockTerminator::Jump(watch_bb);
+                mctx.gl.bbs[current_entry_bb].terminator =
+                    BasicBlockTerminator::Watch(entry_tr, ins.items.clone());
             }
 
             let output_value = builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE));
@@ -187,6 +138,7 @@ pub fn lower_udp<'a>(
                 output_value,
                 VType::SCALAR_NET,
             )?;
+            builder.watch_to(mctx.gl(), ins.items.clone(), entry_tr);
         }
         UdpBody::Sequential(initial, entries) => {
             let (output, output_name) = match *ports {
@@ -235,7 +187,6 @@ pub fn lower_udp<'a>(
                             initial = initial.special_to_zero();
                         };
                         mctx.gl.signals[output_signal].initialize = Some(initial.clone());
-                        builder.switch_to(mctx.gl(), setup_bb);
                         let initial = builder.constant(mctx.gl(), initial);
                         assign_net_lvalue(
                             ctx,
@@ -246,12 +197,35 @@ pub fn lower_udp<'a>(
                             initial,
                             VType::UnsignedNet(SCALAR_VSIZE),
                         )?;
-                        builder.temporal_jump_to(mctx.gl(), entry_tr);
-                        builder.finished_switch_to(mctx.gl(), entry_tr.entry());
                     }
                     (output_signal, output_name)
                 }
             };
+
+            let mut before_inputs = vec![None; inputs.len()];
+            for entry in entries.iter() {
+                let UdpSequentialEntry {
+                    level_list,
+                    edge_list,
+                    current_state: _,
+                    next_state: _,
+                } = &*entry;
+                if level_list.len() < inputs.len() && edge_list.is_some() {
+                    let i = level_list.len();
+                    if before_inputs[i].is_none() {
+                        let signal = Signal {
+                            name: String::from("__UDP_INPUT"),
+                            size: SCALAR_VSIZE,
+                            initialize: None,
+                            mode: ctx.logic_mode,
+                            flags: SignalFlags::EMPTY,
+                            origin: TokenRange::default(),
+                        };
+                        let signal = mctx.gl.signals.insert(signal);
+                        before_inputs[i] = Some(signal);
+                    }
+                }
+            }
 
             if let Some(initial) = initial {
                 let UdpInitialStatement {
@@ -273,7 +247,6 @@ pub fn lower_udp<'a>(
                     UdpInitVal::X => Bits::new_zeroed(SCALAR_VSIZE),
                 };
                 mctx.gl.signals[output].initialize = Some(initial.clone());
-                builder.switch_to(mctx.gl(), setup_bb);
                 let initial = builder.constant(mctx.gl(), initial);
                 assign_net_lvalue(
                     ctx,
@@ -284,9 +257,28 @@ pub fn lower_udp<'a>(
                     initial,
                     VType::UnsignedNet(SCALAR_VSIZE),
                 )?;
-                builder.temporal_jump_to(mctx.gl(), entry_tr);
-                builder.finished_switch_to(mctx.gl(), entry_tr.entry());
             }
+
+            let entry_tr = proc_builder.next_temporal_region(mctx.gl());
+            builder.watch_to(mctx.gl(), ins.items.clone(), entry_tr);
+            builder.finished_switch_to(mctx.gl(), entry_tr.entry());
+
+            for input in inputs.iter() {
+                let (input, input_ty) = lower_expr(ctx, mctx, scope, &mut builder, input, None)?;
+                let input =
+                    truncate_or_extend(mctx.gl(), &mut builder, input, input_ty, SCALAR_VSIZE);
+                input_vars.push(input);
+            }
+
+            let watch_bb = builder.new_basic_block(mctx.gl());
+            builder.switch_to(mctx.gl(), watch_bb);
+            for (input, before_input) in input_vars.iter().zip(&before_inputs) {
+                if let Some(before_input) = before_input {
+                    builder.drive(mctx.gl(), *before_input, *input);
+                }
+            }
+            builder.watch_to(mctx.gl(), ins.items, entry_tr);
+            builder.finished_switch_to(mctx.gl(), entry_tr.entry());
 
             // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 114 - 8.7
             // > When the input changes, the edge-sensitive cases are processed first, followed by
@@ -402,10 +394,7 @@ pub fn lower_udp<'a>(
 
                     mctx.gl.bbs[start_bb].terminator =
                         BasicBlockTerminator::Branch(acc, drive_bb, builder.key());
-                    debug_assert_eq!(
-                        mctx.gl.bbs[current_entry_bb].region,
-                        mctx.gl.bbs[watch_bb].region
-                    );
+                    debug_assert_eq!(mctx.gl.bbs[current_entry_bb].region, entry_tr);
                     mctx.gl.bbs[current_entry_bb].terminator = BasicBlockTerminator::Jump(watch_bb);
                 }
             }
@@ -421,9 +410,9 @@ pub fn lower_udp<'a>(
                 output_value,
                 VType::SCALAR_NET,
             )?;
+            builder.jump_to(mctx.gl(), watch_bb);
         }
     }
-    builder.jump_to(mctx.gl(), watch_bb);
     proc_builder.finalize(mctx.gl());
     Ok(())
 }
