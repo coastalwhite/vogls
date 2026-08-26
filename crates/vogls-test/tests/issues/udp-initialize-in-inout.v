@@ -1,3 +1,4 @@
+// vogls: fail=execute
 primitive latch1(output reg q = 1'b1, input clk, input d);
 table
     0 1 : ? : 1 ;
