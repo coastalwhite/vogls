@@ -16,15 +16,22 @@ pub fn lower<'a>(
     scope: SymbolId,
     id: AstId<'a, GateInstantiation<'a>>,
 ) -> Result<(), ()> {
+    use GateInstantiation as G;
     match &*id {
-        GateInstantiation::Enable(_) | GateInstantiation::Mos(_) => {
+        G::Enable(_)
+        | G::Mos(_)
+        | G::Cmos(_)
+        | G::PassEn(_)
+        | G::PassSwitch(_)
+        | G::Pullup(_)
+        | G::Pulldown(_) => {
             mctx.diagnostics.not_yet_implemented(
                 ctx.arenas.get_span(id),
                 "gate instantiation type not yet implemented",
             );
             return Err(());
         }
-        GateInstantiation::NInput(id) => {
+        G::NInput(id) => {
             use NInputGateType as G;
             for instance in id.instances.iter() {
                 let NInputGateInstance {
@@ -104,7 +111,7 @@ pub fn lower<'a>(
                 proc_builder.finalize(mctx.gl());
             }
         }
-        GateInstantiation::NOutput(id) => {
+        G::NOutput(id) => {
             use NOutputGateType as G;
             for instance in id.instances.iter() {
                 let NOutputGateInstance {
