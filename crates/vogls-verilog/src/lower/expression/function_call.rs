@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator, ConnectionDirection, VariableKey};
+use vogls_ir::{
+    BasicBlockBuilder, ConnectionDirection, ProcessBuilder, TemporalRegionKey, VariableKey,
+};
+use vogls_utils::VgHashSet;
 
 use crate::ast::expr::Expr;
 use crate::ast::statement::TaskEnable;
@@ -77,10 +80,19 @@ pub fn lower_function_call<'a>(
         });
     }
 
+    let fn_entry_tr = TemporalRegionKey::from_entry(lowered.entry);
+
     bb_stack.push(fn_bb);
     bb_seen.insert(fn_bb);
     while let Some(bb_key) = bb_stack.pop() {
+        if gl.bbs[bb_key].region != fn_entry_tr {
+            mctx.diagnostics
+                .not_yet_implemented(ctx.arenas.get_span(expr), "temporal function");
+            return Err(());
+        }
+
         gl.bbs[bb_key].map_temporal_bbs(|bb| bb_map[&bb]);
+        gl.bbs[bb_key].region = builder.tr();
         gl.bbs[bb_key].terminator.for_each_temporal_bb(|next_bb| {
             if bb_seen.insert(next_bb) {
                 bb_stack.push(next_bb);
@@ -88,15 +100,17 @@ pub fn lower_function_call<'a>(
         });
     }
 
-    let origin_bb = builder.key();
-    *builder = builder.next_terminate_later(gl);
-    gl.bbs[origin_bb].terminator = BasicBlockTerminator::Jump(fn_bb);
+    let after = builder.new_basic_block(mctx.gl());
+
+    builder.jump_to(mctx.gl(), fn_bb);
     if let Some(terminate) = bb_map.get(&lowered.terminate) {
         // Procedure might contain infinite loop.
-        gl.bbs[*terminate].terminator = BasicBlockTerminator::Jump(builder.key());
+        builder.finished_switch_to(mctx.gl(), *terminate);
+        builder.jump_to(mctx.gl(), after);
     }
 
-    let output_var = builder.probe(gl, fn_symbol.output);
+    builder.finished_switch_to(mctx.gl(), after);
+    let output_var = builder.probe(mctx.gl(), fn_symbol.output);
     Ok((output_var, fn_symbol.output_ty))
 }
 
@@ -104,6 +118,7 @@ pub fn lower_task_enable<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
+    proc_builder: &mut ProcessBuilder,
     mut builder: BasicBlockBuilder,
     task_enable: AstId<'a, TaskEnable<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
@@ -145,13 +160,8 @@ pub fn lower_task_enable<'a>(
             arg,
             Some(input_ty.bit_length()),
         )?;
-        let arg_variable = expression::coerce_to(
-            mctx.gl(),
-            &mut builder,
-            arg_variable,
-            arg_ty,
-            input_ty,
-        );
+        let arg_variable =
+            expression::coerce_to(mctx.gl(), &mut builder, arg_variable, arg_ty, input_ty);
         builder.drive(mctx.gl(), signal, arg_variable);
     }
 
@@ -181,17 +191,20 @@ pub fn lower_task_enable<'a>(
     }
 
     let mut bb_seen = HashSet::new();
+    let mut trs = VgHashSet::default();
     bb_stack.push(fn_bb);
     bb_seen.insert(fn_bb);
     while let Some(bb_key) = bb_stack.pop() {
-        mctx.gl().bbs[bb_key].map_temporal_bbs(|bb| bb_map[&bb]);
-        mctx.gl().bbs[bb_key]
-            .terminator
-            .for_each_temporal_bb(|next_bb| {
-                if bb_seen.insert(next_bb) {
-                    bb_stack.push(next_bb);
-                }
-            });
+        let bb = &mut mctx.gl.bbs[bb_key];
+        bb.map_temporal_bbs(|tgt| bb_map[&tgt]);
+        if trs.insert(bb.region) {
+            proc_builder.push_temporal_region(bb.region);
+        }
+        bb.terminator.for_each_temporal_bb(|next_bb| {
+            if bb_seen.insert(next_bb) {
+                bb_stack.push(next_bb);
+            }
+        });
     }
 
     for i in 0..task_symbol.io.len() {
@@ -208,13 +221,16 @@ pub fn lower_task_enable<'a>(
         assign_task_output(ctx, mctx, scope, &mut builder, output_var, arg, output_ty)?;
     }
 
-    let origin_bb = builder.key();
-    let builder = builder.next_terminate_later(mctx.gl());
-    mctx.gl().bbs[origin_bb].terminator = BasicBlockTerminator::Jump(fn_bb);
+    let fn_tr = mctx.gl.bbs[fn_bb].region;
+    let after_tr = proc_builder.next_temporal_region(mctx.gl());
+
+    builder.temporal_jump_to(mctx.gl(), fn_tr);
     if let Some(terminate) = bb_map.get(&lowered.terminate) {
         // Procedure might contain infinite loop.
-        mctx.gl().bbs[*terminate].terminator = BasicBlockTerminator::Jump(builder.key());
+        builder.finished_switch_to(mctx.gl(), *terminate);
+        builder.temporal_jump_to(mctx.gl(), after_tr);
     }
+    builder.finished_switch_to(mctx.gl(), after_tr.entry());
 
     Ok(builder)
 }

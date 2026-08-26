@@ -17,14 +17,14 @@ pub fn lower<'a>(
 ) -> Result<(), ()> {
     let statement = id.0;
 
-    let (process, bb_builder) =
+    let (mut proc_builder, bb_builder) =
         ProcessBuilder::new(mctx.gl(), ProcessKind::Initial, ctx.arenas.get_span(id));
 
     let bb_builder =
-        lower_stmts(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;
+        lower_stmts(ctx, mctx, scope, &mut proc_builder, bb_builder, AstIdRange::single(statement))?;
     bb_builder.halt(mctx.gl());
     
-    process.finalize(mctx.gl());
+    proc_builder.finalize(mctx.gl());
 
     Ok(())
 }

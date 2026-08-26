@@ -654,9 +654,9 @@ pub fn create_nba_process(
     let mask_name = format!("{name}::NBA_MASK");
     let value_name = format!("{name}::NBA_VALUE");
     let (size, mode, origin) = (*size, *mode, *origin);
-    let (process, mut builder) =
+    let (mut proc_builder, mut builder) =
         ProcessBuilder::new(gl, ProcessKind::NonBlockingAssignment, origin);
-    let process_key = process.key().unwrap();
+    let process_key = proc_builder.key().unwrap();
 
     let mask = needs_mask.then(|| {
         gl.signals.insert(vogls_ir::Signal {
@@ -677,21 +677,25 @@ pub fn create_nba_process(
         origin,
     });
 
+    let init_tr = proc_builder.entry();
+    let region_tr = proc_builder.next_temporal_region(gl);
+
     match mask {
         None => {
-            process.set_standing(gl, [value].into());
-            let init_bb = builder.key();
+            proc_builder.set_standing(gl, [value].into());
             let value_v = builder.probe(gl, value);
-            builder = builder.wait_region(gl, Region::NonBlocking as u8);
+            builder.wait_region_to(gl, Region::NonBlocking as u8, region_tr);
+
+            builder.finished_switch_to(gl, region_tr.entry());
             builder.drive(gl, signal, value_v);
-            builder.watch_to(gl, [value].into(), init_bb);
+            builder.watch_to(gl, [value].into(), init_tr);
         }
         Some(mask) => {
-            process.set_standing(gl, [mask].into());
+            proc_builder.set_standing(gl, [mask].into());
             // We need to conditionally branch here as it might have already been assigned before.
-            let init_bb = builder.key();
-            builder = builder.wait_region(gl, Region::NonBlocking as u8);
+            builder.wait_region_to(gl, Region::NonBlocking as u8, region_tr);
 
+            builder.finished_switch_to(gl, region_tr.entry());
             let mask_v = builder.probe(gl, mask);
             let value_v = builder.probe(gl, value);
             let inv_mask = builder.binary_not(gl, mask_v);
@@ -702,10 +706,10 @@ pub fn create_nba_process(
             builder.drive(gl, signal, result);
             let zero_mask = builder.constant(gl, Bits::new_zeroed(size));
             builder.drive(gl, mask, zero_mask);
-            builder.watch_to(gl, [mask].into(), init_bb);
+            builder.watch_to(gl, [mask].into(), init_tr);
         }
     }
-    process.finalize(gl);
+    proc_builder.finalize(gl);
 
     (process_key, value, mask)
 }

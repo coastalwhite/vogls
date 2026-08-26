@@ -1,7 +1,8 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, INTEGER_VSIZE, LogicMode, Signal, SignalFlags,
+    BasicBlock, BasicBlockBuilder, BasicBlockTerminator, Bits, INTEGER_VSIZE, LogicMode,
+    ProcessBuilder, Signal, SignalFlags,
 };
 
 use crate::ast::statement::{LoopStatement, LoopStatementVariant};
@@ -13,6 +14,7 @@ pub fn lower_loop_statement<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
+    proc_builder: &mut ProcessBuilder,
     mut builder: BasicBlockBuilder,
     ls: AstId<'a, LoopStatement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
@@ -60,9 +62,11 @@ pub fn lower_loop_statement<'a>(
         V::Forever | V::While(_) => {}
     }
 
+    let preheader = builder.key();
     builder = builder.jump(mctx.gl());
 
     let loop_start = builder.key();
+    let loop_start_tr = builder.tr();
     let condition = match ls.variant {
         V::Forever => None,
         V::Repeat(_) => {
@@ -76,18 +80,24 @@ pub fn lower_loop_statement<'a>(
         }
     };
 
-    let branch_ref = match condition {
+    let exit_bb = match condition {
         None => None,
         Some(condition) => {
-            let branch_ref;
+            let exit_builder;
             let condition = builder.reduce_or(mctx.gl(), condition);
-            (branch_ref, builder) = builder.branch(mctx.gl(), condition);
-            Some(branch_ref)
+            (builder, exit_builder) = builder.double_branch(mctx.gl(), condition);
+            Some(exit_builder.key())
         }
     };
 
-    builder =
-        super::lower_stmts(ctx, mctx, scope, builder, AstIdRange::single(ls.statement))?;
+    builder = super::lower_stmts(
+        ctx,
+        mctx,
+        scope,
+        proc_builder,
+        builder,
+        AstIdRange::single(ls.statement),
+    )?;
 
     match ls.variant {
         V::For(_, _, step) => {
@@ -120,12 +130,27 @@ pub fn lower_loop_statement<'a>(
         V::Forever | V::While(_) => {}
     }
 
-    let builder_key = builder.key();
-    let mut builder = builder.next_terminate_later(mctx.gl());
-    if let Some(branch_ref) = branch_ref {
-        builder.update_branch_falsy(mctx.gl(), branch_ref, builder.key());
+    if builder.tr() != loop_start_tr {
+        let loop_start_tr = builder.mark_as_tr_root(mctx.gl(), loop_start);
+        proc_builder.push_temporal_region(loop_start_tr);
+        mctx.gl.bbs[preheader].terminator =
+            BasicBlockTerminator::Wait(loop_start_tr, vogls_ir::Time(0));
     }
-    mctx.gl.bbs[builder_key].terminator = BasicBlockTerminator::Jump(loop_start);
+    builder.jump_to_any(mctx.gl(), loop_start);
+
+    let exit_bb = match exit_bb {
+        Some(exit_bb) => exit_bb,
+        None => {
+            let region = mctx.gl.bbs[loop_start].region;
+            mctx.gl.bbs.insert(BasicBlock {
+                instrs: Vec::new(),
+                region,
+                terminator: BasicBlockTerminator::Halt,
+            })
+        }
+    };
+
+    builder.finished_switch_to(mctx.gl(), exit_bb);
 
     Ok(builder)
 }

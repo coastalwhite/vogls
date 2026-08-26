@@ -1,5 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::BasicBlockBuilder;
+use vogls_ir::{BasicBlockBuilder, ProcessBuilder};
 
 use crate::ast::AstId;
 use crate::ast::statement::SeqBlock;
@@ -10,6 +10,7 @@ pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
+    proc_builder: &mut ProcessBuilder,
     mut builder: BasicBlockBuilder,
     seq_block: AstId<'a, SeqBlock<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
@@ -26,6 +27,6 @@ pub fn lower<'a>(
         None => scope,
     };
 
-    builder = lower_stmts(ctx, mctx, scope_key, builder, statements)?;
+    builder = lower_stmts(ctx, mctx, scope_key, proc_builder, builder, statements)?;
     Ok(builder)
 }
