@@ -225,7 +225,14 @@ impl<'a> Consumable<'a> for UdpInputDeclaration<'a> {
 
         let port_idents =
             parse_one_or_more_while::<Identifier>(tkw, sc, arenas, ast, diagnostics, |tkw| {
-                tkw.next_if_equals(T::Comma)
+                if tkw.is_next_equal_to(T::Comma)
+                    && tkw.get(tkw.offset + 1).is_some_and(|t| *t.kind == T::Ident)
+                {
+                    tkw.offset += 1;
+                    true
+                } else {
+                    false
+                }
             })?;
 
         Ok(Self {
