@@ -1,5 +1,4 @@
 use std::cmp;
-use std::num::NonZeroU32;
 
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
@@ -11,7 +10,7 @@ use vogls_utils::OrderedSet;
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::ast::{AstId, HIdent};
-use crate::elaborate::{VSymbol, VSymbolTable, VectorTransform};
+use crate::elaborate::{ArrayDim, VSymbol, VSymbolTable, VectorTransform};
 use crate::lower::addressing::{Address, AddressingContext, RangeExpr, lower_addressing};
 use crate::lower::{VType, hident_span, try_resolve_hident};
 use crate::number::Sign;
@@ -693,7 +692,7 @@ pub fn lower_expr<'a>(
                         let value = value.clone();
                         (
                             value.ty(),
-                            &[] as &[NonZeroU32],
+                            &[] as &[ArrayDim],
                             VectorTransform::default(),
                             builder.constant(mctx.gl(), value.into_bits()),
                         )

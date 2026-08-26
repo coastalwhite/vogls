@@ -15,7 +15,7 @@ use vogls_ir::{
 use crate::ast::AstId;
 use crate::ast::constant_expr::{ConstantBitSlice, ConstantExpr};
 use crate::ast::expr::{BitSlice, BitSliceKind, Expr};
-use crate::elaborate::{VSymbolTable, VectorTransform};
+use crate::elaborate::{ArrayDim, VSymbolTable, VectorTransform};
 use crate::parser::AstArenas;
 
 use super::expression::{lower_expr, truncate_or_extend};
@@ -71,7 +71,7 @@ pub trait AddressingContext {
 pub fn lower_addressing<C: AddressingContext>(
     ctx: &mut C,
     elem_width: VectorSize,
-    array_dims: &[NonZeroU32],
+    array_dims: &[ArrayDim],
     transform: VectorTransform,
     mut indices: impl ExactSizeIterator<Item = C::Expr>,
     range: Option<RangeExpr<C>>,
@@ -106,7 +106,8 @@ pub fn lower_addressing<C: AddressingContext>(
     // really a sane language?
     for (&dim, idx) in array_dims.iter().zip(indices.by_ref()) {
         let idx = ctx.eval_var(idx)?;
-        let does_idx_overflow = ctx.var_geq_nonzerou32(idx.clone(), dim)?;
+        let idx = ctx.var_sub_i64(idx, dim.offset)?;
+        let does_idx_overflow = ctx.var_geq_nonzerou32(idx.clone(), dim.num_elements)?;
         let added_offset = ctx.var_mul_nonzerou32(idx, stride)?;
         array = Some(match array {
             Some((offset, overflow)) => (
@@ -116,7 +117,7 @@ pub fn lower_addressing<C: AddressingContext>(
             None => (added_offset, does_idx_overflow),
         });
         stride = stride
-            .checked_mul(dim)
+            .checked_mul(dim.num_elements)
             .ok_or_else(|| ctx.stride_overflow())?;
     }
 
@@ -625,7 +626,7 @@ fn test() {
             let lsb: i64 = $lsb;
             let transform = VectorTransform::from_msb_lsb(msb, lsb).unwrap();
             let width = VectorSize::new(u32::try_from(msb.abs_diff(lsb)).unwrap() + 1).unwrap();
-            let dims = [$(NonZeroU32::new($arr_length).unwrap()),*];
+            let dims = [$(ArrayDim { offset: 0, num_elements: NonZeroU32::new($arr_length).unwrap() }),*];
 
             $(
             let result = lower_addressing(

@@ -1,9 +1,8 @@
 use std::fmt;
-use std::num::NonZeroU32;
 
 use vogls_ir::{Bits, ProcessKey, SCALAR_VSIZE, SignalKey, SignalSlice, VectorSize};
 use vogls_utils::NonMaxU32;
-use vogls_verilog::elaborate::VSymbol;
+use vogls_verilog::elaborate::{ArrayDim, VSymbol};
 use vogls_verilog::lower::VType;
 
 #[derive(Clone)]
@@ -63,7 +62,7 @@ impl From<VSymbol> for Symbol {
 #[derive(Clone)]
 pub struct NetSymbol {
     pub ty: VType,
-    pub dims: Vec<NonZeroU32>,
+    pub dims: Vec<ArrayDim>,
     pub net: NetValue,
 }
 

@@ -1,11 +1,9 @@
-use std::num::NonZeroU32;
-
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VSIZE_8, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
-use crate::elaborate::{VSymbol, VSymbolTable};
+use crate::elaborate::{ArrayDim, VSymbol, VSymbolTable};
 use crate::lower::expression::system_function_call::get_system_function_call_output_ty;
 use crate::lower::expression::{
     coerce_to_max_size_ty, is_zero_sized_replication, system_function_call,
@@ -273,7 +271,7 @@ pub fn get_expr_type<'a>(
                     continue;
                 };
                 let (ty, dims) = match &table[symbol_id].content {
-                    VSymbol::Parameter(vvalue) => (vvalue.ty(), &[] as &[NonZeroU32]),
+                    VSymbol::Parameter(vvalue) => (vvalue.ty(), &[] as &[ArrayDim]),
                     VSymbol::Net(n) => (n.ty, n.dims.as_slice()),
                     _ => {
                         diagnostics
