@@ -266,9 +266,9 @@ fn assign_input_port<'a>(
 
     let port_bit_length = port.ty.bit_length();
 
-    let (process, mut bb_builder) =
+    let (proc_builder, mut bb_builder) =
         ProcessBuilder::new(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
-    let entry_key = bb_builder.key();
+    let entry_tr = proc_builder.entry();
     let (v, v_ty) = expression::lower_expr(
         ctx,
         mctx,
@@ -283,8 +283,8 @@ fn assign_input_port<'a>(
     };
     port.net.drive_blocking(mctx.gl(), &mut bb_builder, v, None);
 
-    bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_key);
-    process.finalize(mctx.gl());
+    bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_tr);
+    proc_builder.finalize(mctx.gl());
     Ok(())
 }
 
@@ -350,9 +350,9 @@ fn assign_port_output<'a>(
         return Err(());
     }
 
-    let (process, mut bb_builder) =
+    let (proc_builder, mut bb_builder) =
         ProcessBuilder::new(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
-    let bb_key = bb_builder.key();
+    let entry_tr = proc_builder.entry();
 
     let output_net = &output.net;
     let probed = output.net.probe(mctx.gl(), &mut bb_builder);
@@ -463,8 +463,8 @@ fn assign_port_output<'a>(
     }
 
     let sensitivity_list = sensitivity_list.items;
-    bb_builder.watch_to(mctx.gl(), sensitivity_list, bb_key);
-    process.finalize(mctx.gl());
+    bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_tr);
+    proc_builder.finalize(mctx.gl());
 
     if error {
         return Err(());

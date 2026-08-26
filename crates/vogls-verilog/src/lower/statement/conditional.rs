@@ -1,5 +1,7 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, BasicBlockTerminator};
+use vogls_ir::{
+    BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, ProcessBuilder, Time,
+};
 
 use crate::ast::AstId;
 use crate::ast::statement::{
@@ -11,10 +13,38 @@ use crate::lower::{LowerContext, MutLowerContext};
 
 use super::lower_stmts;
 
+fn join_origins(
+    mctx: &mut MutLowerContext,
+    origins: &[BasicBlockKey],
+    proc_builder: &mut ProcessBuilder,
+    builder: &mut BasicBlockBuilder,
+) {
+    let join = builder.key();
+    let join_tr = builder.tr();
+
+    if origins
+        .iter()
+        .any(|&bb| mctx.gl.bbs[bb].region != join_tr)
+    {
+        let join_tr = builder.mark_as_tr_root(mctx.gl(), join);
+        proc_builder.push_temporal_region(join_tr);
+    }
+
+    let join_tr = mctx.gl.bbs[join].region;
+    for &bb in origins {
+        if mctx.gl.bbs[bb].region == join_tr {
+            mctx.gl.bbs[bb].terminator = BasicBlockTerminator::Jump(join);
+        } else {
+            mctx.gl.bbs[bb].terminator = BasicBlockTerminator::Wait(join_tr, Time(0));
+        }
+    }
+}
+
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
+    proc_builder: &mut ProcessBuilder,
     mut builder: BasicBlockBuilder,
     conditional: AstId<'a, ConditionalStatement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
@@ -30,19 +60,23 @@ pub fn lower<'a>(
     let mut origins = Vec::new();
 
     let (mut branch_ref, mut if_true_builder) = builder.branch(mctx.gl(), condition);
+    let mut falsy_bb = if_true_builder.next_bb_non_temporal(mctx.gl());
+    if_true_builder.update_branch_falsy(mctx.gl(), branch_ref, falsy_bb);
+
     if_true_builder = lower_stmts(
         ctx,
         mctx,
         scope,
+        proc_builder,
         if_true_builder,
         if_branch.statement.as_id_range(),
     )?;
     origins.push(if_true_builder.key());
 
-    let mut builder = if_true_builder.next_terminate_later(mctx.gl());
-    for else_if_branch in else_ifs.iter() {
-        builder.update_branch_falsy(mctx.gl(), branch_ref, builder.key());
+    let mut builder = if_true_builder;
+    builder.switch_to(mctx.gl(), falsy_bb);
 
+    for else_if_branch in else_ifs.iter() {
         let else_if_branch = &*else_if_branch;
         let (condition, _) = lower_expr(
             ctx,
@@ -55,34 +89,38 @@ pub fn lower<'a>(
         let condition = builder.reduce_or(mctx.gl(), condition);
 
         (branch_ref, if_true_builder) = builder.branch(mctx.gl(), condition);
+        falsy_bb = if_true_builder.next_bb_non_temporal(mctx.gl());
+        if_true_builder.update_branch_falsy(mctx.gl(), branch_ref, falsy_bb);
+
         if_true_builder = lower_stmts(
             ctx,
             mctx,
             scope,
+            proc_builder,
             if_true_builder,
             else_if_branch.statement.as_id_range(),
         )?;
         origins.push(if_true_builder.key());
 
-        builder = if_true_builder.next_terminate_later(mctx.gl());
+        builder = if_true_builder;
+        builder.switch_to(mctx.gl(), falsy_bb);
     }
 
-    let mut branch_ref = Some(branch_ref);
     if let Some(statement) = else_branch {
-        builder.update_branch_falsy(mctx.gl(), branch_ref.take().unwrap(), builder.key());
-
-        builder = lower_stmts(ctx, mctx, scope, builder, statement.as_id_range())?;
-        origins.push(builder.key());
-
-        builder = builder.jump(mctx.gl());
+        builder = lower_stmts(
+            ctx,
+            mctx,
+            scope,
+            proc_builder,
+            builder,
+            statement.as_id_range(),
+        )?;
     }
+    origins.push(builder.key());
 
-    for bb in &origins {
-        mctx.gl.bbs[*bb].terminator = BasicBlockTerminator::Jump(builder.key());
-    }
-    if let Some(branch_ref) = branch_ref {
-        builder.update_branch_falsy(mctx.gl(), branch_ref, builder.key());
-    }
+    builder = builder.next_terminate_later(mctx.gl());
+
+    join_origins(mctx, &origins, proc_builder, &mut builder);
 
     Ok(builder)
 }
@@ -91,6 +129,7 @@ pub fn lower_case_statement<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
+    proc_builder: &mut ProcessBuilder,
     mut builder: BasicBlockBuilder,
     case_statement: AstId<'a, CaseStatement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
@@ -160,29 +199,38 @@ pub fn lower_case_statement<'a>(
 
         let condition = builder.reduce_or(mctx.gl(), condition);
         let (branch_ref, mut if_true_builder) = builder.branch(mctx.gl(), condition);
+        let falsy_bb = if_true_builder.next_bb_non_temporal(mctx.gl());
+        if_true_builder.update_branch_falsy(mctx.gl(), branch_ref, falsy_bb);
+
         if_true_builder = lower_stmts(
             ctx,
             mctx,
             scope,
+            proc_builder,
             if_true_builder,
             case_item.statement_or_null.as_id_range(),
         )?;
         origins.push(if_true_builder.key());
 
-        builder = if_true_builder.next_terminate_later(mctx.gl());
-        builder.update_branch_falsy(mctx.gl(), branch_ref, builder.key());
+        builder = if_true_builder;
+        builder.switch_to(mctx.gl(), falsy_bb);
     }
 
     if let Some(statement) = default {
-        builder = lower_stmts(ctx, mctx, scope, builder, statement.as_id_range())?;
-        builder = builder.jump(mctx.gl());
-    } else {
-        builder = builder.jump(mctx.gl());
+        builder = lower_stmts(
+            ctx,
+            mctx,
+            scope,
+            proc_builder,
+            builder,
+            statement.as_id_range(),
+        )?;
     }
+    origins.push(builder.key());
 
-    for bb in &origins {
-        mctx.gl.bbs[*bb].terminator = BasicBlockTerminator::Jump(builder.key());
-    }
+    builder = builder.next_terminate_later(mctx.gl());
+
+    join_origins(mctx, &origins, proc_builder, &mut builder);
 
     Ok(builder)
 }

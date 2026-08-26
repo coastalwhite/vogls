@@ -39,9 +39,9 @@ pub fn lower<'a>(
         // 1. Computes the expression output                       (RValue)
         // 2. Drives the net(s)                                    (LValue)
         // 3. Watches for updates to any used signal in the RValue
-        let (process, mut bb_builder) =
+        let (proc_builder, mut bb_builder) =
             ProcessBuilder::new(mctx.gl(), ProcessKind::Assign, ctx.arenas.get_span(assign));
-        let bb_key = bb_builder.key();
+        let entry_tr = proc_builder.entry();
 
         let context_width = net_lvalue_size(ctx, mctx, scope, net_assignment.net_lvalue)?;
         let (rvalue, rvalue_ty) = lower_expr(
@@ -63,8 +63,8 @@ pub fn lower<'a>(
             rvalue_ty,
         )?;
 
-        bb_builder.watch_to(mctx.gl(), watch_list, bb_key);
-        process.finalize(mctx.gl());
+        bb_builder.watch_to(mctx.gl(), watch_list, entry_tr);
+        proc_builder.finalize(mctx.gl());
     }
 
     Ok(())

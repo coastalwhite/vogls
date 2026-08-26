@@ -28,9 +28,9 @@ pub fn lower<'a>(
 
                 assert!(!input_terminals.is_empty());
 
-                let (process, mut bb_builder) =
+                let (proc_builder, mut bb_builder) =
                     ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, ctx.arenas.get_span(*id));
-                let entry_key = bb_builder.key();
+                let entry_tr = proc_builder.entry();
 
                 let output_bit_length = net_lvalue_bit_length(ctx, mctx, scope, *output_terminal)?;
 
@@ -93,8 +93,8 @@ pub fn lower<'a>(
                 )?;
 
                 let sensitivity_list = sensitivity_list.items;
-                bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_key);
-                process.finalize(mctx.gl());
+                bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_tr);
+                proc_builder.finalize(mctx.gl());
             }
         }
         GateInstantiation::NOutput(id) => {
@@ -106,9 +106,9 @@ pub fn lower<'a>(
                     input_terminal,
                 } = &*instance;
 
-                let (process, mut bb_builder) =
+                let (proc_builder, mut bb_builder) =
                     ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, ctx.arenas.get_span(*id));
-                let entry_key = bb_builder.key();
+                let entry_tr = proc_builder.entry();
 
                 let mut sensitivity_list = OrderedSet::new();
                 get_used_signals(ctx, mctx, scope, &mut sensitivity_list, *input_terminal)?;
@@ -148,8 +148,8 @@ pub fn lower<'a>(
                     )?;
                 }
 
-                bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_key);
-                process.finalize(mctx.gl());
+                bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_tr);
+                proc_builder.finalize(mctx.gl());
             }
         }
     }

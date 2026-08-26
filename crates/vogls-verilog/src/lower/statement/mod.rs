@@ -1,5 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::BasicBlockBuilder;
+use vogls_ir::{BasicBlockBuilder, ProcessBuilder};
 
 use crate::ast::AstIdRange;
 use crate::ast::statement::{Statement, StatementContent};
@@ -26,6 +26,7 @@ pub fn lower_stmts<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
+    proc_builder: &mut ProcessBuilder,
     mut builder: BasicBlockBuilder,
     stmts: AstIdRange<'a, Statement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
@@ -36,16 +37,29 @@ pub fn lower_stmts<'a>(
                 builder = blocking_assignment::lower(ctx, mctx, scope, builder, ba)?
             }
             S::CaseStatement(case_statement) => {
-                builder =
-                    conditional::lower_case_statement(ctx, mctx, scope, builder, case_statement)?
+                builder = conditional::lower_case_statement(
+                    ctx,
+                    mctx,
+                    scope,
+                    proc_builder,
+                    builder,
+                    case_statement,
+                )?
             }
             S::ConditionalStatement(conditional) => {
-                builder = conditional::lower(ctx, mctx, scope, builder, conditional)?
+                builder = conditional::lower(ctx, mctx, scope, proc_builder, builder, conditional)?
             }
             S::DisableStatement => todo!(),
             S::EventTrigger => todo!(),
             S::LoopStatement(ls) => {
-                builder = loop_statement::lower_loop_statement(ctx, mctx, scope, builder, ls)?
+                builder = loop_statement::lower_loop_statement(
+                    ctx,
+                    mctx,
+                    scope,
+                    proc_builder,
+                    builder,
+                    ls,
+                )?
             }
             S::NonBlockingAssignment(nba) => {
                 builder = nonblocking_assignment::lower(ctx, mctx, scope, builder, nba)?
@@ -57,13 +71,20 @@ pub fn lower_stmts<'a>(
                 );
             }
             S::ProceduralTimingControlStatement(ptc_stmt) => {
-                builder = procedural_timing_control::lower(ctx, mctx, scope, builder, ptc_stmt)?
+                builder = procedural_timing_control::lower(
+                    ctx,
+                    mctx,
+                    scope,
+                    proc_builder,
+                    builder,
+                    ptc_stmt,
+                )?
             }
             S::SeqBlock(seq_block) => {
-                builder = seq_block::lower(ctx, mctx, scope, builder, seq_block)?
+                builder = seq_block::lower(ctx, mctx, scope, proc_builder, builder, seq_block)?
             }
             S::ParBlock(par_block) => {
-                builder = par_block::lower(ctx, mctx, scope, builder, par_block)?
+                builder = par_block::lower(ctx, mctx, scope, proc_builder, builder, par_block)?
             }
             S::SystemTaskEnable(system_task_enable) => {
                 builder = system_task_enable::lower_system_task_enable(
@@ -75,10 +96,10 @@ pub fn lower_stmts<'a>(
                 )?;
             }
             S::TaskEnable(task_enable) => {
-                builder = lower_task_enable(ctx, mctx, scope, builder, task_enable)?;
+                builder = lower_task_enable(ctx, mctx, scope, proc_builder, builder, task_enable)?;
             }
             S::WaitStatement(wait_stmt) => {
-                builder = wait::lower(ctx, mctx, scope, builder, wait_stmt)?
+                builder = wait::lower(ctx, mctx, scope, proc_builder, builder, wait_stmt)?
             }
         }
     }

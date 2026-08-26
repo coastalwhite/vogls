@@ -93,12 +93,12 @@ fn assign_net<'a>(
 
     let net_bit_length = net_symbol.ty.bit_length();
 
-    let (process, mut bb_builder) = ProcessBuilder::new(
+    let (proc_builder, mut bb_builder) = ProcessBuilder::new(
         &mut mctx.gl,
         ProcessKind::Assign,
         ctx.arenas.get_span(rvalue),
     );
-    let bb_key = bb_builder.key();
+    let entry_tr = proc_builder.entry();
 
     let (rvalue, rvalue_ty) = lower_expr(
         ctx,
@@ -113,9 +113,9 @@ fn assign_net<'a>(
     net_symbol
         .net
         .drive_blocking(mctx.gl(), &mut bb_builder, v, None);
-    bb_builder.watch_to(mctx.gl(), sensitivity_list, bb_key);
+    bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_tr);
 
-    process.finalize(mctx.gl());
+    proc_builder.finalize(mctx.gl());
 
     Ok(())
 }

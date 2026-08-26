@@ -22,9 +22,9 @@ pub fn lower<'a>(
     id: AstId<'a, AlwaysConstruct<'a>>,
 ) -> Result<(), ()> {
     let statement = id.0;
-    let (process, bb_builder) =
+    let (mut proc_builder, bb_builder) =
         ProcessBuilder::new(mctx.gl(), ProcessKind::Always, ctx.arenas.get_span(id));
-    let bb_key = bb_builder.key();
+    let entry_tr = proc_builder.entry();
 
     // Combination `always` get special handling to deal with real designs. You don't want
     // them to sporedically trigger. Instead, you want them to arm immediately at the
@@ -39,21 +39,33 @@ pub fn lower<'a>(
         // to
         //   `always begin stmt; @(...); end`
         // with a standing watch.
-        let bb_builder =
-            lower_stmts(ctx, mctx, scope, bb_builder, stmt.into_stmt_range())?;
-        bb_builder.watch_to(mctx.gl(), signals.clone().into(), bb_key);
+        let mut bb_builder = lower_stmts(
+            ctx,
+            mctx,
+            scope,
+            &mut proc_builder,
+            bb_builder,
+            stmt.into_stmt_range(),
+        )?;
+        bb_builder.watch_to(mctx.gl(), signals.clone().into(), entry_tr);
 
-        process.set_standing(mctx.gl(), signals);
-        process.finalize(mctx.gl());
+        proc_builder.set_standing(mctx.gl(), signals);
+        proc_builder.finalize(mctx.gl());
 
         return Ok(());
     }
 
-    let bb_builder =
-        lower_stmts(ctx, mctx, scope, bb_builder, AstIdRange::single(statement))?;
-    bb_builder.jump_to(mctx.gl(), bb_key);
+    let mut bb_builder = lower_stmts(
+        ctx,
+        mctx,
+        scope,
+        &mut proc_builder,
+        bb_builder,
+        AstIdRange::single(statement),
+    )?;
+    bb_builder.jump_to_tr(mctx.gl(), entry_tr);
 
-    process.finalize(mctx.gl());
+    proc_builder.finalize(mctx.gl());
 
     Ok(())
 }

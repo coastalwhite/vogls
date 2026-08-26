@@ -1,5 +1,4 @@
-use hashbrown::hash_map::Entry;
-use vogls_utils::{IndexSet, VgHashMap, VgHashSet};
+use vogls_utils::VgHashSet;
 
 use crate::form::check_ir_form;
 use crate::token_range::TokenRange;
@@ -7,19 +6,20 @@ use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
     BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, LogicMode, Process,
     ProcessKey, ProcessKind, RandomKind, ResizeOp, ResizeOpSimplification, SCALAR_VSIZE,
-    ShiftImmOp, SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp,
-    UnaryOpSimplification, VSIZE_32, VSIZE_64, VariableKey, VectorSize,
+    ShiftImmOp, SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp, UnaryOpSimplification,
+    VSIZE_32, VSIZE_64, VariableKey, VectorSize,
 };
 
 #[must_use]
 pub struct BasicBlockBuilder {
     key: BasicBlockKey,
+    tr: TemporalRegionKey,
     pub instrs: Vec<Instruction>,
 }
 
 pub struct ProcessBuilder {
     key: Option<ProcessKey>,
-    entry: TemporalRegionKey,
+    trs: Vec<TemporalRegionKey>,
 }
 
 impl ProcessBuilder {
@@ -29,15 +29,16 @@ impl ProcessBuilder {
             region: TemporalRegionKey::default(),
             terminator: BasicBlockTerminator::Halt,
         });
-        let region = TemporalRegionKey::from_entry(bb_key);
-        gl.bbs[bb_key].region = region;
+        let entry = TemporalRegionKey::from_entry(bb_key);
+        gl.bbs[bb_key].region = entry;
         (
             Self {
                 key: None,
-                entry: region,
+                trs: vec![entry],
             },
             BasicBlockBuilder {
                 key: bb_key,
+                tr: entry,
                 instrs: Vec::new(),
             },
         )
@@ -53,21 +54,22 @@ impl ProcessBuilder {
             region: TemporalRegionKey::default(),
             terminator: BasicBlockTerminator::Halt,
         });
-        let region = TemporalRegionKey::from_entry(bb_key);
-        gl.bbs[bb_key].region = region;
+        let entry = TemporalRegionKey::from_entry(bb_key);
+        gl.bbs[bb_key].region = entry;
         let process_key = gl.processes.insert(Process {
             standing: None,
             kind,
-            regions: vec![region],
+            regions: Vec::new(),
             origin,
         });
         (
             Self {
                 key: Some(process_key),
-                entry: region,
+                trs: vec![entry],
             },
             BasicBlockBuilder {
                 key: bb_key,
+                tr: entry,
                 instrs: Vec::new(),
             },
         )
@@ -78,216 +80,36 @@ impl ProcessBuilder {
     }
 
     pub fn finalize(self, gl: &mut GlobalContext) {
-        let mut stack = Vec::<BasicBlockKey>::new();
-        let mut seen = VgHashSet::<BasicBlockKey>::default();
-        let mut temporals = VgHashMap::<BasicBlockKey, TemporalRegionKey>::default();
-        let mut temporal_roots = IndexSet::<TemporalRegionKey>::default();
-        let mut var_def_region = VgHashMap::<VariableKey, TemporalRegionKey>::default();
-
-        temporal_roots.insert(self.entry);
-        seen.insert(self.entry.entry());
-        stack.push(self.entry.entry());
-
-        // Find all initial temporal roots. These are the basic blocks that are a temporal terminator
-        // points to.
-        while let Some(bb_key) = stack.pop() {
-            let bb = &gl.bbs[bb_key];
-            bb.terminator.for_each_temporal_bb(|bb| {
-                if seen.insert(bb) {
-                    stack.push(bb);
-                }
-            });
-
-            if bb.terminator.is_temporal() {
-                bb.terminator.for_each_temporal_bb(|bb| {
-                    temporal_roots.insert(TemporalRegionKey::from_entry(bb));
-                });
-            }
-        }
-
-        // Iterate all temporal roots and perform a graph traversal from them.
-        // - If they find a BB that has not been assigned a temporal region, mark it as the current
-        // region.
-        // - If they find a BB that has been assigned a temporal region, mark it as a new root if it
-        // was not already.
-        let mut temporal_region = 0;
-        while temporal_region < temporal_roots.len() {
-            let &root = temporal_roots.get_at_index(temporal_region).unwrap();
-
-            seen.clear();
-            stack.push(root.entry());
-            seen.insert(root.entry());
-            temporals.insert(root.entry(), root);
-
-            while let Some(bb_key) = stack.pop() {
-                let bb = &gl.bbs[bb_key];
-
-                // Only traverse through non-temporal edges.
-                bb.terminator.for_each_non_temporal_bb(|bb| {
-                    if seen.insert(bb) {
-                        match temporals.entry(bb) {
-                            Entry::Vacant(entry) => {
-                                entry.insert(root);
-                                stack.push(bb);
-                            }
-                            Entry::Occupied(mut entry) => {
-                                entry.insert(TemporalRegionKey::from_entry(bb));
-                                temporal_roots.insert(TemporalRegionKey::from_entry(bb));
-                            }
-                        }
-                    }
-                });
-            }
-            temporal_region += 1;
-        }
-
-        for (&bb_key, &region) in &temporals {
-            let bb = &mut gl.bbs[bb_key];
-            bb.region = region;
-
-            for i in &bb.instrs {
-                let dst = i.get_destination_variable();
-                var_def_region.insert(dst, region);
-            }
-
-            use BasicBlockTerminator as T;
-            match &bb.terminator {
-                T::Wait(..) | T::VariableWait(..) | T::WaitRegion(..) | T::Watch(..) | T::Halt => {}
-
-                T::Jump(tgt) => {
-                    let tgt_tr = temporals[tgt];
-                    if tgt_tr != region {
-                        debug_assert_eq!(tgt_tr, TemporalRegionKey::from_entry(*tgt));
-                        bb.terminator = T::Wait(tgt_tr, Time(0));
-                    }
-                }
-                T::Branch(condition, truthy, falsy) => {
-                    let (condition, mut truthy, mut falsy) = (*condition, *truthy, *falsy);
-                    let truthy_tr = temporals[&truthy];
-                    let falsy_tr = temporals[&falsy];
-
-                    if region == truthy_tr && region == falsy_tr {
-                        continue;
-                    }
-
-                    if truthy_tr != region {
-                        debug_assert_eq!(truthy_tr, TemporalRegionKey::from_entry(truthy));
-                        truthy = gl.bbs.insert(BasicBlock {
-                            instrs: Vec::new(),
-                            region,
-                            terminator: BasicBlockTerminator::Wait(truthy_tr, Time(0)),
-                        });
-                    }
-                    if falsy_tr != region {
-                        debug_assert_eq!(falsy_tr, TemporalRegionKey::from_entry(falsy));
-                        falsy = gl.bbs.insert(BasicBlock {
-                            instrs: Vec::new(),
-                            region,
-                            terminator: BasicBlockTerminator::Wait(falsy_tr, Time(0)),
-                        });
-                    }
-                    gl.bbs[bb_key].terminator = T::Branch(condition, truthy, falsy);
-                }
-            }
-        }
-
-        // Turn temporal variables (i.e. variables that span several temporal regions) into
-        // signals.
-        //
-        // We insert probes at the start of each basic block that uses them.
-        // We insert drives at the end of each basic block that uses them.
-        let mut temporal_var_to_signal = VgHashMap::<VariableKey, SignalKey>::default();
-        let mut temporal_vars = IndexSet::<VariableKey>::default();
-        let mut var_remap = VgHashMap::<VariableKey, VariableKey>::default();
-        for (&bb_key, &region) in &temporals {
-            temporal_vars.clear();
-            var_remap.clear();
-
-            let bb = &mut gl.bbs[bb_key];
-            bb.region = region;
-
-            for i in &mut bb.instrs {
-                i.for_each_src(|src| {
-                    if var_def_region[&src] != region {
-                        if matches!(i, Instruction::Phi(..)) {
-                            panic!("Temporal variables are not allowed in Phi instructions");
-                        }
-
-                        temporal_vars.insert(src);
-                    }
-                });
-            }
-
-            if temporal_vars.is_empty() {
-                continue;
-            }
-
-            let mut instrs = Vec::with_capacity(bb.instrs.len() + temporal_vars.len());
-
-            for &v in temporal_vars.iter() {
-                let size = gl.vars.size(v);
-                let signal = match temporal_var_to_signal.entry(v) {
-                    Entry::Vacant(entry) => {
-                        let signal = gl.signals.insert(crate::Signal {
-                            name: format!("TEMPORAL_VAR/{}", gl.signals.len()),
-                            size,
-                            mode: v.mode(),
-                            initialize: None,
-                            flags: SignalFlags::EMPTY,
-                            origin: TokenRange::default(),
-                        });
-                        entry.insert(signal);
-                        signal
-                    }
-                    Entry::Occupied(entry) => *entry.get(),
-                };
-
-                let dst = gl.vars.insert(v.mode(), size);
-                instrs.push(Instruction::Probe(dst, signal, 0));
-                var_remap.insert(v, dst);
-            }
-
-            instrs.extend(bb.instrs.drain(..).map(|mut i| {
-                i.map_src_vars(|v| var_remap.get(&v).copied().unwrap_or(v));
-                i
-            }));
-            bb.instrs = instrs;
-        }
-
-        if !temporal_var_to_signal.is_empty() {
-            for (&bb_key, _) in &temporals {
-                temporal_vars.clear();
-                let bb = &mut gl.bbs[bb_key];
-
-                for instr in &bb.instrs {
-                    let dst = instr.get_destination_variable();
-                    if !temporal_var_to_signal.contains_key(&dst) {
-                        continue;
-                    }
-                    temporal_vars.insert(dst);
-                }
-
-                if temporal_vars.is_empty() {
-                    continue;
-                }
-                bb.instrs.extend(temporal_vars.iter().map(|var| {
-                    let signal = temporal_var_to_signal[var];
-                    let dst = gl.vars.insert(LogicMode::TwoValue, gl.vars.size(*var));
-                    Instruction::Drive(dst, signal, *var, 0)
-                }));
-            }
-        }
-
-        let regions = temporal_roots.take_keys();
-        check_ir_form(&regions, gl);
+        check_ir_form(&self.trs, gl);
 
         if let Some(key) = self.key {
-            gl.processes[key].regions = regions;
+            gl.processes[key].regions = self.trs;
         }
+    }
+
+    pub fn next_temporal_region(&mut self, gl: &mut GlobalContext) -> TemporalRegionKey {
+        let entry = gl.bbs.insert(BasicBlock {
+            instrs: Vec::new(),
+            region: TemporalRegionKey::default(),
+            terminator: BasicBlockTerminator::Halt,
+        });
+        let tr = TemporalRegionKey::from_entry(entry);
+        gl.bbs[entry].region = tr;
+        self.trs.push(tr);
+        tr
+    }
+
+    pub fn push_temporal_region(&mut self, tr: TemporalRegionKey) {
+        debug_assert!(!self.trs.contains(&tr));
+        self.trs.push(tr);
     }
 
     pub fn set_standing(&self, gl: &mut GlobalContext, signals: Box<[SignalKey]>) {
         gl.processes[self.key.unwrap()].standing = Some(signals);
+    }
+
+    pub fn entry(&self) -> TemporalRegionKey {
+        self.trs[0]
     }
 }
 
@@ -386,7 +208,7 @@ impl BasicBlockBuilder {
     pub fn next_bb_non_temporal(&mut self, gl: &mut GlobalContext) -> BasicBlockKey {
         gl.bbs.insert(BasicBlock {
             instrs: Vec::new(),
-            region: TemporalRegionKey::default(),
+            region: self.tr,
             terminator: BasicBlockTerminator::Halt,
         })
     }
@@ -394,7 +216,7 @@ impl BasicBlockBuilder {
     pub fn next_bb_temporal(&mut self, gl: &mut GlobalContext) -> BasicBlockKey {
         let key = gl.bbs.insert(BasicBlock {
             instrs: Vec::new(),
-            region: TemporalRegionKey::default(),
+            region: self.tr,
             terminator: BasicBlockTerminator::Halt,
         });
         let region = TemporalRegionKey::from_entry(key);
@@ -406,13 +228,7 @@ impl BasicBlockBuilder {
         let next_key = self.next_bb_non_temporal(gl);
         BasicBlockBuilder {
             key: next_key,
-            instrs: Vec::new(),
-        }
-    }
-    pub fn next_builder_temporal(&mut self, gl: &mut GlobalContext) -> BasicBlockBuilder {
-        let next_key = self.next_bb_temporal(gl);
-        BasicBlockBuilder {
-            key: next_key,
+            tr: self.tr,
             instrs: Vec::new(),
         }
     }
@@ -464,6 +280,7 @@ impl BasicBlockBuilder {
         branch_ref: BranchRef,
         bb: BasicBlockKey,
     ) {
+        debug_assert_eq!(gl.bbs[branch_ref.0].region, gl.bbs[bb].region);
         let BasicBlockTerminator::Branch(_, truthy, _) = &mut gl.bbs[branch_ref.0].terminator
         else {
             panic!("not a branch");
@@ -477,6 +294,7 @@ impl BasicBlockBuilder {
         branch_ref: BranchRef,
         bb: BasicBlockKey,
     ) {
+        debug_assert_eq!(gl.bbs[branch_ref.0].region, gl.bbs[bb].region);
         let BasicBlockTerminator::Branch(_, _, falsy) = &mut gl.bbs[branch_ref.0].terminator else {
             panic!("not a branch");
         };
@@ -1110,7 +928,8 @@ impl BasicBlockBuilder {
         self.finalize(gl, BasicBlockTerminator::Jump(next_builder.key()));
         next_builder
     }
-    pub fn jump_to(mut self, gl: &mut GlobalContext, bb: BasicBlockKey) {
+    pub fn jump_to(&mut self, gl: &mut GlobalContext, bb: BasicBlockKey) {
+        debug_assert_eq!(self.tr, gl.bbs[bb].region);
         self.finalize(gl, BasicBlockTerminator::Jump(bb));
     }
 
@@ -1119,8 +938,20 @@ impl BasicBlockBuilder {
         self.next_builder_non_temporal(gl)
     }
 
-    pub fn continue_from(instrs: Vec<Instruction>, bb: BasicBlockKey) -> BasicBlockBuilder {
-        BasicBlockBuilder { key: bb, instrs }
+    pub fn new_basic_block(&mut self, gl: &mut GlobalContext) -> BasicBlockKey {
+        self.next_bb_non_temporal(gl)
+    }
+
+    pub fn continue_from(
+        instrs: Vec<Instruction>,
+        tr: TemporalRegionKey,
+        bb: BasicBlockKey,
+    ) -> BasicBlockBuilder {
+        BasicBlockBuilder {
+            key: bb,
+            tr,
+            instrs,
+        }
     }
 
     pub fn push_raw_instruction(&mut self, instruction: Instruction) {
@@ -1192,50 +1023,47 @@ impl BasicBlockBuilder {
         self.finalize(gl, BasicBlockTerminator::Halt);
     }
 
-    fn temporal_term(
-        mut self,
-        gl: &mut GlobalContext,
-        f: impl FnOnce(TemporalRegionKey) -> BasicBlockTerminator,
-    ) -> BasicBlockBuilder {
-        let next_builder = self.next_builder_temporal(gl);
-        self.finalize(gl, f(TemporalRegionKey::from_entry(next_builder.key())));
-        next_builder
-    }
-    fn temporal_term_to(
-        mut self,
-        gl: &mut GlobalContext,
-        to: BasicBlockKey,
-        f: impl FnOnce(TemporalRegionKey) -> BasicBlockTerminator,
-    ) {
-        self.finalize(gl, f(TemporalRegionKey::from_entry(to)));
+    fn temporal_term_to(&mut self, gl: &mut GlobalContext, terminator: BasicBlockTerminator) {
+        if cfg!(debug_assertions) {
+            use BasicBlockTerminator as T;
+            let tgt = match terminator {
+                T::Wait(tgt, _)
+                | T::VariableWait(tgt, _)
+                | T::WaitRegion(tgt, _)
+                | T::Watch(tgt, _) => tgt,
+                T::Jump(..) => unreachable!(),
+                T::Branch(..) => unreachable!(),
+                T::Halt => unreachable!(),
+            };
+            assert_eq!(gl.bbs[tgt.entry()].region, tgt);
+        }
+        self.finalize(gl, terminator);
     }
 
-    pub fn wait(self, gl: &mut GlobalContext, time: Time) -> BasicBlockBuilder {
-        self.temporal_term(gl, |key| BasicBlockTerminator::Wait(key, time))
+    pub fn wait_to(&mut self, gl: &mut GlobalContext, time: Time, tr: TemporalRegionKey) {
+        self.temporal_term_to(gl, BasicBlockTerminator::Wait(tr, time))
     }
-    pub fn wait_to(self, gl: &mut GlobalContext, time: Time, bb: BasicBlockKey) {
-        self.temporal_term_to(gl, bb, |key| BasicBlockTerminator::Wait(key, time))
+    pub fn variable_wait_to(
+        &mut self,
+        gl: &mut GlobalContext,
+        time: VariableKey,
+        tr: TemporalRegionKey,
+    ) {
+        self.temporal_term_to(gl, BasicBlockTerminator::VariableWait(tr, time))
     }
-    pub fn variable_wait(self, gl: &mut GlobalContext, time: VariableKey) -> BasicBlockBuilder {
-        self.temporal_term(gl, |key| BasicBlockTerminator::VariableWait(key, time))
+    pub fn wait_region_to(&mut self, gl: &mut GlobalContext, region: u8, tr: TemporalRegionKey) {
+        self.temporal_term_to(gl, BasicBlockTerminator::WaitRegion(tr, region))
     }
-    pub fn variable_wait_to(self, gl: &mut GlobalContext, time: VariableKey, bb: BasicBlockKey) {
-        self.temporal_term_to(gl, bb, |key| BasicBlockTerminator::VariableWait(key, time))
+    pub fn watch_to(
+        &mut self,
+        gl: &mut GlobalContext,
+        signals: Vec<SignalKey>,
+        tr: TemporalRegionKey,
+    ) {
+        self.temporal_term_to(gl, BasicBlockTerminator::Watch(tr, signals))
     }
-    pub fn wait_region(self, gl: &mut GlobalContext, region: u8) -> BasicBlockBuilder {
-        self.temporal_term(gl, |key| BasicBlockTerminator::WaitRegion(key, region))
-    }
-    pub fn wait_region_to(self, gl: &mut GlobalContext, region: u8, bb: BasicBlockKey) {
-        self.temporal_term_to(gl, bb, |key| BasicBlockTerminator::WaitRegion(key, region))
-    }
-    pub fn watch(self, gl: &mut GlobalContext, signals: Vec<SignalKey>) -> BasicBlockBuilder {
-        self.temporal_term(gl, |key| BasicBlockTerminator::Watch(key, signals))
-    }
-    pub fn watch_to(self, gl: &mut GlobalContext, signals: Vec<SignalKey>, bb: BasicBlockKey) {
-        self.temporal_term_to(gl, bb, |key| BasicBlockTerminator::Watch(key, signals))
-    }
-    pub fn watch_to_next(self, gl: &mut GlobalContext, signals: Vec<SignalKey>, bb: BasicBlockKey) {
-        self.temporal_term_to(gl, bb, |key| BasicBlockTerminator::Watch(key, signals))
+    pub fn temporal_jump_to(&mut self, gl: &mut GlobalContext, tr: TemporalRegionKey) {
+        self.wait_to(gl, Time(0), tr);
     }
 
     pub fn intrinsic(
@@ -1356,17 +1184,78 @@ impl BasicBlockBuilder {
         &mut self,
         gl: &mut GlobalContext,
         terminator: BasicBlockTerminator,
-        bb: BasicBlockKey,
+        to: BasicBlockKey,
     ) {
         self.finalize(gl, terminator);
-        self.key = bb;
-        self.instrs = std::mem::take(&mut gl.bbs[bb].instrs);
+
+        let bb = &mut gl.bbs[to];
+        self.key = to;
+        self.tr = bb.region;
+        self.instrs = std::mem::take(&mut bb.instrs);
     }
 
-    pub fn switch_to(&mut self, gl: &mut GlobalContext, bb: BasicBlockKey) {
+    pub fn switch_to(&mut self, gl: &mut GlobalContext, to: BasicBlockKey) {
         std::mem::swap(&mut gl.bbs[self.key].instrs, &mut self.instrs);
 
-        self.key = bb;
-        self.instrs = std::mem::take(&mut gl.bbs[bb].instrs);
+        let bb = &mut gl.bbs[to];
+        self.key = to;
+        self.tr = bb.region;
+        self.instrs = std::mem::take(&mut bb.instrs);
+    }
+
+    pub fn finished_switch_to(&mut self, gl: &mut GlobalContext, to: BasicBlockKey) {
+        let bb = &mut gl.bbs[to];
+        self.key = to;
+        self.tr = bb.region;
+        self.instrs = std::mem::take(&mut bb.instrs);
+    }
+
+    pub fn tr(&self) -> TemporalRegionKey {
+        self.tr
+    }
+
+    pub fn jump_to_tr(&mut self, gl: &mut GlobalContext, tr: TemporalRegionKey) {
+        if self.tr == tr {
+            self.finalize(gl, BasicBlockTerminator::Jump(tr.entry()));
+        } else {
+            self.wait_to(gl, Time(0), tr);
+        }
+    }
+
+    pub fn jump_to_any(&mut self, gl: &mut GlobalContext, bb: BasicBlockKey) {
+        let target_tr = gl.bbs[bb].region;
+        if self.tr == target_tr {
+            self.finalize(gl, BasicBlockTerminator::Jump(bb));
+        } else {
+            debug_assert_eq!(target_tr.entry(), bb);
+            self.wait_to(gl, Time(0), target_tr);
+        }
+    }
+
+    pub fn mark_as_tr_root(
+        &mut self,
+        gl: &mut GlobalContext,
+        root: BasicBlockKey,
+    ) -> TemporalRegionKey {
+        let tr = TemporalRegionKey::from_entry(root);
+
+        let mut stack = vec![root];
+        let mut seen = VgHashSet::<BasicBlockKey>::default();
+        seen.insert(root);
+
+        while let Some(bb_key) = stack.pop() {
+            gl.bbs[bb_key].region = tr;
+            gl.bbs[bb_key].terminator.for_each_non_temporal_bb(|next| {
+                if seen.insert(next) {
+                    stack.push(next);
+                }
+            });
+        }
+
+        if seen.contains(&self.key) {
+            self.tr = tr;
+        }
+
+        tr
     }
 }

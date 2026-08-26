@@ -1,5 +1,9 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, Bits, LogicMode, SCALAR_VSIZE, TIME_VSIZE, Time, VariableKey};
+use vogls_ir::token_range::TokenRange;
+use vogls_ir::{
+    BasicBlockBuilder, Bits, LogicMode, ProcessBuilder, SCALAR_VSIZE, Signal, SignalFlags,
+    TIME_VSIZE, Time, VariableKey,
+};
 use vogls_utils::OrderedSet;
 
 use crate::ast::expr::Expr;
@@ -19,9 +23,11 @@ pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
+    proc_builder: &mut ProcessBuilder,
     mut builder: BasicBlockBuilder,
     ptc_stmt: AstId<'a, ProceduralTimingControlStatement<'a>>,
 ) -> Result<BasicBlockBuilder, ()> {
+    let next_tr = proc_builder.next_temporal_region(mctx.gl());
     match *ptc_stmt.procedural_timing_control {
         ProceduralTimingControl::DelayControl(ast_delay_control) => {
             let delay_control = &*ast_delay_control;
@@ -38,7 +44,7 @@ pub fn lower<'a>(
                         // that the process is resumed in the next simulation cycle in the
                         // current time.
                         // """
-                        builder = builder.wait_region(mctx.gl(), Region::Inactive as u8)
+                        builder.wait_region_to(mctx.gl(), Region::Inactive as u8, next_tr)
                     } else {
                         let delay = match &**ast_delay_value {
                             DelayValue::UnsignedNumber(value) => {
@@ -50,13 +56,15 @@ pub fn lower<'a>(
                                     .truncate_or_multiply_to(delay, ctx.time_resolution);
                                 delay
                             }
-                            DelayValue::RealNumber(value) => {
-                                ctx.time_scale.unit.real_to_ticks(
+                            DelayValue::RealNumber(value) => ctx
+                                .time_scale
+                                .unit
+                                .real_to_ticks(
                                     *value,
                                     ctx.time_scale.precision,
                                     ctx.time_resolution,
-                                ).unwrap_or(u64::MAX)
-                            }
+                                )
+                                .unwrap_or(u64::MAX),
                             DelayValue::Identifier(ident) => {
                                 let ident = AstItem {
                                     item: *ident,
@@ -77,7 +85,7 @@ pub fn lower<'a>(
                                 delay
                             }
                         };
-                        builder = builder.wait(mctx.gl(), Time(delay));
+                        builder.wait_to(mctx.gl(), Time(delay), next_tr);
                     }
                 }
                 DelayControl::MinTypMax(min_typ_max) => {
@@ -101,16 +109,9 @@ pub fn lower<'a>(
                                 .truncate_or_multiply_to(1, ctx.time_resolution),
                         ),
                     );
-                    builder = builder.variable_wait(mctx.gl(), delay);
+                    builder.variable_wait_to(mctx.gl(), delay, next_tr);
                 }
             }
-            builder = super::lower_stmts(
-                ctx,
-                mctx,
-                scope,
-                builder,
-                ptc_stmt.statement_or_null.as_id_range(),
-            )?;
         }
         ProceduralTimingControl::EventControl(event_control) => match &*event_control {
             EventControl::Star => {
@@ -122,18 +123,12 @@ pub fn lower<'a>(
                     }
                 }
 
-                builder = builder.watch(mctx.gl(), ins.items);
-                builder = super::lower_stmts(
-                    ctx,
-                    mctx,
-                    scope,
-                    builder,
-                    ptc_stmt.statement_or_null.as_id_range(),
-                )?;
+                builder.watch_to(mctx.gl(), ins.items, next_tr);
             }
             EventControl::EventExpression(event_expression) => {
-                builder = builder.jump(mctx.gl());
-                let start_key = builder.key();
+                let start_tr = proc_builder.next_temporal_region(mctx.gl());
+                builder.temporal_jump_to(mctx.gl(), start_tr);
+                builder.finished_switch_to(mctx.gl(), start_tr.entry());
 
                 let mut contains_edge = false;
                 let mut conditions: Vec<(WatchCondition, VariableKey, &NetSymbol, AstId<Expr>)> =
@@ -172,17 +167,34 @@ pub fn lower<'a>(
                     conditions.push((condition, dummy, net, *expr));
                     signals.push(signal);
                 }
+                let mut before_signals = Vec::new();
                 if contains_edge {
                     for (_, v, net, _) in conditions.iter_mut() {
                         *v = net.net.probe(mctx.gl(), &mut builder);
+                        let before_signal = mctx.gl.signals.insert(Signal {
+                            name: format!("EVENT_BEFORE/{}", mctx.gl.signals.len()),
+                            size: mctx.gl.vars.size(*v),
+                            initialize: None,
+                            flags: SignalFlags::EMPTY,
+                            origin: TokenRange::default(),
+                            mode: v.mode(),
+                        });
+                        builder.drive(mctx.gl(), before_signal, *v);
+                        before_signals.push(before_signal);
                     }
                 }
-                builder = builder.watch(mctx.gl(), signals);
+
+                let middle_tr = proc_builder.next_temporal_region(mctx.gl());
+                builder.watch_to(mctx.gl(), signals, middle_tr);
+                builder.finished_switch_to(mctx.gl(), middle_tr.entry());
                 if contains_edge {
                     let mut acc = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
-                    for (condition, before, _, expr) in conditions.into_iter() {
+                    for ((condition, _, _, expr), before_signal) in
+                        conditions.into_iter().zip(before_signals)
+                    {
                         use WatchCondition as C;
 
+                        let before = builder.probe(mctx.gl(), before_signal);
                         let (after, _) = lower_expr(ctx, mctx, scope, &mut builder, expr, None)?;
                         let cond = match condition {
                             C::Posedge => builder.posedge(mctx.gl(), before, after),
@@ -193,18 +205,25 @@ pub fn lower<'a>(
                         acc = builder.or(mctx.gl(), acc, cond);
                     }
 
-                    builder = builder.branch_false_to(mctx.gl(), acc, start_key);
+                    let mut false_builder;
+                    (builder, false_builder) = builder.double_branch(mctx.gl(), acc);
+                    false_builder.temporal_jump_to(mctx.gl(), start_tr);
                 }
-                builder = super::lower_stmts(
-                    ctx,
-                    mctx,
-                    scope,
-                    builder,
-                    ptc_stmt.statement_or_null.as_id_range(),
-                )?;
+
+                builder.temporal_jump_to(mctx.gl(), next_tr);
             }
         },
     }
+
+    builder.finished_switch_to(mctx.gl(), next_tr.entry());
+    builder = super::lower_stmts(
+        ctx,
+        mctx,
+        scope,
+        proc_builder,
+        builder,
+        ptc_stmt.statement_or_null.as_id_range(),
+    )?;
 
     Ok(builder)
 }

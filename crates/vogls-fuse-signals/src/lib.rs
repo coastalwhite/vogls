@@ -338,7 +338,7 @@ impl FuseGraphOptimizer {
         // TODO: This is stupid.
         let keys = gl.bbs.keys().collect::<Vec<_>>();
         for key in keys {
-            let mut builder = BasicBlockBuilder::continue_from(Vec::new(), key);
+            let mut builder = BasicBlockBuilder::continue_from(Vec::new(), gl.bbs[key].region, key);
             use vogls_ir::Instruction as I;
             for i in std::mem::take(&mut gl.bbs[key].instrs) {
                 match &i {
@@ -600,7 +600,7 @@ impl FuseGraphOptimizer {
 
                 builder.drive_partial_constant(gl, *signal, value, edge.drivee_slice.lsb());
             }
-            let entry = builder.key();
+            let entry = builder.tr();
             builder.watch_to(gl, watch_signals.items, entry);
             process.finalize(gl);
         }

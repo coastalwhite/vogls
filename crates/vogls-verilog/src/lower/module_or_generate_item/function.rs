@@ -22,20 +22,21 @@ pub fn lower<'a>(
         statement,
     } = &*id;
 
-    let (process, builder) = ProcessBuilder::new_anonymous(mctx.gl());
+    let (mut proc_builder, builder) = ProcessBuilder::new_anonymous(mctx.gl());
     let entry_key = builder.key();
 
     let builder = crate::lower::statement::lower_stmts(
         ctx,
         mctx,
         scope,
+        &mut proc_builder,
         builder,
         AstIdRange::single(*statement),
     )?;
 
     let terminate_key = builder.key();
     builder.halt(mctx.gl());
-    process.finalize(mctx.gl());
+    proc_builder.finalize(mctx.gl());
 
     unwrap_get_fn_mut(&mut ctx.table, scope).lowered = Some(LoweredFunction {
         entry: entry_key,
@@ -59,7 +60,7 @@ pub fn lower_task<'a>(
         statement_or_null,
     } = &*id;
 
-    let (process, builder) = ProcessBuilder::new_anonymous(mctx.gl());
+    let (mut proc_builder, builder) = ProcessBuilder::new_anonymous(mctx.gl());
 
     let entry_key = builder.key();
 
@@ -67,13 +68,14 @@ pub fn lower_task<'a>(
         ctx,
         mctx,
         scope,
+        &mut proc_builder,
         builder,
         statement_or_null.as_id_range(),
     )?;
 
     let terminate_key = builder.key();
     builder.halt(mctx.gl());
-    process.finalize(mctx.gl());
+    proc_builder.finalize(mctx.gl());
 
     unwrap_get_task_mut(&mut ctx.table, scope).lowered = Some(LoweredTask {
         entry: entry_key,

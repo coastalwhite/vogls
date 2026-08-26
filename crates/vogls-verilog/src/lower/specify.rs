@@ -763,7 +763,7 @@ pub fn lower_iopath<'a>(
         input_before_lut.clear();
         input_before.clear();
 
-        let (process, mut builder) =
+        let (mut proc_builder, mut builder) =
             ProcessBuilder::new(mctx.gl(), ProcessKind::Specify, TokenRange::default());
 
         // @Correctness: This might need something like. `Initial Value of Signal X`. I think
@@ -797,8 +797,9 @@ pub fn lower_iopath<'a>(
             }
         }
 
-        builder = builder.jump(mctx.gl());
-        let wait_loop_bb = builder.key();
+        let wait_loop_tr = proc_builder.next_temporal_region(mctx.gl());
+        builder.temporal_jump_to(mctx.gl(), wait_loop_tr);
+        builder.finished_switch_to(mctx.gl(), wait_loop_tr.entry());
 
         for (_, variable, signal) in input_before.iter_mut() {
             *variable = builder.probe(mctx.gl(), *signal);
@@ -901,23 +902,37 @@ pub fn lower_iopath<'a>(
         let old_proxy_value = builder.probe(mctx.gl(), proxy);
         let old_proxy_value =
             builder.select_bit_constant(mctx.gl(), old_proxy_value, output_bitidx);
+        let old_proxy_signal = mctx.gl.signals.insert(Signal {
+            name: format!("SPECIFY_OLD_PROXY/{}", mctx.gl.signals.len()),
+            size: mctx.gl.vars.size(old_proxy_value),
+            initialize: None,
+            flags: SignalFlags::EMPTY,
+            origin: TokenRange::default(),
+            mode: old_proxy_value.mode(),
+        });
+        builder.drive(mctx.gl(), old_proxy_signal, old_proxy_value);
         for (input, _, signal) in input_before.iter_mut() {
             let new_value = builder.probe(mctx.gl(), *input);
             builder.drive(mctx.gl(), *signal, new_value);
         }
 
-        builder = builder.variable_wait(mctx.gl(), wait_time);
+        let after_tr = proc_builder.next_temporal_region(mctx.gl());
+        builder.variable_wait_to(mctx.gl(), wait_time, after_tr);
+        builder.finished_switch_to(mctx.gl(), after_tr.entry());
 
         // do ... while(...);
         let new_proxy_value = builder.probe(mctx.gl(), proxy);
         let new_proxy_value =
             builder.select_bit_constant(mctx.gl(), new_proxy_value, output_bitidx);
+        let old_proxy_value = builder.probe(mctx.gl(), old_proxy_signal);
         let do_while_condition = builder.case_equals(mctx.gl(), old_proxy_value, new_proxy_value);
-        builder = builder.branch_false_to(mctx.gl(), do_while_condition, wait_loop_bb);
+        let mut false_builder;
+        (builder, false_builder) = builder.double_branch(mctx.gl(), do_while_condition);
+        false_builder.temporal_jump_to(mctx.gl(), wait_loop_tr);
 
         builder.drive_partial_constant(mctx.gl(), output, new_proxy_value, output_bitidx);
-        builder.watch_to(mctx.gl(), vec![proxy], wait_loop_bb);
-        process.finalize(mctx.gl());
+        builder.watch_to(mctx.gl(), vec![proxy], wait_loop_tr);
+        proc_builder.finalize(mctx.gl());
     }
 
     Ok(())

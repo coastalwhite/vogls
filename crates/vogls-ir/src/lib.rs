@@ -74,6 +74,7 @@ impl BasicBlock {
         for i in self.instrs.iter_mut() {
             i.map_bb(&mut f);
         }
+        self.region = TemporalRegionKey(f(self.region.entry()));
         self.terminator.map_temporal_bb(f);
     }
     pub fn map_non_temporal_bbs(&mut self, mut f: impl FnMut(BasicBlockKey) -> BasicBlockKey) {

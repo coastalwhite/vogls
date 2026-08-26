@@ -2,7 +2,7 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, Bits, GlobalContext, ProcessBuilder,
-    ProcessKind, SCALAR_VSIZE, Signal, SignalFlags, TemporalRegionKey, VariableKey,
+    ProcessKind, SCALAR_VSIZE, Signal, SignalFlags, VariableKey,
 };
 use vogls_utils::OrderedSet;
 
@@ -58,8 +58,9 @@ pub fn lower_udp<'a>(
         body,
     } = &*id;
 
-    let (process, mut builder) =
+    let (mut proc_builder, mut builder) =
         ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, ctx.arenas.get_span(id));
+    let mut entry_tr = proc_builder.entry();
 
     // Initial output terminal.
     let mut setup_bb = BasicBlockKey::default();
@@ -67,10 +68,10 @@ pub fn lower_udp<'a>(
         || matches!(ports, UdpPorts::DeclarationPortList(ports) if ports.output_decl.constant_expr.is_some())
     {
         setup_bb = builder.key();
-        builder = builder.next_terminate_later(mctx.gl());
+        entry_tr = proc_builder.next_temporal_region(mctx.gl());
+        builder.temporal_jump_to(mctx.gl(), entry_tr);
+        builder.switch_to(mctx.gl(), entry_tr.entry());
     }
-
-    let entry_bb = builder.key();
 
     let mut ins = OrderedSet::new();
     for input in inputs.iter() {
@@ -118,11 +119,8 @@ pub fn lower_udp<'a>(
             builder.drive(mctx.gl(), *before_input, *input);
         }
     }
-    builder.finalize_and_switch_to(
-        mctx.gl(),
-        BasicBlockTerminator::Watch(TemporalRegionKey::from_entry(entry_bb), ins.items),
-        entry_bb,
-    );
+    builder.watch_to(mctx.gl(), ins.items, entry_tr);
+    builder.finished_switch_to(mctx.gl(), entry_tr.entry());
 
     match body {
         UdpBody::Combinational(entries) => {
@@ -169,6 +167,11 @@ pub fn lower_udp<'a>(
                 let current_entry_bb = builder.key();
                 builder = builder.next_terminate_later(mctx.gl());
 
+                debug_assert_eq!(mctx.gl.bbs[start_bb].region, mctx.gl.bbs[drive_bb].region);
+                debug_assert_eq!(
+                    mctx.gl.bbs[current_entry_bb].region,
+                    mctx.gl.bbs[watch_bb].region
+                );
                 mctx.gl.bbs[start_bb].terminator =
                     BasicBlockTerminator::Branch(acc, drive_bb, builder.key());
                 mctx.gl.bbs[current_entry_bb].terminator = BasicBlockTerminator::Jump(watch_bb);
@@ -243,11 +246,8 @@ pub fn lower_udp<'a>(
                             initial,
                             VType::UnsignedNet(SCALAR_VSIZE),
                         )?;
-                        builder.finalize_and_switch_to(
-                            mctx.gl(),
-                            BasicBlockTerminator::Jump(entry_bb),
-                            entry_bb,
-                        );
+                        builder.temporal_jump_to(mctx.gl(), entry_tr);
+                        builder.finished_switch_to(mctx.gl(), entry_tr.entry());
                     }
                     (output_signal, output_name)
                 }
@@ -284,11 +284,8 @@ pub fn lower_udp<'a>(
                     initial,
                     VType::UnsignedNet(SCALAR_VSIZE),
                 )?;
-                builder.finalize_and_switch_to(
-                    mctx.gl(),
-                    BasicBlockTerminator::Jump(entry_bb),
-                    entry_bb,
-                );
+                builder.temporal_jump_to(mctx.gl(), entry_tr);
+                builder.finished_switch_to(mctx.gl(), entry_tr.entry());
             }
 
             // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 114 - 8.7
@@ -405,6 +402,10 @@ pub fn lower_udp<'a>(
 
                     mctx.gl.bbs[start_bb].terminator =
                         BasicBlockTerminator::Branch(acc, drive_bb, builder.key());
+                    debug_assert_eq!(
+                        mctx.gl.bbs[current_entry_bb].region,
+                        mctx.gl.bbs[watch_bb].region
+                    );
                     mctx.gl.bbs[current_entry_bb].terminator = BasicBlockTerminator::Jump(watch_bb);
                 }
             }
@@ -423,6 +424,6 @@ pub fn lower_udp<'a>(
         }
     }
     builder.jump_to(mctx.gl(), watch_bb);
-    process.finalize(mctx.gl());
+    proc_builder.finalize(mctx.gl());
     Ok(())
 }
