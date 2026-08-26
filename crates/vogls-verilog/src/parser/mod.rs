@@ -810,3 +810,20 @@ impl<'a> Consumable<'a> for Strength1 {
         }
     }
 }
+
+fn is_drive_strength_kw(t: Token) -> bool {
+    use Token as T;
+    matches!(
+        t,
+        T::KeywordHighz0
+            | T::KeywordHighz1
+            | T::KeywordPull0
+            | T::KeywordPull1
+            | T::KeywordWeak1
+            | T::KeywordWeak0
+            | T::KeywordSupply1
+            | T::KeywordSupply0
+            | T::KeywordStrong0
+            | T::KeywordStrong1
+    )
+}

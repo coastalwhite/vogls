@@ -11,6 +11,7 @@ use crate::ast::udp::{
     UdpPortDeclaration, UdpPorts, UdpRegDeclaration, UdpSequentialEntry,
 };
 use crate::ast::{AstIdRange, AstItem, DriveStrength, Identifier};
+use crate::parser::is_drive_strength_kw;
 use crate::parser::utils::{
     item_parse, parse, parse_one_or_more_while, parse_one_or_more_while_next,
     parse_zero_or_more_while_next,
@@ -856,21 +857,9 @@ impl<'a> Consumable<'a> for UdpInstantiation<'a> {
 
         let mut drive_strength = None;
         if tkw.is_next_equal_to(T::LeftParen)
-            && tkw.get(tkw.offset + 1).is_some_and(|t| {
-                matches!(
-                    *t.kind,
-                    T::KeywordHighz0
-                        | T::KeywordHighz1
-                        | T::KeywordPull0
-                        | T::KeywordPull1
-                        | T::KeywordWeak1
-                        | T::KeywordWeak0
-                        | T::KeywordSupply1
-                        | T::KeywordSupply0
-                        | T::KeywordStrong0
-                        | T::KeywordStrong1
-                )
-            })
+            && tkw
+                .get(tkw.offset + 1)
+                .is_some_and(|t| is_drive_strength_kw(*t.kind))
         {
             drive_strength = Some(item_parse::<DriveStrength>(
                 tkw,

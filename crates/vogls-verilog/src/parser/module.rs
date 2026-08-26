@@ -5,12 +5,13 @@ use crate::ast::constant_expr::{
 use crate::ast::expr::Expr;
 use crate::ast::module::{
     AlwaysConstruct, BlockItemDeclaration, CaseGenerateConstruct, CaseGenerateItem,
-    CaseGeneratePattern, ContinousAssign, Dimension, FunctionDeclaration, FunctionRangeOrType,
-    GateInstantiation, GenerateBlock, GenerateRegion, GenvarAssignment, GenvarDeclaration,
-    IfGenerateConstruct, InitialConstruct, InoutDeclaration, InputDeclaration, IntegerDeclaration,
-    ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct, Module,
-    ModuleInstance, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem,
-    ModuleOrGenerateItemContent, ModuleOrGenerateItemDeclaration, ModulePorts, NInputGateInstance,
+    CaseGeneratePattern, ContinousAssign, Dimension, EnableGateInstance, EnableGateInstantiation,
+    EnableGateType, FunctionDeclaration, FunctionRangeOrType, GateInstantiation, GenerateBlock,
+    GenerateRegion, GenvarAssignment, GenvarDeclaration, IfGenerateConstruct, InitialConstruct,
+    InoutDeclaration, InputDeclaration, IntegerDeclaration, ListOfPortConnections,
+    LocalParameterDeclaration, LoopGenerateConstruct, Module, ModuleInstance, ModuleInstantiation,
+    ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemContent, ModuleOrGenerateItemDeclaration,
+    ModulePorts, MosSwitchInstance, MosSwitchInstantiation, MosSwitchType, NInputGateInstance,
     NInputGateInstantiation, NInputGateType, NOutputGateInstance, NOutputGateInstantiation,
     NOutputGateType, NameOfGateInstance, NamedParameterAssignment, NamedPortConnection,
     NetAssignment, NetDeclAssignment, NetDeclaration, NetDeclarationNets, NetIdent, NetType,
@@ -25,10 +26,10 @@ use crate::ast::specify::{
     PolarityOperator, SpecifyBlock, SpecifyBlockItem, StateDependentCondition, SystemTimingCheck,
     TerminalDescriptor,
 };
-use crate::ast::statement::{NetLValue, Statement, StatementOrNull, SystemTaskIdentifier};
+use crate::ast::statement::{Delay3, NetLValue, Statement, StatementOrNull, SystemTaskIdentifier};
 use crate::ast::udp::UdpInstantiation;
-use crate::ast::{AstIdRange, AttributeInstance, Identifier};
-use crate::parser::TokenRange;
+use crate::ast::{AstIdRange, AttributeInstance, DriveStrength, Identifier};
+use crate::parser::{TokenRange, is_drive_strength_kw};
 use crate::tokenizer::Token;
 
 use super::{AstArenas, Consumable, ParserScratches, TokenWalker};
@@ -1128,7 +1129,23 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemContent<'a> {
             | T::KeywordXor
             | T::KeywordXnor
             | T::KeywordBuf
-            | T::KeywordNot => {
+            | T::KeywordNot
+            | T::KeywordBufif0
+            | T::KeywordBufif1
+            | T::KeywordNotif0
+            | T::KeywordNotif1
+            | T::KeywordNmos
+            | T::KeywordPmos
+            | T::KeywordRnmos
+            | T::KeywordRpmos
+            | T::KeywordCmos
+            | T::KeywordRcmos
+            | T::KeywordTranif0
+            | T::KeywordTranif1
+            | T::KeywordRtranif0
+            | T::KeywordRtranif1
+            | T::KeywordTran
+            | T::KeywordRtran => {
                 let gate_instance =
                     parse::<GateInstantiation>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
                 Ok(Self::GateInstantiation(gate_instance))
@@ -1595,6 +1612,26 @@ impl<'a> Consumable<'a> for GateInstantiation<'a> {
                 )?;
                 Ok(Self::NOutput(n_output_gate_instantiation))
             }
+            T::KeywordBufif0 | T::KeywordBufif1 | T::KeywordNotif0 | T::KeywordNotif1 => {
+                let enable_gate_instantiation = parse::<EnableGateInstantiation>(
+                    tkw,
+                    sc,
+                    arenas,
+                    ast,
+                    diagnostics.as_deref_mut(),
+                )?;
+                Ok(Self::Enable(enable_gate_instantiation))
+            }
+            T::KeywordNmos | T::KeywordPmos | T::KeywordRnmos | T::KeywordRpmos => {
+                let mos_switch_instantiation = parse::<MosSwitchInstantiation>(
+                    tkw,
+                    sc,
+                    arenas,
+                    ast,
+                    diagnostics.as_deref_mut(),
+                )?;
+                Ok(Self::Mos(mos_switch_instantiation))
+            }
             _ => {
                 if let Some(d) = diagnostics {
                     d.incomplete(tkw.offset, "gate_instantiation");
@@ -1602,6 +1639,233 @@ impl<'a> Consumable<'a> for GateInstantiation<'a> {
                 Err(())
             }
         }
+    }
+}
+
+impl<'a> Consumable<'a> for EnableGateInstantiation<'a> {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
+        arenas: &mut AstArenas,
+        ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+        // enable_gatetype [drive_strength] [delay3] enable_gate_instance { , enable_gate_instance } ;
+
+        let gatetype =
+            item_parse::<EnableGateType>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let mut drive_strength = None;
+        if tkw.is_next_equal_to(T::LeftParen)
+            && tkw
+                .get(tkw.offset + 1)
+                .is_some_and(|t| is_drive_strength_kw(*t.kind))
+        {
+            drive_strength = Some(item_parse::<DriveStrength>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
+
+        let mut delay = None;
+        if tkw.is_next_equal_to(T::Hash) {
+            delay = Some(parse::<Delay3>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
+        let instances = parse_one_or_more_delimited::<EnableGateInstance>(
+            tkw,
+            sc,
+            arenas,
+            ast,
+            T::Comma,
+            diagnostics.as_deref_mut(),
+        )?;
+        tkw.next_expect(T::Semicolon, diagnostics)?;
+
+        Ok(Self {
+            gatetype,
+            drive_strength,
+            delay,
+            instances,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for EnableGateType {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
+        _arenas: &mut AstArenas,
+        _ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+        // enable_gatetype ::= enable_gatetype ::= bufif0 | bufif1 | notif0 | notif1
+
+        let t = tkw.try_next(diagnostics.as_deref_mut())?;
+        let value = match *t.kind {
+            T::KeywordBufif0 => Self::BufIf0,
+            T::KeywordBufif1 => Self::BufIf1,
+            T::KeywordNotif0 => Self::NotIf0,
+            T::KeywordNotif1 => Self::NotIf1,
+            t => {
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, t);
+                }
+                return Err(());
+            }
+        };
+
+        Ok(value)
+    }
+}
+
+impl<'a> Consumable<'a> for EnableGateInstance<'a> {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
+        arenas: &mut AstArenas,
+        ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+        // enable_gate_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal , enable_terminal )
+
+        let name = try_parse::<NameOfGateInstance>(tkw, sc, arenas, ast);
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let output_terminal = parse::<NetLValue>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
+        let input_terminal = parse::<Expr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
+        let enable_terminal = parse::<Expr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::RightParen, diagnostics)?;
+
+        Ok(Self {
+            name,
+            output_terminal,
+            input_terminal,
+            enable_terminal,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for MosSwitchInstantiation<'a> {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
+        arenas: &mut AstArenas,
+        ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 493
+        // mos_switchtype [delay3] mos_switch_instance { , mos_switch_instance } ;
+
+        let gatetype =
+            item_parse::<MosSwitchType>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+
+        let mut delay = None;
+        if tkw.is_next_equal_to(T::Hash) {
+            delay = Some(parse::<Delay3>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
+        let instances = parse_one_or_more_delimited::<EnableGateInstance>(
+            tkw,
+            sc,
+            arenas,
+            ast,
+            T::Comma,
+            diagnostics.as_deref_mut(),
+        )?;
+        tkw.next_expect(T::Semicolon, diagnostics)?;
+
+        Ok(Self {
+            gatetype,
+            delay,
+            instances,
+        })
+    }
+}
+
+impl<'a> Consumable<'a> for MosSwitchType {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        _sc: &mut ParserScratches<'a>,
+        _arenas: &mut AstArenas,
+        _ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+        // enable_gatetype ::= enable_gatetype ::= bufif0 | bufif1 | notif0 | notif1
+
+        let t = tkw.try_next(diagnostics.as_deref_mut())?;
+        let value = match *t.kind {
+            T::KeywordNmos => Self::NMos,
+            T::KeywordPmos => Self::PMos,
+            T::KeywordRnmos => Self::RNMos,
+            T::KeywordRpmos => Self::RPMos,
+            t => {
+                if let Some(d) = diagnostics {
+                    d.unexpected_token(tkw.offset, t);
+                }
+                return Err(());
+            }
+        };
+
+        Ok(value)
+    }
+}
+
+impl<'a> Consumable<'a> for MosSwitchInstance<'a> {
+    fn consume(
+        tkw: &mut TokenWalker<'_>,
+        sc: &mut ParserScratches<'a>,
+        arenas: &mut AstArenas,
+        ast: &'a Arena,
+        mut diagnostics: Option<&mut Diagnostics>,
+    ) -> Result<Self, ()> {
+        use Token as T;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
+        // mos_switch_instance ::= [ name_of_gate_instance ] ( output_terminal , input_terminal , enable_terminal )
+
+        let name = try_parse::<NameOfGateInstance>(tkw, sc, arenas, ast);
+        tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+        let output_terminal = parse::<NetLValue>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
+        let input_terminal = parse::<Expr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
+        let enable_terminal = parse::<Expr>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::RightParen, diagnostics)?;
+
+        Ok(Self {
+            name,
+            output_terminal,
+            input_terminal,
+            enable_terminal,
+        })
     }
 }
 
@@ -1805,21 +2069,27 @@ impl<'a> Consumable<'a> for NOutputGateInstance<'a> {
     }
 }
 
-impl<'a> Consumable<'a> for NameOfGateInstance {
+impl<'a> Consumable<'a> for NameOfGateInstance<'a> {
     fn consume(
         tkw: &mut TokenWalker<'_>,
         sc: &mut ParserScratches<'a>,
         arenas: &mut AstArenas,
         ast: &'a Arena,
-        diagnostics: Option<&mut Diagnostics>,
+        mut diagnostics: Option<&mut Diagnostics>,
     ) -> Result<Self, ()> {
+        use Token as T;
+
         // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494
         // name_of_gate_instance ::= gate_instance_identifier [ range ]
 
-        // @Incomplete
-        let identifier = item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics)?;
+        let identifier =
+            item_parse::<Identifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let mut range = None;
+        if tkw.is_next_equal_to(T::LeftBrace) {
+            range = Some(parse::<Range>(tkw, sc, arenas, ast, diagnostics)?);
+        }
 
-        Ok(Self { identifier })
+        Ok(Self { identifier, range })
     }
 }
 
