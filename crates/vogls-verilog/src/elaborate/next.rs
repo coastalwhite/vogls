@@ -1271,7 +1271,13 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
 
             use GateInstantiation as G;
             match &*id {
-                G::Enable(_) | G::Mos(_) => {
+                G::Enable(_)
+                | G::Mos(_)
+                | G::Pulldown(_)
+                | G::Pullup(_)
+                | G::Cmos(_)
+                | G::PassEn(_)
+                | G::PassSwitch(_) => {
                     diagnostics.not_yet_implemented(
                         ctx.arenas.get_span(id),
                         "gate instantiation type not yet implemented",
