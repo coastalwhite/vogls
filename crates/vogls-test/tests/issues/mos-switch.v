@@ -1,4 +1,4 @@
-// vogls: fail=elaborate
+// vogls: fail=lower
 `timescale 1ns/1ps
 module tb();
     reg a, b;
