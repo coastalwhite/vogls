@@ -209,11 +209,7 @@ impl LazyStep {
             }
             Self::RunFor(time) => design
                 .design
-                .run(
-                    state,
-                    &mut StdWorld::new(),
-                    time.value,
-                )
+                .run(state, &mut StdWorld::new(), time.value)
                 .map_err(|_| ComputeError::FailedToRun),
         }
     }

@@ -643,8 +643,8 @@ mod tests {
             .unbounded_shl(size.get().saturating_sub(32))
             .wrapping_sub(1);
         [
-            (bmask << size.get().min(32)) | (v & 0xFFFF_FFFF_FFFF_FFFF),
-            (tmask << size.get().saturating_sub(32).min(32)) | (v >> 32) as u64,
+            (bmask << size.get().min(32)) | (v & 0xFFFF_FFFF),
+            (tmask << size.get().saturating_sub(32).min(32)) | (v >> 32),
         ]
     }
     pub fn u128_to_u64x2(v: u128) -> [u64; 2] {

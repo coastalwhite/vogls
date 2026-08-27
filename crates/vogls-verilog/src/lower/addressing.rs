@@ -551,15 +551,9 @@ fn test() {
 
         type Error = ();
 
-        fn too_many_selects(&mut self) -> Self::Error {
-            ()
-        }
-        fn stride_overflow(&mut self) -> Self::Error {
-            ()
-        }
-        fn not_yet_implemented(&mut self, _: &'static str) -> Self::Error {
-            ()
-        }
+        fn too_many_selects(&mut self) -> Self::Error {}
+        fn stride_overflow(&mut self) -> Self::Error {}
+        fn not_yet_implemented(&mut self, _: &'static str) -> Self::Error {}
 
         fn eval_constant(&mut self, operand: Self::ConstantExpr) -> Result<i64, Self::Error> {
             Ok(operand)

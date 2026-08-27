@@ -157,7 +157,7 @@ fn assign_port<'a>(
     };
 
     let assigner_bit_length = get_expr_type(
-        &mut mctx.gl,
+        &mctx.gl,
         ctx.arenas,
         &ctx.table,
         scope,
@@ -216,7 +216,7 @@ fn assign_input_port<'a>(
         // Fusing does not deal with sign-extension or conversion to/from reals. Therefore, we stop
         // fusing them here.
         if get_expr_type(
-            &mut mctx.gl,
+            &mctx.gl,
             ctx.arenas,
             &ctx.table,
             scope,
@@ -224,7 +224,8 @@ fn assign_input_port<'a>(
             expr,
         )
         .map_or(true, |v| {
-            v.bit_length() != port.ty.bit_length() && (!v.is_unsigned_net() || !port.ty.is_unsigned_net())
+            v.bit_length() != port.ty.bit_length()
+                && (!v.is_unsigned_net() || !port.ty.is_unsigned_net())
         }) {
             break 'try_fuse;
         }

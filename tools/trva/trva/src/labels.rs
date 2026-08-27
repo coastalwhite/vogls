@@ -21,8 +21,7 @@ use hashbrown::hash_table::Entry;
 pub struct LabelId(NonZeroU64);
 
 /// A table of seen labels.
-#[derive(Clone)]
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct LabelTable {
     content: String,
     lut: HashTable<((usize, usize), LabelId)>,

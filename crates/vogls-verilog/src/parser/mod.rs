@@ -749,7 +749,7 @@ impl<'a> Consumable<'a> for DriveStrength {
             }
         };
 
-        tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+        tkw.next_expect(T::RightParen, diagnostics)?;
 
         Ok(drive_strength)
     }

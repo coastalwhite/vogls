@@ -1,7 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, ProcessBuilder, Time,
-};
+use vogls_ir::{BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, ProcessBuilder, Time};
 
 use crate::ast::AstId;
 use crate::ast::statement::{
@@ -22,10 +20,7 @@ fn join_origins(
     let join = builder.key();
     let join_tr = builder.tr();
 
-    if origins
-        .iter()
-        .any(|&bb| mctx.gl.bbs[bb].region != join_tr)
-    {
+    if origins.iter().any(|&bb| mctx.gl.bbs[bb].region != join_tr) {
         let join_tr = builder.mark_as_tr_root(mctx.gl(), join);
         proc_builder.push_temporal_region(join_tr);
     }

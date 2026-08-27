@@ -14,6 +14,7 @@ use self::truncate::{fv_l_truncate, tv_l_truncate};
 use self::util::{mask_size_1to64, saturating_rem};
 
 pub mod arithmetic;
+pub mod bitwise_not;
 pub mod comparison;
 pub mod concat;
 pub mod copyxz;
@@ -23,7 +24,6 @@ pub mod format;
 pub mod iter;
 pub mod leading_trailing;
 pub mod load;
-pub mod bitwise_not;
 pub mod parse;
 #[cfg(test)]
 pub mod proptest;
@@ -1348,7 +1348,7 @@ impl Bits {
     }
     pub fn extract_exact_f64(&self) -> Option<f64> {
         assert_eq!(self.size().get(), 64);
-        self.extract_exact_u64().map(|v| f64::from_bits(v))
+        self.extract_exact_u64().map(f64::from_bits)
     }
 
     pub fn contains_special(&self) -> bool {

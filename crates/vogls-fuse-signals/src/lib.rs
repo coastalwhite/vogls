@@ -950,7 +950,6 @@ impl FuseGraph {
                 }
 
                 // Inversion
-                #[expect(clippy::overly_complex_bool_expr)]
                 if reached_fixed_point
                     && passes.contains(FusePasses::INVERSION)
                     && !nodes[n].flags.contains(NodeFlags::DRIVE)

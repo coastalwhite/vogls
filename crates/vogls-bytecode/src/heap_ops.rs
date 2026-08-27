@@ -7,11 +7,11 @@ use vogls_bits::arithmetic::{
     fv_power, fv_subtraction, tv_addition, tv_bin_u64_cell_bitwise_mask_last_op,
     tv_bin_u64_cell_bitwise_op, tv_division, tv_multiplication, tv_power, tv_subtraction,
 };
+use vogls_bits::bitwise_not::{fv_cell_not, tv_cell_not};
 use vogls_bits::comparison::{bitwise_ceq, fv_l_unsigned_leq, tv_gtu64_unsigned_leq};
 use vogls_bits::concat::{fv_l_concat, tv_l_concat};
 use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::leading_trailing::{fv_leading_zeros, tv_leading_zeros};
-use vogls_bits::bitwise_not::{fv_cell_not, tv_cell_not};
 use vogls_bits::reduce::{
     fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor, tv_reduce_and, tv_reduce_or, tv_reduce_xor,
 };

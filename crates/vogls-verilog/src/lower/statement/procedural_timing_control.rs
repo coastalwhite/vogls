@@ -50,11 +50,9 @@ pub fn lower<'a>(
                             DelayValue::UnsignedNumber(value) => {
                                 let value = &ctx.arenas.decimals[value.at];
                                 let delay = value.as_u64().unwrap_or(0);
-                                let delay = ctx
-                                    .time_scale
+                                ctx.time_scale
                                     .unit
-                                    .truncate_or_multiply_to(delay, ctx.time_resolution);
-                                delay
+                                    .truncate_or_multiply_to(delay, ctx.time_resolution)
                             }
                             DelayValue::RealNumber(value) => ctx
                                 .time_scale
@@ -78,11 +76,9 @@ pub fn lower<'a>(
                                     &mut mctx.diagnostics,
                                 )?;
                                 let delay = value.as_integer().unwrap() as u64;
-                                let delay = ctx
-                                    .time_scale
+                                ctx.time_scale
                                     .unit
-                                    .truncate_or_multiply_to(delay, ctx.time_resolution);
-                                delay
+                                    .truncate_or_multiply_to(delay, ctx.time_resolution)
                             }
                         };
                         builder.wait_to(mctx.gl(), Time(delay), next_tr);

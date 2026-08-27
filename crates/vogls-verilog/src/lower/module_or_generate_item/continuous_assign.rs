@@ -126,7 +126,7 @@ pub fn try_fuse_flat_assign<'a>(
     // Fusing does not deal with sign-extension or conversion to/from reals. Therefore, we stop
     // fusing them here.
     if get_expr_type(
-        &mut mctx.gl,
+        &mctx.gl,
         ctx.arenas,
         &ctx.table,
         scope,

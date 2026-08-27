@@ -481,6 +481,9 @@ pub struct ColdContextT<'a> {
 
     icount: u64,
 
+    // @TODO: This can be turned into some FFI stable fat pointer type. Until that time, just wrap
+    // it in a pointer.
+    #[expect(clippy::redundant_allocation)]
     world: Box<&'a mut dyn World>,
 }
 
@@ -575,10 +578,10 @@ impl JITCode {
 
 impl Drop for JITCode {
     fn drop(&mut self) {
-        let mut module = self.0.get_mut();
+        let module = self.0.get_mut();
 
         // SAFETY: Only called once. Namely, in this drop.
-        let module = unsafe { ManuallyDrop::take(&mut module) };
+        let module = unsafe { ManuallyDrop::take(module) };
 
         // SAFETY:
         // This is only safe if no-one is still called into or has references into the JIT-ed
@@ -760,7 +763,7 @@ impl ClifDesign {
 
                 for i in 0..self.num_regions as usize {
                     let region = unsafe { schedule.regions.add(i).as_mut() }.unwrap();
-                    if region.len() > 0 {
+                    if !region.is_empty() {
                         let active = &mut schedule.active_region;
                         debug_assert!(active.capacity() >= region.len());
 
@@ -777,7 +780,7 @@ impl ClifDesign {
                     plugin.timestep(&mut state.runtime);
                 }
 
-                if schedule.future.len() == 0 {
+                if schedule.future.is_empty() {
                     return ReturnValue::CONTINUE;
                 }
 
@@ -812,7 +815,7 @@ impl ClifDesign {
                 schedule.future = future.into();
                 schedule.next_time = next_time;
 
-                if schedule.active_region.len() == 0 {
+                if schedule.active_region.is_empty() {
                     break ReturnValue::CONTINUE;
                 }
             }

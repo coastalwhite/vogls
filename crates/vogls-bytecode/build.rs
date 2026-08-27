@@ -7,7 +7,10 @@ fn main() {
     println!("cargo::rerun-if-changed=build.rs");
 
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let Ok(output) = Command::new(rustc).args(["--version", "--verbose"]).output() else {
+    let Ok(output) = Command::new(rustc)
+        .args(["--version", "--verbose"])
+        .output()
+    else {
         return;
     };
 

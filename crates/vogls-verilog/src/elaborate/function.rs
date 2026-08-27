@@ -172,9 +172,10 @@ pub fn elaborate_task<'a>(
     let id = i.ast_id;
     let TaskDeclaration {
         task_ports,
+        ident: _,
+        automatic: _,
         block_item_decls: _,
         statement_or_null: _,
-        ..
     } = &*ctx.table_ast_refs.tasks[id];
 
     let mut io = Vec::<(SignalKey, ConnectionDirection, VType)>::new();

@@ -28,7 +28,7 @@ impl Radix {
             Self::Hexadecimal => 16,
         }
     }
- 
+
     pub const fn name(self) -> &'static str {
         match self {
             Self::Binary => "binary",
@@ -37,7 +37,7 @@ impl Radix {
             Self::Hexadecimal => "hexadecimal",
         }
     }
- 
+
     pub const fn digit_set(self) -> &'static str {
         match self {
             Self::Binary => "`0` or `1`",
@@ -68,12 +68,15 @@ pub enum ParseSectionPositionError {
     /// The value is well-formed but larger than `u32::MAX`.
     Overflow,
 }
- 
+
 impl fmt::Display for ParseSectionPositionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match *self {
             ParseSectionPositionError::Empty => {
-                write!(f, "expected an address such as `0x2000_0000`, found nothing")
+                write!(
+                    f,
+                    "expected an address such as `0x2000_0000`, found nothing"
+                )
             }
             ParseSectionPositionError::NoDigits { prefix } => {
                 write!(f, "no digits after the `{prefix}` prefix")
@@ -93,10 +96,9 @@ impl fmt::Display for ParseSectionPositionError {
                 ch.escape_debug(),
                 offset,
             ),
-            ParseSectionPositionError::StrayUnderscore { offset } => write!(
-                f,
-                "`_` at offset {offset} must sit between two digits",
-            ),
+            ParseSectionPositionError::StrayUnderscore { offset } => {
+                write!(f, "`_` at offset {offset} must sit between two digits",)
+            }
             ParseSectionPositionError::Overflow => write!(
                 f,
                 "address does not fit in 32 bits (the highest address is 0xffff_ffff)",
@@ -104,20 +106,20 @@ impl fmt::Display for ParseSectionPositionError {
         }
     }
 }
- 
+
 impl Error for ParseSectionPositionError {}
- 
+
 impl FromStr for SectionPosition {
     type Err = ParseSectionPositionError;
- 
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let lead = s.len() - s.trim_start().len();
         let body = s.trim();
- 
+
         if body.is_empty() {
             return Err(ParseSectionPositionError::Empty);
         }
- 
+
         let (radix, prefix, digits) = if let Some(rest) = strip_either(body, "0x", "0X") {
             (Radix::Hexadecimal, "0x", rest)
         } else if let Some(rest) = strip_either(body, "0o", "0O") {
@@ -127,15 +129,15 @@ impl FromStr for SectionPosition {
         } else {
             (Radix::Decimal, "", body)
         };
- 
+
         let base = lead + prefix.len();
         let mut value: u32 = 0;
         let mut seen_digit = false;
         let mut trailing_underscore: Option<usize> = None;
- 
+
         for (i, ch) in digits.char_indices() {
             let offset = base + i;
- 
+
             if ch == '_' {
                 if !seen_digit {
                     return Err(ParseSectionPositionError::StrayUnderscore { offset });
@@ -144,7 +146,7 @@ impl FromStr for SectionPosition {
                 continue;
             }
             trailing_underscore = None;
- 
+
             let digit = match ch.to_digit(radix.value()) {
                 Some(digit) => digit,
                 None if radix == Radix::Decimal && ch.is_ascii_hexdigit() => {
@@ -155,24 +157,24 @@ impl FromStr for SectionPosition {
                 }
             };
             seen_digit = true;
- 
+
             value = value
                 .checked_mul(radix.value())
                 .and_then(|acc| acc.checked_add(digit))
                 .ok_or(ParseSectionPositionError::Overflow)?;
         }
- 
+
         if let Some(offset) = trailing_underscore {
             return Err(ParseSectionPositionError::StrayUnderscore { offset });
         }
         if !seen_digit {
             return Err(ParseSectionPositionError::NoDigits { prefix });
         }
- 
+
         Ok(SectionPosition(value))
     }
 }
- 
+
 fn strip_either<'a>(s: &'a str, a: &str, b: &str) -> Option<&'a str> {
     s.strip_prefix(a).or_else(|| s.strip_prefix(b))
 }

@@ -1141,11 +1141,7 @@ impl Tracer for ICountTracer {
 }
 
 impl Design {
-    pub fn execute(
-        &self,
-        state: &mut State,
-        world: &mut dyn World,
-    ) -> Result<(), ()> {
+    pub fn execute(&self, state: &mut State, world: &mut dyn World) -> Result<(), ()> {
         self.execute_with_tracer(&mut (), state, world)
     }
 
@@ -1239,7 +1235,7 @@ impl Design {
     ) -> Result<(), ()> {
         #[cfg(not(nightly))]
         {
-            return self.execute(state, world);
+            self.execute(state, world)
         }
 
         #[cfg(nightly)]

@@ -129,7 +129,11 @@ impl Diagnostics {
             .push((at, LowerErrorReason::ZeroWidthNet, Vec::new()));
     }
 
-    pub fn report<'a>(&'a self, tokens: &'a Tokenized, arenas: &'a AstArenas) -> DiagnosticsReport<'a> {
+    pub fn report<'a>(
+        &'a self,
+        tokens: &'a Tokenized,
+        arenas: &'a AstArenas,
+    ) -> DiagnosticsReport<'a> {
         DiagnosticsReport(self, tokens, arenas)
     }
 }

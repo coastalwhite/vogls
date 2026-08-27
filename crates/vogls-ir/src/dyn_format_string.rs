@@ -309,10 +309,7 @@ pub fn format_bits(
         Base::Ascii => {
             #[inline(always)]
             fn to_hex(b: u8) -> u8 {
-                static TABLE: [u8; 16] = [
-                    b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'A', b'B', b'C',
-                    b'D', b'E', b'F',
-                ];
+                static TABLE: [u8; 16] = *b"0123456789ABCDEF";
                 TABLE[b as usize]
             }
             for b in bits.be_bytes_iter() {
@@ -432,7 +429,7 @@ pub fn format_bits(
                     f.write_all(b"0")?;
                 }
             }
-            write!(f, "{}", &time_format.suffix_string)?;
+            write!(f, "{}", time_format.suffix_string)?;
 
             return Ok(());
         }

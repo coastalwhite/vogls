@@ -406,7 +406,7 @@ impl BytecodeInstruction for RealInstr {
                 if size <= VSIZE_64 {
                     let shift = 64 - size.get();
                     let value = ((regs[rs1] as i64) << shift) >> shift;
-                    regs[rd] = (value as i64 as f64).to_bits();
+                    regs[rd] = (value as f64).to_bits();
                 } else {
                     let addr = regs.get_as_addr(rs1);
                     regs[rd] = state

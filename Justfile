@@ -1,8 +1,16 @@
 lint:
-	cargo clippy
+	cargo clippy --workspace
+
+format:
+	cargo fmt --check
+
+format-fix:
+	cargo fmt
 
 check:
-    cargo check --workspace
+    RUSTFLAGS="-D warnings" cargo check --workspace
+
+precommit: check lint format
 
 test-bytecode *FLAGS:
     {{just_executable()}} --justfile {{justfile()}} test -B

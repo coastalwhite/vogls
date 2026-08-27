@@ -145,7 +145,12 @@ impl RegInfo {
     }
 
     #[inline]
-    pub fn register(name: &'static str, reg: Reg, mode: LogicMode, size: Option<VectorSize>) -> Self {
+    pub fn register(
+        name: &'static str,
+        reg: Reg,
+        mode: LogicMode,
+        size: Option<VectorSize>,
+    ) -> Self {
         Self::new(name, reg, mode, size, RegStorage::Register)
     }
 

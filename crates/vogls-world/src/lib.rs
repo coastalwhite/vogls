@@ -66,12 +66,12 @@ pub trait World {
     /// Get a handle to write into a file.
     ///
     /// If the file handle has since been closed and not reused, it returns `None`.
-    fn file_write<'a>(&'a mut self, handle: FileId) -> Option<&'a mut dyn io::Write>;
+    fn file_write(&mut self, handle: FileId) -> Option<&mut dyn io::Write>;
 
     /// Get a handle to read from a file.
     ///
     /// If the file handle has since been closed and not reused, it returns `None`.
-    fn file_read<'a>(&'a mut self, handle: FileId) -> Option<&'a mut dyn io::Read>;
+    fn file_read(&mut self, handle: FileId) -> Option<&mut dyn io::Read>;
 
     /// Convenience method to read the file at `path` into a `String`.
     fn read_to_string(&mut self, path: &'_ Path) -> WorldResult<String> {
@@ -88,7 +88,9 @@ pub trait World {
 /// - File opens always fail.
 /// - Standard output and error writes succeed, but are directed no where.
 /// - Standard input is empty.
+#[derive(Default)]
 pub struct NeverWorld;
+#[derive(Default)]
 struct IoNever;
 
 impl io::Read for IoNever {
@@ -126,11 +128,11 @@ impl World for NeverWorld {
         Err(WorldError::RecloseFile)
     }
 
-    fn file_write<'a>(&'a mut self, _handle: FileId) -> Option<&'a mut dyn io::Write> {
+    fn file_write(&mut self, _handle: FileId) -> Option<&mut dyn io::Write> {
         None
     }
 
-    fn file_read<'a>(&'a mut self, _handle: FileId) -> Option<&'a mut dyn io::Read> {
+    fn file_read(&mut self, _handle: FileId) -> Option<&mut dyn io::Read> {
         None
     }
 }

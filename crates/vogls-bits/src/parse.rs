@@ -375,7 +375,7 @@ mod tests {
         assert_tv!(
             "9e_xf23_1zza_9x0b_af1x",
             72,
-            BitsDataRef::SeparateFv(&[0x0FFF_F00F_F0FF_FFF0, 0xFF, 0x0f23_1FFa_900b_af10, 0x9e])
+            BitsDataRef::SeparateFv(&[0x0FFF_F00F_F0FF_FFF0, 0xFF, 0x0F23_1FFA_900B_AF10, 0x9E])
         );
     }
 

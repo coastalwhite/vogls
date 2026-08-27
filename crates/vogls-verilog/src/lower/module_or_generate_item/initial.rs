@@ -1,8 +1,8 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{ProcessBuilder, ProcessKind};
 
-use crate::ast::{AstId, AstIdRange};
 use crate::ast::module::InitialConstruct;
+use crate::ast::{AstId, AstIdRange};
 use crate::lower::statement::lower_stmts;
 use crate::lower::{LowerContext, MutLowerContext};
 
@@ -20,10 +20,16 @@ pub fn lower<'a>(
     let (mut proc_builder, bb_builder) =
         ProcessBuilder::new(mctx.gl(), ProcessKind::Initial, ctx.arenas.get_span(id));
 
-    let bb_builder =
-        lower_stmts(ctx, mctx, scope, &mut proc_builder, bb_builder, AstIdRange::single(statement))?;
+    let bb_builder = lower_stmts(
+        ctx,
+        mctx,
+        scope,
+        &mut proc_builder,
+        bb_builder,
+        AstIdRange::single(statement),
+    )?;
     bb_builder.halt(mctx.gl());
-    
+
     proc_builder.finalize(mctx.gl());
 
     Ok(())

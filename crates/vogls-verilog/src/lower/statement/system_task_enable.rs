@@ -457,7 +457,7 @@ pub fn lower_write_arguments<'a>(
                 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 279
                 // > For each % character (except %m and %%) that appears in a string, a
                 // > corresponding expression shall follow the string in the argument list.
-                if remaining.starts_with(&['m', 'M']) {
+                if remaining.starts_with(['m', 'M']) {
                     at += 1;
                     let scope_name = ctx.table[scope].name();
                     format_string_content.push_str(&ctx.arenas.ident_table[scope_name]);

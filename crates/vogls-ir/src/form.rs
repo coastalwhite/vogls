@@ -5,7 +5,8 @@ use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, LogicMode, Process, ProcessKind, ResizeOp, TemporalRegionKey, VariableKey, TIME_VSIZE, VSIZE_32
+    BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, LogicMode, Process,
+    ProcessKind, ResizeOp, TIME_VSIZE, TemporalRegionKey, VSIZE_32, VariableKey,
 };
 
 struct Fail {
@@ -85,15 +86,15 @@ pub fn check_ir_form(regions: &[TemporalRegionKey], gl: &GlobalContext) {
 
             use BasicBlockTerminator as T;
             match bb.terminator {
-                T::Wait(..) => {},
+                T::Wait(..) => {}
                 T::VariableWait(_, delay) => {
                     assert_eq!(gl.vars.size(delay), TIME_VSIZE);
-                },
-                T::WaitRegion(..) => {},
-                T::Watch(..) => {},
-                T::Jump(..) => {},
-                T::Branch(..) => {},
-                T::Halt => {},
+                }
+                T::WaitRegion(..) => {}
+                T::Watch(..) => {}
+                T::Jump(..) => {}
+                T::Branch(..) => {}
+                T::Halt => {}
             }
         }
     }
@@ -111,7 +112,7 @@ pub fn check_ir_form(regions: &[TemporalRegionKey], gl: &GlobalContext) {
             match instr {
                 None => {}
                 Some(instr) => {
-                    eprint!("[{instr}]: {:?}. Reason: ", &gl.bbs[bb].instrs[instr])
+                    eprint!("[{instr}]: {:?}. Reason: ", gl.bbs[bb].instrs[instr])
                 }
             }
             match reason {

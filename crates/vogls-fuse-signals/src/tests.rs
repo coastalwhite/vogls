@@ -218,8 +218,8 @@ fn assert_graph_equal(signals: &SlotMap<SignalKey, Signal>, g1: &FuseGraph, g2: 
 
     panic!(
         "graphs not equal.\nleft:\n{}\n\nright:\n{}",
-        g1.display_dot(&signals),
-        g2.display_dot(&signals)
+        g1.display_dot(signals),
+        g2.display_dot(signals)
     );
 }
 
