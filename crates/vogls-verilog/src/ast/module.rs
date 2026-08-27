@@ -286,7 +286,7 @@ pub struct EnableGateInstance<'a> {
 pub struct MosSwitchInstantiation<'a> {
     pub gatetype: AstItem<MosSwitchType>,
     pub delay: Option<AstId<'a, Delay3<'a>>>,
-    pub instances: AstIdRange<'a, EnableGateInstance<'a>>,
+    pub instances: AstIdRange<'a, MosSwitchInstance<'a>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 494

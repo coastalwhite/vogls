@@ -2024,7 +2024,7 @@ impl<'a> Consumable<'a> for MosSwitchInstantiation<'a> {
                 diagnostics.as_deref_mut(),
             )?);
         }
-        let instances = parse_one_or_more_delimited::<EnableGateInstance>(
+        let instances = parse_one_or_more_delimited::<MosSwitchInstance>(
             tkw,
             sc,
             arenas,
