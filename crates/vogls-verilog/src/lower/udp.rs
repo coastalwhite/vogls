@@ -32,12 +32,12 @@ fn lower_level(
         }
         UdpLevelSymbol::L1 => builder.case_equals_constant(gl, input, Bits::new_ones(SCALAR_VSIZE)),
         UdpLevelSymbol::X => {
-            let input = builder.x_to_z(gl, input);
+            let input = builder.z_to_x(gl, input);
             builder.case_equals_constant(gl, input, Bits::new_unknown(SCALAR_VSIZE))
         }
         UdpLevelSymbol::QuestionMark => builder.constant(gl, Bits::new_ones(SCALAR_VSIZE)),
         UdpLevelSymbol::B => {
-            let input = builder.x_to_z(gl, input);
+            let input = builder.z_to_x(gl, input);
             builder.not_case_equals_constant(gl, input, Bits::new_unknown(SCALAR_VSIZE))
         }
     }

@@ -73,10 +73,18 @@ fn evaluate_impl(
                 _ = variables.insert(*dst, bits);
             }
             I::Select(dst, cond, truthy, falsy) => {
-                let bits = if variables[cond].is_one() {
-                    variables[truthy].clone()
+                let cond = &variables[cond];
+                let truthy = &variables[truthy];
+                let falsy = &variables[falsy];
+                let bits = if cond.is_one() {
+                    truthy.clone()
+                } else if cond.is_equal_to_zero() {
+                    falsy.clone()
                 } else {
-                    variables[falsy].clone()
+                    let xor = Bits::bitwise_xor(truthy, falsy);
+                    let poison = Bits::bitwise_and(&Bits::new_unknown(truthy.size()), &xor);
+                    let and = Bits::bitwise_and(truthy, falsy);
+                    Bits::bitwise_or(&and, &poison)
                 };
                 _ = variables.insert(*dst, bits);
             }

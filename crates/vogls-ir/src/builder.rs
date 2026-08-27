@@ -1160,8 +1160,8 @@ impl BasicBlockBuilder {
         self.slice(gl, value, offset, width)
     }
 
-    /// Convert all X values to Z values.
-    pub fn x_to_z(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
+    /// Convert all Z values to X values.
+    pub fn z_to_x(&mut self, gl: &mut GlobalContext, src: VariableKey) -> VariableKey {
         match src.mode() {
             LogicMode::TwoValue => src,
             LogicMode::FourValue => {
@@ -1169,6 +1169,15 @@ impl BasicBlockBuilder {
                 self.and_constant(gl, src, Bits::new_ones(size))
             }
         }
+    }
+
+    pub fn nand(&mut self, gl: &mut GlobalContext, lhs: VariableKey, rhs: VariableKey) -> VariableKey {
+        let and = self.and(gl, lhs, rhs);
+        self.binary_not(gl, and)
+    }
+    pub fn nor(&mut self, gl: &mut GlobalContext, lhs: VariableKey, rhs: VariableKey) -> VariableKey {
+        let and = self.or(gl, lhs, rhs);
+        self.binary_not(gl, and)
     }
 
     pub fn posedge(

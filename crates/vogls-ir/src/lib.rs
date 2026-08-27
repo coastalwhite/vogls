@@ -700,6 +700,15 @@ pub enum Instruction {
     SliceImm(VariableKey, VariableKey, u32),
     ShiftImm(VariableKey, ShiftImmOp, VariableKey, u32),
 
+    /// Select between a truthy and falsy value depending on a condition.
+    ///
+    /// The result is calculated as follows:
+    /// - `condition == 0` then `dst = falsy`
+    /// - `condition == 1` then `dst = truthy`
+    /// - `condition in {x, z}`, `truthy == falsy` and `truthy in {0, 1}` then `dst = truthy`
+    /// - otherwise `dst = x`.
+    ///
+    /// (dst, condition, truthy, falsy)
     Select(VariableKey, VariableKey, VariableKey, VariableKey),
 
     Intrinsic(VariableKey, Box<IntrinsicOp>, Box<[VariableKey]>),

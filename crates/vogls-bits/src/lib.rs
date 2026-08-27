@@ -24,6 +24,7 @@ pub mod format;
 pub mod iter;
 pub mod leading_trailing;
 pub mod load;
+pub mod select_merge;
 pub mod parse;
 #[cfg(test)]
 pub mod proptest;
