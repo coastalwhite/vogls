@@ -378,7 +378,7 @@ pub fn linear_scan_register_allocation(
                         intervals
                             .get_mut(dst)
                             .expect("should be inserted before")
-                            .add_range(phi_interval.clone());
+                            .add_range(phi_interval);
 
                         // Make sure the source interval is still alive here and we can use it.
                         intervals

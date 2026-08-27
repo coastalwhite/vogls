@@ -235,7 +235,7 @@ impl BytecodeInstruction for SetUnaligned {
         let val = regs[rs];
         let heap = state.heap.0.as_mut();
         let updated = set_unaligned_inbounds(heap, offset, val, size);
-        regs[rd] = u64::from(updated);
+        regs[rd] = updated;
     }
 }
 
@@ -333,7 +333,7 @@ impl BytecodeInstruction for RelSetUnaligned {
         let value = regs[rs];
         let heap = state.heap.0.as_mut();
         let updated = set_unaligned_check_bounds(heap, offset, value, size, base_addr, base_size);
-        regs[rd] = u64::from(updated);
+        regs[rd] = updated;
     }
 }
 
@@ -473,12 +473,9 @@ impl BytecodeInstruction for SetHeapUnaligned {
             fv_src_num_words,
         ));
 
-        let dst = state.heap.get_mut_u64_slice(
-            HeapOffset {
-                bit_offset: 0 as usize,
-            },
-            state.heap.0.len(),
-        );
+        let dst = state
+            .heap
+            .get_mut_u64_slice(HeapOffset { bit_offset: 0usize }, state.heap.0.len());
         set_with_mask(
             scratch_update_mask,
             dst,

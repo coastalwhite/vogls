@@ -369,9 +369,7 @@ impl Assembler {
         cursor: &mut SourceCursor<'_>,
         new: fn(XRegIdent, XRegIdent, u8) -> u32,
     ) -> AssembleResult<()> {
-        self.parse_itype_instr_base(cursor, new, |cursor| {
-            Ok(cursor.take_shamt()? & 0x1F)
-        })
+        self.parse_itype_instr_base(cursor, new, |cursor| Ok(cursor.take_shamt()? & 0x1F))
     }
 
     fn parse_rtype_instr(

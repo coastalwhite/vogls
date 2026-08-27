@@ -17,6 +17,7 @@ use vogls_world::World;
 use crate::elaborated_design::SignalHandle;
 use crate::symbol::{NetSignal, NetSymbol, NetValue, Symbol};
 
+#[expect(clippy::large_enum_variant)]
 pub enum DesignBackend {
     Bytecode {
         design: vogls_bytecode::Design,

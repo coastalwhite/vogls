@@ -107,11 +107,11 @@ impl World for StdWorld {
         self.file_table.close(handle)
     }
 
-    fn file_write<'a>(&'a mut self, handle: FileId) -> Option<&'a mut dyn io::Write> {
+    fn file_write(&mut self, handle: FileId) -> Option<&mut dyn io::Write> {
         self.file_table.get(handle).map(|f| f as &mut dyn io::Write)
     }
 
-    fn file_read<'a>(&'a mut self, handle: FileId) -> Option<&'a mut dyn io::Read> {
+    fn file_read(&mut self, handle: FileId) -> Option<&mut dyn io::Read> {
         self.file_table.get(handle).map(|f| f as &mut dyn io::Read)
     }
 
@@ -135,9 +135,9 @@ impl IoWriteCapture {
             inner: Arc::new(Mutex::new(Vec::new())),
         }
     }
-    
+
     pub fn read_to_string(&mut self) -> Result<String, std::str::Utf8Error> {
-        let buf =  self.inner.lock().unwrap();
+        let buf = self.inner.lock().unwrap();
         std::str::from_utf8(buf.as_slice()).map(From::from)
     }
 }
@@ -195,11 +195,11 @@ impl World for StdWorldCaptured {
         self.inner.file_close(handle)
     }
 
-    fn file_write<'a>(&'a mut self, handle: FileId) -> Option<&'a mut dyn io::Write> {
+    fn file_write(&mut self, handle: FileId) -> Option<&mut dyn io::Write> {
         self.inner.file_write(handle)
     }
 
-    fn file_read<'a>(&'a mut self, handle: FileId) -> Option<&'a mut dyn io::Read> {
+    fn file_read(&mut self, handle: FileId) -> Option<&mut dyn io::Read> {
         self.inner.file_read(handle)
     }
 }

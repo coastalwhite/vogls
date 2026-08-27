@@ -302,7 +302,7 @@ pub fn get_delay_control_used_signals<'a>(
     let mut error = false;
     match &*delay_control {
         DelayControl::DelayValue(id) => match &**id {
-            DelayValue::UnsignedNumber(_) | DelayValue::RealNumber(_) => {},
+            DelayValue::UnsignedNumber(_) | DelayValue::RealNumber(_) => {}
             DelayValue::Identifier(ident) => {
                 error |= expression::get_used_ident_signals(
                     ctx,

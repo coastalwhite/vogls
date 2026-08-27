@@ -845,7 +845,10 @@ pub fn eval_constant(
         }
         "vogls_rawticks" => {
             ensure_num_args_equal!(0);
-            diagnostics.not_yet_implemented(arenas.get_span(expr), "vogls_rawticks is not yet implemented");
+            diagnostics.not_yet_implemented(
+                arenas.get_span(expr),
+                "vogls_rawticks is not yet implemented",
+            );
             Err(())
         }
 

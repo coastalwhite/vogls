@@ -250,9 +250,7 @@ fn constant_propagate_instruction(
                 (O::Xor, _, Some(b)) => additional.push(BI(dst, IO::Xor, lhs, b.clone())),
 
                 (O::AndNot, Some(_), _) => {}
-                (O::AndNot, _, Some(b)) => {
-                    additional.push(BI(dst, IO::And, lhs, b.bitwise_not()))
-                }
+                (O::AndNot, _, Some(b)) => additional.push(BI(dst, IO::And, lhs, b.bitwise_not())),
                 (O::OrNot, Some(_), _) => {}
                 (O::OrNot, _, Some(b)) => additional.push(BI(dst, IO::Or, lhs, b.bitwise_not())),
                 (O::Xnor, Some(b), _) => additional.push(BI(dst, IO::Xor, rhs, b.bitwise_not())),
@@ -344,7 +342,23 @@ fn constant_propagate_instruction(
                 (O::Negedge, Some(_), _) => {}
                 (O::Negedge, _, Some(_)) => {}
 
-                (O::RealAdd | O::RealSub | O::RealMul | O::RealDiv | O::RealPow | O::RealEq | O::RealNe | O::RealLt | O::RealLeq | O::RealGt | O::RealGeq | O::RealATan2 | O::RealHypot, _, _) => {}
+                (
+                    O::RealAdd
+                    | O::RealSub
+                    | O::RealMul
+                    | O::RealDiv
+                    | O::RealPow
+                    | O::RealEq
+                    | O::RealNe
+                    | O::RealLt
+                    | O::RealLeq
+                    | O::RealGt
+                    | O::RealGeq
+                    | O::RealATan2
+                    | O::RealHypot,
+                    _,
+                    _,
+                ) => {}
             };
 
             // If we managed to convert it to a immediate based operation, we should try to
@@ -538,13 +552,13 @@ fn constant_propagate_instruction(
                         _ => {}
                     }
                 }
-                (Some(Some(t)), _) if t.size() == SCALAR_VSIZE
-                    
+                (Some(Some(t)), _)
+                    if t.size() == SCALAR_VSIZE
+
                     // @TODO: This limitation can be lifted by emitting some conversion
                     // instructions.
-                    && cond.mode().is_two_value() && falsy.mode().is_two_value()
-
-                    => {
+                    && cond.mode().is_two_value() && falsy.mode().is_two_value() =>
+                {
                     use FvLogicValue as L;
                     match t.select_value(0) {
                         // select %c, 0, %f  ->   andnot %f, %c
@@ -560,11 +574,12 @@ fn constant_propagate_instruction(
                         _ => {}
                     }
                 }
-                (_, Some(Some(f))) if f.size() == SCALAR_VSIZE 
+                (_, Some(Some(f)))
+                    if f.size() == SCALAR_VSIZE
                     // @TODO: This limitation can be lifted by emitting some conversion
                     // instructions.
-                    && cond.mode().is_two_value() && truthy.mode().is_two_value()
-                    => {
+                    && cond.mode().is_two_value() && truthy.mode().is_two_value() =>
+                {
                     use FvLogicValue as L;
                     match f.select_value(0) {
                         // select %c, %t, 0  ->   and %t, %c

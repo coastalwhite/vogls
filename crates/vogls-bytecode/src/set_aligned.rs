@@ -436,7 +436,7 @@ impl BytecodeInstruction for FvRelSetAligned {
 
         let heap = state.heap.0.as_mut();
         let updated = fv_set_aligned(heap, offset, spc, val, size);
-        regs[rd] = u64::from(updated);
+        regs[rd] = updated;
     }
 }
 

@@ -809,7 +809,6 @@ impl<'a> Compiler<'a> {
             .call_indirect(sig, fmt_ptr, &[cldctx, fmt_index, args_ptr]);
     }
 
-    #[expect(clippy::too_many_arguments)]
     /// Pointer to a value's heap-layout words: the wide stack slot for >64
     /// values, or a freshly spilled temp ([spc, val] for four-value) for <=64.
     fn value_words_ptr(
@@ -1258,7 +1257,6 @@ impl<'a> Compiler<'a> {
 
     /// Lower an instruction where some operand is wider than 64 bits. Values
     /// live in stack slots (TV: n words; FV: n spc-words then n val-words).
-    #[expect(clippy::too_many_arguments)]
     fn lower_wide_instruction(
         &mut self,
         b: &mut FunctionBuilder,
@@ -1972,7 +1970,6 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    #[expect(clippy::too_many_arguments)]
     fn lower_drive_tv(
         &mut self,
         b: &mut FunctionBuilder,
@@ -2069,7 +2066,6 @@ impl<'a> Compiler<'a> {
     }
 
     /// Full-width four-value drive: poke-if-changed (no fst_poke for FV) + store.
-    #[expect(clippy::too_many_arguments)]
     fn lower_drive_fv(
         &mut self,
         b: &mut FunctionBuilder,

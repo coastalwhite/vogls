@@ -1,5 +1,5 @@
-use crate::arithmetic::fv_contains_special;
 use crate::VectorSize;
+use crate::arithmetic::fv_contains_special;
 
 pub fn tv_leading_zeros(src: &[u64], size: VectorSize) -> u32 {
     let off = size.get() % 64;

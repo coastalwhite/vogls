@@ -101,7 +101,7 @@ impl ComputeNode for LazyDesign {
         write!(
             f,
             "Design {{ sources: {:?}, num_handles: {} }}",
-            &self.sources,
+            self.sources,
             self.handles.len()
         )
     }
@@ -165,7 +165,11 @@ impl ComputeNode for LazyDesign {
         });
         let (design, initial_state) = design.to_bytecode().map_err(|_| ComputeError::Bytecode)?;
         arena.reset();
-        Ok(PlanDesign { design, initial_state, handles })
+        Ok(PlanDesign {
+            design,
+            initial_state,
+            handles,
+        })
     }
 }
 
@@ -174,7 +178,7 @@ impl DslNode for LazyDesign {
         write!(
             f,
             "Design {{ sources: {:?}, num_handles: {} }}",
-            &self.sources,
+            self.sources,
             self.handles.len()
         )
     }

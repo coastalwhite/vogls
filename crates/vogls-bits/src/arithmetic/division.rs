@@ -234,8 +234,8 @@ mod tests {
             ((size, lhs, rhs) in u128_arith_target())
         {
             let mask = (1u128.unbounded_shl(size.get())).wrapping_sub(1);
-            let expected_quotient = if rhs == 0 { [0, 0] } else { u128_to_u64x2((lhs / rhs) & mask) };
-            let expected_modulus = if rhs == 0 { [0, 0] } else { u128_to_u64x2((lhs % rhs) & mask) };
+            let expected_quotient = lhs.checked_div(rhs).map_or([0, 0], |r| u128_to_u64x2(r & mask));
+            let expected_modulus = lhs.checked_rem(rhs).map_or([0, 0], |r| u128_to_u64x2(r & mask));
             let mut given_quotient = [0u64; 2];
             let mut given_modulus = [0u64; 2];
 
@@ -258,8 +258,8 @@ mod tests {
             ((size, lhs, rhs) in u64_arith_target())
         {
             let mask = (1u64.unbounded_shl(size.get())).wrapping_sub(1);
-            let expected_quotient = if rhs == 0 { [0, 0] } else { u64_to_fvu64x2((lhs / rhs) & mask, size) };
-            let expected_modulus = if rhs == 0 { [0, 0] } else { u64_to_fvu64x2((lhs % rhs) & mask, size) };
+            let expected_quotient = lhs.checked_div(rhs).map_or([0, 0], |r| u64_to_fvu64x2(r & mask, size));
+            let expected_modulus = lhs.checked_rem(rhs).map_or([0, 0], |r| u64_to_fvu64x2(r & mask, size));
             let mut given_quotient = [0u64; 2];
             let mut given_modulus = [0u64; 2];
 

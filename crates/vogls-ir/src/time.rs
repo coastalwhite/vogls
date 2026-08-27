@@ -145,8 +145,8 @@ impl TimeResolution {
         debug_assert!(unit_p10 >= prec_p10 && prec_p10 >= reso_p10);
 
         // @Performance: Use lookup table instead of pow.
-        let unit_to_prec_f = 10f64.powi((unit_p10 - prec_p10).max(0) as i32);
-        let prec_to_reso_f = 10u64.pow((prec_p10 - reso_p10).max(0) as u32);
+        let unit_to_prec_f = 10f64.powi(unit_p10.saturating_sub(prec_p10) as i32);
+        let prec_to_reso_f = 10u64.pow(prec_p10.saturating_sub(reso_p10));
 
         if value.is_nan() {
             return Some(0);
@@ -185,4 +185,3 @@ impl TimeFormat {
         }
     }
 }
-

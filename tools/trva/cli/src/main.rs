@@ -144,7 +144,7 @@ fn main() -> ExitCode {
 fn output_section(f: &mut impl io::Write, name: &str, bytes: &[u8], start: u32) -> io::Result<()> {
     let end = start + bytes.len() as u32;
     writeln!(f, "-- .{name} ({start:#010X}-{end:#010X}) --")?;
-    for &b in bytes.as_ref() {
+    for &b in bytes {
         write!(f, "{b:02X}")?;
     }
     writeln!(f)?;

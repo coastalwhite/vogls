@@ -217,9 +217,7 @@ mod vogls {
 
         pub fn with_overrides(&self, overrides: &ConfigOverrides) -> Config {
             Self {
-                num_threads: overrides
-                    .num_threads
-                    .unwrap_or_else(|| self.num_threads.clone()),
+                num_threads: overrides.num_threads.unwrap_or(self.num_threads),
             }
         }
     }
@@ -451,7 +449,7 @@ mod vogls {
     ) -> PyResult<Lazy::Output> {
         let (lazy_key, mut graph) = vogls_plan::dsl::convert(dsl)?;
         let gbl_cfg = CONFIG.lock().unwrap();
-        let cfg = gbl_cfg.with_overrides(&overrides);
+        let cfg = gbl_cfg.with_overrides(overrides);
         drop(gbl_cfg);
         let ctx = vogls_plan::compute::ComputeContext::new(cfg.num_threads);
         let result = vogls_plan::compute::compute::<Lazy>(lazy_key, &mut graph, &ctx)?;

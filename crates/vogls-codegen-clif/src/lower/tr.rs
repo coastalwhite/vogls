@@ -86,7 +86,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
         // TR runs at a time so the region is reused).
         let mut scratch_cursor: u32 = 0;
         for &k in &order {
-            let _ = compiler.gl.bbs[k].for_each_dst_var(|v| {
+            compiler.gl.bbs[k].for_each_dst_var(|v| {
                 debug_assert!(!vmap.contains_key(&v));
                 debug_assert!(!wide_map.contains_key(&v));
 
@@ -100,7 +100,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                     }
                     None => {
                         let words = var_words(size, v.mode());
-                        let loc = if words as usize > WIDE_HEAP_THRESHOLD_WORDS {
+                        let loc = if words > WIDE_HEAP_THRESHOLD_WORDS {
                             // Too large for a stack slot: place in the heap scratch
                             // region at a TR-local offset.
                             let off = scratch_base + scratch_cursor;

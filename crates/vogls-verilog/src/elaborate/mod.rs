@@ -5,7 +5,8 @@ use std::sync::Arc;
 use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, LogicMode, ProcessKey, Signal, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize, SCALAR_VSIZE
+    BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, LogicMode,
+    ProcessKey, SCALAR_VSIZE, Signal, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize,
 };
 use vogls_utils::{Entry, IndexMap, Table, VgHashMap, new_table_key};
 
@@ -132,7 +133,12 @@ impl Net {
         bbb.probe(gl, self.probe_signal())
     }
 
-    pub fn probe_slice(&self, gl: &mut GlobalContext, bbb: &mut BasicBlockBuilder, slice: SignalSlice) -> VariableKey {
+    pub fn probe_slice(
+        &self,
+        gl: &mut GlobalContext,
+        bbb: &mut BasicBlockBuilder,
+        slice: SignalSlice,
+    ) -> VariableKey {
         bbb.probe_slice_constant(gl, self.probe_signal(), slice.lsb(), slice.width())
     }
 

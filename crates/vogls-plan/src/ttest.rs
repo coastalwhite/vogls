@@ -29,11 +29,7 @@ fn moment_stats(data: &[u64], order: u32) -> (f64, f64) {
 
     // Standard deviation is only needed to standardise orders >= 3.
     let std = if order >= 3 {
-        let var = data
-            .iter()
-            .map(|&v| (v as f64 - mean).powi(2))
-            .sum::<f64>()
-            / n;
+        let var = data.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / n;
         var.sqrt()
     } else {
         1.0
@@ -52,7 +48,10 @@ fn moment_stats(data: &[u64], order: u32) -> (f64, f64) {
 
     let preprocessed: Vec<f64> = data.iter().map(|&v| preprocess(v)).collect();
     let pmean = preprocessed.iter().sum::<f64>() / n;
-    let psumsq = preprocessed.iter().map(|&t| (t - pmean).powi(2)).sum::<f64>();
+    let psumsq = preprocessed
+        .iter()
+        .map(|&t| (t - pmean).powi(2))
+        .sum::<f64>();
     (pmean, psumsq)
 }
 

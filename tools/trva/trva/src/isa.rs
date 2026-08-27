@@ -235,9 +235,6 @@ impl FromStr for Isa {
             exts |= ext;
         }
 
-        Ok(Isa {
-            exts,
-            xlen,
-        })
+        Ok(Isa { exts, xlen })
     }
 }

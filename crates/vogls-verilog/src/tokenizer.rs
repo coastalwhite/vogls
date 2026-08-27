@@ -710,7 +710,7 @@ impl Tokenized {
 
                                         let argument_length = ident_length(&content[j..]);
                                         let argument = &content[j..][..argument_length];
-                                        let argument = macros.idents.get_or_insert(&argument);
+                                        let argument = macros.idents.get_or_insert(argument);
                                         let argument_idx = arguments.len();
                                         arguments.insert(argument, argument_idx);
                                         j += argument_length;
@@ -998,7 +998,7 @@ impl Tokenized {
 
                             // Preprocessor directives that need to be passed to the parser.
                             // @TODO: Use markers in parser.
-                            "celldefine" | "endcelldefine" => {},
+                            "celldefine" | "endcelldefine" => {}
                             "default_nettype" => {}
                             "resetall" => {}
                             "line" => todo!(),

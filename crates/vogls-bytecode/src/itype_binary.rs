@@ -2,9 +2,9 @@ use std::fmt;
 
 use vogls_bits::arithmetic::{fv_bitwise_and_elem, fv_bitwise_or_elem, fv_bitwise_xor_elem};
 use vogls_bits::shift::{fv_logical_shift_left, fv_logical_shift_right, fv_shift_arith_right};
+use vogls_codegen::SixBitSize;
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
-use vogls_codegen::SixBitSize;
 
 use super::reg::{Reg, RegInfo, Regs};
 use super::{
@@ -105,10 +105,20 @@ macro_rules! impl_bitwise {
             self.0.fmt(f)
         }
         fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-            operands.push(RegInfo::register("rs", self.0.rs, LogicMode::$rs_mode, Some(self.0.size.into())));
+            operands.push(RegInfo::register(
+                "rs",
+                self.0.rs,
+                LogicMode::$rs_mode,
+                Some(self.0.size.into()),
+            ));
         }
         fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-            operands.push(RegInfo::register("rd", self.0.rd, LogicMode::$rd_mode, Some(self.0.size.into())));
+            operands.push(RegInfo::register(
+                "rd",
+                self.0.rd,
+                LogicMode::$rd_mode,
+                Some(self.0.size.into()),
+            ));
         }
     };
 }

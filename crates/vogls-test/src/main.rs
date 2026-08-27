@@ -238,7 +238,7 @@ impl TestInfo {
                         for kind in line["fail=".len()..].split(',') {
                             let kind = kind.trim();
                             let Ok(p) = TestPhase::from_str(kind) else {
-                                return Err(format!("unknown compile phase '{kind}'").into());
+                                return Err(format!("unknown compile phase '{kind}'"));
                             };
                             phase |= p;
                         }
@@ -1077,7 +1077,7 @@ fn replace_templates(s: &mut String, mode: LogicMode, opts: Optimizations) {
     *s = s.replace("{!mode}", other_mode_str);
     *s = regex!(r"(?m)^\{\?mode=([A-Za-z0-9]+)\}(.*)(\n?)")
         .replace_all(s, |c: &Captures| {
-            if &c[1] == want {
+            if c[1] == want {
                 format!("{}{}", &c[2], &c[3])
             } else {
                 String::new()
@@ -1086,7 +1086,7 @@ fn replace_templates(s: &mut String, mode: LogicMode, opts: Optimizations) {
         .into_owned();
     *s = regex!(r"(?m)^\{\?!mode=([A-Za-z0-9]+)\}(.*)(\n?)")
         .replace_all(s, |c: &Captures| {
-            if &c[1] != want {
+            if c[1] != want {
                 format!("{}{}", &c[2], &c[3])
             } else {
                 String::new()

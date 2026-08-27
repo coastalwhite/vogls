@@ -59,7 +59,6 @@ impl VType {
         self.truncate_or_extend(width)
     }
 
-
     pub fn is_unsigned_net(&self) -> bool {
         matches!(self, Self::UnsignedNet(_))
     }

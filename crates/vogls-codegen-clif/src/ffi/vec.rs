@@ -66,6 +66,11 @@ impl<T> FfiVec<T> {
     }
 
     #[inline(always)]
+    pub fn is_empty(&self) -> bool {
+        self.length == 0
+    }
+
+    #[inline(always)]
     pub fn capacity(&self) -> usize {
         self.capacity
     }
