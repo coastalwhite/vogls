@@ -1942,18 +1942,52 @@ fn lower_instruction(
                 T2,
                 false,
             );
+
+            let mut jump_offset = None;
             match cond.mode() {
                 LogicMode::TwoValue => {}
                 LogicMode::FourValue => {
+                    bce.contains_special(T2, rcond, SixBitSize::N1);
+
+                    let branch_offset = bce.data.len();
+                    bce.panic();
+
+                    let rfalsy = to_reg(
+                        bce,
+                        *falsy,
+                        &gl.vars,
+                        assignment[falsy],
+                        stack_offsets,
+                        T2,
+                        false,
+                    );
+                    let rtruthy = to_reg(
+                        bce,
+                        *truthy,
+                        &gl.vars,
+                        assignment[truthy],
+                        stack_offsets,
+                        T4,
+                        false,
+                    );
+
+                    match SixBitSize::from_vector_size(size) {
+                        None => bce.heap_merge(rd, rtruthy, rfalsy, size),
+                        Some(_) => bce.merge(rd, rtruthy, rfalsy),
+                    }
+
+                    jump_offset = Some(bce.data.len());
+                    bce.panic();
+
+                    let offset = bce.data.len() - branch_offset - 1;
+                    let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
+                    bce.data[branch_offset] = BranchTrue { rcond, imm: offset }.encode();
+
                     bce.fv_ceqi(T2, rcond, SignedImmediate::MINUS_ONE, SixBitSize::N1);
                     rcond = T2;
                 }
             }
             let src_reg = T4;
-
-            // @Performance: Better lowering
-            let branch_offset = bce.data.len();
-            bce.panic();
 
             let rfalsy = to_reg(
                 bce,
@@ -1965,18 +1999,13 @@ fn lower_instruction(
                 false,
             );
             match (dst.mode(), SixBitSize::from_vector_size(size)) {
-                (LogicMode::TwoValue, Some(_)) => bce.copy(rd, rfalsy),
-                (LogicMode::FourValue, Some(_)) => bce.fv_copy(rd, rfalsy),
-                (LogicMode::TwoValue, None) => bce.heap_tv_copy(rd, rfalsy, size),
-                (LogicMode::FourValue, None) => bce.heap_fv_copy(rd, rfalsy, size),
+                (LogicMode::TwoValue, Some(_)) => bce.cnmov(rd, rcond, rfalsy),
+                (LogicMode::FourValue, Some(_)) => {
+                    bce.fv_cnmov(rd, rcond, rfalsy);
+                }
+                (LogicMode::TwoValue, None) => bce.heap_tv_cnmov(rd, rcond, rfalsy, size),
+                (LogicMode::FourValue, None) => bce.heap_fv_cnmov(rd, rcond, rfalsy, size),
             }
-
-            let jump_offset = bce.data.len();
-            bce.panic();
-
-            let offset = bce.data.len() - branch_offset - 1;
-            let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
-            bce.data[branch_offset] = BranchTrue { rcond, imm: offset }.encode();
 
             let rtruthy = to_reg(
                 bce,
@@ -1988,15 +2017,19 @@ fn lower_instruction(
                 false,
             );
             match (dst.mode(), SixBitSize::from_vector_size(size)) {
-                (LogicMode::TwoValue, Some(_)) => bce.copy(rd, rtruthy),
-                (LogicMode::FourValue, Some(_)) => bce.fv_copy(rd, rtruthy),
-                (LogicMode::TwoValue, None) => bce.heap_tv_copy(rd, rtruthy, size),
-                (LogicMode::FourValue, None) => bce.heap_fv_copy(rd, rtruthy, size),
+                (LogicMode::TwoValue, Some(_)) => bce.cmov(rd, rcond, rtruthy),
+                (LogicMode::FourValue, Some(_)) => {
+                    bce.fv_cmov(rd, rcond, rfalsy);
+                }
+                (LogicMode::TwoValue, None) => bce.heap_tv_cmov(rd, rcond, rtruthy, size),
+                (LogicMode::FourValue, None) => bce.heap_fv_cmov(rd, rcond, rtruthy, size),
             }
 
-            let offset = bce.data.len() - jump_offset - 1;
-            let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
-            bce.data[jump_offset] = Jump(offset).encode();
+            if let Some(jump_offset) = jump_offset {
+                let offset = bce.data.len() - jump_offset - 1;
+                let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
+                bce.data[jump_offset] = Jump(offset).encode();
+            }
 
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T2);
         }

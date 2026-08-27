@@ -5,7 +5,8 @@ use vogls_bits::arithmetic::{
     fv_bitwise_xnor_elem, fv_bitwise_xor_elem,
 };
 use vogls_bits::copyxz::{copy_x, copy_z};
-use vogls_bits::edge::{fv_negedge_u64, fv_posedge_u64};
+use vogls_bits::edge::fv_negedge_u64;
+use vogls_bits::select_merge::select_merge;
 use vogls_bits::shift::{
     fv_logical_shift_left, fv_logical_shift_right, fv_shift_arith_right, tv_shift_arith_right,
 };
@@ -63,7 +64,11 @@ pub struct TvSll(pub SbsBitwiseRType);
 pub struct TvSlr(pub SbsBitwiseRType);
 pub struct TvSar(pub SbsBitwiseRType);
 pub struct TvLeftShiftOr(pub SbsBitwiseRType);
-pub struct CMov(pub BitwiseRType);
+pub struct TvCMov(pub BitwiseRType);
+pub struct TvCNMov(pub BitwiseRType);
+pub struct FvCMov(pub BitwiseRType);
+pub struct FvCNMov(pub BitwiseRType);
+pub struct FvMerge(pub BitwiseRType);
 
 pub struct FvAnd(pub BitwiseRType);
 pub struct FvOr(pub BitwiseRType);
@@ -82,7 +87,6 @@ pub struct FvDiv0(pub SbsBitwiseRType);
 pub struct FvModX(pub SbsBitwiseRType);
 pub struct FvMod0(pub SbsBitwiseRType);
 pub struct FvPow(pub SbsBitwiseRType);
-pub struct FvPosedge(pub BitwiseRType);
 pub struct FvNegedge(pub BitwiseRType);
 pub struct FvUnsignedLeq(pub SbsBitwiseRType);
 pub struct FvUnsignedGt(pub SbsBitwiseRType);
@@ -301,8 +305,8 @@ macro_rules! impl_fv_shift {
     };
 }
 
-impl BytecodeInstruction for CMov {
-    impl_bitwise!(CMov, "cmov", TwoValue, TwoValue, TwoValue);
+impl BytecodeInstruction for TvCMov {
+    impl_bitwise!(TvCMov, "tv.cmov", TwoValue, TwoValue, TwoValue);
 
     #[inline(always)]
     fn execute(
@@ -318,6 +322,72 @@ impl BytecodeInstruction for CMov {
         let BitwiseRType { rd, rs1, rs2 } = self.0;
         if regs[rs1] != 0 {
             regs[rd] = regs[rs2];
+        }
+    }
+}
+impl BytecodeInstruction for TvCNMov {
+    impl_bitwise!(TvCNMov, "tv.cnmov", TwoValue, TwoValue, TwoValue);
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        if regs[rs1] == 0 {
+            regs[rd] = regs[rs2];
+        }
+    }
+}
+impl BytecodeInstruction for FvCMov {
+    impl_bitwise!(FvCMov, "fv.cmov", FourValue, TwoValue, FourValue);
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        if regs[rs1] != 0 {
+            let (rdspc, rdval) = rd.to_spc_and_val();
+            let (rsspc, rsval) = rs2.to_spc_and_val();
+            regs[rdspc] = regs[rsspc];
+            regs[rdval] = regs[rsval];
+        }
+    }
+}
+impl BytecodeInstruction for FvCNMov {
+    impl_bitwise!(FvCNMov, "fv.cnmov", FourValue, TwoValue, FourValue);
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        if regs[rs1] == 0 {
+            let (rdspc, rdval) = rd.to_spc_and_val();
+            let (rsspc, rsval) = rs2.to_spc_and_val();
+            regs[rdspc] = regs[rsspc];
+            regs[rdval] = regs[rsval];
         }
     }
 }
@@ -982,26 +1052,6 @@ impl BytecodeInstruction for FvBitwiseCeq {
         regs[rd] = size.mask((regs[rs1_spc] ^ !regs[rs2_spc]) & (regs[rs1_val] ^ !regs[rs2_val]));
     }
 }
-impl BytecodeInstruction for FvPosedge {
-    impl_bitwise!(FvPosedge, "fv.posedge", TwoValue, FourValue, FourValue);
-
-    #[inline(always)]
-    fn execute(
-        self,
-        _code: &[Bytecode],
-        regs: &mut Regs,
-        _pc: &mut u64,
-        _state: &mut RuntimeState,
-        _schedule: &mut Schedule,
-        _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
-    ) {
-        let BitwiseRType { rd, rs1, rs2 } = self.0;
-        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
-        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
-        regs[rd] = fv_posedge_u64(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
-    }
-}
 impl BytecodeInstruction for FvNegedge {
     impl_bitwise!(FvNegedge, "fv.negedge", TwoValue, FourValue, FourValue);
 
@@ -1621,6 +1671,28 @@ impl BytecodeInstruction for FvCopyZ {
             copy_z(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
     }
 }
+impl BytecodeInstruction for FvMerge {
+    impl_bitwise!(FvMerge, "fv.merge", FourValue, FourValue, FourValue);
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        (regs[rd_spc], regs[rd_val]) =
+            select_merge(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
+    }
+}
 
 macro_rules! impl_bytecode_methods {
     ($(($name:ident, $op:ident))*) => {
@@ -1651,7 +1723,10 @@ macro_rules! impl_bytecode_fv_shift_methods {
 }
 
 impl_bytecode_methods! {
-    (cmov, CMov)
+    (cmov, TvCMov)
+    (cnmov, TvCNMov)
+    (fv_cmov, FvCMov)
+    (fv_cnmov, FvCNMov)
     (and, TvAnd)
     (or, TvOr)
     (xor, TvXor)
@@ -1669,8 +1744,8 @@ impl_bytecode_methods! {
     (fv_xnor, FvXnor)
     (fv_ceq, FvCeq)
     (fv_cne, FvCne)
-    (fv_posedge, FvPosedge)
     (fv_negedge, FvNegedge)
+    (merge, FvMerge)
 }
 
 impl_bytecode_sbs_methods! {

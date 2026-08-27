@@ -15,6 +15,7 @@ use vogls_bits::leading_trailing::{fv_leading_zeros, tv_leading_zeros};
 use vogls_bits::reduce::{
     fv_l_reduce_and, fv_l_reduce_or, fv_l_reduce_xor, tv_reduce_and, tv_reduce_or, tv_reduce_xor,
 };
+use vogls_bits::select_merge::select_merge;
 use vogls_bits::shift::{
     fv_l_arithmetic_shift_right, fv_l_logical_shift_left, fv_l_logical_shift_right,
     tv_l_arithmetic_shift_right, tv_l_logical_shift_left, tv_l_logical_shift_right,
@@ -22,7 +23,7 @@ use vogls_bits::shift::{
 use vogls_bits::slice::{fv_ll_slice, tv_ll_slice};
 use vogls_bits::util::CellSlice;
 use vogls_codegen::HeapOffset;
-use vogls_ir::{LogicMode, VSIZE_64, VectorSize};
+use vogls_ir::{LogicMode, SCALAR_VSIZE, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 
 use crate::write_padded_mnemonic;
@@ -52,6 +53,14 @@ pub struct HeapConcat {
     rs2: Reg,
     fv: bool,
     rs2_size: InlineNBitSize<11>,
+}
+pub struct HeapCmov {
+    rd: Reg,
+    rcond: Reg,
+    rs: Reg,
+    fv: bool,
+    inv: bool,
+    size: InlineNBitSize<10>,
 }
 pub struct HeapSlice {
     rd: Reg,
@@ -187,6 +196,7 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             BitwiseOp::FvCopyX => "fv.heap_copyx",
             BitwiseOp::FvCopyZ => "fv.heap_copyz",
             BitwiseOp::FvBitwiseCeq => "fv.heap_bitwise_ceq",
+            BitwiseOp::FvMerge => "fv.heap_merge",
         };
         write_padded_mnemonic(f, mnemonic)?;
         write!(f, "{rd}, {rs1}, {rs2}")
@@ -282,6 +292,126 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             O::FvBitwiseCeq => {
                 fv_bin_u64_cell_bitwise_op_output_tv(dst, src1, src2, bitwise_ceq, size)
             }
+            O::FvMerge => fv_bin_u64_cell_bitwise_op(dst, src1, src2, select_merge),
+        }
+    }
+}
+
+impl BytecodeInstruction for HeapCmov {
+    fn num_additional_slots(&self) -> u8 {
+        u8::from(self.size.0.is_none())
+    }
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc + 1;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap(
+            "rcond",
+            self.rcond,
+            LogicMode::TwoValue,
+            SCALAR_VSIZE,
+        ));
+        operands.push(RegInfo::heap("rs2", self.rs, mode, size));
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc + 1;
+        let size = self.size.get(&mut pc, code);
+        let mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rd", self.rd, mode, size));
+    }
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryBitwise as u8);
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rcond: Reg::new_masked(v >> 12),
+            rs: Reg::new_masked(v >> 16),
+            fv: (v >> 20) & 1 != 0,
+            inv: (v >> 21) & 1 != 0,
+            size: InlineNBitSize::new_masked(v >> 22),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::HeapBinaryBitwise as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rcond as u32) << 12)
+                | ((self.rs as u32) << 16)
+                | ((self.fv as u32) << 20)
+                | ((self.inv as u32) << 21)
+                | (self.size.encode() << 22),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rcond,
+            rs,
+            fv,
+            inv,
+            size: _,
+        } = self;
+        let mnemonic = match (fv, inv) {
+            (true, true) => "fv.heap_cmov",
+            (true, false) => "fv.heap_cnmov",
+            (false, true) => "tv.heap_cmov",
+            (false, false) => "tv.heap_cnmov",
+        };
+        write_padded_mnemonic(f, mnemonic)?;
+        write!(f, "{rd}, {rcond}, {rs}")
+    }
+    #[inline(always)]
+    fn execute(
+        self,
+        code: &[Bytecode],
+        regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self {
+            rd,
+            rcond,
+            rs,
+            fv,
+            inv,
+            size,
+        } = self;
+        let size = size.get(pc, code);
+        let mut num_words = size.get().div_ceil(64) as usize;
+        if fv {
+            num_words *= 2;
+        }
+        let cond = regs[rcond] != 0;
+        let cond = cond ^ inv;
+        if cond {
+            let [dst, src] = state.heap.get_u64_cell_slices([
+                (
+                    HeapOffset {
+                        bit_offset: regs[rd] as usize,
+                    },
+                    num_words,
+                ),
+                (
+                    HeapOffset {
+                        bit_offset: regs[rs] as usize,
+                    },
+                    num_words,
+                ),
+            ]);
+            dst.copy_from_slice(src);
         }
     }
 }
@@ -1640,6 +1770,7 @@ pub enum BitwiseOp {
     FvCopyX,
     FvCopyZ,
     FvBitwiseCeq,
+    FvMerge,
 }
 
 impl BitwiseOp {
@@ -1659,7 +1790,8 @@ impl BitwiseOp {
             | Self::FvXnor
             | Self::FvCopyX
             | Self::FvCopyZ
-            | Self::FvBitwiseCeq => true,
+            | Self::FvBitwiseCeq
+            | Self::FvMerge => true,
         }
     }
 
@@ -1679,7 +1811,8 @@ impl BitwiseOp {
             11 => Self::FvOrNot,
             12 => Self::FvCopyX,
             13 => Self::FvCopyZ,
-            _ => Self::FvBitwiseCeq,
+            14 => Self::FvBitwiseCeq,
+            _ => Self::FvMerge,
         }
     }
 }
@@ -2049,6 +2182,9 @@ impl BytecodeEncoder {
     pub fn heap_fv_bitwise_ceq(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_binary_bitwise(rd, rs1, rs2, BitwiseOp::FvBitwiseCeq, size);
     }
+    pub fn heap_merge(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_bitwise(rd, rs1, rs2, BitwiseOp::FvMerge, size);
+    }
 
     pub fn heap_tv_add(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_binary_arith(rd, rs1, rs2, ArithmeticOp::TvAdd, size);
@@ -2217,6 +2353,45 @@ impl BytecodeEncoder {
     }
     pub fn fv_heap_fill(&mut self, rd: Reg, value: FvLogicValue, size: VectorSize) {
         self.heap_fill(rd, true, value.spc(), value.val(), size);
+    }
+
+    pub fn heap_cmov(
+        &mut self,
+        rd: Reg,
+        rcond: Reg,
+        rs: Reg,
+        size: VectorSize,
+        fv: bool,
+        inv: bool,
+    ) {
+        let inline_size = InlineNBitSize::new(size);
+        self.data.push(
+            HeapCmov {
+                rd,
+                rcond,
+                rs,
+                fv,
+                inv,
+                size: inline_size,
+            }
+            .encode(),
+        );
+        if inline_size.0.is_none() {
+            self.data.push(Bytecode(size.get()));
+        }
+    }
+
+    pub fn heap_tv_cmov(&mut self, rd: Reg, rcond: Reg, rs: Reg, size: VectorSize) {
+        self.heap_cmov(rd, rcond, rs, size, false, false);
+    }
+    pub fn heap_tv_cnmov(&mut self, rd: Reg, rcond: Reg, rs: Reg, size: VectorSize) {
+        self.heap_cmov(rd, rcond, rs, size, false, true);
+    }
+    pub fn heap_fv_cmov(&mut self, rd: Reg, rcond: Reg, rs: Reg, size: VectorSize) {
+        self.heap_cmov(rd, rcond, rs, size, true, false);
+    }
+    pub fn heap_fv_cnmov(&mut self, rd: Reg, rcond: Reg, rs: Reg, size: VectorSize) {
+        self.heap_cmov(rd, rcond, rs, size, true, true);
     }
 
     pub fn heap_concat(

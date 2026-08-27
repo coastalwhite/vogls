@@ -335,7 +335,10 @@ macro_rules! opcodes {
 
 opcodes![
     Interrupt,
-    CMov,
+    TvCMov,
+    TvCNMov,
+    FvCMov,
+    FvCNMov,
     TvAnd,
     TvOr,
     TvXor,
@@ -389,7 +392,7 @@ opcodes![
     FvCeq,
     FvCne,
     FvBitwiseCeq,
-    FvPosedge,
+    FvMerge,
     FvNegedge,
     FvAdd,
     FvSub,
