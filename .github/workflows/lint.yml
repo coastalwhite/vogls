@@ -1,0 +1,38 @@
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+name: lint
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    name: ubuntu / stable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # tag=v7.0.1
+        with:
+          persist-credentials: false
+          submodules: true
+
+      - name: Install stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # branch=master
+        with:
+          toolchain: stable
+
+      - name: clippy
+        run: cargo clippy
+
+      - name: format
+        run: cargo fmt --check
+
+      - name: check
+        env: 
+          rustflags: "-D warnings"
+        run: cargo check
