@@ -428,7 +428,10 @@ pub fn dims_to_array_elab<'a>(
             diagnostics.not_yet_implemented(arenas.get_span(dim), "array overflow");
             return Err(());
         };
-        dims.push(ArrayDim { offset, num_elements });
+        dims.push(ArrayDim {
+            offset,
+            num_elements,
+        });
     }
     Ok(dims)
 }
