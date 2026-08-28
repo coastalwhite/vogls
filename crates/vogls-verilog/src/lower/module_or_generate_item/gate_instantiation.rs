@@ -1,5 +1,4 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::bits::arithmetic::FvLogicValue;
 use vogls_ir::{Bits, ProcessBuilder, ProcessKind, SCALAR_VSIZE, VectorSize};
 use vogls_utils::OrderedSet;
 
@@ -134,10 +133,6 @@ pub fn lower<'a>(
                     CONTEXT_WIDTH,
                 )?;
 
-                // @TODO: We resolve L/H to to 0/1 here.
-                //
-                // In the LRM, it can be collapsed to either 0/1 or z. I feel like this should be a
-                // compile toggle.
                 let data = bb_builder.truncate(mctx.gl(), data, SCALAR_VSIZE);
                 let control = bb_builder.truncate(mctx.gl(), control, SCALAR_VSIZE);
 
@@ -151,6 +146,12 @@ pub fn lower<'a>(
                         bb_builder.select_merge(mctx.gl(), control, z, data)
                     }
                 };
+                let data_is_z = bb_builder.case_equals_constant(
+                    mctx.gl(),
+                    data,
+                    Bits::new_high_impedance(SCALAR_VSIZE),
+                );
+                let out = bb_builder.select(mctx.gl(), data_is_z, z, out);
 
                 assign_net_lvalue(
                     ctx,
@@ -214,10 +215,6 @@ pub fn lower<'a>(
                     CONTEXT_WIDTH,
                 )?;
 
-                // @TODO: We resolve L/H to to 0/1 here.
-                //
-                // In the LRM, it can be collapsed to either 0/1 or z. I feel like this should be a
-                // compile toggle.
                 let data = bb_builder.truncate(mctx.gl(), data, SCALAR_VSIZE);
                 let ncontrol = bb_builder.truncate(mctx.gl(), ncontrol, SCALAR_VSIZE);
                 let pcontrol = bb_builder.truncate(mctx.gl(), pcontrol, SCALAR_VSIZE);
@@ -225,18 +222,19 @@ pub fn lower<'a>(
                 let z = bb_builder.constant(mctx.gl(), Bits::new_high_impedance(SCALAR_VSIZE));
                 let out = match cmos_switch.gatetype.item {
                     CmosSwitchType::Cmos | CmosSwitchType::Rcmos => {
-                        let nor_control = bb_builder.nor(mctx.gl(), ncontrol, pcontrol);
-                        let nor_control = bb_builder.case_equals_constant(
-                            mctx.gl(),
-                            nor_control,
-                            FvLogicValue::L1.into(),
-                        );
+                        let andn_control = bb_builder.andnot(mctx.gl(), pcontrol, ncontrol);
 
                         // out = z    (if both OFF)
                         // out = data (otherwise)
-                        bb_builder.select_merge(mctx.gl(), nor_control, z, data)
+                        bb_builder.select_merge(mctx.gl(), andn_control, z, data)
                     }
                 };
+                let data_is_z = bb_builder.case_equals_constant(
+                    mctx.gl(),
+                    data,
+                    Bits::new_high_impedance(SCALAR_VSIZE),
+                );
+                let out = bb_builder.select(mctx.gl(), data_is_z, z, out);
 
                 assign_net_lvalue(
                     ctx,

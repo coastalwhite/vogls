@@ -481,6 +481,14 @@ fn peephole_instruction(
                     *instr = I::Select(dst, cond, truthy, falsy, SelectMerge::FalseOnSpecial);
                     return PeepholeResult::Changed;
                 }
+
+                if let Some(cond_ek) = var_lookup.get(cond) {
+                    if let CSExpr::Unary(UnaryOp::Not, src_ek) = &exprs[*cond_ek].1 {
+                        *instr =
+                            I::Select(*dst, exprs[*src_ek].0, *falsy, *truthy, SelectMerge::Merge);
+                        return PeepholeResult::Changed;
+                    }
+                }
             }
             SelectMerge::FalseOnSpecial => {
                 if let (Some(truthy_ek), Some(falsy_ek)) =
@@ -518,7 +526,9 @@ fn peephole_instruction(
                 }
 
                 if let Some(cond_ek) = var_lookup.get(cond) {
-                    if let CSExpr::Unary(UnaryOp::Not, src_ek) = &exprs[*cond_ek].1 {
+                    if let CSExpr::Unary(UnaryOp::Not, src_ek) = &exprs[*cond_ek].1
+                        && cond.mode().is_two_value()
+                    {
                         *instr = I::Select(
                             *dst,
                             exprs[*src_ek].0,
