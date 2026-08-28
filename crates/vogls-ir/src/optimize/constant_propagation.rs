@@ -7,8 +7,9 @@ use crate::optimize::remove_bbs;
 use crate::orders::post_order_keys;
 use crate::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp,
-    GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, ShiftImmOp,
-    ShiftImmOpSimplification, Signal, SignalKey, Time, UnaryOp, VariableKey, VariableMap,
+    GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, SelectMerge,
+    ShiftImmOp, ShiftImmOpSimplification, Signal, SignalKey, Time, UnaryOp, VariableKey,
+    VariableMap,
 };
 
 pub fn constant_propagation(
@@ -513,7 +514,7 @@ fn constant_propagate_instruction(
                 Some(b) => assign_constant!(dst, op.evaluate(b, amount)),
             }
         }
-        I::Select(dst, cond, truthy, falsy) => {
+        I::Select(dst, cond, truthy, falsy, kind) => {
             let cond_bits_entry = scratch_map.get(cond);
             let truthy_bits_entry = scratch_map.get(truthy);
             let falsy_bits_entry = scratch_map.get(falsy);
@@ -523,8 +524,10 @@ fn constant_propagate_instruction(
             if let Some(Some(cond)) = cond_bits_entry {
                 let (src, bits) = if cond.is_one() {
                     (truthy, truthy_bits_entry)
-                } else {
+                } else if cond.is_equal_to_zero() || matches!(kind, SelectMerge::FalseOnSpecial) {
                     (falsy, falsy_bits_entry)
+                } else {
+                    return PropagateResult { replace: false };
                 };
 
                 match bits {
@@ -536,66 +539,65 @@ fn constant_propagate_instruction(
                 }
             }
 
-            match (truthy_bits_entry, falsy_bits_entry) {
-                (Some(Some(t)), Some(Some(f))) if t == f => assign_constant!(dst, t.clone()),
-                (Some(Some(t)), Some(Some(f))) if t.size() == SCALAR_VSIZE => {
-                    use FvLogicValue as L;
-                    match (t.select_value(0), f.select_value(0)) {
-                        (L::L1, L::L0) => {
-                            additional.push(I::copy(vars, dst, *cond));
-                            return PropagateResult { replace: true };
+            // @TODO: This limitation can be lifted by emitting some conversion instructions.
+            if cond.mode().is_two_value() && *kind == SelectMerge::FalseOnSpecial {
+                match (truthy_bits_entry, falsy_bits_entry) {
+                    (Some(Some(t)), Some(Some(f))) if t == f => assign_constant!(dst, t.clone()),
+                    (Some(Some(t)), Some(Some(f))) if t.size() == SCALAR_VSIZE => {
+                        use FvLogicValue as L;
+                        match (t.select_value(0), f.select_value(0)) {
+                            (L::L1, L::L0) => {
+                                additional.push(I::copy(vars, dst, *cond));
+                                return PropagateResult { replace: true };
+                            }
+                            (L::L0, L::L1) => {
+                                additional.push(I::Unary(dst, UnaryOp::Not, *cond));
+                                return PropagateResult { replace: true };
+                            }
+                            _ => {}
                         }
-                        (L::L0, L::L1) => {
-                            additional.push(I::Unary(dst, UnaryOp::Not, *cond));
-                            return PropagateResult { replace: true };
-                        }
-                        _ => {}
                     }
-                }
-                (Some(Some(t)), _)
-                    if t.size() == SCALAR_VSIZE
-
-                    // @TODO: This limitation can be lifted by emitting some conversion
-                    // instructions.
-                    && cond.mode().is_two_value() && falsy.mode().is_two_value() =>
-                {
-                    use FvLogicValue as L;
-                    match t.select_value(0) {
-                        // select %c, 0, %f  ->   andnot %f, %c
-                        L::L0 => {
-                            additional.push(I::Binary(dst, BinaryOp::AndNot, falsy, *cond));
-                            return PropagateResult { replace: true };
+                    (Some(Some(t)), _)
+                        if t.size() == SCALAR_VSIZE && falsy.mode().is_two_value() =>
+                    {
+                        use FvLogicValue as L;
+                        match t.select_value(0) {
+                            // select %c, 0, %f  ->   andnot %f, %c
+                            L::L0 => {
+                                additional.push(I::Binary(dst, BinaryOp::AndNot, falsy, *cond));
+                                return PropagateResult { replace: true };
+                            }
+                            // select %c, 1, %f  ->   or %f, %c
+                            L::L1 => {
+                                additional.push(I::Binary(dst, BinaryOp::Or, falsy, *cond));
+                                return PropagateResult { replace: true };
+                            }
+                            _ => {}
                         }
-                        // select %c, 1, %f  ->   or %f, %c
-                        L::L1 => {
-                            additional.push(I::Binary(dst, BinaryOp::Or, falsy, *cond));
-                            return PropagateResult { replace: true };
-                        }
-                        _ => {}
                     }
-                }
-                (_, Some(Some(f)))
-                    if f.size() == SCALAR_VSIZE
+                    (_, Some(Some(f)))
+                        if f.size() == SCALAR_VSIZE
                     // @TODO: This limitation can be lifted by emitting some conversion
                     // instructions.
                     && cond.mode().is_two_value() && truthy.mode().is_two_value() =>
-                {
-                    use FvLogicValue as L;
-                    match f.select_value(0) {
-                        // select %c, %t, 0  ->   and %t, %c
-                        L::L0 => {
-                            additional.push(I::Binary(dst, BinaryOp::And, truthy, *cond));
-                            return PropagateResult { replace: true };
+                    {
+                        use FvLogicValue as L;
+                        match f.select_value(0) {
+                            // select %c, %t, 0  ->   and %t, %c
+                            L::L0 => {
+                                additional.push(I::Binary(dst, BinaryOp::And, truthy, *cond));
+                                return PropagateResult { replace: true };
+                            }
+                            // select %c, %t, 1  ->   ornot %t, %c
+                            L::L1 => {
+                                additional.push(I::Binary(dst, BinaryOp::OrNot, truthy, *cond));
+                                return PropagateResult { replace: true };
+                            }
+                            _ => {}
                         }
-                        // select %c, %t, 1  ->   ornot %t, %c
-                        L::L1 => {
-                            additional.push(I::Binary(dst, BinaryOp::OrNot, truthy, *cond));
-                            return PropagateResult { replace: true };
-                        }
-                        _ => {}
                     }
+                    _ => {}
                 }
-                _ => {}
             }
 
             PropagateResult { replace: false }

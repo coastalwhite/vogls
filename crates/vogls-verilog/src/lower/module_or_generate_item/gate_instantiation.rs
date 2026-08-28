@@ -69,15 +69,15 @@ pub fn lower<'a>(
 
                 let z = bb_builder.constant(mctx.gl(), Bits::new_high_impedance(SCALAR_VSIZE));
                 let out = match enable_switch.gatetype.item {
-                    EnableGateType::BufIf0 => bb_builder.select(mctx.gl(), control, z, data),
-                    EnableGateType::BufIf1 => bb_builder.select(mctx.gl(), control, data, z),
+                    EnableGateType::BufIf0 => bb_builder.select_merge(mctx.gl(), control, z, data),
+                    EnableGateType::BufIf1 => bb_builder.select_merge(mctx.gl(), control, data, z),
                     EnableGateType::NotIf0 => {
                         let data = bb_builder.binary_not(mctx.gl(), data);
-                        bb_builder.select(mctx.gl(), control, z, data)
+                        bb_builder.select_merge(mctx.gl(), control, z, data)
                     }
                     EnableGateType::NotIf1 => {
                         let data = bb_builder.binary_not(mctx.gl(), data);
-                        bb_builder.select(mctx.gl(), control, data, z)
+                        bb_builder.select_merge(mctx.gl(), control, data, z)
                     }
                 };
 
@@ -145,10 +145,10 @@ pub fn lower<'a>(
                 let out = match mos_switch.gatetype.item {
                     MosSwitchType::NMos | MosSwitchType::RNMos => {
                         let control = bb_builder.binary_not(mctx.gl(), control);
-                        bb_builder.select(mctx.gl(), control, z, data)
+                        bb_builder.select_merge(mctx.gl(), control, z, data)
                     }
                     MosSwitchType::PMos | MosSwitchType::RPMos => {
-                        bb_builder.select(mctx.gl(), control, z, data)
+                        bb_builder.select_merge(mctx.gl(), control, z, data)
                     }
                 };
 
@@ -234,7 +234,7 @@ pub fn lower<'a>(
 
                         // out = z    (if both OFF)
                         // out = data (otherwise)
-                        bb_builder.select(mctx.gl(), nor_control, z, data)
+                        bb_builder.select_merge(mctx.gl(), nor_control, z, data)
                     }
                 };
 

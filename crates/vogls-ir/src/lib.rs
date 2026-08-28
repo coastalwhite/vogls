@@ -702,14 +702,16 @@ pub enum Instruction {
 
     /// Select between a truthy and falsy value depending on a condition.
     ///
-    /// The result is calculated as follows:
-    /// - `condition == 0` then `dst = falsy`
-    /// - `condition == 1` then `dst = truthy`
-    /// - `condition in {x, z}`, `truthy == falsy` and `truthy in {0, 1}` then `dst = truthy`
-    /// - otherwise `dst = x`.
+    /// The `kind` describes the behavior when the `condition` contains a `x` or `z`.
     ///
-    /// (dst, condition, truthy, falsy)
-    Select(VariableKey, VariableKey, VariableKey, VariableKey),
+    /// (dst, condition, truthy, falsy, kind)
+    Select(
+        VariableKey,
+        VariableKey,
+        VariableKey,
+        VariableKey,
+        SelectMerge,
+    ),
 
     Intrinsic(VariableKey, Box<IntrinsicOp>, Box<[VariableKey]>),
     /// Store the 64-bit simulation time when a signal was last updated.
@@ -726,6 +728,21 @@ pub enum Instruction {
     DriveSlice(VariableKey, SignalKey, VariableKey, VariableKey),
 
     Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SelectMerge {
+    /// The result is calculated as follows:
+    /// - `condition == 0` then `dst = falsy`
+    /// - `condition == 1` then `dst = truthy`
+    /// - `condition in {x, z}`, `truthy == falsy` and `truthy in {0, 1}` then `dst = truthy`
+    /// - otherwise `dst = x`.
+    Merge,
+
+    /// The result is calculated as follows:
+    /// - `condition in {0, x, z}` then `dst = falsy`
+    /// - `condition == 1` then `dst = truthy`
+    FalseOnSpecial,
 }
 
 impl Instruction {
@@ -751,7 +768,7 @@ impl Instruction {
             | Self::Slice(dst, _, _)
             | Self::SliceImm(dst, _, _)
             | Self::ShiftImm(dst, _, _, _)
-            | Self::Select(dst, _, _, _)
+            | Self::Select(dst, _, _, _, _)
             | Self::Phi(dst, _)
             | Self::LastUpdateTime(dst, _)
             | Self::Probe(dst, _, _)
@@ -772,7 +789,7 @@ impl Instruction {
             | Self::Slice(dst, _, _)
             | Self::SliceImm(dst, _, _)
             | Self::ShiftImm(dst, _, _, _)
-            | Self::Select(dst, _, _, _)
+            | Self::Select(dst, _, _, _, _)
             | Self::Phi(dst, _)
             | Self::LastUpdateTime(dst, _)
             | Self::Probe(dst, _, _)
@@ -839,7 +856,7 @@ impl Instruction {
                 *dst = f(*dst);
                 *src = f(*src);
             }
-            Self::Select(dst, cond, truthy, falsy) => {
+            Self::Select(dst, cond, truthy, falsy, _) => {
                 *dst = f(*dst);
                 *cond = f(*cond);
                 *truthy = f(*truthy);
@@ -887,7 +904,7 @@ impl Instruction {
                 f(*src);
                 f(*partial);
             }
-            Self::Select(dst, cond, truthy, falsy) => {
+            Self::Select(dst, cond, truthy, falsy, _) => {
                 f(*dst);
                 f(*cond);
                 f(*truthy);
@@ -926,7 +943,7 @@ impl Instruction {
                 f(*src);
                 f(*partial);
             }
-            Self::Select(_, cond, truthy, falsy) => {
+            Self::Select(_, cond, truthy, falsy, _) => {
                 f(*cond);
                 f(*truthy);
                 f(*falsy);

@@ -5,8 +5,8 @@ use vogls_utils::{Table, VgHashMap, VgHashSet};
 use crate::optimize::{CSExpr, ExprKey, remap_vars};
 use crate::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, GlobalContext,
-    Instruction, LogicMode, ProcessKey, ResizeOp, ResizeOpSimplification, Signal, SignalKey,
-    TvPushdownVariant, UnaryOp, UnaryOpSimplification, VariableKey, VariableMap,
+    Instruction, LogicMode, ProcessKey, ResizeOp, ResizeOpSimplification, SelectMerge, Signal,
+    SignalKey, TvPushdownVariant, UnaryOp, UnaryOpSimplification, VariableKey, VariableMap,
 };
 
 pub fn peephole(
@@ -101,9 +101,14 @@ pub fn peephole(
                     I::ShiftImm(dst, op, src, amount) => {
                         (*dst, CSExpr::ShiftImm(*op, try_lookup!(src), *amount))
                     }
-                    I::Select(dst, cond, truthy, falsy) => (
+                    I::Select(dst, cond, truthy, falsy, kind) => (
                         *dst,
-                        CSExpr::Select(try_lookup!(cond), try_lookup!(truthy), try_lookup!(falsy)),
+                        CSExpr::Select(
+                            try_lookup!(cond),
+                            try_lookup!(truthy),
+                            try_lookup!(falsy),
+                            *kind,
+                        ),
                     ),
                     I::Intrinsic(..) => continue,
                     I::LastUpdateTime(dst, signal) => (*dst, CSExpr::LastUpdateTime(*signal)),
@@ -469,49 +474,70 @@ fn peephole_instruction(
             }
         }
         I::ShiftImm(..) => {}
-        I::Select(dst, cond, truthy, falsy) => {
-            if let (Some(truthy_ek), Some(falsy_ek)) =
-                (var_lookup.get(truthy), var_lookup.get(falsy))
-            {
-                if *truthy_ek == *falsy_ek {
-                    return PeepholeResult::RemapVar {
-                        dst: *dst,
-                        src: *truthy,
-                    };
+        I::Select(dst, cond, truthy, falsy, kind) => match kind {
+            SelectMerge::Merge => {
+                if cond.mode().is_two_value() {
+                    let (dst, cond, truthy, falsy) = (*dst, *cond, *truthy, *falsy);
+                    *instr = I::Select(dst, cond, truthy, falsy, SelectMerge::FalseOnSpecial);
+                    return PeepholeResult::Changed;
+                }
+            }
+            SelectMerge::FalseOnSpecial => {
+                if let (Some(truthy_ek), Some(falsy_ek)) =
+                    (var_lookup.get(truthy), var_lookup.get(falsy))
+                {
+                    if *truthy_ek == *falsy_ek {
+                        return PeepholeResult::RemapVar {
+                            dst: *dst,
+                            src: *truthy,
+                        };
+                    }
+
+                    if dst.mode().is_four_value() {
+                        let (dst, cond) = (*dst, *cond);
+                        let truthy_tv = try_get_two_value(&exprs[*truthy_ek].1, exprs);
+                        let falsy_tv = try_get_two_value(&exprs[*falsy_ek].1, exprs);
+
+                        if let (Some(truthy_tv), Some(falsy_tv)) = (truthy_tv, falsy_tv) {
+                            let dst_size = vars.size(dst);
+                            let dst_tv = vars.insert(LogicMode::TwoValue, dst_size);
+                            let mut i = i;
+                            let truthy_tv = truthy_tv.to_var(vars, instrs, &mut i);
+                            let falsy_tv = falsy_tv.to_var(vars, instrs, &mut i);
+                            instrs[i] = I::Select(
+                                dst_tv,
+                                cond,
+                                truthy_tv,
+                                falsy_tv,
+                                SelectMerge::FalseOnSpecial,
+                            );
+                            instrs.insert(i + 1, I::Unary(dst, UnaryOp::TvToFv, dst_tv));
+                            return PeepholeResult::Changed;
+                        }
+                    }
                 }
 
-                if dst.mode().is_four_value() {
-                    let (dst, cond) = (*dst, *cond);
-                    let truthy_tv = try_get_two_value(&exprs[*truthy_ek].1, exprs);
-                    let falsy_tv = try_get_two_value(&exprs[*falsy_ek].1, exprs);
+                if let Some(cond_ek) = var_lookup.get(cond) {
+                    if let CSExpr::Unary(UnaryOp::Not, src_ek) = &exprs[*cond_ek].1 {
+                        *instr = I::Select(
+                            *dst,
+                            exprs[*src_ek].0,
+                            *falsy,
+                            *truthy,
+                            SelectMerge::FalseOnSpecial,
+                        );
+                        return PeepholeResult::Changed;
+                    }
 
-                    if let (Some(truthy_tv), Some(falsy_tv)) = (truthy_tv, falsy_tv) {
-                        let dst_size = vars.size(dst);
-                        let dst_tv = vars.insert(LogicMode::TwoValue, dst_size);
-                        let mut i = i;
-                        let truthy_tv = truthy_tv.to_var(vars, instrs, &mut i);
-                        let falsy_tv = falsy_tv.to_var(vars, instrs, &mut i);
-                        instrs[i] = I::Select(dst_tv, cond, truthy_tv, falsy_tv);
-                        instrs.insert(i + 1, I::Unary(dst, UnaryOp::TvToFv, dst_tv));
+                    if let Some(TwoValueOp::Source(cond_tv)) =
+                        try_get_two_value(&exprs[*cond_ek].1, exprs)
+                    {
+                        *instr = I::Select(*dst, cond_tv, *truthy, *falsy, *kind);
                         return PeepholeResult::Changed;
                     }
                 }
             }
-
-            if let Some(cond_ek) = var_lookup.get(cond) {
-                if let CSExpr::Unary(UnaryOp::Not, src_ek) = &exprs[*cond_ek].1 {
-                    *instr = I::Select(*dst, exprs[*src_ek].0, *falsy, *truthy);
-                    return PeepholeResult::Changed;
-                }
-
-                if let Some(TwoValueOp::Source(cond_tv)) =
-                    try_get_two_value(&exprs[*cond_ek].1, exprs)
-                {
-                    *instr = I::Select(*dst, cond_tv, *truthy, *falsy);
-                    return PeepholeResult::Changed;
-                }
-            }
-        }
+        },
         I::Intrinsic(..) => {}
         I::LastUpdateTime(..) => {}
         I::Probe(..) => {}

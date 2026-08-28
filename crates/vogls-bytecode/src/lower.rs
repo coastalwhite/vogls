@@ -5,7 +5,7 @@ use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
     GlobalContext, Instruction, IntrinsicOp, LabelDisplay, LogicMode, ProcessKey, ResizeOp,
-    ShiftImmOp, SignalKey, UnaryOp, VSIZE_64, VariableKey, VariableMap,
+    SelectMerge, ShiftImmOp, SignalKey, UnaryOp, VSIZE_64, VariableKey, VariableMap,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
@@ -591,12 +591,7 @@ fn lower_instruction(
                 (O::LeadingZeros, M::FourValue, _, None) => {
                     bce.heap_fv_leading_zeros(rd, rs, src_size)
                 }
-                (O::TvToFv, _, _, Some(src_size)) => {
-                    // @Performance: better lowering.
-                    let (spc, val) = rd.to_spc_and_val();
-                    bce.copy(val, rs);
-                    bce.load_u64(spc, src_size.mask(u64::MAX));
-                }
+                (O::TvToFv, _, _, Some(src_size)) => bce.tv_to_fv(rd, rs, src_size),
                 (O::TvToFv, _, _, None) => {
                     // @Performance: better lowering.
                     let offset = HeapAlignment::spc_offset_to_val_offset(src_size, 0);
@@ -1921,7 +1916,7 @@ fn lower_instruction(
             }
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T2);
         }
-        I::Select(dst, cond, truthy, falsy) => {
+        I::Select(dst, cond, truthy, falsy, kind) => {
             // Temporary Register Allocation:
             // T0:    RD  (ADDR / VAL / SPC)
             // T1:    RD  (VAL)
@@ -1944,9 +1939,16 @@ fn lower_instruction(
             );
 
             let mut jump_offset = None;
-            match cond.mode() {
-                LogicMode::TwoValue => {}
-                LogicMode::FourValue => {
+            match (cond.mode(), kind) {
+                (LogicMode::TwoValue, _) => {
+                    // rd and rcond might alias eachother. If they do, we need to copy over the rcond.
+                    if rcond == rd || (dst.mode().is_four_value() && rcond == rd.to_spc_and_val().1)
+                    {
+                        bce.copy(T2, rcond);
+                        rcond = T2;
+                    }
+                }
+                (LogicMode::FourValue, SelectMerge::Merge) => {
                     bce.contains_special(T2, rcond, SixBitSize::N1);
 
                     let branch_offset = bce.data.len();
@@ -1981,13 +1983,21 @@ fn lower_instruction(
 
                     let offset = bce.data.len() - branch_offset - 1;
                     let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
-                    bce.data[branch_offset] = BranchTrue { rcond, imm: offset }.encode();
+                    bce.data[branch_offset] = BranchFalse {
+                        rcond: T2,
+                        imm: offset,
+                    }
+                    .encode();
 
                     bce.fv_ceqi(T2, rcond, SignedImmediate::MINUS_ONE, SixBitSize::N1);
                     rcond = T2;
                 }
+                (LogicMode::FourValue, SelectMerge::FalseOnSpecial) => {
+                    let (rcondspc, rcondval) = rcond.to_spc_and_val();
+                    bce.and(T2, rcondspc, rcondval);
+                    rcond = T2;
+                }
             }
-            let src_reg = T4;
 
             let rfalsy = to_reg(
                 bce,
@@ -1995,7 +2005,7 @@ fn lower_instruction(
                 &gl.vars,
                 assignment[falsy],
                 stack_offsets,
-                src_reg,
+                T4,
                 false,
             );
             match (dst.mode(), SixBitSize::from_vector_size(size)) {
@@ -2013,13 +2023,13 @@ fn lower_instruction(
                 &gl.vars,
                 assignment[truthy],
                 stack_offsets,
-                src_reg,
+                T4,
                 false,
             );
             match (dst.mode(), SixBitSize::from_vector_size(size)) {
                 (LogicMode::TwoValue, Some(_)) => bce.cmov(rd, rcond, rtruthy),
                 (LogicMode::FourValue, Some(_)) => {
-                    bce.fv_cmov(rd, rcond, rfalsy);
+                    bce.fv_cmov(rd, rcond, rtruthy);
                 }
                 (LogicMode::TwoValue, None) => bce.heap_tv_cmov(rd, rcond, rtruthy, size),
                 (LogicMode::FourValue, None) => bce.heap_fv_cmov(rd, rcond, rtruthy, size),

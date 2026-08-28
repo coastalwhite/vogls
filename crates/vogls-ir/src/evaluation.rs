@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use vogls_bits::Bits;
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, SignalKey,
-    VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, SelectMerge,
+    SignalKey, VariableKey,
 };
 
 pub fn evaluate(
@@ -72,19 +72,16 @@ fn evaluate_impl(
                 let bits = op.evaluate(src, *amount);
                 _ = variables.insert(*dst, bits);
             }
-            I::Select(dst, cond, truthy, falsy) => {
+            I::Select(dst, cond, truthy, falsy, kind) => {
                 let cond = &variables[cond];
                 let truthy = &variables[truthy];
                 let falsy = &variables[falsy];
                 let bits = if cond.is_one() {
                     truthy.clone()
-                } else if cond.is_equal_to_zero() {
+                } else if cond.is_equal_to_zero() || matches!(kind, SelectMerge::FalseOnSpecial) {
                     falsy.clone()
                 } else {
-                    let xor = Bits::bitwise_xor(truthy, falsy);
-                    let poison = Bits::bitwise_and(&Bits::new_unknown(truthy.size()), &xor);
-                    let and = Bits::bitwise_and(truthy, falsy);
-                    Bits::bitwise_or(&and, &poison)
+                    Bits::merge(truthy, falsy)
                 };
                 _ = variables.insert(*dst, bits);
             }

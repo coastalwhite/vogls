@@ -14,8 +14,7 @@ use cranelift_module::{FuncId, Module};
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_codegen::{HeapAlignment, SixBitSize};
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Instruction, IntrinsicOp,
-    LogicMode, ResizeOp, ShiftImmOp, UnaryOp, VSIZE_32, VariableKey, VectorSize,
+    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Instruction, IntrinsicOp, LogicMode, ResizeOp, SelectMerge, ShiftImmOp, UnaryOp, VSIZE_32, VariableKey, VectorSize,
 };
 use vogls_utils::VgHashMap;
 
@@ -1853,39 +1852,99 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                         }
                     }
-                    Instruction::Select(dst, cond, truthy, falsy) => {
-                        // Condition is truthy i.f.f. it is `1`.
-                        let cond = match cond.mode() {
-                            LogicMode::TwoValue => get(b, *cond),
-                            LogicMode::FourValue => {
-                                let cv = get(b, *cond);
-                                let cs = spc_get(b, *cond);
-                                b.ins().band(cs, cv)
-                            }
-                        };
-
+                    Instruction::Select(dst, cond, truthy, falsy, kind) => {
                         let size = gl.vars.size(*dst);
+
+                        // Condition is truthy i.f.f. it is `1`.
+                        let mut jump_target = None;
+
+                        let mut cond_val = get(b, *cond);
+                        if cond.mode().is_four_value() {
+                            let cond_spc = spc_get(b, *cond);
+
+                            match kind {
+                                SelectMerge::Merge => {
+                                    let merge_bb = b.create_block();
+                                    let no_merge_bb = b.create_block();
+                                    let after_bb = b.create_block();
+
+                                    b.ins().brif(cond_spc, no_merge_bb, &[], merge_bb, &[]);
+                                    b.switch_to_block(merge_bb);
+                                    b.set_cold_block(merge_bb);
+
+                                    match SixBitSize::from_vector_size(size) {
+                                        None => {
+                                            let truthy_ptr =
+                                                wide_map[truthy].addr(b, ptr, params.cldctx, 0);
+                                            let falsy_ptr =
+                                                wide_map[falsy].addr(b, ptr, params.cldctx, 0);
+                                            let dst_ptr =
+                                                wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                            clif_binary_bitwise(
+                                                b,
+                                                size,
+                                                dst_ptr,
+                                                truthy_ptr,
+                                                falsy_ptr,
+                                                FvFvFn {
+                                                    iter: clif_select_merge,
+                                                    spc_mask: false,
+                                                    val_mask: false,
+                                                },
+                                            );
+                                        }
+                                        Some(_) => {
+                                            let truthy_val = get(b, *truthy);
+                                            let truthy_spc = spc_get(b, *truthy);
+                                            let falsy_val = get(b, *falsy);
+                                            let falsy_spc = spc_get(b, *falsy);
+
+                                            let (merge_val, merge_spc) = clif_select_merge(
+                                                b, truthy_val, truthy_spc, falsy_val, falsy_spc,
+                                            );
+
+                                            b.def_var(vmap[dst], merge_val);
+                                            b.def_var(spc_map[dst], merge_spc);
+                                        }
+                                    }
+
+                                    b.ins().jump(after_bb, &[]);
+                                    jump_target = Some(after_bb);
+
+                                    b.switch_to_block(no_merge_bb);
+                                }
+                                SelectMerge::FalseOnSpecial => {
+                                    cond_val = b.ins().band(cond_val, cond_spc)
+                                }
+                            }
+                        }
+
                         match SixBitSize::from_vector_size(size) {
                             Some(_) => {
                                 let truthy_val = get(b, *truthy);
                                 let falsy_val = get(b, *falsy);
-                                let val = b.ins().select(cond, truthy_val, falsy_val);
+                                let val = b.ins().select(cond_val, truthy_val, falsy_val);
                                 b.def_var(vmap[dst], val);
                                 if dst.mode().is_four_value() {
                                     let truthy_spc = spc_get(b, *truthy);
                                     let falsy_spc = spc_get(b, *falsy);
-                                    let spc = b.ins().select(cond, truthy_spc, falsy_spc);
+                                    let spc = b.ins().select(cond_val, truthy_spc, falsy_spc);
                                     b.def_var(spc_map[dst], spc);
                                 }
                             }
                             None => {
                                 let truthy_ptr = wide_map[truthy].addr(b, ptr, params.cldctx, 0);
                                 let falsy_ptr = wide_map[falsy].addr(b, ptr, params.cldctx, 0);
-                                let src_ptr = b.ins().select(cond, truthy_ptr, falsy_ptr);
+                                let src_ptr = b.ins().select(cond_val, truthy_ptr, falsy_ptr);
                                 let dst_ptr = wide_map[dst].addr(b, ptr, params.cldctx, 0);
                                 let words = var_words(size, dst.mode()) as u32;
                                 wide_copy(b, dst_ptr, src_ptr, words);
                             }
+                        }
+
+                        if let Some(jump_target) = jump_target {
+                            b.ins().jump(jump_target, &[]);
+                            b.switch_to_block(jump_target);
                         }
                     }
                     // Constant-offset slice: extract dst-width bits of src at `offset`.
@@ -2939,6 +2998,29 @@ fn sign_shift_right(b: &mut FunctionBuilder, s: Value, amount: u32, size: u32) -
     let se = b.ins().sshr_imm_u(up, shb);
     let amt = amount.min(63) as i64;
     b.ins().sshr_imm_u(se, amt)
+}
+
+/// Bitwise four-value merge of two same-width values, one 64-bit word at a time:
+/// a result bit is known only where both inputs are known and agree, and is `x`
+/// (`spc` clear, `val` clear) everywhere else. The Cranelift mirror of
+/// [`vogls_bits::select_merge::select_merge`], used for a `Select` whose
+/// condition is `x`/`z` and so picks neither arm.
+///
+/// Returns `(val, spc)`. Bits above the value's width stay zero in both planes
+/// as long as they are zero in the inputs.
+fn clif_select_merge(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    let both_known = b.ins().band(lspc, rspc);
+    let differ = b.ins().bxor(lval, rval);
+    let agree = b.ins().bnot(differ);
+    let spc = b.ins().band(both_known, agree);
+    let val = b.ins().band(lval, spc);
+    (val, spc)
 }
 
 /// Copy `words` 64-bit words from `src_ptr` to `dst_ptr`. Used to move a wide

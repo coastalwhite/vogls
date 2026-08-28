@@ -12,9 +12,7 @@ pub mod deadcode_elimination;
 pub mod peephole;
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, LogicMode, ProcessKey, ResizeOp, ShiftImmOp, SignalKey, TemporalRegionKey,
-    UnaryOp, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SelectMerge, ShiftImmOp, SignalKey, TemporalRegionKey, UnaryOp, VariableKey,
 };
 
 #[derive(Default, Clone, Copy)]
@@ -101,7 +99,7 @@ enum CSExpr {
     Slice(VectorSize, ExprKey, ExprKey),
     BinaryImm(BinaryImmOp, ExprKey, Bits),
     ShiftImm(ShiftImmOp, ExprKey, u32),
-    Select(ExprKey, ExprKey, ExprKey),
+    Select(ExprKey, ExprKey, ExprKey, SelectMerge),
     SliceImm(VectorSize, ExprKey, u32),
     Probe(SignalKey, VectorSize, u32),
     ProbeSlice(SignalKey, VectorSize, ExprKey),

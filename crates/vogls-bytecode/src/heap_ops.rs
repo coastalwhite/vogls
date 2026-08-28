@@ -329,7 +329,7 @@ impl BytecodeInstruction for HeapCmov {
     }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
-        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryBitwise as u8);
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapCmov as u8);
         let v = c.0;
         Self {
             rd: Reg::new_masked(v >> 8),
@@ -343,7 +343,7 @@ impl BytecodeInstruction for HeapCmov {
     #[inline(always)]
     fn encode(&self) -> Bytecode {
         Bytecode(
-            BytecodeOpcode::HeapBinaryBitwise as u32
+            BytecodeOpcode::HeapCmov as u32
                 | ((self.rd as u32) << 8)
                 | ((self.rcond as u32) << 12)
                 | ((self.rs as u32) << 16)

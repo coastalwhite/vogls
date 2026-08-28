@@ -71,9 +71,9 @@ pub fn common_subexpr_elim(
                     I::ShiftImm(dst, op, src, amount) => {
                         (*dst, CSExpr::ShiftImm(*op, try_lookup!(src), *amount))
                     }
-                    I::Select(dst, cond, truthy, falsy) => (
+                    I::Select(dst, cond, truthy, falsy, kind) => (
                         *dst,
-                        CSExpr::Select(try_lookup!(cond), try_lookup!(truthy), try_lookup!(falsy)),
+                        CSExpr::Select(try_lookup!(cond), try_lookup!(truthy), try_lookup!(falsy), *kind),
                     ),
                     I::Intrinsic(..) => continue,
                     I::LastUpdateTime(dst, signal) => {
