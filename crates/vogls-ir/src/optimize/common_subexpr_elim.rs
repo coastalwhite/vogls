@@ -73,7 +73,12 @@ pub fn common_subexpr_elim(
                     }
                     I::Select(dst, cond, truthy, falsy, kind) => (
                         *dst,
-                        CSExpr::Select(try_lookup!(cond), try_lookup!(truthy), try_lookup!(falsy), *kind),
+                        CSExpr::Select(
+                            try_lookup!(cond),
+                            try_lookup!(truthy),
+                            try_lookup!(falsy),
+                            *kind,
+                        ),
                     ),
                     I::Intrinsic(..) => continue,
                     I::LastUpdateTime(dst, signal) => {

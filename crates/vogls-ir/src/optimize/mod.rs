@@ -12,7 +12,9 @@ pub mod deadcode_elimination;
 pub mod peephole;
 
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SelectMerge, ShiftImmOp, SignalKey, TemporalRegionKey, UnaryOp, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
+    Instruction, LogicMode, ProcessKey, ResizeOp, SelectMerge, ShiftImmOp, SignalKey,
+    TemporalRegionKey, UnaryOp, VariableKey,
 };
 
 #[derive(Default, Clone, Copy)]
