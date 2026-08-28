@@ -5,8 +5,8 @@ use std::fmt::{Display, Write};
 use crate::time::TimeFormat;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, IntrinsicOp, LogicMode, Process, RandomKind, ResizeOp, ShiftImmOp, Signal, Time,
-    UnaryOp, VariableKey,
+    Instruction, IntrinsicOp, LogicMode, Process, RandomKind, ResizeOp, SelectMerge, ShiftImmOp,
+    Signal, Time, UnaryOp, VariableKey,
 };
 
 const INDENT: &str = "  ";
@@ -496,10 +496,20 @@ impl ContextFormat for Instruction {
                     src.display(ctx)
                 )?;
             }
-            Self::Select(dst, cond, truthy, falsy) => {
+            Self::Select(dst, cond, truthy, falsy, SelectMerge::FalseOnSpecial) => {
                 write!(
                     f,
                     "{} = select {}, {}, {}",
+                    dst.display(ctx),
+                    cond.display(ctx),
+                    truthy.display(ctx),
+                    falsy.display(ctx),
+                )?;
+            }
+            Self::Select(dst, cond, truthy, falsy, SelectMerge::Merge) => {
+                write!(
+                    f,
+                    "{} = select.merge {}, {}, {}",
                     dst.display(ctx),
                     cond.display(ctx),
                     truthy.display(ctx),

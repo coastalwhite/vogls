@@ -3,11 +3,7 @@ use vogls_utils::VgHashSet;
 use crate::form::check_ir_form;
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
-    BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, LogicMode, Process,
-    ProcessKey, ProcessKind, RandomKind, ResizeOp, ResizeOpSimplification, SCALAR_VSIZE,
-    ShiftImmOp, SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp, UnaryOpSimplification,
-    VSIZE_32, VSIZE_64, VariableKey, VectorSize,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, LogicMode, Process, ProcessKey, ProcessKind, RandomKind, ResizeOp, ResizeOpSimplification, SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp, UnaryOpSimplification, VSIZE_32, VSIZE_64, VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -1130,7 +1126,7 @@ impl BasicBlockBuilder {
         dst
     }
 
-    pub fn select(
+    pub fn select_merge(
         &mut self,
         gl: &mut GlobalContext,
         select: VariableKey,
@@ -1145,7 +1141,26 @@ impl BasicBlockBuilder {
         let falsy = self.convert_mode(gl, falsy, mode);
         let dst = gl.vars.insert(mode, size);
         self.instrs
-            .push(Instruction::Select(dst, select, truthy, falsy));
+            .push(Instruction::Select(dst, select, truthy, falsy, SelectMerge::Merge));
+        dst
+    }
+
+    pub fn select(
+        &mut self,
+        gl: &mut GlobalContext,
+        select: VariableKey,
+        truthy: VariableKey,
+        falsy: VariableKey,
+    ) -> VariableKey {
+        let size = gl.vars.size(truthy);
+        assert_eq!(size, gl.vars.size(falsy));
+        assert_eq!(SCALAR_VSIZE, gl.vars.size(select));
+        let mode = truthy.mode().max(falsy.mode());
+        let truthy = self.convert_mode(gl, truthy, mode);
+        let falsy = self.convert_mode(gl, falsy, mode);
+        let dst = gl.vars.insert(mode, size);
+        self.instrs
+            .push(Instruction::Select(dst, select, truthy, falsy, SelectMerge::FalseOnSpecial));
         dst
     }
 

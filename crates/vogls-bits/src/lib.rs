@@ -24,7 +24,6 @@ pub mod format;
 pub mod iter;
 pub mod leading_trailing;
 pub mod load;
-pub mod select_merge;
 pub mod parse;
 #[cfg(test)]
 pub mod proptest;
@@ -32,6 +31,7 @@ pub mod proptest;
 pub mod random;
 pub mod reduce;
 pub mod select;
+pub mod select_merge;
 pub mod set_subslice;
 pub mod shift;
 pub mod slice;
@@ -1609,6 +1609,14 @@ impl Bits {
             FvLogicValue::L0 => lhs.clone(),
             FvLogicValue::L1 => rhs.clone(),
         }
+    }
+
+    pub fn merge(lhs: &Self, rhs: &Self) -> Self {
+        // @TODO: Better implementation
+        let xor = Bits::bitwise_xor(lhs, rhs);
+        let poison = Bits::bitwise_and(&Bits::new_unknown(lhs.size()), &xor);
+        let and = Bits::bitwise_and(lhs, rhs);
+        Bits::bitwise_or(&and, &poison)
     }
 
     pub fn is_equal_to_zero(&self) -> bool {

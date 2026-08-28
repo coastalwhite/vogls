@@ -6,7 +6,7 @@ use vogls_utils::{VgHashMap, VgHashSet};
 use crate::token_range::TokenRange;
 use crate::{
     BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, LogicMode, Process,
-    ProcessKind, ResizeOp, TIME_VSIZE, TemporalRegionKey, VSIZE_32, VariableKey,
+    ProcessKind, ResizeOp, SelectMerge, TIME_VSIZE, TemporalRegionKey, VSIZE_32, VariableKey,
 };
 
 struct Fail {
@@ -211,9 +211,20 @@ fn check_instruction(
         I::ShiftImm(dst, _, src, _) => {
             assert_eq!(dst.mode(), src.mode());
         }
-        I::Select(dst, _, truthy, falsy) => {
-            assert_eq!(dst.mode(), truthy.mode());
-            assert_eq!(dst.mode(), falsy.mode());
+        I::Select(dst, cond, truthy, falsy, kind) => {
+            assert_eq!(truthy.mode(), falsy.mode());
+            match kind {
+                SelectMerge::FalseOnSpecial => {
+                    assert_eq!(dst.mode(), truthy.mode());
+                }
+                SelectMerge::Merge => {
+                    // @TODO: Remove the limitation of
+                    assert_eq!(dst.mode(), truthy.mode().max(cond.mode()));
+                    if cond.mode().is_four_value() {
+                        assert_eq!(truthy.mode(), LogicMode::FourValue);
+                    }
+                }
+            }
         }
         I::Intrinsic(..) => {}
         I::LastUpdateTime(dst, _) => {

@@ -481,6 +481,7 @@ opcodes![
     HeapBinaryMinMax,
     HeapBinaryShift,
     HeapCaseEq,
+    HeapCmov,
     HeapUnary,
     HeapFill,
     HeapConcat,
@@ -943,6 +944,13 @@ impl BytecodeEncoder {
     }
     pub fn mask(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
         self.andi(rd, rs, SignedImmediate::MINUS_ONE, size)
+    }
+
+    pub fn tv_to_fv(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
+        // @Performance: better lowering.
+        let (spc, val) = rd.to_spc_and_val();
+        self.copy(val, rs);
+        self.load_u64(spc, size.mask(u64::MAX));
     }
 
     fn add_immediate(&mut self, rd: Reg, rs: Reg, offset: i64, scratch: Reg) {

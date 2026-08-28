@@ -1135,6 +1135,8 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemContent<'a> {
             | T::KeywordXnor
             | T::KeywordBuf
             | T::KeywordNot
+            | T::KeywordPullup
+            | T::KeywordPulldown
             | T::KeywordBufif0
             | T::KeywordBufif1
             | T::KeywordNotif0

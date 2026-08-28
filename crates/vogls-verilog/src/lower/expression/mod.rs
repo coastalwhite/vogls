@@ -645,7 +645,7 @@ pub fn lower_expr<'a>(
                 }
 
                 let c = to_logical(mctx.gl(), builder, c, c_ty);
-                let result = builder.select(mctx.gl(), c, t, f);
+                let result = builder.select_merge(mctx.gl(), c, t, f);
                 result_stack.push(Some((result, t_ty)));
             }
             Expr::Ident(ast_ident, exprs, range_expression) => {
