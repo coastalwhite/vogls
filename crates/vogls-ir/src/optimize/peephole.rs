@@ -482,12 +482,11 @@ fn peephole_instruction(
                     return PeepholeResult::Changed;
                 }
 
-                if let Some(cond_ek) = var_lookup.get(cond) {
-                    if let CSExpr::Unary(UnaryOp::Not, src_ek) = &exprs[*cond_ek].1 {
-                        *instr =
-                            I::Select(*dst, exprs[*src_ek].0, *falsy, *truthy, SelectMerge::Merge);
-                        return PeepholeResult::Changed;
-                    }
+                if let Some(cond_ek) = var_lookup.get(cond)
+                    && let CSExpr::Unary(UnaryOp::Not, src_ek) = &exprs[*cond_ek].1
+                {
+                    *instr = I::Select(*dst, exprs[*src_ek].0, *falsy, *truthy, SelectMerge::Merge);
+                    return PeepholeResult::Changed;
                 }
             }
             SelectMerge::FalseOnSpecial => {

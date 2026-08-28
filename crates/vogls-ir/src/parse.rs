@@ -8,7 +8,10 @@ use vogls_utils::{VgHashMap, VgHashSet};
 use crate::dyn_format_string::{DynFormatArgument, DynFormatString};
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction, IntrinsicOp, LogicMode, ProcessKey, ProcessKind, ResizeOp, SCALAR_VSIZE, SelectMerge, ShiftImmOp, Signal, SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp, VariableKey,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
+    Instruction, IntrinsicOp, LogicMode, ProcessKey, ProcessKind, ResizeOp, SCALAR_VSIZE,
+    SelectMerge, ShiftImmOp, Signal, SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey, Time,
+    UnaryOp, VariableKey,
 };
 
 #[derive(Debug)]

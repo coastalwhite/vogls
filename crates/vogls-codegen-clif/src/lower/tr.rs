@@ -14,7 +14,8 @@ use cranelift_module::{FuncId, Module};
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_codegen::{HeapAlignment, SixBitSize};
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Instruction, IntrinsicOp, LogicMode, ResizeOp, SelectMerge, ShiftImmOp, UnaryOp, VSIZE_32, VariableKey, VectorSize,
+    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Instruction, IntrinsicOp,
+    LogicMode, ResizeOp, SelectMerge, ShiftImmOp, UnaryOp, VSIZE_32, VariableKey, VectorSize,
 };
 use vogls_utils::VgHashMap;
 

@@ -3,7 +3,11 @@ use vogls_utils::VgHashSet;
 use crate::form::check_ir_form;
 use crate::token_range::TokenRange;
 use crate::{
-    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, LogicMode, Process, ProcessKey, ProcessKind, RandomKind, ResizeOp, ResizeOpSimplification, SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp, UnaryOpSimplification, VSIZE_32, VSIZE_64, VariableKey, VectorSize,
+    BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
+    BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, LogicMode, Process,
+    ProcessKey, ProcessKind, RandomKind, ResizeOp, ResizeOpSimplification, SCALAR_VSIZE,
+    SelectMerge, ShiftImmOp, SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp,
+    UnaryOpSimplification, VSIZE_32, VSIZE_64, VariableKey, VectorSize,
 };
 
 #[must_use]
@@ -1140,8 +1144,13 @@ impl BasicBlockBuilder {
         let truthy = self.convert_mode(gl, truthy, mode);
         let falsy = self.convert_mode(gl, falsy, mode);
         let dst = gl.vars.insert(mode, size);
-        self.instrs
-            .push(Instruction::Select(dst, select, truthy, falsy, SelectMerge::Merge));
+        self.instrs.push(Instruction::Select(
+            dst,
+            select,
+            truthy,
+            falsy,
+            SelectMerge::Merge,
+        ));
         dst
     }
 
@@ -1159,8 +1168,13 @@ impl BasicBlockBuilder {
         let truthy = self.convert_mode(gl, truthy, mode);
         let falsy = self.convert_mode(gl, falsy, mode);
         let dst = gl.vars.insert(mode, size);
-        self.instrs
-            .push(Instruction::Select(dst, select, truthy, falsy, SelectMerge::FalseOnSpecial));
+        self.instrs.push(Instruction::Select(
+            dst,
+            select,
+            truthy,
+            falsy,
+            SelectMerge::FalseOnSpecial,
+        ));
         dst
     }
 
@@ -1186,11 +1200,21 @@ impl BasicBlockBuilder {
         }
     }
 
-    pub fn nand(&mut self, gl: &mut GlobalContext, lhs: VariableKey, rhs: VariableKey) -> VariableKey {
+    pub fn nand(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
         let and = self.and(gl, lhs, rhs);
         self.binary_not(gl, and)
     }
-    pub fn nor(&mut self, gl: &mut GlobalContext, lhs: VariableKey, rhs: VariableKey) -> VariableKey {
+    pub fn nor(
+        &mut self,
+        gl: &mut GlobalContext,
+        lhs: VariableKey,
+        rhs: VariableKey,
+    ) -> VariableKey {
         let and = self.or(gl, lhs, rhs);
         self.binary_not(gl, and)
     }
