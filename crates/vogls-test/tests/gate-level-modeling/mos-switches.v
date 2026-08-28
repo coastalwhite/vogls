@@ -1,3 +1,4 @@
+// vogls: mode=four-value-logic
 module tb;
    reg data, ctrl;
 
