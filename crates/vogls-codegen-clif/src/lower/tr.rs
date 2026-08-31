@@ -1568,9 +1568,26 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     (val, spc)
                                 })
                             }
-                            (O::ConcatRight, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            // Wide ConcatRight { src (high), imm (low) }: the
+                            // immediate is reserved in the heap via claim_constant
+                            // and concatenated word-by-word from heap-layout pointers.
+                            (O::ConcatRight, _, _, _, _, _) => {
+                                let (dst_base, src_base, imm_base) = self
+                                    .compiler
+                                    .concat_operand_ptrs(
+                                        b, *dst, *src, imm, vmap, spc_map, wide_map, params,
+                                    );
+                                clif_concat(
+                                    b,
+                                    dst.mode() == M::FourValue,
+                                    dst_base,
+                                    dst_size,
+                                    imm_base,
+                                    imm_size,
+                                    src_base,
+                                    src_size,
+                                );
+                            }
                             // ConcatLeft: { Imm, Operand } — imm high, operand low.
                             (O::ConcatLeft, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv {
@@ -1587,9 +1604,24 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     (val, spc)
                                 })
                             }
-                            (O::ConcatLeft, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            // Wide ConcatLeft { imm (high), src (low) }.
+                            (O::ConcatLeft, _, _, _, _, _) => {
+                                let (dst_base, src_base, imm_base) = self
+                                    .compiler
+                                    .concat_operand_ptrs(
+                                        b, *dst, *src, imm, vmap, spc_map, wide_map, params,
+                                    );
+                                clif_concat(
+                                    b,
+                                    dst.mode() == M::FourValue,
+                                    dst_base,
+                                    dst_size,
+                                    src_base,
+                                    src_size,
+                                    imm_base,
+                                    imm_size,
+                                );
+                            }
 
                             // CaseEquality (===): whole-word compare of both planes; the
                             // result is a fully-known single bit (dst is one bit).
@@ -3497,6 +3529,74 @@ fn clif_unary_bitwise(
     b.switch_to_block(done_bb);
     let last = b.ins().iadd_imm_u(dst_base, ((nwords - 1) * 8) as i64);
     f.finish(b, size, last);
+}
+
+/// Wide concat `{ high, low }` into `dst`, all pointing at heap-layout word
+/// arrays (four-value: `n` special words then `n` value words). `low` occupies
+/// bits `[0, low_size)`, `high` starts at bit `low_size`. Fully unrolled — the
+/// per-word shift depends on `low_size % 64`, so a runtime word loop wouldn't
+/// help. Operand words are read straight from their heap-layout pointers (the
+/// immediate lives in a heap-reserved constant), never materialized as `iconst`s.
+#[expect(clippy::too_many_arguments)]
+fn clif_concat(
+    b: &mut FunctionBuilder,
+    is_fv: bool,
+    dst_base: Value,
+    dst_size: VectorSize,
+    low_base: Value,
+    low_size: VectorSize,
+    high_base: Value,
+    high_size: VectorSize,
+) {
+    let dn = nwords(dst_size.get()) as usize;
+    let low_n = nwords(low_size.get()) as usize;
+    let high_n = nwords(high_size.get()) as usize;
+    let word_shift = (low_size.get() / 64) as usize;
+    let bit_shift = low_size.get() % 64;
+    let dtop = super::top_i64(dst_size.get());
+    let planes = if is_fv { 2 } else { 1 };
+
+    for p in 0..planes {
+        // Plane base word offsets: spc plane first (p == 0), then val plane.
+        let d_off = (p * dn) as i32;
+        let l_off = (p * low_n) as i32;
+        let h_off = (p * high_n) as i32;
+        let zero = b.ins().iconst(I64, 0);
+        let mut acc: Vec<Value> = vec![zero; dn];
+
+        // Low operand at bit 0.
+        for k in 0..low_n {
+            acc[k] = b.ins().load(I64, mem(), low_base, (l_off + k as i32) * 8);
+        }
+        // High operand starting at bit `low_size`.
+        for k in 0..high_n {
+            let hw = b.ins().load(I64, mem(), high_base, (h_off + k as i32) * 8);
+            let lo = k + word_shift;
+            if bit_shift == 0 {
+                if lo < dn {
+                    acc[lo] = b.ins().bor(acc[lo], hw);
+                }
+            } else {
+                let losh = b.ins().ishl_imm_u(hw, bit_shift as i64);
+                if lo < dn {
+                    acc[lo] = b.ins().bor(acc[lo], losh);
+                }
+                let hish = b.ins().ushr_imm_u(hw, (64 - bit_shift) as i64);
+                if lo + 1 < dn {
+                    acc[lo + 1] = b.ins().bor(acc[lo + 1], hish);
+                }
+            }
+        }
+        // Mask the top word to the dst width and store.
+        for i in 0..dn {
+            let v = if i == dn - 1 {
+                b.ins().band_imm_u(acc[i], dtop)
+            } else {
+                acc[i]
+            };
+            b.ins().store(mem(), v, dst_base, (d_off + i as i32) * 8);
+        }
+    }
 }
 
 fn clif_binary_bitwise(

@@ -843,6 +843,32 @@ impl<'a> Compiler<'a> {
         b.ins().stack_addr(self.ptr, slot, 0)
     }
 
+    /// Base pointers (heap-layout words) for a wide concat with a constant
+    /// operand: the dst wide slot, the src operand (spilled to a temp slot if it
+    /// is register-width — concat operand widths differ), and the immediate
+    /// reserved in the runtime heap via `claim_constant` (baked in at init, so it
+    /// is loaded rather than materialized as `iconst`s).
+    #[expect(clippy::too_many_arguments)]
+    fn concat_operand_ptrs(
+        &mut self,
+        b: &mut FunctionBuilder,
+        dst: VariableKey,
+        src: VariableKey,
+        imm: &vogls_bits::Bits,
+        vmap: &VgHashMap<VariableKey, Variable>,
+        spc_map: &VgHashMap<VariableKey, Variable>,
+        wide_map: &WideMap,
+        params: &Params,
+    ) -> (Value, Value, Value) {
+        let dst_base = wide_map[&dst].addr(b, self.ptr, params.cldctx, 0);
+        let src_base = self.value_words_ptr(b, src, vmap, spc_map, wide_map, params.cldctx);
+        let imm_ref = self.heap_builder.claim_constant(dst.mode(), imm.clone());
+        let imm_base = b
+            .ins()
+            .iadd_imm_u(params.heap_ptr, (imm_ref.offset.bit_offset / 8) as i64);
+        (dst_base, src_base, imm_base)
+    }
+
     /// The low value word of a (possibly wide) value — used for shift amounts.
     fn first_val_word(
         &self,
