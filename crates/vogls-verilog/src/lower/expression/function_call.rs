@@ -207,6 +207,17 @@ pub fn lower_task_enable<'a>(
         });
     }
 
+    let fn_tr = mctx.gl.bbs[fn_bb].region;
+    let after_tr = proc_builder.next_temporal_region(mctx.gl());
+
+    builder.temporal_jump_to(mctx.gl(), fn_tr);
+    if let Some(terminate) = bb_map.get(&lowered.terminate) {
+        // Procedure might contain infinite loop.
+        builder.finished_switch_to(mctx.gl(), *terminate);
+        builder.temporal_jump_to(mctx.gl(), after_tr);
+    }
+    builder.finished_switch_to(mctx.gl(), after_tr.entry());
+
     for i in 0..task_symbol.io.len() {
         let (signal, direction, output_ty) = task_symbol.io[i];
         if !matches!(
@@ -220,17 +231,6 @@ pub fn lower_task_enable<'a>(
         let output_var = builder.probe(mctx.gl(), signal);
         assign_task_output(ctx, mctx, scope, &mut builder, output_var, arg, output_ty)?;
     }
-
-    let fn_tr = mctx.gl.bbs[fn_bb].region;
-    let after_tr = proc_builder.next_temporal_region(mctx.gl());
-
-    builder.temporal_jump_to(mctx.gl(), fn_tr);
-    if let Some(terminate) = bb_map.get(&lowered.terminate) {
-        // Procedure might contain infinite loop.
-        builder.finished_switch_to(mctx.gl(), *terminate);
-        builder.temporal_jump_to(mctx.gl(), after_tr);
-    }
-    builder.finished_switch_to(mctx.gl(), after_tr.entry());
 
     Ok(builder)
 }
