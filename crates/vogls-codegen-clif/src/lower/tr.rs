@@ -1572,9 +1572,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             // immediate is reserved in the heap via claim_constant
                             // and concatenated word-by-word from heap-layout pointers.
                             (O::ConcatRight, _, _, _, _, _) => {
-                                let (dst_base, src_base, imm_base) = self
-                                    .compiler
-                                    .concat_operand_ptrs(
+                                let (dst_base, src_base, imm_base) =
+                                    self.compiler.concat_operand_ptrs(
                                         b, *dst, *src, imm, vmap, spc_map, wide_map, params,
                                     );
                                 clif_concat(
@@ -1606,9 +1605,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }
                             // Wide ConcatLeft { imm (high), src (low) }.
                             (O::ConcatLeft, _, _, _, _, _) => {
-                                let (dst_base, src_base, imm_base) = self
-                                    .compiler
-                                    .concat_operand_ptrs(
+                                let (dst_base, src_base, imm_base) =
+                                    self.compiler.concat_operand_ptrs(
                                         b, *dst, *src, imm, vmap, spc_map, wide_map, params,
                                     );
                                 clif_concat(
