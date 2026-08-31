@@ -1,5 +1,6 @@
 `timescale 1ns/1ps
-module panic_task_real_port;
+module tb;
+   real out;
    task take_real;
       input real x;
       begin
@@ -7,13 +8,13 @@ module panic_task_real_port;
    endtask
 
    task give_real;
-      input _dummy;
       output real x;
       begin x = 1337.0; end
    endtask
 
    initial begin
       take_real(1.0);
-      $vogls_assert_eq(give_real(0), 1337.0);
+	  give_real(out);
+      $vogls_assert_eq(out, 1337.0);
    end
 endmodule
