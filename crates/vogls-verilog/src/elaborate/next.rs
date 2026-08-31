@@ -2071,18 +2071,24 @@ fn extend_fn_statement_needs<'a, 'b>(
         for stmt in stmts.iter() {
             match stmt.content {
                 StatementContent::SeqBlock(id) => {
-                    let SeqBlock {
-                        block: _,
-                        statements,
-                    } = &*id;
-                    extend_fn_statement_needs(scope, table, st, *statements);
+                    let SeqBlock { block, statements } = &*id;
+                    let blk_scope = match block {
+                        None => scope,
+                        Some(block) => table
+                            .resolve(scope, block.block_identifier.item.0)
+                            .expect("Should have been expanded"),
+                    };
+                    st.stmt_dispatch_stack.push((blk_scope, *statements));
                 }
                 StatementContent::ParBlock(id) => {
-                    let ParBlock {
-                        block: _,
-                        statements,
-                    } = &*id;
-                    extend_fn_statement_needs(scope, table, st, *statements);
+                    let ParBlock { block, statements } = &*id;
+                    let blk_scope = match block {
+                        None => scope,
+                        Some(block) => table
+                            .resolve(scope, block.block_identifier.item.0)
+                            .expect("Should have been expanded"),
+                    };
+                    st.stmt_dispatch_stack.push((blk_scope, *statements));
                 }
 
                 StatementContent::CaseStatement(id) => {
