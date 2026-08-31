@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::{fmt, io};
 
@@ -17,6 +17,7 @@ use crate::{ParseError, ParsedDesign};
 pub struct DesignBuilder {
     pub(crate) token_buffer: Tokenized,
     pub(crate) macros: Macros,
+    pub(crate) include_dirs: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -72,6 +73,7 @@ impl DesignBuilder {
             name.map(Into::into),
             world,
             &mut self.macros,
+            &self.include_dirs,
         )?;
         Ok(self)
     }
@@ -127,6 +129,11 @@ impl DesignBuilder {
 
     pub fn define_macro(&mut self, name: impl AsRef<str>, value: Macro) -> &mut Self {
         self.macros.define(name.as_ref(), value);
+        self
+    }
+
+    pub fn push_include_dir(&mut self, include_dir: impl Into<PathBuf>) -> &mut Self {
+        self.include_dirs.push(include_dir.into());
         self
     }
 

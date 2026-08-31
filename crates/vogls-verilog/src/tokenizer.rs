@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_utils::{TableMap, VgHashMap, new_table_key};
-use vogls_world::{World, WorldError};
+use vogls_world::{World, WorldError, WorldResult};
 
 use crate::number::{
     Base, skip_binary, skip_decimal, skip_hexadecimal, skip_octal, skip_scientific_exp, skip_sign,
@@ -165,6 +165,7 @@ impl Tokenized {
         path: Option<Arc<Path>>,
         world: &mut dyn World,
         macros: &mut Macros,
+        include_dirs: &[PathBuf],
     ) -> Result<Self, Box<TokenizeError>> {
         let mut ts = Self {
             tokens: Vec::new(),
@@ -174,7 +175,7 @@ impl Tokenized {
             contents: Vec::new(),
             file_line_offsets: Vec::new(),
         };
-        ts.append_tokenize_with_macros(content, path, world, macros)?;
+        ts.append_tokenize_with_macros(content, path, world, macros, include_dirs)?;
         Ok(ts)
     }
 
@@ -184,6 +185,7 @@ impl Tokenized {
         path: Option<Arc<Path>>,
         world: &mut dyn World,
         macros: &mut Macros,
+        include_dirs: &[PathBuf],
     ) -> Result<(), Box<TokenizeError>> {
         let Self {
             tokens,
@@ -935,41 +937,22 @@ impl Tokenized {
                                         None => todo!(),
                                         Some(path) => path.as_ref(),
                                     };
-                                    // @TODO: better error handling
-                                    let path = path
-                                        .parent()
-                                        .ok_or_else(|| {
-                                            std::io::Error::new(
-                                                std::io::ErrorKind::NotFound,
-                                                "parent directory not found".to_string(),
-                                            )
-                                        })
-                                        .map(|p| p.join(s));
-                                    let path = match path {
-                                        Err(err) => {
-                                            return Err(Box::new(TokenizeError {
-                                                line: self.file_line_offsets[file_idx as usize]
-                                                    .len()
-                                                    as u64,
-                                                file: self.paths[file_idx as usize].clone(),
-                                                reason: TokenizeErrorReason::FailedToOpenFile(
-                                                    PathBuf::default(),
-                                                    err.into(),
-                                                ),
-                                            }));
-                                        }
-                                        Ok(path) => path,
-                                    };
-                                    let content: Arc<str> = match world.read_to_string(&path) {
+                                    let content: Arc<str> = match read_to_string_with_include_dirs(
+                                        world,
+                                        &s,
+                                        &path,
+                                        &include_dirs,
+                                    ) {
                                         Ok(content) => content.into(),
                                         Err(err) => {
+                                            let out = path.join(s);
                                             return Err(Box::new(TokenizeError {
                                                 line: self.file_line_offsets[file_idx as usize]
                                                     .len()
                                                     as u64,
                                                 file: self.paths[file_idx as usize].clone(),
                                                 reason: TokenizeErrorReason::FailedToOpenFile(
-                                                    path, err,
+                                                    out, err,
                                                 ),
                                             }));
                                         }
@@ -1286,7 +1269,7 @@ macro_rules! define_tokens {
         #[test]
         fn tokenizer_examples() {
             $(
-            let consumed = Tokenized::tokenize_with_macros($example.into(), None, &mut vogls_world::std::StdWorld::new(), &mut Macros::default()).unwrap();
+            let consumed = Tokenized::tokenize_with_macros($example.into(), None, &mut vogls_world::std::StdWorld::new(), &mut Macros::default(), &[]).unwrap();
             assert_eq!(consumed.tokens.len(), 1);
             assert_eq!(consumed.tokens[0], Token::$ident, "Example \"{}\" of token {} had the invalid kind", $example, stringify!($ident));
             )+
@@ -1491,4 +1474,49 @@ define_tokens! {
     KeywordWor = "wor",
     KeywordXnor = "xnor",
     KeywordXor = "xor",
+}
+
+pub fn read_to_string_with_include_dirs(
+    world: &mut dyn World,
+    file: &str,
+    caller: &Path,
+    include_dirs: &[PathBuf],
+) -> WorldResult<String> {
+    let file = Path::new(file);
+    let caller = caller
+        .parent()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "parent directory not found".to_string(),
+            )
+        })
+        .map(|p| p.join(file))?;
+
+    fn try_next_include_dir(err: &WorldError) -> bool {
+        let WorldError::Io(err) = err else {
+            return false;
+        };
+
+        match err.kind() {
+            std::io::ErrorKind::NotFound => true,
+            _ => false,
+        }
+    }
+
+    match world.read_to_string(&caller.join(file)) {
+        Ok(content) => Ok(content),
+        Err(err) => {
+            if try_next_include_dir(&err) && file.is_relative() {
+                for p in include_dirs {
+                    match world.read_to_string(&p.join(file)) {
+                        Ok(content) => return Ok(content),
+                        Err(_) if !try_next_include_dir(&err) => return Err(err),
+                        Err(_) => {}
+                    }
+                }
+            }
+            Err(err)
+        }
+    }
 }

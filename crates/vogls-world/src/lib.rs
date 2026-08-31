@@ -14,6 +14,18 @@ pub enum WorldError {
     Io(io::Error),
 }
 
+impl WorldError {
+    fn do_try_next_dir(&self) -> bool {
+        let Self::Io(e) = self else {
+            return false;
+        };
+        match e.kind() {
+            ::std::io::ErrorKind::NotFound => true,
+            _ => false,
+        }
+    }
+}
+
 impl From<io::Error> for WorldError {
     fn from(value: io::Error) -> Self {
         Self::Io(value)

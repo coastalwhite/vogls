@@ -180,6 +180,7 @@ struct TestInfo {
     mode: SelectLogicMode,
     backend: SelectBackend,
     opt_flags: OptFlags,
+    include_dirs: Vec<PathBuf>,
 }
 
 fn parse_opts(s: &str) -> Option<OptFlags> {
@@ -195,7 +196,7 @@ fn parse_opts(s: &str) -> Option<OptFlags> {
 }
 
 impl TestInfo {
-    pub fn parse(content: &str) -> Result<Self, String> {
+    pub fn parse(path: &Path, content: &str) -> Result<Self, String> {
         let mut info = TestInfo {
             fail: None,
             expect_panic: false,
@@ -209,6 +210,7 @@ impl TestInfo {
             mode: SelectLogicMode::All,
             backend: SelectBackend::All,
             opt_flags: OptFlags::ALL,
+            include_dirs: Vec::new(),
         };
 
         for line in content.lines() {
@@ -282,6 +284,13 @@ impl TestInfo {
                         return Err(format!("Invalid vogls optimization '{opt}'"));
                     };
                     info.opt_flags |= opt;
+                }
+                _ if line.starts_with("include-dir=") => {
+                    info.include_dirs.push(
+                        path.parent()
+                            .unwrap()
+                            .join(&line["include-dir=".len()..].trim()),
+                    );
                 }
                 _ => return Err(format!("Invalid vogls test command '{line}'")),
             }
@@ -446,7 +455,7 @@ fn main() -> Result<std::process::ExitCode, Box<dyn std::error::Error>> {
         let offset_path = path.as_path();
         let path = tests_dir.join(offset_path);
         let s = std::fs::read_to_string(&path)?;
-        let test_information = TestInfo::parse(&s)?;
+        let test_information = TestInfo::parse(&path, &s)?;
 
         for &opt_rounds in opt_rounds_configurations {
             for &logic_mode in test_information.mode.selection(modes) {
@@ -711,6 +720,9 @@ fn run_test(
                 }
                 LogicMode::FourValue => {}
             }
+            for include_dir in &test_information.include_dirs {
+                builder.push_include_dir(include_dir.clone());
+            }
             builder
                 .define_macro("__VOGLS_VERIFY_IR", Macro::default())
                 .add_source(path)
@@ -834,6 +846,9 @@ fn run_test(
                         builder.define_macro("__VOGLS__TWO_VALUE_LOGIC", Macro::default());
                     }
                     LogicMode::FourValue => {}
+                }
+                for include_dir in &test_information.include_dirs {
+                    builder.push_include_dir(include_dir.clone());
                 }
                 builder.add_source(path).map_err(|_| {
                     FailureInfo::CompileFailure(TestPhase::LEXING, "failed to tokenize".into())

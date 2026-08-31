@@ -19,13 +19,15 @@ impl FileIdFfi for FileId {
 pub struct FileOpenOptions(u64);
 
 impl FileOpenOptions {
-    pub const EMPTY: Self = Self(0b00_0000u64);
-    pub const READ: Self = Self(0b00_0001u64);
-    pub const WRITE: Self = Self(0b00_0010u64);
-    pub const CREATE: Self = Self(0b00_0100u64);
-    pub const CREATE_NEW: Self = Self(0b00_1000u64);
-    pub const APPEND: Self = Self(0b01_0000u64);
-    pub const TRUNCATE: Self = Self(0b10_0000u64);
+    pub const EMPTY: Self = Self(0b000_0000u64);
+     
+    pub const READ: Self = Self(0b000_0001u64);
+    pub const WRITE: Self = Self(0b000_0010u64);
+    pub const CREATE: Self = Self(0b000_0100u64);
+    pub const CREATE_NEW: Self = Self(0b000_1000u64);
+    pub const APPEND: Self = Self(0b001_0000u64);
+    pub const TRUNCATE: Self = Self(0b010_0000u64);
+    pub const INCLUDE_DIRS: Self = Self(0b100_0000u64);
 
     pub const fn new() -> Self {
         Self::EMPTY
@@ -53,6 +55,10 @@ impl FileOpenOptions {
     }
     pub const fn truncate(&mut self, truncate: bool) -> &mut Self {
         self.set(Self::TRUNCATE, truncate);
+        self
+    }
+    pub const fn include_dirs(&mut self, include_dirs: bool) -> &mut Self {
+        self.set(Self::INCLUDE_DIRS, include_dirs);
         self
     }
 
