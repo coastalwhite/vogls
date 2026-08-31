@@ -1,5 +1,7 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalKey};
+use vogls_ir::{
+    ConnectionDirection, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalKey, TIME_VSIZE,
+};
 
 use crate::ast::module::{
     FunctionDeclaration, FunctionRangeOrType, TaskDeclaration, TaskPortItemContent,
@@ -49,16 +51,11 @@ pub fn elaborate_fn<'a>(
                 evaluate_net_msb_lsb(gl, ctx.arenas, *range, parent, &ctx.table, diagnostics)?;
             (transform, VType::SignedNet(size))
         }
-        FunctionRangeOrType::Integer => {
-            (VectorTransform::default(), VType::SignedNet(INTEGER_VSIZE))
+        FunctionRangeOrType::Integer => (VectorTransform::default(), VType::INTEGER),
+        FunctionRangeOrType::Real | FunctionRangeOrType::Realtime => {
+            (VectorTransform::default(), VType::Real)
         }
-        FunctionRangeOrType::Real | FunctionRangeOrType::Realtime | FunctionRangeOrType::Time => {
-            diagnostics.not_yet_implemented(
-                ctx.arenas.get_span(id),
-                "real / time / realtime function output",
-            );
-            return Err(());
-        }
+        FunctionRangeOrType::Time => (VectorTransform::default(), VType::TIME),
     };
 
     let net = super::new_net(
@@ -119,7 +116,8 @@ pub fn elaborate_fn<'a>(
                     (VType::net(width, *signed), transform)
                 }
                 TfType::Integer => (VType::SignedNet(INTEGER_VSIZE), VectorTransform::default()),
-                TfType::Real | TfType::Realtime | TfType::Time => todo!(),
+                TfType::Real | TfType::Realtime => (VType::Real, VectorTransform::default()),
+                TfType::Time => (VType::UnsignedNet(TIME_VSIZE), VectorTransform::default()),
             };
             let ident = ctx.arenas.to_item(ident);
             let origin = ctx.arenas.get_item_span(ident);
