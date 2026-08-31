@@ -1,4 +1,3 @@
-// vogls: panic
 `timescale 1ns/1ps
 module panic_task_real_port;
    task take_real;
@@ -8,12 +7,13 @@ module panic_task_real_port;
    endtask
 
    task give_real;
+      input _dummy;
       output real x;
-      begin x = 1.0; end
+      begin x = 1337.0; end
    endtask
 
    initial begin
-      take_real(1.0);        // vogls never reaches here: it panics at
-      $finish;
+      take_real(1.0);
+      $vogls_assert_eq(give_real(0), 1337.0);
    end
 endmodule
