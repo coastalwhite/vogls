@@ -76,6 +76,9 @@ struct Args {
     #[arg(long)]
     no_peephole_optimization: bool,
 
+    #[arg(short = 'I', long = "include-dir")]
+    include_dirs: Vec<PathBuf>,
+
     #[arg(long)]
     print_vm_map: bool,
 
@@ -116,6 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         no_common_subexpr_elim,
         no_peephole_optimization,
         print_vm_map,
+        include_dirs,
         profile,
         emit_unoptimized_fuse_graph,
         emit_optimized_fuse_graph,
@@ -128,6 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut timers = TimerStack::new(timings);
+    let mut world = StdWorld::new();
 
     let mut lowered = if vir {
         let content = read_to_string(&path[0])?;
@@ -145,9 +150,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for name in &defines {
             builder.define_macro(name, Macro::default());
         }
+        for include_dir in include_dirs {
+            builder.push_include_dir(include_dir);
+        }
         timers.timed("tokenization", |_| {
             for path in &path {
-                builder.add_source(path)?;
+                builder.add_source_in_world(&mut world, path)?;
             }
             Result::<_, DesignBuilderError>::Ok(())
         })?;
@@ -265,7 +273,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     timers.start("simulation");
     design
-        .run(&mut state, &mut StdWorld::new(), time)
+        .run(&mut state, &mut world, time)
         .map_err(|_| "simulation failed")?;
     timers.stop();
 

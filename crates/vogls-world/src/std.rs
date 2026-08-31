@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{self, Cursor, stderr, stdin, stdout};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::file::{FileId, FileIdFfi, FileOpenOptions};
@@ -76,13 +76,19 @@ impl FileTable {
 #[derive(Default)]
 pub struct StdWorld {
     file_table: FileTable,
+    include_dirs: Vec<PathBuf>,
 }
 
 impl StdWorld {
     pub fn new() -> Self {
         Self {
             file_table: FileTable::new(),
+            include_dirs: Vec::new(),
         }
+    }
+
+    pub fn push_include_dir(&mut self, include_dir: impl Into<PathBuf>) {
+        self.include_dirs.push(include_dir.into());
     }
 }
 
@@ -100,7 +106,20 @@ impl World for StdWorld {
     }
 
     fn file_open(&mut self, path: &'_ Path, options: FileOpenOptions) -> WorldResult<FileId> {
-        self.file_table.open(path, options)
+        match self.file_table.open(path, options) {
+            Ok(f) => Ok(f),
+            Err(e) if !e.do_try_next_dir() || path.is_absolute() => return Err(e),
+            Err(e) => {
+                for p in &self.include_dirs {
+                    match self.file_table.open(&p.join(path), options) {
+                        Ok(f) => return Ok(f),
+                        Err(_) if !e.do_try_next_dir() => return Err(e),
+                        _ => {}
+                    }
+                }
+                Err(e)
+            }
+        }
     }
 
     fn file_close(&mut self, handle: FileId) -> WorldResult<()> {
@@ -116,7 +135,22 @@ impl World for StdWorld {
     }
 
     fn read_to_string(&mut self, path: &'_ Path) -> WorldResult<String> {
-        Ok(std::fs::read_to_string(path)?)
+        let result = std::fs::read_to_string(path).map_err(WorldError::from);
+        match result {
+            Ok(f) => Ok(f),
+            Err(e) if !e.do_try_next_dir() || path.is_absolute() => return Err(e),
+            Err(e) => {
+                for p in &self.include_dirs {
+                    let result = std::fs::read_to_string(&p.join(path)).map_err(WorldError::from);
+                    match result {
+                        Ok(f) => return Ok(f),
+                        Err(_) if !e.do_try_next_dir() => return Err(e),
+                        _ => {}
+                    }
+                }
+                Err(e)
+            }
+        }
     }
 }
 
