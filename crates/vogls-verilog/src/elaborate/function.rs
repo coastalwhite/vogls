@@ -205,8 +205,9 @@ pub fn elaborate_task<'a>(
                     };
                     (VType::net(width, signed), transform)
                 }
-                TfType::Integer => (VType::SignedNet(INTEGER_VSIZE), VectorTransform::default()),
-                TfType::Real | TfType::Realtime | TfType::Time => todo!(),
+                TfType::Integer => (VType::INTEGER, VectorTransform::default()),
+                TfType::Real | TfType::Realtime => (VType::Real, VectorTransform::default()),
+                TfType::Time => (VType::TIME, VectorTransform::default()),
             };
             let ident = ctx.arenas.to_item(ident);
             let origin = ctx.arenas.get_item_span(ident);
