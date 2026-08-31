@@ -180,25 +180,7 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             op,
             size: _,
         } = self;
-        let mnemonic = match op {
-            BitwiseOp::TvAnd => "tv.heap_and",
-            BitwiseOp::TvOr => "tv.heap_or",
-            BitwiseOp::TvXor => "tv.heap_xor",
-            BitwiseOp::TvAndNot => "tv.heap_andnot",
-            BitwiseOp::TvOrNot => "tv.heap_ornot",
-            BitwiseOp::TvXnor => "tv.heap_xnor",
-            BitwiseOp::FvAnd => "fv.heap_and",
-            BitwiseOp::FvOr => "fv.heap_or",
-            BitwiseOp::FvXor => "fv.heap_xor",
-            BitwiseOp::FvAndNot => "fv.heap_andnot",
-            BitwiseOp::FvOrNot => "fv.heap_ornot",
-            BitwiseOp::FvXnor => "fv.heap_xnor",
-            BitwiseOp::FvCopyX => "fv.heap_copyx",
-            BitwiseOp::FvCopyZ => "fv.heap_copyz",
-            BitwiseOp::FvBitwiseCeq => "fv.heap_bitwise_ceq",
-            BitwiseOp::FvMerge => "fv.heap_merge",
-        };
-        write_padded_mnemonic(f, mnemonic)?;
+        write_padded_mnemonic(f, op.mnemonic())?;
         write!(f, "{rd}, {rs1}, {rs2}")
     }
     #[inline(always)]
@@ -1813,6 +1795,27 @@ impl BitwiseOp {
             13 => Self::FvCopyZ,
             14 => Self::FvBitwiseCeq,
             _ => Self::FvMerge,
+        }
+    }
+
+    pub fn mnemonic(self) -> &'static str {
+        match self {
+            BitwiseOp::TvAnd => "tv.heap_and",
+            BitwiseOp::TvOr => "tv.heap_or",
+            BitwiseOp::TvXor => "tv.heap_xor",
+            BitwiseOp::TvAndNot => "tv.heap_andnot",
+            BitwiseOp::TvOrNot => "tv.heap_ornot",
+            BitwiseOp::TvXnor => "tv.heap_xnor",
+            BitwiseOp::FvAnd => "fv.heap_and",
+            BitwiseOp::FvOr => "fv.heap_or",
+            BitwiseOp::FvXor => "fv.heap_xor",
+            BitwiseOp::FvAndNot => "fv.heap_andnot",
+            BitwiseOp::FvOrNot => "fv.heap_ornot",
+            BitwiseOp::FvXnor => "fv.heap_xnor",
+            BitwiseOp::FvCopyX => "fv.heap_copyx",
+            BitwiseOp::FvCopyZ => "fv.heap_copyz",
+            BitwiseOp::FvBitwiseCeq => "fv.heap_bitwise_ceq",
+            BitwiseOp::FvMerge => "fv.heap_merge",
         }
     }
 }

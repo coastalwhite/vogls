@@ -617,7 +617,7 @@ fn lower_instruction(
                     let val = T4;
                     match SignedImmediate::new_from_u64(num_words * 64) {
                         None => {
-                            bce.load_u64(val, num_words);
+                            bce.load_u64(val, num_words * 64);
                             bce.add(val, rs, val, SixBitSize::N64);
                         }
                         Some(imm) => bce.addi(val, rs, imm, SixBitSize::N64),
