@@ -1,4 +1,4 @@
-use vogls_ir::{SCALAR_VSIZE, VSIZE_64, VectorSize};
+use vogls_ir::{INTEGER_VSIZE, SCALAR_VSIZE, TIME_VSIZE, VSIZE_64, VectorSize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VType {
@@ -9,6 +9,8 @@ pub enum VType {
 
 impl VType {
     pub const SCALAR_NET: Self = Self::UnsignedNet(SCALAR_VSIZE);
+    pub const TIME: Self = Self::UnsignedNet(TIME_VSIZE);
+    pub const INTEGER: Self = Self::UnsignedNet(INTEGER_VSIZE);
 
     pub const fn bit_length(&self) -> VectorSize {
         match self {
