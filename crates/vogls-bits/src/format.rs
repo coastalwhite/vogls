@@ -184,7 +184,13 @@ fn fmt_bits(bits: &Bits, f: &mut impl fmt::Write, options: &BitsFormatOptions) -
     let num_fill = match options.width {
         BitsFormatWidth::Shrink => 0,
         BitsFormatWidth::Expand => options.base.max_num_digits(bits.size()) - num_digits,
-        BitsFormatWidth::Minimum(width) => width.saturating_sub(num_digits),
+        BitsFormatWidth::Minimum(width) => {
+            let min_width = match options.base {
+                B::Decimal => width,
+                _ => width.max(options.base.max_num_digits(bits.size())),
+            };
+            min_width.saturating_sub(num_digits)
+        }
     };
 
     let (num_left_fill, num_right_fill) = match options.align.unwrap_or(Alignment::Right) {
