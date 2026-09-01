@@ -1483,15 +1483,12 @@ pub fn read_to_string_with_include_dirs(
     include_dirs: &[PathBuf],
 ) -> WorldResult<String> {
     let file = Path::new(file);
-    let caller = caller
-        .parent()
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                "parent directory not found".to_string(),
-            )
-        })
-        .map(|p| p.join(file))?;
+    let caller = caller.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "parent directory not found".to_string(),
+        )
+    })?;
 
     fn try_next_include_dir(err: &WorldError) -> bool {
         let WorldError::Io(err) = err else {

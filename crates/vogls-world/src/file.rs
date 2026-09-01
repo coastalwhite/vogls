@@ -20,7 +20,7 @@ pub struct FileOpenOptions(u64);
 
 impl FileOpenOptions {
     pub const EMPTY: Self = Self(0b000_0000u64);
-     
+
     pub const READ: Self = Self(0b000_0001u64);
     pub const WRITE: Self = Self(0b000_0010u64);
     pub const CREATE: Self = Self(0b000_0100u64);
