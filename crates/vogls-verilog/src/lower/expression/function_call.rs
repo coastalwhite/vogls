@@ -41,7 +41,8 @@ pub fn lower_function_call<'a>(
     let mut map = HashMap::new();
     for i in 0..fn_symbol.inputs.len() {
         let (input_signal, input_ty) = fn_symbol.inputs[i];
-        let Some((arg_variable, arg_ty)) = arguments[i] else {
+        // Arguments are in reverse order.
+        let Some((arg_variable, arg_ty)) = arguments[arguments.len() - 1 - i] else {
             return Err(());
         };
         let arg_variable = expression::coerce_to(
