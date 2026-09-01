@@ -869,14 +869,15 @@ pub fn lower_expr<'a>(
                     }
                 }
 
+                let range_base = end_result_stack_len + exprs.len();
                 let range_expr = match range_expression {
                     None => None,
                     Some(BitSlice::MsbLsb(msb, lsb)) => Some(RangeExpr::MsbLsb(msb, lsb)),
                     Some(BitSlice::PlusWidth(_, width)) => {
-                        Some(RangeExpr::PlusWidth(end_result_stack_len, width))
+                        Some(RangeExpr::PlusWidth(range_base, width))
                     }
                     Some(BitSlice::MinusWidth(_, width)) => {
-                        Some(RangeExpr::MinusWidth(end_result_stack_len, width))
+                        Some(RangeExpr::MinusWidth(range_base, width))
                     }
                 };
 
@@ -892,7 +893,7 @@ pub fn lower_expr<'a>(
                     ty.bit_length(),
                     dims,
                     transform,
-                    (result_stack.len() - exprs.len()..result_stack.len()).rev(),
+                    (end_result_stack_len..end_result_stack_len + exprs.len()).rev(),
                     range_expr,
                 );
 
