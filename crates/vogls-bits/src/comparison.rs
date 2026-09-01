@@ -29,10 +29,12 @@ pub fn tv_gtu64_unsigned_leq(lhs: &[u64], rhs: &[u64], size: VectorSize) -> bool
     true
 }
 pub fn tv_gtu64_signed_leq(lhs: &[u64], rhs: &[u64], size: VectorSize) -> bool {
-    if tv_gtu64_select_bit(lhs, size.get() - 1, size)
-        && !tv_gtu64_select_bit(rhs, size.get() - 1, size)
-    {
-        return true;
+    let lhs_neg = tv_gtu64_select_bit(lhs, size.get() - 1, size);
+    let rhs_neg = tv_gtu64_select_bit(rhs, size.get() - 1, size);
+
+    // If the signs differ, the negative sign is the smaller one.
+    if lhs_neg != rhs_neg {
+        return lhs_neg;
     }
 
     tv_gtu64_unsigned_leq(lhs, rhs, size)
