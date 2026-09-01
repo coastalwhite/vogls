@@ -206,7 +206,7 @@ impl VValue {
         !Self::less_than_equal(lhs, rhs)
     }
     pub fn greater_than_equal(lhs: VValue, rhs: VValue) -> FvLogicValue {
-        Self::less_than(rhs, lhs)
+        Self::less_than_equal(rhs, lhs)
     }
 
     pub fn scalar_from_bool(value: bool) -> VValue {
