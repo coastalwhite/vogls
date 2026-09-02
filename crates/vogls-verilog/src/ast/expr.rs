@@ -91,8 +91,7 @@ impl BinaryOperator {
     pub fn is_self_determined(self) -> (bool, bool) {
         use BinaryOperator as O;
         match self {
-            O::Power
-            | O::Multiply
+            O::Multiply
             | O::Divide
             | O::Modulus
             | O::BinaryPlus
@@ -109,9 +108,11 @@ impl BinaryOperator {
             | O::BitwiseXor
             | O::BitwiseXnor
             | O::BitwiseOr => (false, false),
-            O::ArithmeticLeftShift | O::ArithmeticRightShift | O::ShiftLeft | O::ShiftRight => {
-                (false, true)
-            }
+            O::Power
+            | O::ArithmeticLeftShift
+            | O::ArithmeticRightShift
+            | O::ShiftLeft
+            | O::ShiftRight => (false, true),
             O::LogicalAnd | O::LogicalOr => (true, true),
         }
     }
@@ -130,10 +131,13 @@ impl BinaryOperator {
             | O::LogicalAnd
             | O::LogicalOr => SCALAR_VSIZE,
 
-            O::ShiftLeft | O::ShiftRight | O::ArithmeticLeftShift | O::ArithmeticRightShift => lhs,
-
             O::Power
-            | O::Multiply
+            | O::ShiftLeft
+            | O::ShiftRight
+            | O::ArithmeticLeftShift
+            | O::ArithmeticRightShift => lhs,
+
+            O::Multiply
             | O::Divide
             | O::Modulus
             | O::BinaryPlus
@@ -148,7 +152,11 @@ impl BinaryOperator {
     pub fn context_width(self, lhs: VectorSize, rhs: VectorSize) -> VectorSize {
         use BinaryOperator as O;
         match self {
-            O::ShiftLeft | O::ShiftRight | O::ArithmeticLeftShift | O::ArithmeticRightShift => lhs,
+            O::Power
+            | O::ShiftLeft
+            | O::ShiftRight
+            | O::ArithmeticLeftShift
+            | O::ArithmeticRightShift => lhs,
 
             O::GreaterThan
             | O::GreaterThanEqual
@@ -160,7 +168,6 @@ impl BinaryOperator {
             | O::CaseInequality
             | O::LogicalAnd
             | O::LogicalOr
-            | O::Power
             | O::Multiply
             | O::Divide
             | O::Modulus
