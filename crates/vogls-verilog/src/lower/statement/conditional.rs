@@ -1,11 +1,13 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, ProcessBuilder, Time};
+use vogls_ir::{
+    BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, ProcessBuilder, SCALAR_VSIZE, Time,
+};
 
 use crate::ast::AstId;
 use crate::ast::statement::{
     CaseItemPattern, CaseStatement, CaseStatementVariant, ConditionalStatement,
 };
-use crate::lower::expression::coerce_bin_arithmetic;
+use crate::lower::expression::{coerce_bin_arithmetic, get_expr_type};
 use crate::lower::lower_expr;
 use crate::lower::{LowerContext, MutLowerContext};
 
@@ -134,7 +136,39 @@ pub fn lower_case_statement<'a>(
         items,
     } = &*case_statement;
 
-    let (expr_var, expr_var_ty) = lower_expr(ctx, mctx, scope, &mut builder, *expr, None)?;
+    let mut context_width = SCALAR_VSIZE;
+    // let mut context_is_signed = true;
+
+    let expr_ty = get_expr_type(
+        &mctx.gl,
+        ctx.arenas,
+        &ctx.table,
+        scope,
+        &mut mctx.diagnostics,
+        *expr,
+    )?;
+    context_width = context_width.max(expr_ty.bit_length());
+    // context_is_signed &= expr_ty.is_signed();
+    for item in items.iter() {
+        let CaseItemPattern::Expressions(iexprs) = item.pattern.item else {
+            continue;
+        };
+        for iexpr in iexprs.iter() {
+            let iexpr_ty = get_expr_type(
+                &mctx.gl,
+                ctx.arenas,
+                &ctx.table,
+                scope,
+                &mut mctx.diagnostics,
+                iexpr,
+            )?;
+            context_width = context_width.max(iexpr_ty.bit_length());
+            // context_is_signed &= iexpr_ty.is_signed();
+        }
+    }
+
+    let (expr_var, expr_var_ty) =
+        lower_expr(ctx, mctx, scope, &mut builder, *expr, Some(context_width))?;
 
     let mut origins = Vec::new();
     let mut default = None;
@@ -147,14 +181,8 @@ pub fn lower_case_statement<'a>(
             }
             CaseItemPattern::Expressions(exprs) => {
                 let fst = exprs.first().expect("spec: 1+ pattern expr in case_item");
-                let (v, v_ty) = lower_expr(
-                    ctx,
-                    mctx,
-                    scope,
-                    &mut builder,
-                    fst,
-                    Some(expr_var_ty.bit_length()),
-                )?;
+                let (v, v_ty) =
+                    lower_expr(ctx, mctx, scope, &mut builder, fst, Some(context_width))?;
                 let (expr_var, _, v, _) =
                     coerce_bin_arithmetic(mctx.gl(), &mut builder, expr_var, expr_var_ty, v, v_ty);
                 let expr_var_adj = match variant {
@@ -168,14 +196,8 @@ pub fn lower_case_statement<'a>(
                 };
                 let mut acc = builder.case_equals(mctx.gl(), expr_var_adj, v);
                 for e in exprs.iter().skip(1) {
-                    let (v, _) = lower_expr(
-                        ctx,
-                        mctx,
-                        scope,
-                        &mut builder,
-                        e,
-                        Some(expr_var_ty.bit_length()),
-                    )?;
+                    let (v, _) =
+                        lower_expr(ctx, mctx, scope, &mut builder, e, Some(context_width))?;
                     let expr_var_adj = match variant {
                         CaseStatementVariant::Case => expr_var,
                         CaseStatementVariant::CaseX => {
