@@ -1,6 +1,7 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, ProcessBuilder, SCALAR_VSIZE, Time,
+    BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, Bits, ProcessBuilder, SCALAR_VSIZE,
+    Time,
 };
 
 use crate::ast::AstId;
@@ -169,6 +170,13 @@ pub fn lower_case_statement<'a>(
 
     let (expr_var, expr_var_ty) =
         lower_expr(ctx, mctx, scope, &mut builder, *expr, Some(context_width))?;
+    let expr_var = match variant {
+        CaseStatementVariant::Case => expr_var,
+        CaseStatementVariant::CaseZ => expr_var,
+        CaseStatementVariant::CaseX => {
+            builder.bitwise_case_equals_constant(mctx.gl(), expr_var, Bits::new_ones(context_width))
+        }
+    };
 
     let mut origins = Vec::new();
     let mut default = None;
@@ -185,29 +193,41 @@ pub fn lower_case_statement<'a>(
                     lower_expr(ctx, mctx, scope, &mut builder, fst, Some(context_width))?;
                 let (expr_var, _, v, _) =
                     coerce_bin_arithmetic(mctx.gl(), &mut builder, expr_var, expr_var_ty, v, v_ty);
-                let expr_var_adj = match variant {
-                    CaseStatementVariant::Case => expr_var,
-                    CaseStatementVariant::CaseX => {
-                        // @Performance: This should probably be one instruction
-                        let x = builder.copy_x(mctx.gl(), expr_var, v);
-                        builder.copy_z(mctx.gl(), x, v)
-                    }
-                    CaseStatementVariant::CaseZ => builder.copy_z(mctx.gl(), expr_var, v),
+                let (expr_var, v) = match variant {
+                    CaseStatementVariant::Case => (expr_var, v),
+                    CaseStatementVariant::CaseX => (
+                        expr_var,
+                        builder.bitwise_case_equals_constant(
+                            mctx.gl(),
+                            v,
+                            Bits::new_ones(context_width),
+                        ),
+                    ),
+                    CaseStatementVariant::CaseZ => (
+                        builder.copy_z(mctx.gl(), expr_var, v),
+                        builder.copy_z(mctx.gl(), v, expr_var),
+                    ),
                 };
-                let mut acc = builder.case_equals(mctx.gl(), expr_var_adj, v);
+                let mut acc = builder.case_equals(mctx.gl(), expr_var, v);
                 for e in exprs.iter().skip(1) {
                     let (v, _) =
                         lower_expr(ctx, mctx, scope, &mut builder, e, Some(context_width))?;
-                    let expr_var_adj = match variant {
-                        CaseStatementVariant::Case => expr_var,
-                        CaseStatementVariant::CaseX => {
-                            // @Performance: This should probably be one instruction
-                            let x = builder.copy_x(mctx.gl(), expr_var, v);
-                            builder.copy_z(mctx.gl(), x, v)
-                        }
-                        CaseStatementVariant::CaseZ => builder.copy_z(mctx.gl(), expr_var, v),
+                    let (expr_var, v) = match variant {
+                        CaseStatementVariant::Case => (expr_var, v),
+                        CaseStatementVariant::CaseX => (
+                            expr_var,
+                            builder.bitwise_case_equals_constant(
+                                mctx.gl(),
+                                v,
+                                Bits::new_ones(context_width),
+                            ),
+                        ),
+                        CaseStatementVariant::CaseZ => (
+                            builder.copy_z(mctx.gl(), expr_var, v),
+                            builder.copy_z(mctx.gl(), v, expr_var),
+                        ),
                     };
-                    let v = builder.case_equals(mctx.gl(), expr_var_adj, v);
+                    let v = builder.case_equals(mctx.gl(), expr_var, v);
                     acc = builder.or(mctx.gl(), acc, v);
                 }
                 acc
