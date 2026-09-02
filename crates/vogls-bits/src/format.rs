@@ -76,30 +76,15 @@ impl BitsFormatBase {
                 if bits.contains_special() {
                     1
                 } else {
-                    let data_ref = bits.as_data_ref();
-                    let (val, _) = data_ref.to_u64_slices();
-
-                    if val.len() > 2 {
-                        todo!()
-                    }
-
-                    let v = if val.len() == 2 {
-                        ((val[1] as u128) << 64) | (val[0] as u128)
-                    } else {
-                        val[0] as u128
-                    };
-
-                    if v == 0 {
+                    let limbs = value_limbs(bits);
+                    let chunks = decimal_chunks(limbs);
+                    let Some(&top) = chunks.last() else {
                         return 1;
-                    }
-
-                    let flog10 = v.ilog10();
-                    let clog10 = if 10u128.pow(flog10) == v {
-                        flog10
-                    } else {
-                        flog10 + 1
                     };
-                    clog10 as usize
+                    let floor = (chunks.len() - 1) * 19 + top.ilog10() as usize;
+                    let is_pow10 = 10u64.pow(top.ilog10()) == top
+                        && chunks[..chunks.len() - 1].iter().all(|&c| c == 0);
+                    if is_pow10 { floor } else { floor + 1 }
                 }
             }
         }
@@ -110,20 +95,7 @@ impl BitsFormatBase {
             Self::Binary => size.get() as usize,
             Self::Octal => size.get().div_ceil(3) as usize,
             Self::LowerHex | Self::UpperHex => size.get().div_ceil(4) as usize,
-            Self::Decimal => {
-                if size.get() > 128 {
-                    todo!()
-                }
-
-                let v = 1u128.unbounded_shl(size.get()).wrapping_sub(1);
-                let flog10 = v.ilog10();
-                let clog10 = if 10u128.pow(flog10) == v {
-                    flog10
-                } else {
-                    flog10 + 1
-                };
-                clog10 as usize
-            }
+            Self::Decimal => num_decimal_digits(size) as usize,
         }
     }
 
@@ -551,31 +523,96 @@ fn fmt_bits_decimal(
     _separator: Option<char>,
 ) -> fmt::Result {
     if bits.contains_special() {
-        // @FIXME: This should print 'X' and 'Z' if not all digits are special.
-        if bits.contains_unknown() {
+        let count_unknown = bits.count_unknown();
+        let count_high_impedance = bits.count_high_impedance();
+        let num_bits = bits.size().get();
+        if count_unknown == num_bits {
             f.write_char('x')?;
-        } else {
+        } else if count_unknown > 0 {
+            f.write_char('X')?;
+        } else if count_high_impedance == num_bits {
             f.write_char('z')?;
+        } else {
+            f.write_char('Z')?;
         }
         return Ok(());
     }
 
-    if bits.size() > const { VectorSize::new(64).unwrap() } {
-        todo!();
+    let mut limbs = value_limbs(bits);
+
+    // Signed values are stored as two's complement within `size` bits; recover
+    // the magnitude by negating when the sign bit is set.
+    let size = bits.size().get();
+    let sign_word = ((size - 1) / 64) as usize;
+    let sign_bit = (size - 1) % 64;
+    let negative = signed && (limbs[sign_word] >> sign_bit) & 1 != 0;
+    if negative {
+        let mut carry = 1u64;
+        for limb in limbs.iter_mut() {
+            let (v, c) = (!*limb).overflowing_add(carry);
+            *limb = v;
+            carry = c as u64;
+        }
+        let off = size % 64;
+        if off != 0 {
+            *limbs.last_mut().unwrap() &= (1u64 << off) - 1;
+        }
+        f.write_char('-')?;
     }
 
-    if signed {
-        let v = bits
-            .sign_extend(const { VectorSize::new(64).unwrap() })
-            .extract_exact_u64()
-            .unwrap()
-            .cast_signed();
-        write!(f, "{v}")
-    } else {
-        let v = bits
-            .zero_extend(const { VectorSize::new(64).unwrap() })
-            .extract_exact_u64()
-            .unwrap();
-        write!(f, "{v}")
+    let chunks = decimal_chunks(limbs);
+    match chunks.last() {
+        None => f.write_char('0'),
+        Some(&top) => {
+            write!(f, "{top}")?;
+            for &chunk in chunks.iter().rev().skip(1) {
+                write!(f, "{chunk:019}")?;
+            }
+            Ok(())
+        }
     }
+}
+
+fn num_decimal_digits(size: VectorSize) -> u32 {
+    // @NOTE: This is a bit-twiddling trick that specializes `ceil(log10(pow(2, size) - 1))`.
+    if size.get() < 2 {
+        return 1;
+    }
+    const C: u128 = 5_553_023_288_523_357_132; // floor(2^64 * log10 2)
+    ((size.get() as u128 * C) >> 64) as u32 + 1
+}
+
+fn value_limbs(bits: &Bits) -> Vec<u64> {
+    // The value words of `bits` as little-endian `u64` limbs, with the unused high
+    // bits of the most-significant word masked off.
+    let data_ref = bits.as_data_ref();
+    let (val, _) = data_ref.to_u64_slices();
+    let mut limbs = val.to_vec();
+    let off = bits.size().get() % 64;
+    if off != 0 {
+        *limbs.last_mut().unwrap() &= (1u64 << off) - 1;
+    }
+    limbs
+}
+
+const DECIMAL_CHUNK: u64 = 10u64.pow(19);
+fn divmod_limbs(limbs: &mut Vec<u64>, d: u64) -> u64 {
+    let mut rem: u128 = 0;
+    for limb in limbs.iter_mut().rev() {
+        let cur = (rem << 64) | (*limb as u128);
+        *limb = (cur / d as u128) as u64;
+        rem = cur % d as u128;
+    }
+    while limbs.len() > 1 && *limbs.last().unwrap() == 0 {
+        limbs.pop();
+    }
+    rem as u64
+}
+
+fn decimal_chunks(mut limbs: Vec<u64>) -> Vec<u64> {
+    let mut chunks = Vec::new();
+    while limbs.iter().any(|&x| x != 0) {
+        chunks.push(divmod_limbs(&mut limbs, DECIMAL_CHUNK));
+    }
+    chunks
 }
