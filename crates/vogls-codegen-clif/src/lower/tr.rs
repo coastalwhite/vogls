@@ -863,117 +863,120 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         // The wide (>64 dst/lhs/rhs) path for each op runs the `wide_binop`
                         // shim over heap-layout words; the per-op arms below supply the shim
                         // opcode base and whether the rhs is a shift amount.
-                        let wide_binop = |compiler: &mut Compiler,
-                                          b: &mut FunctionBuilder,
-                                          wbase: WideCode,
-                                          is_shift: bool| {
-                            let is_fv = dst.mode() == LogicMode::FourValue;
-                            let dsize = gl.vars.size(*dst).get();
-                            let ssize = gl.vars.size(*lhs).get();
+                        let wide_binop =
+                            |compiler: &mut Compiler,
+                             b: &mut FunctionBuilder,
+                             wbase: WideCode,
+                             is_shift: bool,
+                             mode: LogicMode| {
+                                let is_fv = mode.is_four_value();
+                                let dsize = gl.vars.size(*dst).get();
+                                let ssize = gl.vars.size(*lhs).get();
 
-                            let lhs_ptr = compiler.value_words_ptr(
-                                b,
-                                *lhs,
-                                vmap,
-                                spc_map,
-                                wide_map,
-                                params.cldctx,
-                            );
-                            let rhs_ptr = if is_shift {
-                                // Pass `[amt_known, amt_val]`; a four-value amount that
-                                // isn't fully known makes the shim produce all-x. `amt` is
-                                // the low value word of the (possibly wide) shift amount.
-                                let amt = {
-                                    let size = gl.vars.size(*rhs).get();
-                                    if size > 64 {
-                                        let off = if rhs.mode() == LogicMode::FourValue {
-                                            nwords(size)
-                                        } else {
-                                            0
-                                        };
-                                        wide_load(b, ptr, params.cldctx, wide_map[rhs], off)
-                                    } else {
-                                        b.use_var(vmap[rhs])
-                                    }
-                                };
-                                let known = if rhs.mode() == LogicMode::FourValue {
-                                    let s2size = gl.vars.size(*rhs).get().min(64);
-                                    let spc = if gl.vars.size(*rhs).get() > 64 {
-                                        wide_load(b, ptr, params.cldctx, wide_map[rhs], 0)
-                                    } else {
-                                        b.use_var(spc_map[rhs])
-                                    };
-                                    let k = b.ins().icmp_imm_u(IntCC::Equal, spc, mask_of(s2size));
-                                    b.ins().uextend(I64, k)
-                                } else {
-                                    b.ins().iconst(I64, 1)
-                                };
-                                let slot = b.create_sized_stack_slot(StackSlotData::new(
-                                    StackSlotKind::ExplicitSlot,
-                                    16,
-                                    3,
-                                ));
-                                b.ins().stack_store(ptr, known, slot, 0);
-                                b.ins().stack_store(ptr, amt, slot, 8);
-                                b.ins().stack_addr(ptr, slot, 0)
-                            } else {
-                                compiler.value_words_ptr(
+                                let lhs_ptr = compiler.value_words_ptr(
                                     b,
-                                    *rhs,
+                                    *lhs,
                                     vmap,
                                     spc_map,
                                     wide_map,
                                     params.cldctx,
-                                )
-                            };
-
-                            let dst_wide = dsize > 64;
-                            let dst_slot = if dst_wide {
-                                wide_map[dst]
-                            } else {
-                                let words = if is_fv { 2 } else { 1 };
-                                WideLoc::Slot(b.create_sized_stack_slot(StackSlotData::new(
-                                    StackSlotKind::ExplicitSlot,
-                                    words * 8,
-                                    3,
-                                )))
-                            };
-                            let dst_ptr = dst_slot.addr(b, ptr, params.cldctx, 0);
-
-                            let cldctx = params.cldctx;
-                            let fnp = b.ins().load(
-                                ptr,
-                                mem(),
-                                cldctx,
-                                (layout::CTX_FN_TABLE + layout::FN_WIDE_BINOP) as i32,
-                            );
-                            let mut sig = Signature::new(CallConv::SystemV);
-                            sig.params.extend(
-                                [types::I32, ptr, ptr, ptr, types::I32, types::I32]
-                                    .map(AbiParam::new),
-                            );
-                            let sr = b.import_signature(sig);
-                            let opc = b.ins().iconst(types::I32, wbase.encode(is_fv) as i64);
-                            let dsc = b.ins().iconst(types::I32, dsize as i64);
-                            let ssc = b.ins().iconst(types::I32, ssize as i64);
-                            b.ins().call_indirect(
-                                sr,
-                                fnp,
-                                &[opc, dst_ptr, lhs_ptr, rhs_ptr, dsc, ssc],
-                            );
-
-                            if !dst_wide {
-                                if is_fv {
-                                    let spc = wide_load(b, ptr, params.cldctx, dst_slot, 0);
-                                    let val = wide_load(b, ptr, params.cldctx, dst_slot, 1);
-                                    b.def_var(spc_map[dst], spc);
-                                    b.def_var(vmap[dst], val);
+                                );
+                                let rhs_ptr = if is_shift {
+                                    // Pass `[amt_known, amt_val]`; a four-value amount that
+                                    // isn't fully known makes the shim produce all-x. `amt` is
+                                    // the low value word of the (possibly wide) shift amount.
+                                    let amt = {
+                                        let size = gl.vars.size(*rhs).get();
+                                        if size > 64 {
+                                            let off = if rhs.mode() == LogicMode::FourValue {
+                                                nwords(size)
+                                            } else {
+                                                0
+                                            };
+                                            wide_load(b, ptr, params.cldctx, wide_map[rhs], off)
+                                        } else {
+                                            b.use_var(vmap[rhs])
+                                        }
+                                    };
+                                    let known = if rhs.mode() == LogicMode::FourValue {
+                                        let s2size = gl.vars.size(*rhs).get().min(64);
+                                        let spc = if gl.vars.size(*rhs).get() > 64 {
+                                            wide_load(b, ptr, params.cldctx, wide_map[rhs], 0)
+                                        } else {
+                                            b.use_var(spc_map[rhs])
+                                        };
+                                        let k =
+                                            b.ins().icmp_imm_u(IntCC::Equal, spc, mask_of(s2size));
+                                        b.ins().uextend(I64, k)
+                                    } else {
+                                        b.ins().iconst(I64, 1)
+                                    };
+                                    let slot = b.create_sized_stack_slot(StackSlotData::new(
+                                        StackSlotKind::ExplicitSlot,
+                                        16,
+                                        3,
+                                    ));
+                                    b.ins().stack_store(ptr, known, slot, 0);
+                                    b.ins().stack_store(ptr, amt, slot, 8);
+                                    b.ins().stack_addr(ptr, slot, 0)
                                 } else {
-                                    let val = wide_load(b, ptr, params.cldctx, dst_slot, 0);
-                                    b.def_var(vmap[dst], val);
+                                    compiler.value_words_ptr(
+                                        b,
+                                        *rhs,
+                                        vmap,
+                                        spc_map,
+                                        wide_map,
+                                        params.cldctx,
+                                    )
+                                };
+
+                                let dst_wide = dsize > 64;
+                                let dst_slot = if dst_wide {
+                                    wide_map[dst]
+                                } else {
+                                    let words = if is_fv { 2 } else { 1 };
+                                    WideLoc::Slot(b.create_sized_stack_slot(StackSlotData::new(
+                                        StackSlotKind::ExplicitSlot,
+                                        words * 8,
+                                        3,
+                                    )))
+                                };
+                                let dst_ptr = dst_slot.addr(b, ptr, params.cldctx, 0);
+
+                                let cldctx = params.cldctx;
+                                let fnp = b.ins().load(
+                                    ptr,
+                                    mem(),
+                                    cldctx,
+                                    (layout::CTX_FN_TABLE + layout::FN_WIDE_BINOP) as i32,
+                                );
+                                let mut sig = Signature::new(CallConv::SystemV);
+                                sig.params.extend(
+                                    [types::I32, ptr, ptr, ptr, types::I32, types::I32]
+                                        .map(AbiParam::new),
+                                );
+                                let sr = b.import_signature(sig);
+                                let opc = b.ins().iconst(types::I32, wbase.encode(is_fv) as i64);
+                                let dsc = b.ins().iconst(types::I32, dsize as i64);
+                                let ssc = b.ins().iconst(types::I32, ssize as i64);
+                                b.ins().call_indirect(
+                                    sr,
+                                    fnp,
+                                    &[opc, dst_ptr, lhs_ptr, rhs_ptr, dsc, ssc],
+                                );
+
+                                if !dst_wide {
+                                    if is_fv {
+                                        let spc = wide_load(b, ptr, params.cldctx, dst_slot, 0);
+                                        let val = wide_load(b, ptr, params.cldctx, dst_slot, 1);
+                                        b.def_var(spc_map[dst], spc);
+                                        b.def_var(vmap[dst], val);
+                                    } else {
+                                        let val = wide_load(b, ptr, params.cldctx, dst_slot, 0);
+                                        b.def_var(vmap[dst], val);
+                                    }
                                 }
-                            }
-                        };
+                            };
                         match (
                             op,
                             dst.mode(),
@@ -1586,37 +1589,37 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 map!(lhs, rhs => @tv self.compiler.real_shim(b, params, rc::HYPOT, lhs, rhs))
                             }
                             (O::Add, _, _, _, _, _) => {
-                                wide_binop(self.compiler, b, WideCode::Add, false)
+                                wide_binop(self.compiler, b, WideCode::Add, false, dst.mode())
                             }
                             (O::Sub, _, _, _, _, _) => {
-                                wide_binop(self.compiler, b, WideCode::Sub, false)
+                                wide_binop(self.compiler, b, WideCode::Sub, false, dst.mode())
                             }
                             (O::Multiply, _, _, _, _, _) => {
-                                wide_binop(self.compiler, b, WideCode::Mul, false)
+                                wide_binop(self.compiler, b, WideCode::Mul, false, dst.mode())
                             }
                             (O::Power, _, _, _, _, _) => {
-                                wide_binop(self.compiler, b, WideCode::Pow, false)
+                                wide_binop(self.compiler, b, WideCode::Pow, false, dst.mode())
                             }
                             (O::DivideX, _, _, _, _, _) => {
-                                wide_binop(self.compiler, b, WideCode::Div, false)
+                                wide_binop(self.compiler, b, WideCode::DivX, false, lhs.mode())
                             }
                             (O::Divide0, _, _, _, _, _) => {
-                                wide_binop(self.compiler, b, WideCode::Div, false)
+                                wide_binop(self.compiler, b, WideCode::Div0, false, lhs.mode())
                             }
                             (O::ModulusX, _, _, _, _, _) => {
-                                wide_binop(self.compiler, b, WideCode::Mod, false)
+                                wide_binop(self.compiler, b, WideCode::ModX, false, lhs.mode())
                             }
                             (O::Modulus0, _, _, _, _, _) => {
-                                wide_binop(self.compiler, b, WideCode::Mod, false)
+                                wide_binop(self.compiler, b, WideCode::Mod0, false, lhs.mode())
                             }
                             (O::LogicalShiftLeft, _, _, _, _, _) => {
-                                wide_binop(self.compiler, b, WideCode::Lsl, true)
+                                wide_binop(self.compiler, b, WideCode::Lsl, true, dst.mode())
                             }
                             (O::LogicalShiftRight, _, _, _, _, _) => {
-                                wide_binop(self.compiler, b, WideCode::Lsr, true)
+                                wide_binop(self.compiler, b, WideCode::Lsr, true, dst.mode())
                             }
                             (O::ArithmeticShiftRight, _, _, _, _, _) => {
-                                wide_binop(self.compiler, b, WideCode::Asr, true)
+                                wide_binop(self.compiler, b, WideCode::Asr, true, dst.mode())
                             }
                         }
                     }
@@ -1698,8 +1701,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             |compiler: &mut Compiler,
                              b: &mut FunctionBuilder,
                              wbase: WideCode,
-                             swap: bool| {
-                                let is_fv = dst.mode() == LogicMode::FourValue;
+                             swap: bool,
+                             mode: LogicMode| {
+                                let is_fv = mode.is_four_value();
                                 let dsize = gl.vars.size(*dst).get();
                                 let ssize = gl.vars.size(*src).get();
                                 let src_ptr = compiler.value_words_ptr(
@@ -1911,7 +1915,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::Add, _, _, _, _, _) => {
-                                wide_binop_imm(self.compiler, b, WideCode::Add, false)
+                                wide_binop_imm(self.compiler, b, WideCode::Add, false, dst.mode())
                             }
                             // Sub: Operand - Imm.
                             (O::Sub, M::TwoValue, _, Some(_), _, _) => imap!(sval, ival => @tv {
@@ -1925,7 +1929,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::Sub, _, _, _, _, _) => {
-                                wide_binop_imm(self.compiler, b, WideCode::Sub, false)
+                                wide_binop_imm(self.compiler, b, WideCode::Sub, false, dst.mode())
                             }
                             // RevSub: Imm - Operand.
                             (O::RevSub, M::TwoValue, _, Some(_), _, _) => imap!(sval, ival => @tv {
@@ -1939,7 +1943,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::RevSub, _, _, _, _, _) => {
-                                wide_binop_imm(self.compiler, b, WideCode::Sub, true)
+                                wide_binop_imm(self.compiler, b, WideCode::Sub, true, dst.mode())
                             }
                             (O::Multiply, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv {
@@ -1954,7 +1958,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::Multiply, _, _, _, _, _) => {
-                                wide_binop_imm(self.compiler, b, WideCode::Mul, false)
+                                wide_binop_imm(self.compiler, b, WideCode::Mul, false, dst.mode())
                             }
                             // Divide/Modulus: Operand / Imm, div-by-zero yields 0.
                             (O::Divide, M::TwoValue, _, Some(_), _, _) => {
@@ -1967,7 +1971,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::Divide, _, _, _, _, _) => {
-                                wide_binop_imm(self.compiler, b, WideCode::Div, false)
+                                wide_binop_imm(self.compiler, b, WideCode::Div0, false, dst.mode())
                             }
                             (O::Modulus, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv clif_tv_mod0(b, sval, ival))
@@ -1979,7 +1983,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::Modulus, _, _, _, _, _) => {
-                                wide_binop_imm(self.compiler, b, WideCode::Mod, false)
+                                wide_binop_imm(self.compiler, b, WideCode::Mod0, false, dst.mode())
                             }
                             // RevDivide0/RevModulus0: Imm / Operand, div-by-zero yields 0.
                             (O::RevDivide0, M::TwoValue, _, Some(_), _, _) => {
@@ -1992,7 +1996,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::RevDivide0, _, _, _, _, _) => {
-                                wide_binop_imm(self.compiler, b, WideCode::Div, true)
+                                wide_binop_imm(self.compiler, b, WideCode::Div0, true, dst.mode())
                             }
                             (O::RevModulus0, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv clif_tv_mod0(b, ival, sval))
@@ -2004,7 +2008,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::RevModulus0, _, _, _, _, _) => {
-                                wide_binop_imm(self.compiler, b, WideCode::Mod, true)
+                                wide_binop_imm(self.compiler, b, WideCode::Mod0, true, dst.mode())
                             }
                             // RevDivideX/RevModulusX: Imm / Operand, div-by-zero yields x.
                             // dst is always four-value; gate on a non-zero divisor (the
@@ -2022,7 +2026,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::RevDivideX, _, _, _, _, _) => {
-                                wide_binop_imm(self.compiler, b, WideCode::Div, true)
+                                wide_binop_imm(self.compiler, b, WideCode::DivX, true, src.mode())
                             }
                             (O::RevModulusX, _, M::TwoValue, Some(_), _, _) => {
                                 imap!(sval, ival => @fv {
@@ -2037,7 +2041,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 })
                             }
                             (O::RevModulusX, _, _, _, _, _) => {
-                                wide_binop_imm(self.compiler, b, WideCode::Mod, true)
+                                wide_binop_imm(self.compiler, b, WideCode::ModX, true, src.mode())
                             }
                             // UnsignedLessEqual: Operand <= Imm (dst is one bit).
                             (O::UnsignedLessEqual, M::TwoValue, _, _, Some(_), _) => {
@@ -2572,10 +2576,10 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 );
                             }
                             (O::Power, _, _, _, _, _) => {
-                                wide_binop_imm(self.compiler, b, WideCode::Pow, false)
+                                wide_binop_imm(self.compiler, b, WideCode::Pow, false, dst.mode())
                             }
                             (O::RevPower, _, _, _, _, _) => {
-                                wide_binop_imm(self.compiler, b, WideCode::Pow, true)
+                                wide_binop_imm(self.compiler, b, WideCode::Pow, true, dst.mode())
                             }
                         }
                     }
