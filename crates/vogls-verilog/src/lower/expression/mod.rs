@@ -308,7 +308,18 @@ pub fn lower_expr<'a>(
                 }
 
                 let result = match op {
-                    O::Power => arithmetic_op!(power, real_pow),
+                    O::Power => {
+                        let l_width = l_ty.bit_length();
+                        let (l, l_ty, r, _) =
+                            coerce_bin_arithmetic(mctx.gl(), builder, l, l_ty, r, r_ty);
+                        if l_ty.is_real() {
+                            (builder.real_pow(mctx.gl(), l, r), VType::Real)
+                        } else {
+                            let v = builder.power(mctx.gl(), l, r);
+                            let l_ty = l_ty.truncate(l_width);
+                            (builder.truncate(mctx.gl(), v, l_width), l_ty)
+                        }
+                    }
                     O::Multiply => arithmetic_op!(multiply, real_mul),
                     O::BinaryPlus => arithmetic_op!(plus, real_add),
                     O::BinaryMinus => arithmetic_op!(minus, real_sub),
