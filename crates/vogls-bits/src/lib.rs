@@ -11,7 +11,7 @@ use self::format::{BitsDisplay, BitsFormatOptions};
 use self::leading_trailing::{tv_leading_ones, tv_leading_zeros};
 use self::parse::BitsParseError;
 use self::truncate::{fv_l_truncate, tv_l_truncate};
-use self::util::{mask_size_1to64, saturating_rem};
+use self::util::{mask_size_1to64, saturating_rem, wrapping_u64_pow};
 
 pub mod arithmetic;
 pub mod bitwise_not;
@@ -1434,8 +1434,8 @@ impl Bits {
         let lhs = as_u64_value_slice!(x, lhs);
         let rhs = as_u64_value_slice!(y, rhs);
 
-        if size.get() <= 32 {
-            return Self::from_u64(size, lhs[0].wrapping_pow(rhs[0] as u32));
+        if size <= Mode::TwoValue.max_inline_size() {
+            return Self::from_u64(size, wrapping_u64_pow(lhs[0], rhs[0]));
         }
 
         let mut dst = vec![0u64; lhs.len()];
