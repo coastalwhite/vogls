@@ -801,6 +801,18 @@ impl Bits {
             }
         }
     }
+    pub fn count_high_impedance(&self) -> u32 {
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(_) => 0,
+            BitsDataRef::SeparateTv(_) => 0,
+            BitsDataRef::InlineFv(spc, val) => (!spc & val).count_ones(),
+            BitsDataRef::SeparateFv(v) => v[..v.len() / 2]
+                .iter()
+                .zip(&v[v.len() / 2..])
+                .map(|(spc, val)| (!spc & val).count_ones())
+                .sum::<u32>(),
+        }
+    }
 
     pub fn reduce_or(&self) -> FvLogicValue {
         match self.as_data_ref() {
