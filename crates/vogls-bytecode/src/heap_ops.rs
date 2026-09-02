@@ -1778,10 +1778,10 @@ operator! {
         (TvSub, "tv.heap_sub", false),
         (TvMul, "tv_heap_mul", false),
         (TvPow, "tv_heap_pow", false),
-        (FvAdd, "fv_heap_add", false),
-        (FvSub, "fv_heap_sub", false),
-        (FvMul, "fv_heap_mul", false),
-        (FvPow, "fv_heap_pow", false),
+        (FvAdd, "fv_heap_add", true),
+        (FvSub, "fv_heap_sub", true),
+        (FvMul, "fv_heap_mul", true),
+        (FvPow, "fv_heap_pow", true),
     }
 }
 
