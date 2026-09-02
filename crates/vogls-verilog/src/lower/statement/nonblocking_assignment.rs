@@ -17,7 +17,13 @@ pub fn lower<'a>(
         delay_or_event_control,
         expression,
     } = &*nba;
-    assert!(delay_or_event_control.is_none());
+    if let Some(delay_or_event_control) = delay_or_event_control {
+        mctx.diagnostics.not_yet_implemented(
+            ctx.arenas.get_span(*delay_or_event_control),
+            "delay or event control on non-blocking assignment",
+        );
+        return Err(());
+    }
 
     let context_width = assign::variable_lvalue_size(ctx, mctx, scope, *variable_lvalue)?;
     let (value, value_ty) = expression::lower_expr(
