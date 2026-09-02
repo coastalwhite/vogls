@@ -1,7 +1,12 @@
 use std::fmt;
 
 use vogls_bits::arithmetic::{
-    FvLogicValue, fv_addition, fv_bin_u64_cell_bitwise_op, fv_bin_u64_cell_bitwise_op_output_tv, fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem, fv_bitwise_xnor_elem, fv_bitwise_xor_elem, fv_contains_special, fv_division, fv_division_x, fv_multiplication, fv_power, fv_subtraction, tv_addition, tv_bin_u64_cell_bitwise_mask_last_op, tv_bin_u64_cell_bitwise_op, tv_division, tv_division_x, tv_multiplication, tv_power, tv_subtraction,
+    FvLogicValue, fv_addition, fv_bin_u64_cell_bitwise_op, fv_bin_u64_cell_bitwise_op_output_tv,
+    fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem,
+    fv_bitwise_xnor_elem, fv_bitwise_xor_elem, fv_contains_special, fv_division, fv_division_x,
+    fv_multiplication, fv_power, fv_subtraction, tv_addition, tv_bin_u64_cell_bitwise_mask_last_op,
+    tv_bin_u64_cell_bitwise_op, tv_division, tv_division_x, tv_multiplication, tv_power,
+    tv_subtraction,
 };
 use vogls_bits::bitwise_not::{fv_cell_not, tv_cell_not};
 use vogls_bits::comparison::{bitwise_ceq, fv_l_unsigned_leq, tv_gtu64_unsigned_leq};
