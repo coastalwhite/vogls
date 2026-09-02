@@ -139,7 +139,7 @@ pub struct FnTable {
     /// patterns `a`/`b` (b unused for unary ops).
     real_op: extern "C" fn(u32, u64, u64) -> u64,
 
-    /// Wide / cold binary ops, dispatched by [`wide_code`] on heap-layout word
+    /// Wide / cold binary ops, dispatched by [`WideCode`] on heap-layout word
     /// arrays. `(op, dst, lhs, rhs, dsize, ssize)`.
     wide_binop: extern "C" fn(u32, *mut u64, *const u64, *const u64, u32, u32),
 
@@ -202,25 +202,45 @@ extern "C" fn real_op(op: u32, a: u64, b: u64) -> u64 {
     r.to_bits()
 }
 
-/// Op codes for the [`wide_binop`] shim. The value passed is `op * 2 + is_fv`.
-pub mod wide_code {
-    pub const ADD: u32 = 0;
-    pub const SUB: u32 = 1;
-    pub const MUL: u32 = 2;
-    pub const DIV: u32 = 3;
-    pub const MOD: u32 = 4;
-    pub const POW: u32 = 5;
-    pub const LSL: u32 = 6;
-    pub const LSR: u32 = 7;
-    pub const ASR: u32 = 8;
-    pub const ULE: u32 = 9;
-    pub const MIN: u32 = 10;
-    pub const MAX: u32 = 11;
+macro_rules! wide_code {
+    ($($variant:ident),+ $(,)?) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[repr(u8)]
+        pub enum WideCode {
+            $($variant,)+
+        }
 
-    #[inline]
-    pub const fn code(op: u32, is_fv: bool) -> u32 {
-        op * 2 + is_fv as u32
-    }
+        impl WideCode {
+            #[inline]
+            pub const fn encode(self, is_fv: bool) -> u8 {
+                (self as u8) * 2 + is_fv as u8
+            }
+
+            #[inline]
+            pub const fn decode(op: u8) -> Option<(WideCode, bool)> {
+                let code = match op >> 1 {
+                    $(x if x == WideCode::$variant as u8 => WideCode::$variant,)+
+                    _ => return None,
+                };
+                Some((code, (op & 1) != 0))
+            }
+        }
+    };
+}
+
+wide_code! {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Pow,
+    Lsl,
+    Lsr,
+    Asr,
+    Ule,
+    Min,
+    Max,
 }
 
 /// Wide (and cold narrow) binary ops, delegated to the `vogls-bits` word-slice
@@ -236,13 +256,14 @@ extern "C" fn wide_binop(
     dsize: u32,
     ssize: u32,
 ) {
+    use WideCode as W;
     use vogls_bits::arithmetic as a;
     use vogls_bits::comparison as cmp;
     use vogls_bits::shift as sh;
-    use wide_code as w;
 
-    let is_fv = (op & 1) != 0;
-    let operation = op >> 1;
+    let Some((operation, is_fv)) = WideCode::decode(op as u8) else {
+        return;
+    };
     let ds = VectorSize::new(dsize).unwrap();
     let ss = VectorSize::new(ssize).unwrap();
     let snw = (ssize as usize).div_ceil(64);
@@ -255,7 +276,7 @@ extern "C" fn wide_binop(
         let d = std::slice::from_raw_parts_mut(dst, dw);
         let l = std::slice::from_raw_parts(lhs, sw);
         match operation {
-            w::ADD => {
+            W::Add => {
                 let r = std::slice::from_raw_parts(rhs, sw);
                 if is_fv {
                     a::fv_addition(d, l, r, ds)
@@ -263,7 +284,7 @@ extern "C" fn wide_binop(
                     a::tv_addition(d, l, r, ds)
                 }
             }
-            w::SUB => {
+            W::Sub => {
                 let r = std::slice::from_raw_parts(rhs, sw);
                 if is_fv {
                     a::fv_subtraction(d, l, r, ds)
@@ -271,7 +292,7 @@ extern "C" fn wide_binop(
                     a::tv_subtraction(d, l, r, ds)
                 }
             }
-            w::MUL => {
+            W::Mul => {
                 let r = std::slice::from_raw_parts(rhs, sw);
                 if is_fv {
                     a::fv_multiplication(d, l, r, ds)
@@ -279,7 +300,7 @@ extern "C" fn wide_binop(
                     a::tv_multiplication(d, l, r, ds)
                 }
             }
-            w::DIV => {
+            W::Div => {
                 let r = std::slice::from_raw_parts(rhs, sw);
                 let mut m = vec![0u64; dw];
                 if is_fv {
@@ -288,7 +309,7 @@ extern "C" fn wide_binop(
                     a::tv_division(d, &mut m, l, r, ds)
                 }
             }
-            w::MOD => {
+            W::Mod => {
                 let r = std::slice::from_raw_parts(rhs, sw);
                 let mut q = vec![0u64; dw];
                 if is_fv {
@@ -297,7 +318,7 @@ extern "C" fn wide_binop(
                     a::tv_division(&mut q, d, l, r, ds)
                 }
             }
-            w::POW => {
+            W::Pow => {
                 let r = std::slice::from_raw_parts(rhs, sw);
                 if is_fv {
                     a::fv_power(d, l, r, ds)
@@ -307,22 +328,22 @@ extern "C" fn wide_binop(
             }
             // For shifts, rhs points to `[amt_known, amt_val]`; an unknown
             // (four-value) amount yields an all-x result.
-            w::LSL | w::LSR | w::ASR => {
+            W::Lsl | W::Lsr | W::Asr => {
                 if is_fv && *rhs == 0 {
                     d.fill(0);
                 } else {
                     let amt = *rhs.add(1) as u32;
                     match operation {
-                        w::LSL if is_fv => sh::fv_l_logical_shift_left(d, l, amt, ds),
-                        w::LSL => sh::tv_l_logical_shift_left(d, l, amt, ds),
-                        w::LSR if is_fv => sh::fv_l_logical_shift_right(d, l, amt, ds),
-                        w::LSR => sh::tv_l_logical_shift_right(d, l, amt, ds),
+                        W::Lsl if is_fv => sh::fv_l_logical_shift_left(d, l, amt, ds),
+                        W::Lsl => sh::tv_l_logical_shift_left(d, l, amt, ds),
+                        W::Lsr if is_fv => sh::fv_l_logical_shift_right(d, l, amt, ds),
+                        W::Lsr => sh::tv_l_logical_shift_right(d, l, amt, ds),
                         _ if is_fv => sh::fv_l_arithmetic_shift_right(d, l, amt, ds),
                         _ => sh::tv_l_arithmetic_shift_right(d, l, amt, ds),
                     }
                 }
             }
-            w::ULE => {
+            W::Ule => {
                 let r = std::slice::from_raw_parts(rhs, sw);
                 if is_fv {
                     let res = cmp::fv_l_unsigned_leq(l, r, ss);
@@ -332,9 +353,9 @@ extern "C" fn wide_binop(
                     d[0] = cmp::tv_gtu64_unsigned_leq(l, r, ss) as u64;
                 }
             }
-            w::MIN | w::MAX => {
+            W::Min | W::Max => {
                 let r = std::slice::from_raw_parts(rhs, sw);
-                let is_max = operation == w::MAX;
+                let is_max = operation == W::Max;
                 if is_fv {
                     if a::fv_contains_special(l, ss) || a::fv_contains_special(r, ss) {
                         d.fill(0);
@@ -349,7 +370,6 @@ extern "C" fn wide_binop(
                     d.copy_from_slice(if pick_l { l } else { r });
                 }
             }
-            _ => {}
         }
     }
 }
