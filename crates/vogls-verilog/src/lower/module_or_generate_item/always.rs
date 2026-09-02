@@ -33,7 +33,7 @@ pub fn lower<'a>(
     // We define *combinational* always similar to Icarus Verilog, in that we say if your
     // `always` blocks only includes an event control with a STAR or identifiers that do
     // not include an edge.
-    if let Some((signals, stmt)) = extract_standing_signals(ctx, mctx, scope, statement)? {
+    if let Some((signals, ectrl, stmt)) = extract_standing_signals(ctx, mctx, scope, statement)? {
         // Transform the process from
         //   `always @(...) stmt;`
         // to
@@ -47,6 +47,16 @@ pub fn lower<'a>(
             bb_builder,
             stmt.into_stmt_range(),
         )?;
+
+        if signals.is_empty() {
+            mctx.diagnostics.warnings.push((
+                ctx.arenas.get_span(ectrl),
+                "event control watches no signals and thus never triggers".into(),
+            ));
+            proc_builder.abort(mctx.gl());
+            return Ok(());
+        }
+
         bb_builder.watch_to(mctx.gl(), signals.clone().into(), entry_tr);
 
         proc_builder.set_standing(mctx.gl(), signals);
@@ -77,7 +87,14 @@ fn extract_standing_signals<'a>(
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     statement: AstId<'a, Statement<'a>>,
-) -> Result<Option<(Box<[SignalKey]>, AstId<'a, StatementOrNull<'a>>)>, ()> {
+) -> Result<
+    Option<(
+        Box<[SignalKey]>,
+        AstId<'a, EventControl<'a>>,
+        AstId<'a, StatementOrNull<'a>>,
+    )>,
+    (),
+> {
     let StatementContent::ProceduralTimingControlStatement(ptcs) = statement.content else {
         return Ok(None);
     };
@@ -92,7 +109,7 @@ fn extract_standing_signals<'a>(
             get_used_signals_stmt_or_null(ctx, mctx, scope, &mut signals, ptcs.statement_or_null)?;
             let mut signals = signals.items;
             signals.sort_unstable();
-            Ok(Some((signals.into(), ptcs.statement_or_null)))
+            Ok(Some((signals.into(), *ectrl, ptcs.statement_or_null)))
         }
         EventControl::EventExpression(event_expression) => {
             let mut signals = IndexSet::new();
@@ -119,7 +136,7 @@ fn extract_standing_signals<'a>(
             }
             let mut signals = signals.take_keys();
             signals.sort_unstable();
-            Ok(Some((signals.into(), ptcs.statement_or_null)))
+            Ok(Some((signals.into(), *ectrl, ptcs.statement_or_null)))
         }
     }
 }
