@@ -74,7 +74,7 @@ pub fn lower_expr<'a>(
                     item.dispatched = true;
 
                     let child_context_width =
-                        item.context_width.filter(|_| op.is_self_determined());
+                        item.context_width.filter(|_| !op.is_self_determined());
                     dispatch_stack.push(item);
                     dispatch_stack.push(StackItem::new(child, child_context_width));
                     continue;
