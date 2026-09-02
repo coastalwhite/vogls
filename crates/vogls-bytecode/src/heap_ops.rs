@@ -454,17 +454,7 @@ impl BytecodeInstruction for HeapBinaryArithmetic {
             op,
             size: _,
         } = self;
-        let mnemonic = match op {
-            ArithmeticOp::TvAdd => "tv.heap_add",
-            ArithmeticOp::TvSub => "tv.heap_sub",
-            ArithmeticOp::TvMul => "tv.heap_mul",
-            ArithmeticOp::TvPow => "tv.heap_pow",
-            ArithmeticOp::FvAdd => "fv.heap_add",
-            ArithmeticOp::FvSub => "fv.heap_sub",
-            ArithmeticOp::FvMul => "fv.heap_mul",
-            ArithmeticOp::FvPow => "fv.heap_pow",
-        };
-        write_padded_mnemonic(f, mnemonic)?;
+        write_padded_mnemonic(f, op.mnemonic())?;
         write!(f, "{rd}, {rs1}, {rs2}")
     }
     #[inline(always)]
@@ -706,13 +696,7 @@ impl BytecodeInstruction for HeapBinaryCmp {
             op,
             size: _,
         } = self;
-        let mnemonic = match op {
-            CompareOp::TvUnsignedLeq => "tv.heap_uleq",
-            CompareOp::TvUnsignedGt => "tv.heap_ugt",
-            CompareOp::FvUnsignedLeq => "fv.heap_uleq",
-            CompareOp::FvUnsignedGt => "fv.heap_ugt",
-        };
-        write_padded_mnemonic(f, mnemonic)?;
+        write_padded_mnemonic(f, op.mnemonic())?;
         write!(f, "{rd}, {rs1}, {rs2}")
     }
     #[inline(always)]
@@ -1735,148 +1719,78 @@ impl BytecodeInstruction for HeapUnary {
     }
 }
 
-#[derive(Clone, Copy)]
-pub enum BitwiseOp {
-    TvAnd,
-    TvOr,
-    TvXor,
-    TvAndNot,
-    TvOrNot,
-    TvXnor,
-    FvAnd,
-    FvOr,
-    FvXor,
-    FvAndNot,
-    FvOrNot,
-    FvXnor,
-    FvCopyX,
-    FvCopyZ,
-    FvBitwiseCeq,
-    FvMerge,
+macro_rules! operator {
+    ($name:ident $mask:expr => { $(($variant:ident, $mnemonic:literal, $fv:literal),)+ }) => {
+        #[derive(Clone, Copy)]
+        #[repr(u32)]
+        pub enum $name {
+            $($variant,)+
+        }
+
+        impl $name {
+            const NUM_VARIANTS: u32 = 0 $(+ { _ = Self::$variant; 1 })+;
+
+            pub fn is_four_value(self) -> bool {
+                match self {
+                    $(Self::$variant => $fv,)+
+                }
+            }
+            pub fn mnemonic(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $mnemonic,)+
+                }
+            }
+            pub fn new_masked(v: u32) -> Self {
+                let v = v & $mask;
+                const { assert!($mask + 1 >= Self::NUM_VARIANTS); }
+                assert!(v < Self::NUM_VARIANTS);
+                unsafe { std::mem::transmute::<u32, $name>(v) }
+            }
+        }
+
+    };
 }
 
-impl BitwiseOp {
-    pub fn is_four_value(self) -> bool {
-        match self {
-            Self::TvAnd
-            | Self::TvOr
-            | Self::TvXor
-            | Self::TvAndNot
-            | Self::TvOrNot
-            | Self::TvXnor => false,
-            Self::FvAnd
-            | Self::FvOr
-            | Self::FvXor
-            | Self::FvAndNot
-            | Self::FvOrNot
-            | Self::FvXnor
-            | Self::FvCopyX
-            | Self::FvCopyZ
-            | Self::FvBitwiseCeq
-            | Self::FvMerge => true,
-        }
-    }
-
-    pub fn new_masked(v: u32) -> Self {
-        match v & 0xF {
-            0 => Self::TvAnd,
-            1 => Self::TvOr,
-            2 => Self::TvXor,
-            3 => Self::TvAndNot,
-            4 => Self::TvOrNot,
-            5 => Self::TvXnor,
-            6 => Self::FvAnd,
-            7 => Self::FvOr,
-            8 => Self::FvXor,
-            9 => Self::FvAndNot,
-            10 => Self::FvXnor,
-            11 => Self::FvOrNot,
-            12 => Self::FvCopyX,
-            13 => Self::FvCopyZ,
-            14 => Self::FvBitwiseCeq,
-            _ => Self::FvMerge,
-        }
-    }
-
-    pub fn mnemonic(self) -> &'static str {
-        match self {
-            BitwiseOp::TvAnd => "tv.heap_and",
-            BitwiseOp::TvOr => "tv.heap_or",
-            BitwiseOp::TvXor => "tv.heap_xor",
-            BitwiseOp::TvAndNot => "tv.heap_andnot",
-            BitwiseOp::TvOrNot => "tv.heap_ornot",
-            BitwiseOp::TvXnor => "tv.heap_xnor",
-            BitwiseOp::FvAnd => "fv.heap_and",
-            BitwiseOp::FvOr => "fv.heap_or",
-            BitwiseOp::FvXor => "fv.heap_xor",
-            BitwiseOp::FvAndNot => "fv.heap_andnot",
-            BitwiseOp::FvOrNot => "fv.heap_ornot",
-            BitwiseOp::FvXnor => "fv.heap_xnor",
-            BitwiseOp::FvCopyX => "fv.heap_copyx",
-            BitwiseOp::FvCopyZ => "fv.heap_copyz",
-            BitwiseOp::FvBitwiseCeq => "fv.heap_bitwise_ceq",
-            BitwiseOp::FvMerge => "fv.heap_merge",
-        }
+operator! {
+    BitwiseOp 0xF => {
+        (TvAnd, "tv.heap_and", false),
+        (TvOr, "tv.heap_or", false),
+        (TvXor, "tv.heap_xor", false),
+        (TvAndNot, "tv.heap_andnot", false),
+        (TvOrNot, "tv.heap_ornot", false),
+        (TvXnor, "tv.heap_xnor", false),
+        (FvAnd, "fv.heap_and", true),
+        (FvOr, "fv.heap_or", true),
+        (FvXor, "fv.heap_xor", true),
+        (FvAndNot, "fv.heap_andnot", true),
+        (FvOrNot, "fv.heap_ornot", true),
+        (FvXnor, "fv.heap_xnor", true),
+        (FvCopyX, "fv.heap_copyx", true),
+        (FvCopyZ, "fv.heap_copyz", true),
+        (FvBitwiseCeq, "fv.heap_bitwise_ceq", true),
+        (FvMerge, "fv.heap_merge", true),
     }
 }
 
-#[derive(Clone, Copy)]
-pub enum ArithmeticOp {
-    TvAdd,
-    TvSub,
-    TvMul,
-    TvPow,
-    FvAdd,
-    FvSub,
-    FvMul,
-    FvPow,
-}
-
-impl ArithmeticOp {
-    pub fn is_four_value(self) -> bool {
-        match self {
-            Self::TvAdd | Self::TvSub | Self::TvMul | Self::TvPow => false,
-            Self::FvAdd | Self::FvSub | Self::FvMul | Self::FvPow => true,
-        }
-    }
-
-    pub fn new_masked(v: u32) -> Self {
-        match v & 0xF {
-            0 => Self::TvAdd,
-            1 => Self::TvSub,
-            2 => Self::TvMul,
-            3 => Self::TvPow,
-            4 => Self::FvAdd,
-            5 => Self::FvSub,
-            6 => Self::FvMul,
-            _ => Self::FvPow,
-        }
+operator! {
+    ArithmeticOp 0xF => {
+        (TvAdd, "tv.heap_add", false),
+        (TvSub, "tv.heap_sub", false),
+        (TvMul, "tv_heap_mul", false),
+        (TvPow, "tv_heap_pow", false),
+        (FvAdd, "fv_heap_add", false),
+        (FvSub, "fv_heap_sub", false),
+        (FvMul, "fv_heap_mul", false),
+        (FvPow, "fv_heap_pow", false),
     }
 }
 
-#[derive(Clone, Copy)]
-pub enum CompareOp {
-    TvUnsignedLeq,
-    TvUnsignedGt,
-    FvUnsignedLeq,
-    FvUnsignedGt,
-}
-
-impl CompareOp {
-    pub fn is_four_value(self) -> bool {
-        match self {
-            Self::TvUnsignedLeq | Self::TvUnsignedGt => false,
-            Self::FvUnsignedLeq | Self::FvUnsignedGt => true,
-        }
-    }
-
-    pub fn new_masked(v: u32) -> Self {
-        match v & 0x3 {
-            0 => Self::TvUnsignedLeq,
-            1 => Self::TvUnsignedGt,
-            2 => Self::FvUnsignedLeq,
-            _ => Self::FvUnsignedGt,
-        }
+operator! {
+    CompareOp 0x3 => {
+        (TvUnsignedLeq, "tv.heap_unsigned_leq", false),
+        (TvUnsignedGt, "tv.heap_unsigned_gt", false),
+        (FvUnsignedLeq, "fv.heap_unsigned_leq", true),
+        (FvUnsignedGt, "fv.heap_unsigned_gt", true),
     }
 }
 
