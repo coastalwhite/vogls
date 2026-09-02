@@ -232,8 +232,10 @@ wide_code! {
     Add,
     Sub,
     Mul,
-    Div,
-    Mod,
+    DivX,
+    Div0,
+    ModX,
+    Mod0,
     Pow,
     Lsl,
     Lsr,
@@ -300,7 +302,18 @@ extern "C" fn wide_binop(
                     a::tv_multiplication(d, l, r, ds)
                 }
             }
-            W::Div => {
+            W::DivX => {
+                let dw = dnw * 2;
+                let d = std::slice::from_raw_parts_mut(dst, dw);
+                let r = std::slice::from_raw_parts(rhs, sw);
+                let mut m = vec![0u64; dw];
+                if is_fv {
+                    a::fv_division_x(d, &mut m, l, r, ds)
+                } else {
+                    a::tv_division_x(d, &mut m, l, r, ds)
+                }
+            }
+            W::Div0 => {
                 let r = std::slice::from_raw_parts(rhs, sw);
                 let mut m = vec![0u64; dw];
                 if is_fv {
@@ -309,7 +322,18 @@ extern "C" fn wide_binop(
                     a::tv_division(d, &mut m, l, r, ds)
                 }
             }
-            W::Mod => {
+            W::ModX => {
+                let dw = dnw * 2;
+                let d = std::slice::from_raw_parts_mut(dst, dw);
+                let r = std::slice::from_raw_parts(rhs, sw);
+                let mut q = vec![0u64; dw];
+                if is_fv {
+                    a::fv_division_x(&mut q, d, l, r, ds)
+                } else {
+                    a::tv_division_x(&mut q, d, l, r, ds)
+                }
+            }
+            W::Mod0 => {
                 let r = std::slice::from_raw_parts(rhs, sw);
                 let mut q = vec![0u64; dw];
                 if is_fv {
