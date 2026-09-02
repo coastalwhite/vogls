@@ -446,6 +446,7 @@ impl BasicBlockBuilder {
         (unsigned_ge_constant, UnsignedGreaterEqual)
         (case_equals_constant, CaseEquality)
         (not_case_equals_constant, CaseInequality)
+        (bitwise_case_equals_constant, BitwiseCaseEquality)
     }
 
     shift_imm_ops! {
