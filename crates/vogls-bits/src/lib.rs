@@ -797,7 +797,7 @@ impl Bits {
                     .zip(&v[v.len() / 2..])
                     .map(|(spc, val)| (!spc & !val).count_ones())
                     .sum::<u32>()
-                    - saturating_rem(self.size().get(), 64)
+                    - (64 - saturating_rem(self.size().get(), 64))
             }
         }
     }
