@@ -286,7 +286,7 @@ impl BytecodeInstruction for FvLeadingZeros {
             return;
         }
 
-        regs[rdspc] = u32::MAX.into();
+        regs[rdspc] = u64::from(u32::MAX);
         regs[rdval] = u64::from(regs[rsval].leading_zeros()).wrapping_sub(64 - size as u64);
     }
 }
