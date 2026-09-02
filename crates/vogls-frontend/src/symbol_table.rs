@@ -204,6 +204,10 @@ impl<T> SymbolTable<T> {
     pub fn pop_last_inserted(&mut self, symbol: SymbolId) {
         assert_eq!(self.symbols.len(), symbol.0.get() as usize);
 
+        let popped = &self.symbols[symbol.0.get() as usize - 1];
+        let key = (popped.parent, popped.name);
+        let _ = self.lut.remove(&key);
+
         if let Some(parent) = self[symbol].parent {
             assert_eq!(Some(symbol), self[parent].children.pop());
         };
