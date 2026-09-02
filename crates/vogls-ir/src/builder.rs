@@ -111,6 +111,26 @@ impl ProcessBuilder {
     pub fn entry(&self) -> TemporalRegionKey {
         self.trs[0]
     }
+
+    pub fn abort(self, gl: &mut GlobalContext) {
+        let mut stack = Vec::new();
+        for tr in &self.trs {
+            stack.push(tr.entry());
+            while let Some(bb_key) = stack.pop() {
+                let Some(bb) = gl.bbs.remove(bb_key) else {
+                    continue;
+                };
+                bb.terminator.for_each_non_temporal_bb(|tgt| {
+                    if gl.bbs.contains_key(tgt) {
+                        stack.push(tgt);
+                    }
+                });
+            }
+        }
+        if let Some(key) = self.key() {
+            _ = gl.processes.remove(key);
+        }
+    }
 }
 
 pub struct PhiRef(BasicBlockKey, usize);
