@@ -713,14 +713,10 @@ fn lower_instruction(
                     bce.truncate(rdval, rsval, dst_size);
                 }
                 (O::Truncate, M::FourValue, Some(dst_size), None) => {
+                    let offset = HeapAlignment::spc_offset_to_val_offset(src_size, 0);
                     let (rdspc, rdval) = rd.to_spc_and_val();
                     bce.load_rel_unaligned(rdspc, rs, InlineAddrOffset::ZERO, dst_size);
-                    let (addr, offset) = InlineAddrOffset::new(
-                        src_size.get().next_power_of_two() as i64,
-                        bce,
-                        rs,
-                        T4,
-                    );
+                    let (addr, offset) = InlineAddrOffset::new(offset as i64, bce, rs, T4);
                     bce.load_rel_unaligned(rdval, addr, offset, dst_size);
                 }
                 (O::Truncate, M::FourValue, None, None) => {
