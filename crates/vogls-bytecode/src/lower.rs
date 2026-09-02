@@ -581,14 +581,14 @@ fn lower_instruction(
                     bce.fv_reduce_xor(rd, rs, src_size)
                 }
                 (O::ReduceXor, M::FourValue, _, None) => bce.heap_fv_reduce_xor(rd, rs, src_size),
-                (O::LeadingZeros, M::TwoValue, _, Some(size)) => bce.leading_zeros(rd, rs, size),
-                (O::LeadingZeros, M::TwoValue, _, None) => {
+                (O::LeadingZeros, _, M::TwoValue, Some(size)) => bce.leading_zeros(rd, rs, size),
+                (O::LeadingZeros, _, M::TwoValue, None) => {
                     bce.heap_tv_leading_zeros(rd, rs, src_size)
                 }
-                (O::LeadingZeros, M::FourValue, _, Some(size)) => {
+                (O::LeadingZeros, _, M::FourValue, Some(size)) => {
                     bce.fv_leading_zeros(rd, rs, size)
                 }
-                (O::LeadingZeros, M::FourValue, _, None) => {
+                (O::LeadingZeros, _, M::FourValue, None) => {
                     bce.heap_fv_leading_zeros(rd, rs, src_size)
                 }
                 (O::TvToFv, _, _, Some(src_size)) => bce.tv_to_fv(rd, rs, src_size),

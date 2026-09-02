@@ -1027,7 +1027,13 @@ impl UnaryOp {
             O::ReduceXor => Bits::from(src.reduce_xor()),
             O::TvToFv => src.clone(),
             O::FvToTv => src.special_to_zero(),
-            O::LeadingZeros => Bits::from_u64(INTEGER_VSIZE, src.leading_zeroes().into()),
+            O::LeadingZeros => {
+                if src.contains_special() {
+                    return Bits::new_unknown(INTEGER_VSIZE);
+                }
+
+                Bits::new_u32(src.leading_zeroes())
+            }
             O::RealToLogical => Bits::from(f64::from_bits(src.extract_exact_u64().unwrap()) != 0.0),
             O::RealToU64 => {
                 Bits::new_u64(f64::from_bits(src.extract_exact_u64().unwrap()).round() as u64)
@@ -1219,11 +1225,10 @@ impl UnaryOp {
     pub fn output_mode(self, src: LogicMode) -> Option<LogicMode> {
         use UnaryOp as O;
         match self {
-            O::Not | O::ReduceOr | O::ReduceAnd | O::ReduceXor => Some(src),
+            O::Not | O::ReduceOr | O::ReduceAnd | O::ReduceXor | O::LeadingZeros => Some(src),
             O::TvToFv if src == LogicMode::TwoValue => Some(LogicMode::FourValue),
             O::FvToTv if src == LogicMode::FourValue => Some(LogicMode::TwoValue),
             O::TvToFv | O::FvToTv => None,
-            O::LeadingZeros => Some(LogicMode::TwoValue),
             O::RealToLogical
             | O::RealToU64
             | O::RealToI64
