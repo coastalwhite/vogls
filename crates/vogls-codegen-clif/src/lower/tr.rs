@@ -26,7 +26,7 @@ use crate::lower::{
 };
 use crate::runtime::{ColdContextT, EventT, FnTable, ScheduleT, layout};
 
-use super::{Compiler, WideMap, wide_load, wide_store};
+use super::{Compiler, WideMap, top_i64, wide_load, wide_store};
 
 pub struct TrBuilder<'a, 'b> {
     compiler: &'a mut Compiler<'b>,
@@ -158,6 +158,54 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                 let spc_get = |b: &mut FunctionBuilder, v: VariableKey| {
                     debug_assert_eq!(v.mode(), LogicMode::FourValue);
                     b.use_var(spc_map[&v])
+                };
+
+                let cldctx = params.cldctx;
+                let sz = |v: VariableKey| gl.vars.size(v).get();
+                let is_fv = |v: VariableKey| v.mode() == LogicMode::FourValue;
+                let rv = |b: &mut FunctionBuilder, v: VariableKey, i: u32| -> Value {
+                    let size = gl.vars.size(v).get();
+                    if size > 64 {
+                        let off = if v.mode() == LogicMode::FourValue {
+                            nwords(size) + i
+                        } else {
+                            i
+                        };
+                        wide_load(b, ptr, cldctx, wide_map[&v], off)
+                    } else {
+                        b.use_var(vmap[&v])
+                    }
+                };
+                let rs = |b: &mut FunctionBuilder, v: VariableKey, i: u32| -> Value {
+                    let size = gl.vars.size(v).get();
+                    if size > 64 {
+                        wide_load(b, ptr, cldctx, wide_map[&v], i)
+                    } else if v.mode() == LogicMode::FourValue {
+                        b.use_var(spc_map[&v])
+                    } else {
+                        b.ins().iconst(I64, mask_of(size))
+                    }
+                };
+                let wv = |b: &mut FunctionBuilder, v: VariableKey, i: u32, val: Value| {
+                    let size = gl.vars.size(v).get();
+                    if size > 64 {
+                        let off = if v.mode() == LogicMode::FourValue {
+                            nwords(size) + i
+                        } else {
+                            i
+                        };
+                        wide_store(b, ptr, cldctx, wide_map[&v], off, val);
+                    } else {
+                        b.def_var(vmap[&v], val);
+                    }
+                };
+                let ws = |b: &mut FunctionBuilder, v: VariableKey, i: u32, val: Value| {
+                    let size = gl.vars.size(v).get();
+                    if size > 64 {
+                        wide_store(b, ptr, cldctx, wide_map[&v], i, val);
+                    } else {
+                        b.def_var(spc_map[&v], val);
+                    }
                 };
 
                 match instr {
@@ -348,9 +396,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let spc = b.ins().uextend(I64, z1);
                                 (val, spc)
                             }),
-                            (O::ReduceOr, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             (O::ReduceAnd, M::TwoValue, _, Some(_)) => map!(val => @tv {
                                 let m = mask_of(src_size.get());
                                 let c = b.ins().icmp_imm_u(IntCC::Equal, val, m);
@@ -370,9 +415,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let spc = b.ins().uextend(I64, z1);
                                 (val, spc)
                             }),
-                            (O::ReduceAnd, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             (O::ReduceXor, M::TwoValue, _, Some(_)) => map!(val => @tv {
                                 let p = b.ins().popcnt(val);
                                 b.ins().band_imm_u(p, 1)
@@ -388,9 +430,93 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let spc = b.ins().uextend(I64, allk);
                                 (val, spc)
                             }),
-                            (O::ReduceXor, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::ReduceOr | O::ReduceAnd | O::ReduceXor, _, _, _) => {
+                                let n = nwords(sz(*src));
+                                let ssize = sz(*src);
+                                if is_fv(*src) {
+                                    let mut k1 = b.ins().iconst(I64, 0);
+                                    let mut k0 = b.ins().iconst(I64, 0);
+                                    let mut notk = b.ins().iconst(I64, 0);
+                                    let mut xor = b.ins().iconst(I64, 0);
+                                    let mut all1 = b.ins().iconst(types::I8, 1);
+                                    for i in 0..n {
+                                        let sv = rv(b, *src, i);
+                                        let ss = rs(b, *src, i);
+                                        let m = if i == n - 1 { top_i64(ssize) } else { -1 };
+                                        let k1i = b.ins().band(ss, sv);
+                                        k1 = b.ins().bor(k1, k1i);
+                                        let nsv = b.ins().bnot(sv);
+                                        let k0i = b.ins().band(ss, nsv);
+                                        let k0i = b.ins().band_imm_u(k0i, m);
+                                        k0 = b.ins().bor(k0, k0i);
+                                        let nss = b.ins().bnot(ss);
+                                        let notki = b.ins().band_imm_u(nss, m);
+                                        notk = b.ins().bor(notk, notki);
+                                        xor = b.ins().bxor(xor, sv);
+                                        let eqs = b.ins().icmp_imm_u(IntCC::Equal, ss, m);
+                                        let eqv = b.ins().icmp_imm_u(IntCC::Equal, sv, m);
+                                        let a1i = b.ins().band(eqs, eqv);
+                                        all1 = b.ins().band(all1, a1i);
+                                    }
+                                    let all_known = b.ins().icmp_imm_u(IntCC::Equal, notk, 0);
+                                    let (z0, z1) = match op {
+                                        UnaryOp::ReduceOr => {
+                                            let has1 = b.ins().icmp_imm_u(IntCC::NotEqual, k1, 0);
+                                            let z1 = b.ins().bor(all_known, has1);
+                                            (has1, z1)
+                                        }
+                                        UnaryOp::ReduceAnd => {
+                                            let has0 = b.ins().icmp_imm_u(IntCC::NotEqual, k0, 0);
+                                            let z1 = b.ins().bor(all_known, has0);
+                                            (all1, z1)
+                                        }
+                                        _ => {
+                                            let pc = b.ins().popcnt(xor);
+                                            let par = b.ins().band_imm_u(pc, 1);
+                                            let parb = b.ins().icmp_imm_u(IntCC::NotEqual, par, 0);
+                                            let z0 = b.ins().band(all_known, parb);
+                                            (z0, all_known)
+                                        }
+                                    };
+                                    let vz = b.ins().uextend(I64, z0);
+                                    let sz2 = b.ins().uextend(I64, z1);
+                                    wv(b, *dst, 0, vz);
+                                    ws(b, *dst, 0, sz2);
+                                } else {
+                                    let r = match op {
+                                        UnaryOp::ReduceOr => {
+                                            let mut acc = b.ins().iconst(I64, 0);
+                                            for i in 0..n {
+                                                let w = rv(b, *src, i);
+                                                acc = b.ins().bor(acc, w);
+                                            }
+                                            let c = b.ins().icmp_imm_u(IntCC::NotEqual, acc, 0);
+                                            b.ins().uextend(I64, c)
+                                        }
+                                        UnaryOp::ReduceAnd => {
+                                            let mut acc = b.ins().iconst(types::I8, 1);
+                                            for i in 0..n {
+                                                let w = rv(b, *src, i);
+                                                let m =
+                                                    if i == n - 1 { top_i64(ssize) } else { -1 };
+                                                let eq = b.ins().icmp_imm_u(IntCC::Equal, w, m);
+                                                acc = b.ins().band(acc, eq);
+                                            }
+                                            b.ins().uextend(I64, acc)
+                                        }
+                                        _ => {
+                                            let mut acc = b.ins().iconst(I64, 0);
+                                            for i in 0..n {
+                                                let w = rv(b, *src, i);
+                                                acc = b.ins().bxor(acc, w);
+                                            }
+                                            let pc = b.ins().popcnt(acc);
+                                            b.ins().band_imm_u(pc, 1)
+                                        }
+                                    };
+                                    wv(b, *dst, 0, r);
+                                }
+                            }
                             (O::LeadingZeros, M::TwoValue, _, Some(_)) => map!(val => @tv {
                                 let shifted = if src_size.get() < 64 {
                                     b.ins().ishl_imm_u(val, (64 - src_size.get()) as i64)
@@ -424,9 +550,50 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let spc = b.ins().select(known, spc_full, zero);
                                 (val, spc)
                             }),
-                            (O::LeadingZeros, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::LeadingZeros, _, _, _) => {
+                                let n = nwords(sz(*src));
+                                let ssize = sz(*src);
+                                let dsize = sz(*dst);
+                                let top_bits = ssize - (n - 1) * 64;
+                                let mut lz = b.ins().iconst(I64, 0);
+                                let mut found = b.ins().iconst(types::I8, 0);
+                                for wi in (0..n).rev() {
+                                    let w = rv(b, *src, wi);
+                                    let wbits = if wi == n - 1 { top_bits } else { 64 };
+                                    let shifted = if wbits < 64 {
+                                        b.ins().ishl_imm_u(w, (64 - wbits) as i64)
+                                    } else {
+                                        w
+                                    };
+                                    let word_clz = b.ins().clz(shifted);
+                                    let w_nz = b.ins().icmp_imm_u(IntCC::NotEqual, w, 0);
+                                    let wbits_c = b.ins().iconst(I64, wbits as i64);
+                                    let contrib = b.ins().select(w_nz, word_clz, wbits_c);
+                                    let zero = b.ins().iconst(I64, 0);
+                                    let add = b.ins().select(found, zero, contrib);
+                                    lz = b.ins().iadd(lz, add);
+                                    found = b.ins().bor(found, w_nz);
+                                }
+                                let r = maskv(b, lz, dsize);
+                                if is_fv(*dst) {
+                                    let mut allknown = b.ins().iconst(types::I8, 1);
+                                    for wi in 0..n {
+                                        let sw = rs(b, *src, wi);
+                                        let wbits = if wi == n - 1 { top_bits } else { 64 };
+                                        let full =
+                                            b.ins().icmp_imm_u(IntCC::Equal, sw, mask_of(wbits));
+                                        allknown = b.ins().band(allknown, full);
+                                    }
+                                    let zero = b.ins().iconst(I64, 0);
+                                    let val = b.ins().select(allknown, r, zero);
+                                    let spcmask = b.ins().iconst(I64, mask_of(dsize));
+                                    let spc = b.ins().select(allknown, spcmask, zero);
+                                    wv(b, *dst, 0, val);
+                                    ws(b, *dst, 0, spc);
+                                } else {
+                                    wv(b, *dst, 0, r);
+                                }
+                            }
 
                             (O::RealNeg, _, _, _) => {
                                 map!(val => @tv { let fs = b.ins().bitcast(F64, cast(), val); let r = b.ins().fneg(fs); native(b, r) })
@@ -689,12 +856,124 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }
                         };
 
+                        use crate::runtime::WideCode;
                         use crate::runtime::real_code as rc;
                         use BinaryOp as O;
                         use LogicMode as M;
-                        // Wide (>64 dst/lhs/rhs) binary ops delegate to the multi-word
-                        // lowering; each op has a `(.., _, _, _)` fallback below. Power
-                        // and the Real* ops handle their own widths and aren't qualified.
+                        // The wide (>64 dst/lhs/rhs) path for each op runs the `wide_binop`
+                        // shim over heap-layout words; the per-op arms below supply the shim
+                        // opcode base and whether the rhs is a shift amount.
+                        let wide_binop = |compiler: &mut Compiler,
+                                          b: &mut FunctionBuilder,
+                                          wbase: WideCode,
+                                          is_shift: bool| {
+                            let is_fv = dst.mode() == LogicMode::FourValue;
+                            let dsize = gl.vars.size(*dst).get();
+                            let ssize = gl.vars.size(*lhs).get();
+
+                            let lhs_ptr = compiler.value_words_ptr(
+                                b,
+                                *lhs,
+                                vmap,
+                                spc_map,
+                                wide_map,
+                                params.cldctx,
+                            );
+                            let rhs_ptr = if is_shift {
+                                // Pass `[amt_known, amt_val]`; a four-value amount that
+                                // isn't fully known makes the shim produce all-x. `amt` is
+                                // the low value word of the (possibly wide) shift amount.
+                                let amt = {
+                                    let size = gl.vars.size(*rhs).get();
+                                    if size > 64 {
+                                        let off = if rhs.mode() == LogicMode::FourValue {
+                                            nwords(size)
+                                        } else {
+                                            0
+                                        };
+                                        wide_load(b, ptr, params.cldctx, wide_map[rhs], off)
+                                    } else {
+                                        b.use_var(vmap[rhs])
+                                    }
+                                };
+                                let known = if rhs.mode() == LogicMode::FourValue {
+                                    let s2size = gl.vars.size(*rhs).get().min(64);
+                                    let spc = if gl.vars.size(*rhs).get() > 64 {
+                                        wide_load(b, ptr, params.cldctx, wide_map[rhs], 0)
+                                    } else {
+                                        b.use_var(spc_map[rhs])
+                                    };
+                                    let k = b.ins().icmp_imm_u(IntCC::Equal, spc, mask_of(s2size));
+                                    b.ins().uextend(I64, k)
+                                } else {
+                                    b.ins().iconst(I64, 1)
+                                };
+                                let slot = b.create_sized_stack_slot(StackSlotData::new(
+                                    StackSlotKind::ExplicitSlot,
+                                    16,
+                                    3,
+                                ));
+                                b.ins().stack_store(ptr, known, slot, 0);
+                                b.ins().stack_store(ptr, amt, slot, 8);
+                                b.ins().stack_addr(ptr, slot, 0)
+                            } else {
+                                compiler.value_words_ptr(
+                                    b,
+                                    *rhs,
+                                    vmap,
+                                    spc_map,
+                                    wide_map,
+                                    params.cldctx,
+                                )
+                            };
+
+                            let dst_wide = dsize > 64;
+                            let dst_slot = if dst_wide {
+                                wide_map[dst]
+                            } else {
+                                let words = if is_fv { 2 } else { 1 };
+                                WideLoc::Slot(b.create_sized_stack_slot(StackSlotData::new(
+                                    StackSlotKind::ExplicitSlot,
+                                    words * 8,
+                                    3,
+                                )))
+                            };
+                            let dst_ptr = dst_slot.addr(b, ptr, params.cldctx, 0);
+
+                            let cldctx = params.cldctx;
+                            let fnp = b.ins().load(
+                                ptr,
+                                mem(),
+                                cldctx,
+                                (layout::CTX_FN_TABLE + layout::FN_WIDE_BINOP) as i32,
+                            );
+                            let mut sig = Signature::new(CallConv::SystemV);
+                            sig.params.extend(
+                                [types::I32, ptr, ptr, ptr, types::I32, types::I32]
+                                    .map(AbiParam::new),
+                            );
+                            let sr = b.import_signature(sig);
+                            let opc = b.ins().iconst(types::I32, wbase.encode(is_fv) as i64);
+                            let dsc = b.ins().iconst(types::I32, dsize as i64);
+                            let ssc = b.ins().iconst(types::I32, ssize as i64);
+                            b.ins().call_indirect(
+                                sr,
+                                fnp,
+                                &[opc, dst_ptr, lhs_ptr, rhs_ptr, dsc, ssc],
+                            );
+
+                            if !dst_wide {
+                                if is_fv {
+                                    let spc = wide_load(b, ptr, params.cldctx, dst_slot, 0);
+                                    let val = wide_load(b, ptr, params.cldctx, dst_slot, 1);
+                                    b.def_var(spc_map[dst], spc);
+                                    b.def_var(vmap[dst], val);
+                                } else {
+                                    let val = wide_load(b, ptr, params.cldctx, dst_slot, 0);
+                                    b.def_var(vmap[dst], val);
+                                }
+                            }
+                        };
                         match (
                             op,
                             dst.mode(),
@@ -901,33 +1180,76 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             (O::Add, _, _, Some(_), _, _) => {
                                 bin_arith!(lhs, rhs => b.ins().iadd(lhs, rhs), true)
                             }
-                            (O::Add, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             (O::Sub, _, _, Some(_), _, _) => {
                                 bin_arith!(lhs, rhs => b.ins().isub(lhs, rhs), true)
                             }
-                            (O::Sub, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             (O::Multiply, _, _, Some(_), _, _) => {
                                 bin_arith!(lhs, rhs => b.ins().imul(lhs, rhs), true)
                             }
-                            (O::Multiply, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             (O::Min, _, _, Some(_), _, _) => {
                                 bin_arith!(lhs, rhs => b.ins().umin(lhs, rhs), false)
                             }
-                            (O::Min, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             (O::Max, _, _, Some(_), _, _) => {
                                 bin_arith!(lhs, rhs => b.ins().umax(lhs, rhs), false)
                             }
-                            (O::Max, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::Min, M::TwoValue, _, _, _, _)
+                            | (O::Max, M::TwoValue, _, _, _, _) => {
+                                let is_max = matches!(op, O::Max);
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let lhs_ptr = wide_map[lhs].addr(b, ptr, params.cldctx, 0);
+                                let rhs_ptr = wide_map[rhs].addr(b, ptr, params.cldctx, 0);
+                                let one = b.ins().iconst(I64, 1);
+                                clif_binary_reduce(
+                                    b,
+                                    dst_size,
+                                    one,
+                                    lhs_ptr,
+                                    rhs_ptr,
+                                    TvReduce {
+                                        step: clif_tv_leq_reduce_step,
+                                        finish:
+                                            |b: &mut FunctionBuilder,
+                                             size: VectorSize,
+                                             lhs_base,
+                                             rhs_base,
+                                             acc| {
+                                                tv_minmax_copy(
+                                                    b, size, is_max, dst_base, lhs_base, rhs_base,
+                                                    acc,
+                                                )
+                                            },
+                                    },
+                                );
+                            }
+                            (O::Min, M::FourValue, _, _, _, _)
+                            | (O::Max, M::FourValue, _, _, _, _) => {
+                                let is_max = matches!(op, O::Max);
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let lhs_ptr = wide_map[lhs].addr(b, ptr, params.cldctx, 0);
+                                let rhs_ptr = wide_map[rhs].addr(b, ptr, params.cldctx, 0);
+                                let acc0 = b.ins().iconst(I64, FV_CMP_ACC0);
+                                clif_binary_reduce(
+                                    b,
+                                    dst_size,
+                                    acc0,
+                                    lhs_ptr,
+                                    rhs_ptr,
+                                    FvReduce {
+                                        step: clif_fv_leq_reduce_step,
+                                        finish:
+                                            |b: &mut FunctionBuilder,
+                                             size: VectorSize,
+                                             lhs_base,
+                                             rhs_base,
+                                             acc| {
+                                                fv_minmax_copy(
+                                                    b, size, is_max, dst_base, lhs_base, rhs_base,
+                                                    acc,
+                                                )
+                                            },
+                                    },
+                                );
+                            }
 
                             // Negedge only ever has size-1 operands, so it is always narrow.
                             (O::Negedge, _, M::TwoValue, _, _, _) => {
@@ -956,6 +1278,34 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     b.ins().uextend(I64, eq)
                                 })
                             }
+                            (O::CaseEquality, _, M::TwoValue, _, _, _) => {
+                                let lhs_ptr = wide_map[lhs].addr(b, ptr, params.cldctx, 0);
+                                let rhs_ptr = wide_map[rhs].addr(b, ptr, params.cldctx, 0);
+                                let one = b.ins().iconst(I64, 1);
+                                let r = clif_binary_reduce(
+                                    b,
+                                    lhs_size,
+                                    one,
+                                    lhs_ptr,
+                                    rhs_ptr,
+                                    TvReduce {
+                                        step: |b: &mut FunctionBuilder, acc, l, r| {
+                                            let eq = b.ins().icmp(IntCC::Equal, l, r);
+                                            let eq = b.ins().uextend(I64, eq);
+                                            let acc = b.ins().band(acc, eq);
+                                            let differ = b.ins().icmp_imm_u(IntCC::Equal, acc, 0);
+                                            (acc, differ)
+                                        },
+                                        finish:
+                                            |_b: &mut FunctionBuilder,
+                                             _s: VectorSize,
+                                             _l,
+                                             _r,
+                                             _a| {},
+                                    },
+                                );
+                                wv(b, *dst, 0, r);
+                            }
                             (O::CaseEquality, _, M::FourValue, _, Some(_), _) => {
                                 map!((lval, lspc), (rval, rspc) => @tv {
                                     let vm = b.ins().icmp(IntCC::Equal, lval, rval);
@@ -964,12 +1314,42 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     b.ins().uextend(I64, eq)
                                 })
                             }
-                            (O::CaseEquality, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
-                            (O::Power, _, _, _, _, _) => self.compiler.emit_wide_binop(
-                                b, params, *op, *dst, *lhs, *rhs, vmap, spc_map, wide_map,
-                            ),
+                            (O::CaseEquality, _, M::FourValue, _, _, _) => {
+                                let lhs_ptr = wide_map[lhs].addr(b, ptr, params.cldctx, 0);
+                                let rhs_ptr = wide_map[rhs].addr(b, ptr, params.cldctx, 0);
+                                let one = b.ins().iconst(I64, 1);
+                                let r = clif_binary_reduce(
+                                    b,
+                                    lhs_size,
+                                    one,
+                                    lhs_ptr,
+                                    rhs_ptr,
+                                    FvReduce {
+                                        step: |b: &mut FunctionBuilder,
+                                               _valid_mask,
+                                               acc,
+                                               lv,
+                                               ls,
+                                               rv,
+                                               rs| {
+                                            let ve = b.ins().icmp(IntCC::Equal, lv, rv);
+                                            let se = b.ins().icmp(IntCC::Equal, ls, rs);
+                                            let both = b.ins().band(ve, se);
+                                            let both = b.ins().uextend(I64, both);
+                                            let acc = b.ins().band(acc, both);
+                                            let differ = b.ins().icmp_imm_u(IntCC::Equal, acc, 0);
+                                            (acc, differ)
+                                        },
+                                        finish:
+                                            |_b: &mut FunctionBuilder,
+                                             _s: VectorSize,
+                                             _l,
+                                             _r,
+                                             _a| {},
+                                    },
+                                );
+                                wv(b, *dst, 0, r);
+                            }
                             // DivideX/ModulusX: operands are known; div-by-zero yields x,
                             // so gate the four-value dst on a non-zero divisor.
                             (O::DivideX, _, M::TwoValue, Some(_), _, _) => {
@@ -984,9 +1364,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, lspc, lhs_size.get(), rspc, rhs_size.get(), dst_size.get(), Some(nz))
                                 })
                             }
-                            (O::DivideX, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             (O::ModulusX, _, M::TwoValue, Some(_), _, _) => {
                                 map!(lhs, rhs => @fv {
                                     let (raw, nz) = clif_tv_modx(b, lhs, rhs);
@@ -999,9 +1376,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, lspc, lhs_size.get(), rspc, rhs_size.get(), dst_size.get(), Some(nz))
                                 })
                             }
-                            (O::ModulusX, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             (O::Divide0, _, M::TwoValue, Some(_), _, _) => {
                                 map!(lhs, rhs => @tv clif_tv_div0(b, lhs, rhs))
                             }
@@ -1011,9 +1385,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, lspc, lhs_size.get(), rspc, rhs_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::Divide0, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             (O::Modulus0, _, M::TwoValue, Some(_), _, _) => {
                                 map!(lhs, rhs => @tv clif_tv_mod0(b, lhs, rhs))
                             }
@@ -1023,14 +1394,28 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, lspc, lhs_size.get(), rspc, rhs_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::Modulus0, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
                             (O::UnsignedLessEqual, M::TwoValue, _, _, Some(_), Some(_)) => {
                                 map!(lhs, rhs => @tv {
                                     let c = b.ins().icmp(IntCC::UnsignedLessThanOrEqual, lhs, rhs);
                                     b.ins().uextend(I64, c)
                                 })
+                            }
+                            (O::UnsignedLessEqual, M::TwoValue, _, _, _, _) => {
+                                let lhs_ptr = wide_map[lhs].addr(b, ptr, params.cldctx, 0);
+                                let rhs_ptr = wide_map[rhs].addr(b, ptr, params.cldctx, 0);
+                                let one = b.ins().iconst(I64, 1);
+                                let r = clif_binary_reduce(
+                                    b,
+                                    lhs_size,
+                                    one,
+                                    lhs_ptr,
+                                    rhs_ptr,
+                                    TvReduce {
+                                        step: clif_tv_leq_reduce_step,
+                                        finish: noop_finalize,
+                                    },
+                                );
+                                wv(b, *dst, 0, r);
                             }
                             (O::UnsignedLessEqual, M::FourValue, _, _, Some(_), Some(_)) => {
                                 map!((lval, lspc), (rval, rspc) => @fv {
@@ -1039,9 +1424,30 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, cmpv, lspc, lhs_size.get(), rspc, rhs_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::UnsignedLessEqual, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::UnsignedLessEqual, M::FourValue, _, _, _, _) => {
+                                let lhs_ptr = wide_map[lhs].addr(b, ptr, params.cldctx, 0);
+                                let rhs_ptr = wide_map[rhs].addr(b, ptr, params.cldctx, 0);
+                                let acc0 = b.ins().iconst(I64, FV_CMP_ACC0);
+                                let r = clif_binary_reduce(
+                                    b,
+                                    lhs_size,
+                                    acc0,
+                                    lhs_ptr,
+                                    rhs_ptr,
+                                    FvReduce {
+                                        step: clif_fv_leq_reduce_step,
+                                        finish:
+                                            |_b: &mut FunctionBuilder,
+                                             _s: VectorSize,
+                                             _l,
+                                             _r,
+                                             _a| {},
+                                    },
+                                );
+                                let (val, spc) = fv_cmp_result(b, r);
+                                wv(b, *dst, 0, val);
+                                ws(b, *dst, 0, spc);
+                            }
                             (O::LogicalShiftLeft, M::TwoValue, _, Some(_), _, _) => {
                                 map!(lhs, rhs => @tv {
                                     let sh = ushl(b, lhs, rhs);
@@ -1103,15 +1509,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     (val, spc)
                                 })
                             }
-                            (O::LogicalShiftLeft, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
-                            (O::LogicalShiftRight, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
-                            (O::ArithmeticShiftRight, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
 
                             (O::Concat, M::TwoValue, _, Some(_), _, _) => {
                                 map!(lhs, rhs => @tv {
@@ -1128,9 +1525,38 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     (val, spc)
                                 })
                             }
-                            (O::Concat, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            // Wide `{ lhs, rhs }`: `rhs` in the low bits, `lhs` starting at
+                            // bit `|rhs|`. The dst is wide; operands may be narrow (a wide
+                            // result of two narrow halves), so spill via `value_words_ptr`.
+                            (O::Concat, _, _, _, _, _) => {
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let lhs_base = self.compiler.value_words_ptr(
+                                    b,
+                                    *lhs,
+                                    vmap,
+                                    spc_map,
+                                    wide_map,
+                                    params.cldctx,
+                                );
+                                let rhs_base = self.compiler.value_words_ptr(
+                                    b,
+                                    *rhs,
+                                    vmap,
+                                    spc_map,
+                                    wide_map,
+                                    params.cldctx,
+                                );
+                                clif_concat(
+                                    b,
+                                    is_fv(*dst),
+                                    dst_base,
+                                    dst_size,
+                                    rhs_base,
+                                    rhs_size,
+                                    lhs_base,
+                                    lhs_size,
+                                );
+                            }
                             // Real* ops are always 64-bit, so never wide.
                             (O::RealAdd, _, _, _, _, _) => {
                                 map!(lhs, rhs => @real b.ins().fadd(lhs, rhs))
@@ -1158,6 +1584,39 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }
                             (O::RealHypot, _, _, _, _, _) => {
                                 map!(lhs, rhs => @tv self.compiler.real_shim(b, params, rc::HYPOT, lhs, rhs))
+                            }
+                            (O::Add, _, _, _, _, _) => {
+                                wide_binop(self.compiler, b, WideCode::Add, false)
+                            }
+                            (O::Sub, _, _, _, _, _) => {
+                                wide_binop(self.compiler, b, WideCode::Sub, false)
+                            }
+                            (O::Multiply, _, _, _, _, _) => {
+                                wide_binop(self.compiler, b, WideCode::Mul, false)
+                            }
+                            (O::Power, _, _, _, _, _) => {
+                                wide_binop(self.compiler, b, WideCode::Pow, false)
+                            }
+                            (O::DivideX, _, _, _, _, _) => {
+                                wide_binop(self.compiler, b, WideCode::Div, false)
+                            }
+                            (O::Divide0, _, _, _, _, _) => {
+                                wide_binop(self.compiler, b, WideCode::Div, false)
+                            }
+                            (O::ModulusX, _, _, _, _, _) => {
+                                wide_binop(self.compiler, b, WideCode::Mod, false)
+                            }
+                            (O::Modulus0, _, _, _, _, _) => {
+                                wide_binop(self.compiler, b, WideCode::Mod, false)
+                            }
+                            (O::LogicalShiftLeft, _, _, _, _, _) => {
+                                wide_binop(self.compiler, b, WideCode::Lsl, true)
+                            }
+                            (O::LogicalShiftRight, _, _, _, _, _) => {
+                                wide_binop(self.compiler, b, WideCode::Lsr, true)
+                            }
+                            (O::ArithmeticShiftRight, _, _, _, _, _) => {
+                                wide_binop(self.compiler, b, WideCode::Asr, true)
                             }
                         }
                     }
@@ -1229,11 +1688,98 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             (dst_base, lhs_base, rhs_base)
                         };
 
+                        use crate::runtime::WideCode;
                         use BinaryImmOp as O;
                         use LogicMode as M;
-                        // Wide (>64 dst/src/imm) ops delegate to the multi-word lowering;
-                        // each op has a `(.., _, _, _)` fallback below. Power/RevPower run
-                        // their own shim and aren't qualified.
+                        // The wide (>64 dst/src/imm) path for each op runs the `wide_binop`
+                        // shim over heap-layout words; the per-op arms below supply the shim
+                        // opcode base and operand order (`swap` => the immediate is the lhs).
+                        let wide_binop_imm =
+                            |compiler: &mut Compiler,
+                             b: &mut FunctionBuilder,
+                             wbase: WideCode,
+                             swap: bool| {
+                                let is_fv = dst.mode() == LogicMode::FourValue;
+                                let dsize = gl.vars.size(*dst).get();
+                                let ssize = gl.vars.size(*src).get();
+                                let src_ptr = compiler.value_words_ptr(
+                                    b,
+                                    *src,
+                                    vmap,
+                                    spc_map,
+                                    wide_map,
+                                    params.cldctx,
+                                );
+                                // A wide (>64) immediate is reserved in the runtime
+                                // heap (baked in at init) rather than materialized
+                                // as `iconst`s into a temp stack slot. The narrow
+                                // `Power`/`RevPower` path keeps the stack slot: the
+                                // heap packs a small four-value constant into one
+                                // word, but the shim reads the `[spc, val]` layout.
+                                let imm_ptr = if ssize > 64 {
+                                    let imm_ref = compiler
+                                        .heap_builder
+                                        .claim_constant(dst.mode(), imm.clone());
+                                    b.ins().iadd_imm_u(
+                                        params.heap_ptr,
+                                        (imm_ref.offset.bit_offset / 8) as i64,
+                                    )
+                                } else {
+                                    compiler.materialize_imm_slot(b, imm, is_fv)
+                                };
+                                let (lhs_ptr, rhs_ptr) = if swap {
+                                    (imm_ptr, src_ptr)
+                                } else {
+                                    (src_ptr, imm_ptr)
+                                };
+
+                                let dst_wide = dsize > 64;
+                                let dst_slot = if dst_wide {
+                                    wide_map[dst]
+                                } else {
+                                    let words = if is_fv { 2 } else { 1 };
+                                    WideLoc::Slot(b.create_sized_stack_slot(StackSlotData::new(
+                                        StackSlotKind::ExplicitSlot,
+                                        words * 8,
+                                        3,
+                                    )))
+                                };
+                                let dst_ptr = dst_slot.addr(b, ptr, params.cldctx, 0);
+
+                                let cldctx = params.cldctx;
+                                let fnp = b.ins().load(
+                                    ptr,
+                                    mem(),
+                                    cldctx,
+                                    (layout::CTX_FN_TABLE + layout::FN_WIDE_BINOP) as i32,
+                                );
+                                let mut sig = Signature::new(CallConv::SystemV);
+                                sig.params.extend(
+                                    [types::I32, ptr, ptr, ptr, types::I32, types::I32]
+                                        .map(AbiParam::new),
+                                );
+                                let sr = b.import_signature(sig);
+                                let opc = b.ins().iconst(types::I32, wbase.encode(is_fv) as i64);
+                                let dsc = b.ins().iconst(types::I32, dsize as i64);
+                                let ssc = b.ins().iconst(types::I32, ssize as i64);
+                                b.ins().call_indirect(
+                                    sr,
+                                    fnp,
+                                    &[opc, dst_ptr, lhs_ptr, rhs_ptr, dsc, ssc],
+                                );
+
+                                if !dst_wide {
+                                    if is_fv {
+                                        let spc = wide_load(b, ptr, params.cldctx, dst_slot, 0);
+                                        let val = wide_load(b, ptr, params.cldctx, dst_slot, 1);
+                                        b.def_var(spc_map[dst], spc);
+                                        b.def_var(vmap[dst], val);
+                                    } else {
+                                        let val = wide_load(b, ptr, params.cldctx, dst_slot, 0);
+                                        b.def_var(vmap[dst], val);
+                                    }
+                                }
+                            };
                         match (
                             op,
                             dst.mode(),
@@ -1364,9 +1910,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::Add, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::Add, _, _, _, _, _) => {
+                                wide_binop_imm(self.compiler, b, WideCode::Add, false)
+                            }
                             // Sub: Operand - Imm.
                             (O::Sub, M::TwoValue, _, Some(_), _, _) => imap!(sval, ival => @tv {
                                 let r = b.ins().isub(sval, ival);
@@ -1378,9 +1924,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::Sub, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::Sub, _, _, _, _, _) => {
+                                wide_binop_imm(self.compiler, b, WideCode::Sub, false)
+                            }
                             // RevSub: Imm - Operand.
                             (O::RevSub, M::TwoValue, _, Some(_), _, _) => imap!(sval, ival => @tv {
                                 let r = b.ins().isub(ival, sval);
@@ -1392,9 +1938,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::RevSub, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::RevSub, _, _, _, _, _) => {
+                                wide_binop_imm(self.compiler, b, WideCode::Sub, true)
+                            }
                             (O::Multiply, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv {
                                     let r = b.ins().imul(sval, ival);
@@ -1407,9 +1953,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::Multiply, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::Multiply, _, _, _, _, _) => {
+                                wide_binop_imm(self.compiler, b, WideCode::Mul, false)
+                            }
                             // Divide/Modulus: Operand / Imm, div-by-zero yields 0.
                             (O::Divide, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv clif_tv_div0(b, sval, ival))
@@ -1420,9 +1966,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::Divide, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::Divide, _, _, _, _, _) => {
+                                wide_binop_imm(self.compiler, b, WideCode::Div, false)
+                            }
                             (O::Modulus, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv clif_tv_mod0(b, sval, ival))
                             }
@@ -1432,9 +1978,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::Modulus, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::Modulus, _, _, _, _, _) => {
+                                wide_binop_imm(self.compiler, b, WideCode::Mod, false)
+                            }
                             // RevDivide0/RevModulus0: Imm / Operand, div-by-zero yields 0.
                             (O::RevDivide0, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv clif_tv_div0(b, ival, sval))
@@ -1445,9 +1991,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::RevDivide0, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::RevDivide0, _, _, _, _, _) => {
+                                wide_binop_imm(self.compiler, b, WideCode::Div, true)
+                            }
                             (O::RevModulus0, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv clif_tv_mod0(b, ival, sval))
                             }
@@ -1457,9 +2003,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::RevModulus0, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::RevModulus0, _, _, _, _, _) => {
+                                wide_binop_imm(self.compiler, b, WideCode::Mod, true)
+                            }
                             // RevDivideX/RevModulusX: Imm / Operand, div-by-zero yields x.
                             // dst is always four-value; gate on a non-zero divisor (the
                             // operand). Two-value operands are fully known.
@@ -1475,9 +2021,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), Some(nz))
                                 })
                             }
-                            (O::RevDivideX, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::RevDivideX, _, _, _, _, _) => {
+                                wide_binop_imm(self.compiler, b, WideCode::Div, true)
+                            }
                             (O::RevModulusX, _, M::TwoValue, Some(_), _, _) => {
                                 imap!(sval, ival => @fv {
                                     let (raw, nz) = clif_tv_modx(b, ival, sval);
@@ -1490,9 +2036,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), Some(nz))
                                 })
                             }
-                            (O::RevModulusX, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::RevModulusX, _, _, _, _, _) => {
+                                wide_binop_imm(self.compiler, b, WideCode::Mod, true)
+                            }
                             // UnsignedLessEqual: Operand <= Imm (dst is one bit).
                             (O::UnsignedLessEqual, M::TwoValue, _, _, Some(_), _) => {
                                 imap!(sval, ival => @tv {
@@ -1507,9 +2053,67 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, cmpv, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::UnsignedLessEqual, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            // Wide `src <= imm` via the reduction construct.
+                            (O::UnsignedLessEqual, M::TwoValue, _, _, _, _) => {
+                                let (src_ptr, imm_ptr) = self.compiler.binop_imm_ptrs(
+                                    b,
+                                    *src,
+                                    imm,
+                                    dst.mode(),
+                                    wide_map,
+                                    params,
+                                );
+                                let one = b.ins().iconst(I64, 1);
+                                let r = clif_binary_reduce(
+                                    b,
+                                    src_size,
+                                    one,
+                                    src_ptr,
+                                    imm_ptr,
+                                    TvReduce {
+                                        step: |b: &mut FunctionBuilder, acc, l, r| {
+                                            clif_tv_leq_reduce_step(b, acc, l, r)
+                                        },
+                                        finish:
+                                            |_b: &mut FunctionBuilder,
+                                             _s: VectorSize,
+                                             _l,
+                                             _r,
+                                             _a| {},
+                                    },
+                                );
+                                wv(b, *dst, 0, r);
+                            }
+                            (O::UnsignedLessEqual, M::FourValue, _, _, _, _) => {
+                                let (src_ptr, imm_ptr) = self.compiler.binop_imm_ptrs(
+                                    b,
+                                    *src,
+                                    imm,
+                                    dst.mode(),
+                                    wide_map,
+                                    params,
+                                );
+                                let acc0 = b.ins().iconst(I64, FV_CMP_ACC0);
+                                let r = clif_binary_reduce(
+                                    b,
+                                    src_size,
+                                    acc0,
+                                    src_ptr,
+                                    imm_ptr,
+                                    FvReduce {
+                                        step: clif_fv_leq_reduce_step,
+                                        finish:
+                                            |_b: &mut FunctionBuilder,
+                                             _s: VectorSize,
+                                             _l,
+                                             _r,
+                                             _a| {},
+                                    },
+                                );
+                                let (val, spc) = fv_cmp_result(b, r);
+                                wv(b, *dst, 0, val);
+                                ws(b, *dst, 0, spc);
+                            }
                             // UnsignedGreaterEqual: Imm <= Operand, i.e. Operand >= Imm.
                             (O::UnsignedGreaterEqual, M::TwoValue, _, _, Some(_), _) => {
                                 imap!(sval, ival => @tv {
@@ -1524,9 +2128,55 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, cmpv, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::UnsignedGreaterEqual, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            // Wide `src >= imm`, i.e. `imm <= src` (operands swapped).
+                            (O::UnsignedGreaterEqual, M::TwoValue, _, _, _, _) => {
+                                let (src_ptr, imm_ptr) = self.compiler.binop_imm_ptrs(
+                                    b,
+                                    *src,
+                                    imm,
+                                    dst.mode(),
+                                    wide_map,
+                                    params,
+                                );
+                                let one = b.ins().iconst(I64, 1);
+                                let r = clif_binary_reduce(
+                                    b,
+                                    src_size,
+                                    one,
+                                    imm_ptr,
+                                    src_ptr,
+                                    TvReduce {
+                                        step: clif_tv_leq_reduce_step,
+                                        finish: noop_finalize,
+                                    },
+                                );
+                                wv(b, *dst, 0, r);
+                            }
+                            (O::UnsignedGreaterEqual, M::FourValue, _, _, _, _) => {
+                                let (src_ptr, imm_ptr) = self.compiler.binop_imm_ptrs(
+                                    b,
+                                    *src,
+                                    imm,
+                                    dst.mode(),
+                                    wide_map,
+                                    params,
+                                );
+                                let acc0 = b.ins().iconst(I64, FV_CMP_ACC0);
+                                let r = clif_binary_reduce(
+                                    b,
+                                    src_size,
+                                    acc0,
+                                    imm_ptr,
+                                    src_ptr,
+                                    FvReduce {
+                                        step: clif_fv_leq_reduce_step,
+                                        finish: noop_finalize,
+                                    },
+                                );
+                                let (val, spc) = fv_cmp_result(b, r);
+                                wv(b, *dst, 0, val);
+                                ws(b, *dst, 0, spc);
+                            }
                             (O::Min, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv b.ins().umin(sval, ival))
                             }
@@ -1536,9 +2186,73 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::Min, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            // Wide `min(src, imm)` via the reduction construct.
+                            (O::Min, M::TwoValue, _, _, _, _) => {
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let (src_ptr, imm_ptr) = self.compiler.binop_imm_ptrs(
+                                    b,
+                                    *src,
+                                    imm,
+                                    dst.mode(),
+                                    wide_map,
+                                    params,
+                                );
+                                let one = b.ins().iconst(I64, 1);
+                                clif_binary_reduce(
+                                    b,
+                                    dst_size,
+                                    one,
+                                    src_ptr,
+                                    imm_ptr,
+                                    TvReduce {
+                                        step: clif_tv_leq_reduce_step,
+                                        finish:
+                                            |b: &mut FunctionBuilder,
+                                             size: VectorSize,
+                                             lhs_base,
+                                             rhs_base,
+                                             acc| {
+                                                tv_minmax_copy(
+                                                    b, size, false, dst_base, lhs_base, rhs_base,
+                                                    acc,
+                                                )
+                                            },
+                                    },
+                                );
+                            }
+                            (O::Min, M::FourValue, _, _, _, _) => {
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let (src_ptr, imm_ptr) = self.compiler.binop_imm_ptrs(
+                                    b,
+                                    *src,
+                                    imm,
+                                    dst.mode(),
+                                    wide_map,
+                                    params,
+                                );
+                                let acc0 = b.ins().iconst(I64, FV_CMP_ACC0);
+                                clif_binary_reduce(
+                                    b,
+                                    dst_size,
+                                    acc0,
+                                    src_ptr,
+                                    imm_ptr,
+                                    FvReduce {
+                                        step: clif_fv_leq_reduce_step,
+                                        finish:
+                                            |b: &mut FunctionBuilder,
+                                             size: VectorSize,
+                                             lhs_base,
+                                             rhs_base,
+                                             acc| {
+                                                fv_minmax_copy(
+                                                    b, size, false, dst_base, lhs_base, rhs_base,
+                                                    acc,
+                                                )
+                                            },
+                                    },
+                                );
+                            }
                             (O::Max, M::TwoValue, _, Some(_), _, _) => {
                                 imap!(sval, ival => @tv b.ins().umax(sval, ival))
                             }
@@ -1548,9 +2262,73 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     clif_fv_arith(b, raw, sspc, src_size.get(), ispc, imm_size.get(), dst_size.get(), None)
                                 })
                             }
-                            (O::Max, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            // Wide `max(src, imm)` via the reduction construct.
+                            (O::Max, M::TwoValue, _, _, _, _) => {
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let (src_ptr, imm_ptr) = self.compiler.binop_imm_ptrs(
+                                    b,
+                                    *src,
+                                    imm,
+                                    dst.mode(),
+                                    wide_map,
+                                    params,
+                                );
+                                let one = b.ins().iconst(I64, 1);
+                                clif_binary_reduce(
+                                    b,
+                                    dst_size,
+                                    one,
+                                    src_ptr,
+                                    imm_ptr,
+                                    TvReduce {
+                                        step: clif_tv_leq_reduce_step,
+                                        finish:
+                                            |b: &mut FunctionBuilder,
+                                             size: VectorSize,
+                                             lhs_base,
+                                             rhs_base,
+                                             acc| {
+                                                tv_minmax_copy(
+                                                    b, size, true, dst_base, lhs_base, rhs_base,
+                                                    acc,
+                                                )
+                                            },
+                                    },
+                                );
+                            }
+                            (O::Max, M::FourValue, _, _, _, _) => {
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let (src_ptr, imm_ptr) = self.compiler.binop_imm_ptrs(
+                                    b,
+                                    *src,
+                                    imm,
+                                    dst.mode(),
+                                    wide_map,
+                                    params,
+                                );
+                                let acc0 = b.ins().iconst(I64, FV_CMP_ACC0);
+                                clif_binary_reduce(
+                                    b,
+                                    dst_size,
+                                    acc0,
+                                    src_ptr,
+                                    imm_ptr,
+                                    FvReduce {
+                                        step: clif_fv_leq_reduce_step,
+                                        finish:
+                                            |b: &mut FunctionBuilder,
+                                             size: VectorSize,
+                                             lhs_base,
+                                             rhs_base,
+                                             acc| {
+                                                fv_minmax_copy(
+                                                    b, size, true, dst_base, lhs_base, rhs_base,
+                                                    acc,
+                                                )
+                                            },
+                                    },
+                                );
+                            }
 
                             // ConcatRight: { Operand, Imm } — operand high, imm low.
                             (O::ConcatRight, M::TwoValue, _, Some(_), _, _) => {
@@ -1637,9 +2415,54 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     b.ins().uextend(I64, eq)
                                 })
                             }
-                            (O::CaseEquality, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            // Wide `src === imm`: AND-fold word equality of the operand
+                            // against the heap-reserved immediate, early-exiting.
+                            (O::CaseEquality, _, M::TwoValue, _, _, _) => {
+                                let (src_ptr, imm_ptr) = self.compiler.binop_imm_ptrs(
+                                    b,
+                                    *src,
+                                    imm,
+                                    src.mode(),
+                                    wide_map,
+                                    params,
+                                );
+                                let one = b.ins().iconst(I64, 1);
+                                let r = clif_binary_reduce(
+                                    b,
+                                    src_size,
+                                    one,
+                                    src_ptr,
+                                    imm_ptr,
+                                    TvReduce {
+                                        step: clif_tv_caseeq_reduce_step,
+                                        finish: noop_finalize,
+                                    },
+                                );
+                                wv(b, *dst, 0, r);
+                            }
+                            (O::CaseEquality, _, M::FourValue, _, _, _) => {
+                                let (src_ptr, imm_ptr) = self.compiler.binop_imm_ptrs(
+                                    b,
+                                    *src,
+                                    imm,
+                                    src.mode(),
+                                    wide_map,
+                                    params,
+                                );
+                                let one = b.ins().iconst(I64, 1);
+                                let r = clif_binary_reduce(
+                                    b,
+                                    src_size,
+                                    one,
+                                    src_ptr,
+                                    imm_ptr,
+                                    FvReduce {
+                                        step: clif_fv_caseeq_reduce_step,
+                                        finish: noop_finalize,
+                                    },
+                                );
+                                wv(b, *dst, 0, r);
+                            }
                             (O::CaseInequality, _, M::TwoValue, _, Some(_), _) => {
                                 imap!(sval, ival => @tv {
                                     let eq = b.ins().icmp(IntCC::NotEqual, sval, ival);
@@ -1654,9 +2477,55 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     b.ins().uextend(I64, eq)
                                 })
                             }
-                            (O::CaseInequality, _, _, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            // Wide `src !== imm`: the negation of `===`.
+                            (O::CaseInequality, _, M::TwoValue, _, _, _) => {
+                                let (src_ptr, imm_ptr) = self.compiler.binop_imm_ptrs(
+                                    b,
+                                    *src,
+                                    imm,
+                                    src.mode(),
+                                    wide_map,
+                                    params,
+                                );
+                                let one = b.ins().iconst(I64, 1);
+                                let r = clif_binary_reduce(
+                                    b,
+                                    src_size,
+                                    one,
+                                    src_ptr,
+                                    imm_ptr,
+                                    TvReduce {
+                                        step: clif_tv_caseeq_reduce_step,
+                                        finish: noop_finalize,
+                                    },
+                                );
+                                let ne = b.ins().bxor_imm_u(r, 1);
+                                wv(b, *dst, 0, ne);
+                            }
+                            (O::CaseInequality, _, M::FourValue, _, _, _) => {
+                                let (src_ptr, imm_ptr) = self.compiler.binop_imm_ptrs(
+                                    b,
+                                    *src,
+                                    imm,
+                                    src.mode(),
+                                    wide_map,
+                                    params,
+                                );
+                                let one = b.ins().iconst(I64, 1);
+                                let r = clif_binary_reduce(
+                                    b,
+                                    src_size,
+                                    one,
+                                    src_ptr,
+                                    imm_ptr,
+                                    FvReduce {
+                                        step: clif_fv_caseeq_reduce_step,
+                                        finish: noop_finalize,
+                                    },
+                                );
+                                let ne = b.ins().bxor_imm_u(r, 1);
+                                wv(b, *dst, 0, ne);
+                            }
                             // BitwiseCaseEquality (per-bit ===): bit = 1 iff operand and
                             // immediate agree in BOTH planes. Same-width, fully-known,
                             // two-value result.
@@ -1702,13 +2571,11 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     },
                                 );
                             }
-
-                            // Power/RevPower have no clean inline form: run the vogls-bits
-                            // shim (handles narrow and wide).
-                            (O::Power | O::RevPower, _, _, _, _, _) => {
-                                self.compiler.emit_wide_binop_imm(
-                                    b, params, gl, *op, *dst, *src, imm, vmap, spc_map, wide_map,
-                                )
+                            (O::Power, _, _, _, _, _) => {
+                                wide_binop_imm(self.compiler, b, WideCode::Pow, false)
+                            }
+                            (O::RevPower, _, _, _, _, _) => {
+                                wide_binop_imm(self.compiler, b, WideCode::Pow, true)
                             }
                         }
                     }
@@ -1747,10 +2614,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     (maskvsbs(b, val, dst_size), maskvsbs(b, spc, dst_size))
                                 })
                             }
-                            (O::Truncate, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
-
                             (O::ZeroExtend, LogicMode::TwoValue, Some(_), Some(_)) => {
                                 map!(val => @tv val)
                             }
@@ -1761,10 +2624,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     (val, spc)
                                 })
                             }
-                            (O::ZeroExtend, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
-
                             (O::SignExtend, M::TwoValue, Some(dst_size), Some(src_size)) => {
                                 map!(val => @tv sign_extend(b, val, dst_size, src_size))
                             }
@@ -1775,9 +2634,103 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     (val, spc)
                                 })
                             }
-                            (O::SignExtend, _, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (O::Truncate | O::ZeroExtend | O::SignExtend, _, _, _) => {
+                                let dsize = sz(*dst);
+                                let ssize = sz(*src);
+                                let dn = nwords(dsize);
+                                let sn = nwords(ssize);
+                                let fv = is_fv(*dst);
+                                let dtop = top_i64(dsize);
+                                let ext_word = |i: u32| -> u64 {
+                                    let lo = (i * 64).max(ssize);
+                                    let hi = ((i + 1) * 64).min(dsize);
+                                    if lo >= hi {
+                                        return 0;
+                                    }
+                                    let width = hi - lo;
+                                    let m = if width >= 64 {
+                                        u64::MAX
+                                    } else {
+                                        (1u64 << width) - 1
+                                    };
+                                    m << (lo - i * 64)
+                                };
+                                match op {
+                                    ResizeOp::Truncate => {
+                                        for i in 0..dn {
+                                            let dmask = if i == dn - 1 { dtop } else { -1 };
+                                            let v = rv(b, *src, i);
+                                            let vv = b.ins().band_imm_u(v, dmask);
+                                            wv(b, *dst, i, vv);
+                                            if fv {
+                                                let s = rs(b, *src, i);
+                                                let sv = b.ins().band_imm_u(s, dmask);
+                                                ws(b, *dst, i, sv);
+                                            }
+                                        }
+                                    }
+                                    ResizeOp::ZeroExtend => {
+                                        for i in 0..dn {
+                                            let dmask = if i == dn - 1 { dtop } else { -1 };
+                                            let v = if i < sn {
+                                                rv(b, *src, i)
+                                            } else {
+                                                b.ins().iconst(I64, 0)
+                                            };
+                                            let vv = b.ins().band_imm_u(v, dmask);
+                                            wv(b, *dst, i, vv);
+                                            if fv {
+                                                let s = if i < sn {
+                                                    rs(b, *src, i)
+                                                } else {
+                                                    b.ins().iconst(I64, 0)
+                                                };
+                                                let s2 = b.ins().bor_imm_u(s, ext_word(i) as i64);
+                                                let sv = b.ins().band_imm_u(s2, dmask);
+                                                ws(b, *dst, i, sv);
+                                            }
+                                        }
+                                    }
+                                    ResizeOp::SignExtend => {
+                                        let sword = (ssize - 1) / 64;
+                                        let sbit = (ssize - 1) % 64;
+                                        let allone = b.ins().iconst(I64, -1);
+                                        let zero = b.ins().iconst(I64, 0);
+                                        let stopv = rv(b, *src, sword);
+                                        let shv = b.ins().ushr_imm_u(stopv, sbit as i64);
+                                        let signv = b.ins().band_imm_u(shv, 1);
+                                        let signv_b = b.ins().icmp_imm_u(IntCC::NotEqual, signv, 0);
+                                        let fillv = b.ins().select(signv_b, allone, zero);
+                                        let fills = if fv {
+                                            let stops = rs(b, *src, sword);
+                                            let shs = b.ins().ushr_imm_u(stops, sbit as i64);
+                                            let signs = b.ins().band_imm_u(shs, 1);
+                                            let signs_b =
+                                                b.ins().icmp_imm_u(IntCC::NotEqual, signs, 0);
+                                            Some(b.ins().select(signs_b, allone, zero))
+                                        } else {
+                                            None
+                                        };
+                                        for i in 0..dn {
+                                            let dmask = if i == dn - 1 { dtop } else { -1 };
+                                            let extc = b.ins().iconst(I64, ext_word(i) as i64);
+                                            let base_v = if i < sn { rv(b, *src, i) } else { zero };
+                                            let fh = b.ins().band(fillv, extc);
+                                            let vv0 = b.ins().bor(base_v, fh);
+                                            let vv = b.ins().band_imm_u(vv0, dmask);
+                                            wv(b, *dst, i, vv);
+                                            if fv {
+                                                let base_s =
+                                                    if i < sn { rs(b, *src, i) } else { zero };
+                                                let fs = b.ins().band(fills.unwrap(), extc);
+                                                let ss0 = b.ins().bor(base_s, fs);
+                                                let ss = b.ins().band_imm_u(ss0, dmask);
+                                                ws(b, *dst, i, ss);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                     Instruction::ShiftImm(dst, op, src, amount) => {
@@ -1835,9 +2788,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     (val, spc)
                                 }
                             }),
-                            (S::LogicalShiftLeft, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (S::LogicalShiftLeft, _, _) => self.compiler.emit_wide_shift_imm(
+                                b, params, gl, *op, *dst, *src, amount, vmap, spc_map, wide_map,
+                            ),
                             (S::LogicalShiftRight, M::TwoValue, Some(_)) => map!(sv => @tv {
                                 if amount >= 64 {
                                     b.ins().iconst(I64, 0)
@@ -1860,9 +2813,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     (val, spc)
                                 }
                             }),
-                            (S::LogicalShiftRight, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (S::LogicalShiftRight, _, _) => self.compiler.emit_wide_shift_imm(
+                                b, params, gl, *op, *dst, *src, amount, vmap, spc_map, wide_map,
+                            ),
                             (S::ArithmeticShiftRight, M::TwoValue, Some(_)) => map!(sv => @tv {
                                 let sh = sign_shift_right(b, sv, amount, size);
                                 maskv(b, sh, size)
@@ -1878,9 +2831,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     (val, spc)
                                 })
                             }
-                            (S::ArithmeticShiftRight, _, _) => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            (S::ArithmeticShiftRight, _, _) => self.compiler.emit_wide_shift_imm(
+                                b, params, gl, *op, *dst, *src, amount, vmap, spc_map, wide_map,
+                            ),
                         }
                     }
                     Instruction::Select(dst, cond, truthy, falsy, kind) => {
@@ -2013,8 +2966,31 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             SixBitSize::from_vector_size(dst_size),
                             SixBitSize::from_vector_size(src_size),
                         ) else {
-                            self.compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr);
+                            let s_size = sz(*src);
+                            let src_ptr = self.compiler.value_words_ptr(
+                                b,
+                                *src,
+                                vmap,
+                                spc_map,
+                                wide_map,
+                                params.cldctx,
+                            );
+                            let offc = b.ins().iconst(I64, *offset as i64);
+                            let one = b.ins().iconst(types::I8, 1);
+                            self.compiler.emit_wide_slice(
+                                b,
+                                params,
+                                *dst,
+                                src_ptr,
+                                offc,
+                                one,
+                                s_size,
+                                is_fv(*src),
+                                false,
+                                vmap,
+                                spc_map,
+                                wide_map,
+                            );
                             continue;
                         };
 
@@ -2127,9 +3103,65 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 }
                                 b.def_var(spc_map[dst], dst_spc);
                             }
-                            _ => self
-                                .compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr),
+                            _ => {
+                                if sz(*dst) > 64 {
+                                    let s_size = sz(*src);
+                                    let off = rv(b, *offset, 0);
+                                    let off_known = if is_fv(*offset) {
+                                        let os = rs(b, *offset, 0);
+                                        b.ins().icmp_imm_u(IntCC::Equal, os, mask_of(sz(*offset)))
+                                    } else {
+                                        b.ins().iconst(types::I8, 1)
+                                    };
+                                    let src_ptr = self.compiler.value_words_ptr(
+                                        b,
+                                        *src,
+                                        vmap,
+                                        spc_map,
+                                        wide_map,
+                                        params.cldctx,
+                                    );
+                                    self.compiler.emit_wide_slice(
+                                        b,
+                                        params,
+                                        *dst,
+                                        src_ptr,
+                                        off,
+                                        off_known,
+                                        s_size,
+                                        is_fv(*src),
+                                        true,
+                                        vmap,
+                                        spc_map,
+                                        wide_map,
+                                    );
+                                } else {
+                                    let d_size = sz(*dst);
+                                    let s_size = sz(*src);
+                                    let src_nwords = nwords(s_size);
+                                    let loc = wide_map[src];
+                                    let off = rv(b, *offset, 0);
+                                    let off_known = if is_fv(*offset) {
+                                        let os = rs(b, *offset, 0);
+                                        b.ins().icmp_imm_u(IntCC::Equal, os, mask_of(sz(*offset)))
+                                    } else {
+                                        b.ins().iconst(types::I8, 1)
+                                    };
+                                    let (val_ptr, spc_ptr) = if is_fv(*src) {
+                                        let vp = loc.addr(b, ptr, params.cldctx, src_nwords);
+                                        let sp = loc.addr(b, ptr, params.cldctx, 0);
+                                        (vp, Some(sp))
+                                    } else {
+                                        let vp = loc.addr(b, ptr, params.cldctx, 0);
+                                        (vp, None)
+                                    };
+                                    let (val, spc) = dyn_slice_read(
+                                        b, val_ptr, spc_ptr, off, off_known, s_size, d_size, 0,
+                                    );
+                                    wv(b, *dst, 0, val);
+                                    ws(b, *dst, 0, spc);
+                                }
+                            }
                         }
                         b.ins().jump(done_bb, &[]);
 
@@ -2379,8 +3411,33 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         // A wide dst needs the multi-word extraction; the inline path
                         // below reads into a single-word (<=64) dst.
                         if SixBitSize::from_vector_size(dst_size).is_none() {
-                            self.compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr);
+                            let (href, _rt, mode) = info.heap_ref(*signal);
+                            let heap = params.heap_ptr;
+                            let base = href.offset.bit_offset / 64;
+                            let s_size = gl.signals[*signal].size.get();
+                            let d_size = sz(*dst);
+                            if *offset == 0 && d_size == s_size {
+                                let n = nwords(d_size);
+                                let words = if is_fv(*dst) { 2 * n } else { n };
+                                for i in 0..words {
+                                    let w = b.ins().load(
+                                        I64,
+                                        mem(),
+                                        heap,
+                                        ((base + i as usize) * 8) as i32,
+                                    );
+                                    wide_store(b, ptr, params.cldctx, wide_map[dst], i, w);
+                                }
+                            } else {
+                                let src_ptr = b.ins().iadd_imm_u(heap, (base * 8) as i64);
+                                let offc = b.ins().iconst(I64, *offset as i64);
+                                let one = b.ins().iconst(types::I8, 1);
+                                let src_is_fv = mode == LogicMode::FourValue;
+                                self.compiler.emit_wide_slice(
+                                    b, params, *dst, src_ptr, offc, one, s_size, src_is_fv, false,
+                                    vmap, spc_map, wide_map,
+                                );
+                            }
                             continue;
                         }
 
@@ -2495,8 +3552,28 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         // shared, but a wide dst needs the multi-word extraction.
                         b.switch_to_block(probe_bb);
                         if SixBitSize::from_vector_size(dst_size).is_none() {
-                            self.compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr);
+                            let src_ptr = b.ins().iadd_imm_u(heap, (base_word * 8) as i64);
+                            let off_known = if is_fv(*offset) {
+                                let os = rs(b, *offset, 0);
+                                b.ins().icmp_imm_u(IntCC::Equal, os, mask_of(sz(*offset)))
+                            } else {
+                                b.ins().iconst(types::I8, 1)
+                            };
+                            let src_is_fv = mode == LogicMode::FourValue;
+                            self.compiler.emit_wide_slice(
+                                b,
+                                params,
+                                *dst,
+                                src_ptr,
+                                off,
+                                off_known,
+                                signal_size.get(),
+                                src_is_fv,
+                                true,
+                                vmap,
+                                spc_map,
+                                wide_map,
+                            );
                         } else if mode == LogicMode::FourValue && signal_size.get() <= 32 {
                             // Packed four-value signal: spc | (val << s_size) in one word.
                             // val/spc share the word, so a plain shift past the field pulls
@@ -2589,8 +3666,49 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         if SixBitSize::from_vector_size(gl.signals[*signal].size).is_none()
                             && (mode == LogicMode::FourValue || ssize > 64)
                         {
-                            self.compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr);
+                            if *offset == 0 && ssize == d_size {
+                                let (href, rt, _mode) = info.heap_ref(*signal);
+                                let heap = params.heap_ptr;
+                                let base = href.offset.bit_offset / 64;
+                                let n = nwords(sz(*src));
+                                let words = if is_fv(*src) { 2 * n } else { n };
+                                let loc = wide_map[src];
+                                let mut acc = b.ins().iconst(I64, 0);
+                                for i in 0..words {
+                                    let sw = wide_load(b, ptr, params.cldctx, loc, i);
+                                    let hw = b.ins().load(
+                                        I64,
+                                        mem(),
+                                        heap,
+                                        ((base + i as usize) * 8) as i32,
+                                    );
+                                    let d = b.ins().bxor(sw, hw);
+                                    acc = b.ins().bor(acc, d);
+                                }
+                                let changed = b.ins().icmp_imm_u(IntCC::NotEqual, acc, 0);
+                                let do_bb = b.create_block();
+                                let merge = b.create_block();
+                                b.ins().brif(changed, do_bb, &[], merge, &[]);
+                                b.switch_to_block(do_bb);
+                                self.compiler.call_drive_signal(b, params, rt);
+                                for i in 0..words {
+                                    let sw = wide_load(b, ptr, params.cldctx, loc, i);
+                                    b.ins().store(
+                                        mem(),
+                                        sw,
+                                        heap,
+                                        ((base + i as usize) * 8) as i32,
+                                    );
+                                }
+                                b.ins().jump(merge, &[]);
+                                b.switch_to_block(merge);
+                            } else {
+                                let offc = b.ins().iconst(I64, *offset as i64);
+                                let one = b.ins().iconst(types::I8, 1);
+                                self.compiler.emit_wide_drive(
+                                    b, params, *signal, *src, offc, one, vmap, spc_map, wide_map,
+                                );
+                            }
                         } else if mode == LogicMode::TwoValue {
                             // lower_drive_tv already handles two-value partial writes.
                             let sv = get(b, *src);
@@ -2643,8 +3761,16 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         // A wide (>64) signal needs the multi-word drive; drive_partial
                         // below writes a single-word (<=64) signal.
                         if SixBitSize::from_vector_size(gl.signals[*signal].size).is_none() {
-                            self.compiler
-                                .lower_wide_instruction(b, params, vmap, spc_map, wide_map, instr);
+                            let off = rv(b, *index, 0);
+                            let off_known = if is_fv(*index) {
+                                let os = rs(b, *index, 0);
+                                b.ins().icmp_imm_u(IntCC::Equal, os, mask_of(sz(*index)))
+                            } else {
+                                b.ins().iconst(types::I8, 1)
+                            };
+                            self.compiler.emit_wide_drive(
+                                b, params, *signal, *src, off, off_known, vmap, spc_map, wide_map,
+                            );
                         } else {
                             let off = get(b, *index);
                             let off_known = if index.mode().is_four_value() {
@@ -3630,4 +4756,332 @@ fn clif_binary_bitwise(
     b.switch_to_block(done_bb);
     let last = b.ins().iadd_imm_u(dst_base, ((nwords - 1) * 8) as i64);
     f.finish(b, size, last);
+}
+
+trait BinaryReduceFn {
+    fn reduce(
+        &mut self,
+        b: &mut FunctionBuilder,
+        size: VectorSize,
+        valid_mask: Value,
+        acc: Value,
+        lhs_ptr: Value,
+        rhs_ptr: Value,
+    ) -> (Value, Value);
+
+    fn finish(
+        &mut self,
+        b: &mut FunctionBuilder,
+        size: VectorSize,
+        lhs_base: Value,
+        rhs_base: Value,
+        acc: Value,
+    );
+}
+
+fn clif_binary_reduce(
+    b: &mut FunctionBuilder,
+    size: VectorSize,
+    acc0: Value,
+    lhs_base: Value,
+    rhs_base: Value,
+    mut f: impl BinaryReduceFn,
+) -> Value {
+    let nwords = nwords(size.get());
+
+    let reduce_bb = b.create_block();
+    let done_bb = b.create_block();
+    let it = b.append_block_param(reduce_bb, I64);
+    let acc_in = b.append_block_param(reduce_bb, I64);
+    let acc_out = b.append_block_param(done_bb, I64);
+
+    let top = b.ins().iconst(I64, ((nwords - 1) * 8) as i64);
+    b.ins()
+        .jump(reduce_bb, &[BlockArg::from(top), BlockArg::from(acc0)]);
+
+    b.switch_to_block(reduce_bb);
+    let lhs_ptr = b.ins().iadd(lhs_base, it);
+    let rhs_ptr = b.ins().iadd(rhs_base, it);
+    // Live-bit mask of the current word: the top word is partial, the rest full.
+    let is_top = b
+        .ins()
+        .icmp_imm_u(IntCC::Equal, it, ((nwords - 1) * 8) as i64);
+    let top_mask = b.ins().iconst(I64, super::top_i64(size.get()));
+    let all_ones = b.ins().iconst(I64, -1);
+    let valid_mask = b.ins().select(is_top, top_mask, all_ones);
+    let (acc, early_exit) = f.reduce(b, size, valid_mask, acc_in, lhs_ptr, rhs_ptr);
+
+    // Continue to the next-lower word unless the fold settled or we ran out.
+    let at_bottom = b.ins().icmp_imm_u(IntCC::Equal, it, 0);
+    let stop = b.ins().bor(early_exit, at_bottom);
+    let next = b.ins().iadd_imm_u(it, -8);
+    b.ins().brif(
+        stop,
+        done_bb,
+        &[BlockArg::from(acc)],
+        reduce_bb,
+        &[BlockArg::from(next), BlockArg::from(acc)],
+    );
+
+    b.switch_to_block(done_bb);
+    f.finish(b, size, lhs_base, rhs_base, acc_out);
+    acc_out
+}
+
+/// Per-word step of an unsigned `lhs <= rhs`: the most-significant differing
+/// word decides, so it early-exits there. `acc` starts at 1 (all words equal so
+/// far => `<=` holds) and holds the running answer as an `I64` 0/1.
+fn clif_tv_leq_reduce_step(
+    b: &mut FunctionBuilder,
+    acc: Value,
+    lhs: Value,
+    rhs: Value,
+) -> (Value, Value) {
+    let differ = b.ins().icmp(IntCC::NotEqual, lhs, rhs);
+    let lt = b.ins().icmp(IntCC::UnsignedLessThan, lhs, rhs);
+    let lt = b.ins().uextend(I64, lt);
+    let acc = b.ins().select(differ, lt, acc);
+    (acc, differ)
+}
+
+fn noop_finalize(
+    _b: &mut FunctionBuilder,
+    _size: VectorSize,
+    _acc: Value,
+    _lhs: Value,
+    _rhs: Value,
+) {
+}
+
+/// Seed for [`fv_cmp_word_step`]: `<=` holds (equal), nothing decided yet, all
+/// known so far.
+const FV_CMP_ACC0: i64 = 0b101;
+
+/// Per-word step of a four-value unsigned comparison. A relational op is `x`
+/// whenever either operand has an unknown bit, so the fold both walks the value
+/// planes most-significant word first for `lhs <= rhs` (bit 0, decided at the
+/// first differing word — bit 1) and ANDs "fully known" across every word
+/// (bit 2). The first not-fully-known word settles the result to `x`, so it
+/// early-exits there.
+fn clif_fv_leq_reduce_step(
+    b: &mut FunctionBuilder,
+    valid_mask: Value,
+    acc: Value,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    let settled = b.ins().band_imm_u(acc, 0b010);
+    let settled_b = b.ins().icmp_imm_u(IntCC::NotEqual, settled, 0);
+    let not_settled = b.ins().icmp_imm_u(IntCC::Equal, settled, 0);
+    let leq = b.ins().band_imm_u(acc, 0b001);
+    let known = b.ins().band_imm_u(acc, 0b100);
+    let known_b = b.ins().icmp_imm_u(IntCC::NotEqual, known, 0);
+
+    // Both operands fully known in this word's live bits.
+    let lk = b.ins().icmp(IntCC::Equal, lspc, valid_mask);
+    let rk = b.ins().icmp(IntCC::Equal, rspc, valid_mask);
+    let word_known = b.ins().band(lk, rk);
+    let new_known = b.ins().band(known_b, word_known);
+
+    // MSW-first `<=`: the first differing value word decides.
+    let differ = b.ins().icmp(IntCC::NotEqual, lval, rval);
+    let lt = b.ins().icmp(IntCC::UnsignedLessThan, lval, rval);
+    let lt = b.ins().uextend(I64, lt);
+    let do_update = b.ins().band(differ, not_settled);
+    let new_leq = b.ins().select(do_update, lt, leq);
+    let new_settled = b.ins().bor(differ, settled_b);
+
+    let s = b.ins().uextend(I64, new_settled);
+    let s = b.ins().ishl_imm_u(s, 1);
+    let k = b.ins().uextend(I64, new_known);
+    let k = b.ins().ishl_imm_u(k, 2);
+    let acc = b.ins().bor(new_leq, s);
+    let acc = b.ins().bor(acc, k);
+
+    // A not-fully-known word forces the whole result to `x`, so stop.
+    let exit = b.ins().icmp_imm_u(IntCC::Equal, k, 0);
+    (acc, exit)
+}
+
+/// Per-word step of a two-value bit-exact `===`: AND-fold word equality, early-
+/// exiting once the running answer (`acc`, `I64` 0/1) drops to 0.
+fn clif_tv_caseeq_reduce_step(
+    b: &mut FunctionBuilder,
+    acc: Value,
+    lhs: Value,
+    rhs: Value,
+) -> (Value, Value) {
+    let eq = b.ins().icmp(IntCC::Equal, lhs, rhs);
+    let eq = b.ins().uextend(I64, eq);
+    let acc = b.ins().band(acc, eq);
+    let differ = b.ins().icmp_imm_u(IntCC::Equal, acc, 0);
+    (acc, differ)
+}
+
+/// Per-word step of a four-value bit-exact `===`: both planes must match word by
+/// word, early-exiting at the first difference.
+fn clif_fv_caseeq_reduce_step(
+    b: &mut FunctionBuilder,
+    _valid_mask: Value,
+    acc: Value,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    let ve = b.ins().icmp(IntCC::Equal, lval, rval);
+    let se = b.ins().icmp(IntCC::Equal, lspc, rspc);
+    let both = b.ins().band(ve, se);
+    let both = b.ins().uextend(I64, both);
+    let acc = b.ins().band(acc, both);
+    let differ = b.ins().icmp_imm_u(IntCC::Equal, acc, 0);
+    (acc, differ)
+}
+
+/// Turn the packed accumulator from [`fv_cmp_word_step`] into a 1-bit four-value
+/// result `(val, spc)`: the comparison when both operands are fully known, else `x`.
+fn fv_cmp_result(b: &mut FunctionBuilder, acc: Value) -> (Value, Value) {
+    let known = b.ins().band_imm_u(acc, 0b100);
+    let known_b = b.ins().icmp_imm_u(IntCC::NotEqual, known, 0);
+    let leq = b.ins().band_imm_u(acc, 0b001);
+    let zero = b.ins().iconst(I64, 0);
+    let one = b.ins().iconst(I64, 1);
+    let val = b.ins().select(known_b, leq, zero);
+    let spc = b.ins().select(known_b, one, zero);
+    (val, spc)
+}
+
+/// `min`/`max` finalize for a two-value reduction: copy the winning operand's
+/// words into `dst_base` (`min` keeps `lhs` when `lhs <= rhs`, i.e. `acc != 0`).
+fn tv_minmax_copy(
+    b: &mut FunctionBuilder,
+    size: VectorSize,
+    is_max: bool,
+    dst_base: Value,
+    lhs_base: Value,
+    rhs_base: Value,
+    acc: Value,
+) {
+    let n = nwords(size.get());
+    for i in 0..n {
+        let off = (i * 8) as i32;
+        let l = b.ins().load(I64, mem(), lhs_base, off);
+        let r = b.ins().load(I64, mem(), rhs_base, off);
+        let w = if is_max {
+            b.ins().select(acc, r, l)
+        } else {
+            b.ins().select(acc, l, r)
+        };
+        b.ins().store(mem(), w, dst_base, off);
+    }
+}
+
+/// `min`/`max` finalize for a four-value reduction (acc from [`fv_cmp_word_step`]):
+/// copy the winning operand's two planes, or fill `x` when either operand had an
+/// unknown bit.
+fn fv_minmax_copy(
+    b: &mut FunctionBuilder,
+    size: VectorSize,
+    is_max: bool,
+    dst_base: Value,
+    lhs_base: Value,
+    rhs_base: Value,
+    acc: Value,
+) {
+    let known = b.ins().band_imm_u(acc, 0b100);
+    let known_b = b.ins().icmp_imm_u(IntCC::NotEqual, known, 0);
+    let leq = b.ins().band_imm_u(acc, 0b001);
+    let leq_b = b.ins().icmp_imm_u(IntCC::NotEqual, leq, 0);
+    let zero = b.ins().iconst(I64, 0);
+    // Both planes: spc words then val words.
+    let n = nwords(size.get());
+    for j in 0..2 * n {
+        let off = (j * 8) as i32;
+        let l = b.ins().load(I64, mem(), lhs_base, off);
+        let r = b.ins().load(I64, mem(), rhs_base, off);
+        let win = if is_max {
+            b.ins().select(leq_b, r, l)
+        } else {
+            b.ins().select(leq_b, l, r)
+        };
+        let w = b.ins().select(known_b, win, zero);
+        b.ins().store(mem(), w, dst_base, off);
+    }
+}
+
+/// Two-value reduction: `step(acc, lhs_word, rhs_word) -> (acc, early_exit)`.
+struct TvReduce<S, F> {
+    step: S,
+    finish: F,
+}
+/// Four-value reduction: `step(acc, lhs_val, lhs_spc, rhs_val, rhs_spc) ->
+/// (acc, early_exit)`, reading both planes at each word (like [`FvFvFn`]).
+struct FvReduce<S, F> {
+    step: S,
+    finish: F,
+}
+
+impl<
+    S: FnMut(&mut FunctionBuilder, Value, Value, Value) -> (Value, Value),
+    F: FnMut(&mut FunctionBuilder, VectorSize, Value, Value, Value),
+> BinaryReduceFn for TvReduce<S, F>
+{
+    fn reduce(
+        &mut self,
+        b: &mut FunctionBuilder,
+        _size: VectorSize,
+        _valid_mask: Value,
+        acc: Value,
+        lhs_ptr: Value,
+        rhs_ptr: Value,
+    ) -> (Value, Value) {
+        let lhs = b.ins().load(I64, mem(), lhs_ptr, 0);
+        let rhs = b.ins().load(I64, mem(), rhs_ptr, 0);
+        (self.step)(b, acc, lhs, rhs)
+    }
+    fn finish(
+        &mut self,
+        b: &mut FunctionBuilder,
+        size: VectorSize,
+        lhs_base: Value,
+        rhs_base: Value,
+        acc: Value,
+    ) {
+        (self.finish)(b, size, lhs_base, rhs_base, acc);
+    }
+}
+
+impl<
+    S: FnMut(&mut FunctionBuilder, Value, Value, Value, Value, Value, Value) -> (Value, Value),
+    F: FnMut(&mut FunctionBuilder, VectorSize, Value, Value, Value),
+> BinaryReduceFn for FvReduce<S, F>
+{
+    fn reduce(
+        &mut self,
+        b: &mut FunctionBuilder,
+        size: VectorSize,
+        valid_mask: Value,
+        acc: Value,
+        lhs_ptr: Value,
+        rhs_ptr: Value,
+    ) -> (Value, Value) {
+        let val_offset = (HeapAlignment::spc_offset_to_val_offset(size, 0) / 8) as i32;
+        let lhs_spc = b.ins().load(I64, mem(), lhs_ptr, 0);
+        let lhs_val = b.ins().load(I64, mem(), lhs_ptr, val_offset);
+        let rhs_spc = b.ins().load(I64, mem(), rhs_ptr, 0);
+        let rhs_val = b.ins().load(I64, mem(), rhs_ptr, val_offset);
+        (self.step)(b, valid_mask, acc, lhs_val, lhs_spc, rhs_val, rhs_spc)
+    }
+    fn finish(
+        &mut self,
+        b: &mut FunctionBuilder,
+        size: VectorSize,
+        lhs_base: Value,
+        rhs_base: Value,
+        acc: Value,
+    ) {
+        (self.finish)(b, size, lhs_base, rhs_base, acc);
+    }
 }
