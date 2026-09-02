@@ -213,15 +213,17 @@ fn constant_propagate_instruction(
             macro_rules! simplify_div_mod_imm {
                 ($dst:expr, $src:expr, $imm:expr, $op:ident, $is_rhs:expr, $div_by_zero_equals_x:expr) => {{
                     let b: &Bits = $imm;
-                    if b.contains_special()
-                        || ($is_rhs && $div_by_zero_equals_x && b.is_equal_to_zero())
-                    {
+                    if b.contains_special() {
                         assign_constant!(dst, Bits::new_unknown(b.size()));
-                    } else if $is_rhs && !$div_by_zero_equals_x && b.is_equal_to_zero() {
-                        assign_constant!(dst, Bits::new_zeroed(b.size()));
+                    } else if $is_rhs && b.is_equal_to_zero() {
+                        if $div_by_zero_equals_x {
+                            assign_constant!(dst, Bits::new_unknown(b.size()));
+                        } else {
+                            assign_constant!(dst, Bits::new_zeroed(b.size()));
+                        }
                     }
 
-                    if lhs.mode() == LogicMode::TwoValue {
+                    if $is_rhs && $div_by_zero_equals_x && lhs.mode() == LogicMode::TwoValue {
                         let tgt = vars.insert(LogicMode::TwoValue, b.size());
                         additional.push(BI(tgt, IO::$op, lhs, b.clone()));
                         additional.push(I::Unary(dst, UnaryOp::TvToFv, tgt));
@@ -266,24 +268,24 @@ fn constant_propagate_instruction(
                 (O::Power, Some(b), _) => additional.push(BI(dst, IO::RevPower, rhs, b.clone())),
                 (O::Power, _, Some(b)) => additional.push(BI(dst, IO::Power, lhs, b.clone())),
                 (O::DivideX, Some(b), _) => {
-                    simplify_div_mod_imm!(dst, rhs, b, RevDivideX, false, false)
+                    simplify_div_mod_imm!(dst, rhs, b, RevDivideX, false, true)
                 }
-                (O::DivideX, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Divide, true, false),
+                (O::DivideX, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Divide, true, true),
                 (O::Divide0, Some(b), _) => {
-                    simplify_div_mod_imm!(dst, rhs, b, RevDivide0, false, true)
+                    simplify_div_mod_imm!(dst, rhs, b, RevDivide0, false, false)
                 }
-                (O::Divide0, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Divide, true, true),
+                (O::Divide0, _, Some(b)) => simplify_div_mod_imm!(dst, lhs, b, Divide, true, false),
                 (O::ModulusX, Some(b), _) => {
-                    simplify_div_mod_imm!(dst, rhs, b, RevModulusX, false, false)
+                    simplify_div_mod_imm!(dst, rhs, b, RevModulusX, false, true)
                 }
                 (O::ModulusX, _, Some(b)) => {
-                    simplify_div_mod_imm!(dst, lhs, b, Modulus, true, false)
+                    simplify_div_mod_imm!(dst, lhs, b, Modulus, true, true)
                 }
                 (O::Modulus0, Some(b), _) => {
-                    simplify_div_mod_imm!(dst, rhs, b, RevModulus0, false, true)
+                    simplify_div_mod_imm!(dst, rhs, b, RevModulus0, false, false)
                 }
                 (O::Modulus0, _, Some(b)) => {
-                    simplify_div_mod_imm!(dst, lhs, b, Modulus, true, true)
+                    simplify_div_mod_imm!(dst, lhs, b, Modulus, true, false)
                 }
 
                 (O::UnsignedLessEqual, Some(b), _) => {
