@@ -1,11 +1,7 @@
 use std::fmt;
 
 use vogls_bits::arithmetic::{
-    FvLogicValue, fv_addition, fv_bin_u64_cell_bitwise_op, fv_bin_u64_cell_bitwise_op_output_tv,
-    fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem,
-    fv_bitwise_xnor_elem, fv_bitwise_xor_elem, fv_contains_special, fv_division, fv_multiplication,
-    fv_power, fv_subtraction, tv_addition, tv_bin_u64_cell_bitwise_mask_last_op,
-    tv_bin_u64_cell_bitwise_op, tv_division, tv_multiplication, tv_power, tv_subtraction,
+    FvLogicValue, fv_addition, fv_bin_u64_cell_bitwise_op, fv_bin_u64_cell_bitwise_op_output_tv, fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem, fv_bitwise_xnor_elem, fv_bitwise_xor_elem, fv_contains_special, fv_division, fv_division_x, fv_multiplication, fv_power, fv_subtraction, tv_addition, tv_bin_u64_cell_bitwise_mask_last_op, tv_bin_u64_cell_bitwise_op, tv_division, tv_division_x, tv_multiplication, tv_power, tv_subtraction,
 };
 use vogls_bits::bitwise_not::{fv_cell_not, tv_cell_not};
 use vogls_bits::comparison::{bitwise_ceq, fv_l_unsigned_leq, tv_gtu64_unsigned_leq};
@@ -544,7 +540,7 @@ impl BytecodeInstruction for HeapBinaryDivMod {
     }
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
-        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryArithmetic as u8);
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapBinaryDivMod as u8);
         let v = c.0;
         Self {
             rd: Reg::new_masked(v >> 8),
@@ -559,7 +555,7 @@ impl BytecodeInstruction for HeapBinaryDivMod {
     #[inline(always)]
     fn encode(&self) -> Bytecode {
         Bytecode(
-            BytecodeOpcode::HeapBinaryArithmetic as u32
+            BytecodeOpcode::HeapBinaryDivMod as u32
                 | ((self.rd as u32) << 8)
                 | ((self.rs1 as u32) << 12)
                 | ((self.rs2 as u32) << 16)
@@ -634,15 +630,18 @@ impl BytecodeInstruction for HeapBinaryDivMod {
         // @Performance: don't use the scratch here.
         let dst = &mut cldctx.heap_scratch;
         dst.clear();
-        dst.resize(num_words * 2, 0u64);
+        dst.resize(dst_num_words * 2, 0u64);
         let (dst, compl) = dst.split_at_mut(dst_num_words);
 
-        // @TODO: Use fillx.
-        match (src_fv, is_mod) {
-            (false, false) => tv_division(dst, compl, src1, src2, size),
-            (false, true) => tv_division(compl, dst, src1, src2, size),
-            (true, false) => fv_division(dst, compl, src1, src2, size),
-            (true, true) => fv_division(compl, dst, src1, src2, size),
+        match (src_fv, is_mod, fill_x) {
+            (false, false, false) => tv_division(dst, compl, src1, src2, size),
+            (false, true, false) => tv_division(compl, dst, src1, src2, size),
+            (false, false, true) => tv_division_x(dst, compl, src1, src2, size),
+            (false, true, true) => tv_division_x(compl, dst, src1, src2, size),
+            (true, false, false) => fv_division(dst, compl, src1, src2, size),
+            (true, true, false) => fv_division(compl, dst, src1, src2, size),
+            (true, false, true) => fv_division_x(dst, compl, src1, src2, size),
+            (true, true, true) => fv_division_x(compl, dst, src1, src2, size),
         }
 
         state

@@ -89,6 +89,79 @@ pub fn fv_division(
     );
 }
 
+/// Two-value logic division producing four-value quotient and modulus.
+pub fn tv_division_x(
+    quotient: &mut [u64],
+    modulus: &mut [u64],
+    numerator: &[u64],
+    denumerator: &[u64],
+    size: VectorSize,
+) {
+    let nwords = size.get().div_ceil(64) as usize;
+    assert!(
+        nwords != 0
+            && quotient.len() == 2 * nwords
+            && modulus.len() == 2 * nwords
+            && numerator.len() == nwords
+            && denumerator.len() == nwords
+    );
+
+    // Division by zero yield x.
+    if denumerator.iter().all(|w| *w == 0) {
+        quotient.fill(0);
+        modulus.fill(0);
+        return;
+    }
+
+    fv_set_no_special(quotient, size);
+    fv_set_no_special(modulus, size);
+
+    tv_division(
+        &mut quotient[nwords..],
+        &mut modulus[nwords..],
+        numerator,
+        denumerator,
+        size,
+    );
+}
+
+pub fn fv_division_x(
+    quotient: &mut [u64],
+    modulus: &mut [u64],
+    numerator: &[u64],
+    denumerator: &[u64],
+    size: VectorSize,
+) {
+    let nwords = size.get().div_ceil(64) as usize;
+    assert!(
+        !quotient.is_empty()
+            && quotient.len() == modulus.len()
+            && quotient.len() == numerator.len()
+            && quotient.len() == denumerator.len()
+            && quotient.len() == 2 * nwords
+    );
+
+    if fv_contains_special(numerator, size)
+        || fv_contains_special(denumerator, size)
+        || denumerator[nwords..].iter().all(|w| *w == 0)
+    {
+        quotient.fill(0);
+        modulus.fill(0);
+        return;
+    }
+
+    fv_set_no_special(quotient, size);
+    fv_set_no_special(modulus, size);
+
+    tv_division(
+        &mut quotient[nwords..],
+        &mut modulus[nwords..],
+        &numerator[nwords..],
+        &denumerator[nwords..],
+        size,
+    );
+}
+
 /// Computes `dst_lhs -= rhs << offset`.
 pub fn tv_lsl_mut_sub(dst_lhs: &mut [u64], rhs: &[u64], offset: u32, size: VectorSize) {
     assert!(!dst_lhs.is_empty() && dst_lhs.len() == rhs.len());
@@ -189,7 +262,7 @@ pub fn tv_lsl_unsigned_leq(lhs: &[u64], shift: u32, rhs: &[u64], size: VectorSiz
 
 #[cfg(test)]
 mod tests {
-    use super::{fv_division, tv_division, tv_lsl_mut_sub, tv_lsl_unsigned_leq};
+    use super::{fv_division, tv_division, tv_division_x, tv_lsl_mut_sub, tv_lsl_unsigned_leq};
     use crate::VectorSize;
     use crate::arithmetic::tests::{
         fvu64x2_to_slice, fvu64x2_to_slice_mut, u64_arith_target, u64_to_fvu64x2, u64x2_to_slice,
@@ -268,6 +341,31 @@ mod tests {
                 fvu64x2_to_slice_mut(&mut given_modulus, size),
                 fvu64x2_to_slice(&u64_to_fvu64x2(lhs, size), size),
                 fvu64x2_to_slice(&u64_to_fvu64x2(rhs, size), size),
+                size
+            );
+
+            proptest::prop_assert_eq!(given_quotient, expected_quotient);
+            proptest::prop_assert_eq!(given_modulus, expected_modulus);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn proptest_tv_division_x
+            ((size, lhs, rhs) in u64_arith_target())
+        {
+            let mask = (1u64.unbounded_shl(size.get())).wrapping_sub(1);
+            // On divide-by-zero the result is all-`x`, encoded as `spc = 0, val = 0`.
+            let expected_quotient = lhs.checked_div(rhs).map_or([0, 0], |r| u64_to_fvu64x2(r & mask, size));
+            let expected_modulus = lhs.checked_rem(rhs).map_or([0, 0], |r| u64_to_fvu64x2(r & mask, size));
+            let mut given_quotient = [0u64; 2];
+            let mut given_modulus = [0u64; 2];
+
+            tv_division_x(
+                fvu64x2_to_slice_mut(&mut given_quotient, size),
+                fvu64x2_to_slice_mut(&mut given_modulus, size),
+                u64x2_to_slice(&u128_to_u64x2(lhs as u128), size),
+                u64x2_to_slice(&u128_to_u64x2(rhs as u128), size),
                 size
             );
 

@@ -477,6 +477,7 @@ opcodes![
     HeapHeapTruncate,
     HeapBinaryBitwise,
     HeapBinaryArithmetic,
+    HeapBinaryDivMod,
     HeapBinaryCmp,
     HeapBinaryMinMax,
     HeapBinaryShift,
