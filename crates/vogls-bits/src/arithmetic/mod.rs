@@ -10,7 +10,7 @@ mod multiplication;
 mod power;
 
 pub use add_sub::{fv_addition, fv_subtraction, tv_addition, tv_subtraction};
-pub use division::{fv_division, tv_division};
+pub use division::{fv_division, tv_division, tv_division_x, fv_division_x};
 pub use multiplication::{fv_multiplication, tv_multiplication};
 pub use power::{fv_power, tv_power};
 
