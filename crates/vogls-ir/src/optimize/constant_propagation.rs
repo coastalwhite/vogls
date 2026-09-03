@@ -223,12 +223,20 @@ fn constant_propagate_instruction(
                         }
                     }
 
-                    if $constant_is_rhs && $div_by_zero_equals_x && lhs.mode() == LogicMode::TwoValue {
+                    if $constant_is_rhs
+                        && $div_by_zero_equals_x
+                        && lhs.mode() == LogicMode::TwoValue
+                    {
                         let tgt = vars.insert(LogicMode::TwoValue, b.size());
                         additional.push(BI(tgt, IO::$op, lhs, b.clone()));
                         additional.push(I::Unary(dst, UnaryOp::TvToFv, tgt));
                     } else {
-                        additional.push(BI(dst, IO::$op, if $constant_is_rhs { lhs } else { rhs }, b.clone()));
+                        additional.push(BI(
+                            dst,
+                            IO::$op,
+                            if $constant_is_rhs { lhs } else { rhs },
+                            b.clone(),
+                        ));
                     }
                 }};
             }

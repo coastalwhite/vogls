@@ -534,9 +534,7 @@ impl Bits {
         const MODE: Mode = Mode::TwoValue;
         if size > MODE.max_inline_size() {
             let nwords = size_to_num_words(size);
-            let mut values = (0..nwords)
-                .map(|_| 0u64)
-                .collect::<Box<[u64]>>();
+            let mut values = (0..nwords).map(|_| 0u64).collect::<Box<[u64]>>();
             values[nwords - 1] |= last_word_mask(size);
             Self::from_boxed_slice(MODE, size, values)
         } else {
