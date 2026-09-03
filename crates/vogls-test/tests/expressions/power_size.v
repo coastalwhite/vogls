@@ -1,7 +1,8 @@
 module top;
-  reg [3:0] g;
+  reg [3:0] g, x;
   initial begin
     g = 4'd11;
-    $vogls_assert_eq(g ** 2, 9);
+    x = g ** 2;
+    $vogls_assert_eq(x, 9);
   end
 endmodule
