@@ -1,6 +1,6 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, Bits, ProcessBuilder, SCALAR_VSIZE,
+    BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, ProcessBuilder, SCALAR_VSIZE,
     Time,
 };
 
@@ -170,13 +170,6 @@ pub fn lower_case_statement<'a>(
 
     let (expr_var, expr_var_ty) =
         lower_expr(ctx, mctx, scope, &mut builder, *expr, Some(context_width))?;
-    let expr_var = match variant {
-        CaseStatementVariant::Case => expr_var,
-        CaseStatementVariant::CaseZ => expr_var,
-        CaseStatementVariant::CaseX => {
-            builder.bitwise_case_equals_constant(mctx.gl(), expr_var, Bits::new_ones(context_width))
-        }
-    };
 
     let mut origins = Vec::new();
     let mut default = None;
@@ -195,14 +188,13 @@ pub fn lower_case_statement<'a>(
                     coerce_bin_arithmetic(mctx.gl(), &mut builder, expr_var, expr_var_ty, v, v_ty);
                 let (expr_var, v) = match variant {
                     CaseStatementVariant::Case => (expr_var, v),
-                    CaseStatementVariant::CaseX => (
-                        expr_var,
-                        builder.bitwise_case_equals_constant(
-                            mctx.gl(),
-                            v,
-                            Bits::new_ones(context_width),
-                        ),
-                    ),
+                    CaseStatementVariant::CaseX => {
+                        let v = builder.copy_x(mctx.gl(), v, expr_var);
+                        let v = builder.copy_z(mctx.gl(), v, expr_var);
+                        let expr_var = builder.copy_x(mctx.gl(), expr_var, v);
+                        let expr_var = builder.copy_z(mctx.gl(), expr_var, v);
+                        (expr_var, v)
+                    }
                     CaseStatementVariant::CaseZ => (
                         builder.copy_z(mctx.gl(), expr_var, v),
                         builder.copy_z(mctx.gl(), v, expr_var),
@@ -214,14 +206,13 @@ pub fn lower_case_statement<'a>(
                         lower_expr(ctx, mctx, scope, &mut builder, e, Some(context_width))?;
                     let (expr_var, v) = match variant {
                         CaseStatementVariant::Case => (expr_var, v),
-                        CaseStatementVariant::CaseX => (
-                            expr_var,
-                            builder.bitwise_case_equals_constant(
-                                mctx.gl(),
-                                v,
-                                Bits::new_ones(context_width),
-                            ),
-                        ),
+                        CaseStatementVariant::CaseX => {
+                            let v = builder.copy_x(mctx.gl(), v, expr_var);
+                            let v = builder.copy_z(mctx.gl(), v, expr_var);
+                            let expr_var = builder.copy_x(mctx.gl(), expr_var, v);
+                            let expr_var = builder.copy_z(mctx.gl(), expr_var, v);
+                            (expr_var, v)
+                        }
                         CaseStatementVariant::CaseZ => (
                             builder.copy_z(mctx.gl(), expr_var, v),
                             builder.copy_z(mctx.gl(), v, expr_var),

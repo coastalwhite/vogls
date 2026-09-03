@@ -85,13 +85,13 @@ pub fn get_expr_type<'a>(
                     | O::LogicalAnd
                     | O::LogicalOr => VType::SCALAR_NET,
 
-                    O::ShiftLeft
+                    O::Power
+                    | O::ShiftLeft
                     | O::ShiftRight
                     | O::ArithmeticLeftShift
                     | O::ArithmeticRightShift => l,
 
-                    O::Power
-                    | O::Multiply
+                    O::Multiply
                     | O::Divide
                     | O::Modulus
                     | O::BinaryPlus

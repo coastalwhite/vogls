@@ -291,8 +291,9 @@ impl VValue {
 
     pub fn power(lhs: VValue, rhs: VValue) -> Self {
         use VValue as V;
+        let l_width = lhs.ty().bit_length();
         let (lhs, rhs) = Self::coerce_max_size(lhs, rhs);
-        match (lhs, rhs) {
+        let bits = match (lhs, rhs) {
             (V::UnsignedNet(lb), V::UnsignedNet(r) | V::SignedNet(r)) => {
                 V::UnsignedNet(Bits::power(&lb, &r))
             }
@@ -302,7 +303,8 @@ impl VValue {
             (lhs @ V::Real(_), rhs) | (lhs, rhs @ V::Real(_)) => {
                 V::Real(Real::power(lhs.into_real(), rhs.into_real()))
             }
-        }
+        };
+        bits.truncate_or_extend(l_width)
     }
 
     pub fn is_real(&self) -> bool {
