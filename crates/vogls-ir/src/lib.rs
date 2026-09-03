@@ -1720,6 +1720,10 @@ impl BinaryImmOp {
                 S::Keep
             }
 
+            O::UnsignedLessEqual | O::UnsignedGreaterEqual if imm.contains_special() => {
+                S::Constant(Bits::new_unknown(SCALAR_VSIZE))
+            }
+
             O::Add
             | O::Sub
             | O::Power
@@ -1732,8 +1736,6 @@ impl BinaryImmOp {
             | O::RevModulusX
             | O::RevDivide0
             | O::RevModulus0
-            | O::UnsignedLessEqual
-            | O::UnsignedGreaterEqual
             | O::Min
             | O::Max
                 if imm.contains_special() =>
