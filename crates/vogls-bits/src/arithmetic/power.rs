@@ -18,13 +18,13 @@ pub fn tv_power(dst: &mut [u64], lhs: &[u64], rhs: &[u64], size: VectorSize) {
 
     for bit in 0..bits {
         if (rhs[bit / 64] >> (bit % 64)) & 1 == 1 {
-            tv_multiplication(scratch, &dst, &base, size);
-            dst.copy_from_slice(&scratch);
+            tv_multiplication(scratch, dst, base, size);
+            dst.copy_from_slice(scratch);
         }
         // Squaring the base is only needed for the remaining higher bits.
         if bit + 1 < bits {
-            tv_multiplication(scratch, &base, &base, size);
-            base.copy_from_slice(&scratch);
+            tv_multiplication(scratch, base, base, size);
+            base.copy_from_slice(scratch);
         }
     }
 }

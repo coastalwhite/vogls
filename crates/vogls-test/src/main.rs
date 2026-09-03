@@ -289,7 +289,7 @@ impl TestInfo {
                     info.include_dirs.push(
                         path.parent()
                             .unwrap()
-                            .join(&line["include-dir=".len()..].trim()),
+                            .join(line["include-dir=".len()..].trim()),
                     );
                 }
                 _ => return Err(format!("Invalid vogls test command '{line}'")),

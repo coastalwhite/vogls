@@ -1,7 +1,6 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, ProcessBuilder, SCALAR_VSIZE,
-    Time,
+    BasicBlockBuilder, BasicBlockKey, BasicBlockTerminator, ProcessBuilder, SCALAR_VSIZE, Time,
 };
 
 use crate::ast::AstId;

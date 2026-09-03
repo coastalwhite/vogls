@@ -939,9 +939,9 @@ impl Tokenized {
                                     };
                                     let content: Arc<str> = match read_to_string_with_include_dirs(
                                         world,
-                                        &s,
-                                        &path,
-                                        &include_dirs,
+                                        s,
+                                        path,
+                                        include_dirs,
                                     ) {
                                         Ok(content) => content.into(),
                                         Err(err) => {
@@ -1495,10 +1495,7 @@ pub fn read_to_string_with_include_dirs(
             return false;
         };
 
-        match err.kind() {
-            std::io::ErrorKind::NotFound => true,
-            _ => false,
-        }
+        matches!(err.kind(), std::io::ErrorKind::NotFound)
     }
 
     match world.read_to_string(&caller.join(file)) {
