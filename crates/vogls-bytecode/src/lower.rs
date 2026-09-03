@@ -1299,20 +1299,20 @@ fn lower_instruction(
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
                     bce.heap_fv_pow(rd, T4, rs, src_size);
                 }
-                (O::RevDivideX, M::TwoValue, Some(size), _, _, _) => {
+                (O::RevDivideX, _, Some(size), M::TwoValue, _, _) => {
                     bce.load_bits_into_register(T4, M::TwoValue, imm);
                     bce.divx(rd, T4, rs, size);
                 }
-                (O::RevDivideX, M::TwoValue, None, _, _, _) => {
+                (O::RevDivideX, _, None, M::TwoValue, _, _) => {
                     let imm = heap_builder.claim_constant(M::TwoValue, imm.clone());
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
                     bce.heap_tv_divx(rd, T4, rs, src_size);
                 }
-                (O::RevDivideX, M::FourValue, Some(size), _, _, _) => {
+                (O::RevDivideX, _, Some(size), M::FourValue, _, _) => {
                     bce.load_bits_into_register(T4, M::FourValue, imm);
                     bce.fv_divx(rd, T4, rs, size);
                 }
-                (O::RevDivideX, M::FourValue, None, _, _, _) => {
+                (O::RevDivideX, _, None, M::FourValue, _, _) => {
                     let imm = heap_builder.claim_constant(M::FourValue, imm.clone());
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
                     bce.heap_fv_divx(rd, T4, rs, src_size);
@@ -1335,20 +1335,20 @@ fn lower_instruction(
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
                     bce.heap_fv_div0(rd, T4, rs, src_size);
                 }
-                (O::RevModulusX, M::TwoValue, Some(size), _, _, _) => {
+                (O::RevModulusX, _, Some(size), M::TwoValue, _, _) => {
                     bce.load_bits_into_register(T4, M::TwoValue, imm);
                     bce.modx(rd, T4, rs, size);
                 }
-                (O::RevModulusX, M::TwoValue, None, _, _, _) => {
+                (O::RevModulusX, _, None, M::TwoValue, _, _) => {
                     let imm = heap_builder.claim_constant(M::TwoValue, imm.clone());
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
                     bce.heap_tv_modx(rd, T4, rs, src_size);
                 }
-                (O::RevModulusX, M::FourValue, Some(size), _, _, _) => {
+                (O::RevModulusX, _, Some(size), M::FourValue, _, _) => {
                     bce.load_bits_into_register(T4, M::FourValue, imm);
                     bce.fv_modx(rd, T4, rs, size);
                 }
-                (O::RevModulusX, M::FourValue, None, _, _, _) => {
+                (O::RevModulusX, _, None, M::FourValue, _, _) => {
                     let imm = heap_builder.claim_constant(M::FourValue, imm.clone());
                     bce.load_u64(T4, imm.offset.bit_offset as u64);
                     bce.heap_fv_modx(rd, T4, rs, src_size);
@@ -1945,7 +1945,7 @@ fn lower_instruction(
                     }
                 }
                 (LogicMode::FourValue, SelectMerge::Merge) => {
-                    bce.contains_special(T2, rcond, SixBitSize::N1);
+                    bce.contains_special(T4, rcond, SixBitSize::N1);
 
                     let branch_offset = bce.data.len();
                     bce.panic();
@@ -1980,7 +1980,7 @@ fn lower_instruction(
                     let offset = bce.data.len() - branch_offset - 1;
                     let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
                     bce.data[branch_offset] = BranchFalse {
-                        rcond: T2,
+                        rcond: T4,
                         imm: offset,
                     }
                     .encode();
