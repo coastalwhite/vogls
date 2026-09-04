@@ -363,8 +363,7 @@ impl BytecodeInstruction for FvCMov {
         if regs[rs1] != 0 {
             let (rdspc, rdval) = rd.to_spc_and_val();
             let (rsspc, rsval) = rs2.to_spc_and_val();
-            regs[rdspc] = regs[rsspc];
-            regs[rdval] = regs[rsval];
+            (regs[rdspc], regs[rdval]) = (regs[rsspc], regs[rsval]);
         }
     }
 }
@@ -386,8 +385,7 @@ impl BytecodeInstruction for FvCNMov {
         if regs[rs1] == 0 {
             let (rdspc, rdval) = rd.to_spc_and_val();
             let (rsspc, rsval) = rs2.to_spc_and_val();
-            regs[rdspc] = regs[rsspc];
-            regs[rdval] = regs[rsval];
+            (regs[rdspc], regs[rdval]) = (regs[rsspc], regs[rsval]);
         }
     }
 }
