@@ -319,7 +319,7 @@ impl BytecodeInstruction for LoadRelUnaligned {
             return;
         }
 
-        assert!(heap.is_empty() && word < heap.len() - 1);
+        assert!(!heap.is_empty() && word < heap.len() - 1);
         let w1 = heap[word];
         let w2 = heap[word + 1];
         let w = (w1 >> boff) | (w2 << (64 - boff));
