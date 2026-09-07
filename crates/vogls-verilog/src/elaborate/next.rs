@@ -410,11 +410,13 @@ fn extend_opt_generate_block_sids<'a, 'b>(
         )?,
     };
 
-    let mut error = false;
-    for item in items.iter() {
-        error |= extend_module_or_generate_item_sids(item, sid, ctx, st, diagnostics).is_err();
-    }
-    if error { Err(()) } else { Ok(()) }
+    st.next_levels.push_back((
+        sid,
+        ElabLevel::GenerateBlock(items),
+        st.default_nettype,
+        ctx.time_scale,
+    ));
+    Ok(())
 }
 
 fn extend_generate_if_sids<'a, 'b>(
