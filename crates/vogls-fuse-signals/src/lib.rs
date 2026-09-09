@@ -72,7 +72,7 @@ use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::VcdValue;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, Instruction, IntrinsicOp,
-    ProcessBuilder, Signal, SignalFlags, SignalKey, SignalSlice, VectorSize,
+    ProcessBuilder, Signal, SignalFlags, SignalKey, SignalSlice, VectorSize, WatchCondition,
 };
 use vogls_utils::{OrderedSet, Table, VgHashMap, VgHashSet};
 
@@ -528,20 +528,23 @@ impl FuseGraphOptimizer {
                 builder.push_raw_instruction(i);
             }
             gl.bbs[key].instrs = builder.into_instructions();
-            if let BasicBlockTerminator::Watch(_, signals) = &mut gl.bbs[key].terminator {
-                signals.retain_mut(|s| match self.fused_signals.get(s) {
+            if let BasicBlockTerminator::Watch(_, conditions) = &mut gl.bbs[key].terminator {
+                conditions.retain_mut(|c| match self.fused_signals.get(&c.signal) {
                     None => true,
-                    Some(FuseTarget::Signal(to, _)) => {
-                        *s = *to;
+                    Some(FuseTarget::Signal(to, part_select)) => {
+                        *c = WatchCondition {
+                            signal: *to,
+                            part_select: *part_select,
+                        };
                         true
                     }
                     Some(FuseTarget::Constant(_)) => false,
                 });
                 // Canonicalize the signal list.
-                signals.sort_unstable();
-                signals.dedup();
+                conditions.sort_unstable_by_key(|c| c.to_ord());
+                conditions.dedup();
 
-                if signals.is_empty() {
+                if conditions.is_empty() {
                     gl.bbs[key].terminator = BasicBlockTerminator::Halt;
                 }
             }
@@ -553,16 +556,19 @@ impl FuseGraphOptimizer {
             };
 
             let mut standing_vec = standing.to_vec();
-            standing_vec.retain_mut(|s| match self.fused_signals.get(s) {
+            standing_vec.retain_mut(|c| match self.fused_signals.get(&c.signal) {
                 None => true,
-                Some(FuseTarget::Signal(to, _)) => {
-                    *s = *to;
+                Some(FuseTarget::Signal(to, part_select)) => {
+                    *c = WatchCondition {
+                        signal: *to,
+                        part_select: *part_select,
+                    };
                     true
                 }
                 Some(FuseTarget::Constant(_)) => false,
             });
             // Canonicalize the signal list.
-            standing_vec.sort_unstable();
+            standing_vec.sort_unstable_by_key(|c| c.to_ord());
             standing_vec.dedup();
             *standing = standing_vec.into_boxed_slice();
         }

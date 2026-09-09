@@ -20,9 +20,9 @@ impl WatchMap {
         let mut bb_lookup = VgHashMap::default();
         let mut next_watcher_index = 0usize;
         for (key, bb) in bbs.iter() {
-            if let BasicBlockTerminator::Watch(_, signals) = &bb.terminator {
+            if let BasicBlockTerminator::Watch(_, conditions) = &bb.terminator {
                 bb_lookup.insert(key, next_watcher_index);
-                watchers.extend(signals.iter().map(|s| (*s, next_watcher_index)));
+                watchers.extend(conditions.iter().map(|c| (c.signal, next_watcher_index)));
                 next_watcher_index += 1;
             }
         }

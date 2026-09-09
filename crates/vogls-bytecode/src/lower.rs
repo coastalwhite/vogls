@@ -5,7 +5,7 @@ use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
     GlobalContext, Instruction, IntrinsicOp, LabelDisplay, LogicMode, ProcessKey, ResizeOp,
-    SelectMerge, ShiftImmOp, SignalKey, UnaryOp, VSIZE_64, VariableKey, VariableMap,
+    SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalKey, UnaryOp, VSIZE_64, VariableKey, VariableMap,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
@@ -85,10 +85,11 @@ pub fn lower_process_to_bytecode(
 
     // Standing processes are not scheduled in the active queue, instead their listeners are armed
     // right at the start.
-    let mut standing = process
-        .standing
-        .as_ref()
-        .filter(|watchers| watchers.iter().any(|s| !gl.signals[*s].triggers_t0_poke()));
+    let mut standing = process.standing.as_ref().filter(|conditions| {
+        conditions
+            .iter()
+            .any(|c| !gl.signals[c.signal].triggers_t0_poke())
+    });
     if standing.is_none() {
         schedule.push_active(InstructionPtr(bytecode.data.len() as u64));
     }
@@ -271,10 +272,10 @@ pub fn lower_process_to_bytecode(
                     ));
                     bytecode.panic();
                 }
-                T::Watch(target, signals) => {
+                T::Watch(target, conditions) => {
                     let index = watch_map.get_watch_index(bb_key);
                     if standing
-                        .take_if(|s| s.as_ref() == signals.as_slice())
+                        .take_if(|s| s.as_ref() == conditions.as_slice())
                         .is_some()
                     {
                         listeners.arm(index);
@@ -2290,79 +2291,175 @@ fn lower_instruction(
 
             let signal_addr = signal_address(*signal, signals, io_signals);
 
-            if *partial != 0 || signal_size != src_size {
-                let offset = signal_addr.wrapping_add(u64::from(*partial));
+            use LogicMode as M;
+            if src_size == SCALAR_VSIZE {
+                let addr = signal_addr + *partial as u64;
 
-                match (src.mode(), SixBitSize::from_vector_size(src_size)) {
-                    (LogicMode::TwoValue, None) => {
-                        let raddr = T2;
-                        bce.load_u64(raddr, offset);
-                        bce.tv_set_heap_unaligned(rd, rs, raddr, src_size, offset, src_size);
-                    }
-                    (LogicMode::FourValue, None) => {
-                        let raddr = T2;
-                        let spc_base_addr = offset;
-                        let val_base_addr =
-                            HeapAlignment::spc_offset_to_val_offset(signal_size, spc_base_addr);
-                        bce.load_u64(raddr, offset);
-                        bce.fv_set_heap_unaligned(
-                            rd,
+                const SCRATCH: Reg = T2;
+                let rt_signal = io_signals[signal];
+                let lupdt_index = lupdt_indexes.get(&rt_signal).copied();
+                let watch_index =
+                    (watch_map.num_watch_indices(*signal) > 0).then(|| rt_signal.as_u64());
+                let plugin_rt_index = options.has_plugins.then_some(rt_signal.as_u64());
+
+                match (src.mode(), signal_size == SCALAR_VSIZE) {
+                    (M::TwoValue, _) => {
+                        let tv_correct_index = rt_signal.as_u64();
+                        bce.tv_set1(
+                            Some(rd),
                             rs,
-                            raddr,
-                            src_size,
-                            spc_base_addr,
-                            val_base_addr,
-                            src_size,
+                            addr,
+                            tv_correct_index,
+                            lupdt_index,
+                            watch_index,
+                            plugin_rt_index,
+                            SCRATCH,
                         );
                     }
-                    (LogicMode::TwoValue, Some(src_size)) => {
-                        bce.set_unaligned(rd, rs, offset, src_size);
+                    (M::FourValue, true) => {
+                        bce.fv_set1(
+                            Some(rd),
+                            rs,
+                            addr,
+                            lupdt_index,
+                            watch_index,
+                            plugin_rt_index,
+                            SCRATCH,
+                        );
                     }
-                    (LogicMode::FourValue, Some(src_size)) => {
-                        // TempReg: PARTIAL is no longer used from here.
-                        let rpoke_t1 = T4;
-                        let rpoke_t2 = T5;
-
-                        let spc_offset = offset;
-                        let val_offset =
-                            HeapAlignment::spc_offset_to_val_offset(signal_size, spc_offset);
-                        let (rsspc, rsval) = rs.to_spc_and_val();
-                        bce.set_unaligned(rpoke_t1, rsspc, spc_offset, src_size);
-                        bce.set_unaligned(rpoke_t2, rsval, val_offset, src_size);
-                        bce.or(rd, rpoke_t1, rpoke_t2);
+                    (M::FourValue, false) => {
+                        bce.fv_set1spread(
+                            Some(rd),
+                            rs,
+                            signal_addr,
+                            *partial as u64,
+                            signal_size,
+                            lupdt_index,
+                            watch_index,
+                            plugin_rt_index,
+                            SCRATCH,
+                        );
                     }
                 }
             } else {
-                match (src.mode(), SixBitSize::from_vector_size(signal_size)) {
-                    (LogicMode::TwoValue, None) => {
-                        let raddr = T2;
-                        bce.load_u64(raddr, signal_addr);
-                        bce.tv_set_heap_aligned(rd, rs, raddr, src_size, InlineAddrOffset::ZERO);
+                const SCRATCH: Reg = T2;
+                let rt_signal = io_signals[signal];
+                let tv_correct_index = rt_signal.as_u64();
+                let lupdt_index = lupdt_indexes.get(&rt_signal).copied();
+                let watch_index =
+                    (watch_map.num_watch_indices(*signal) > 0).then(|| rt_signal.as_u64());
+                let plugin_rt_index = options.has_plugins.then_some(rt_signal.as_u64());
+
+                let is_partial = *partial != 0 || signal_size != src_size;
+                let offset = signal_addr.wrapping_add(u64::from(*partial));
+
+                match (
+                    src.mode(),
+                    SixBitSize::from_vector_size(src_size),
+                    is_partial,
+                ) {
+                    (M::TwoValue, None, false) => {
+                        bce.tv_set_whole_heap(
+                            Some(rd),
+                            rs,
+                            signal_addr,
+                            src_size,
+                            Some(tv_correct_index),
+                            lupdt_index,
+                            watch_index,
+                            plugin_rt_index,
+                        );
                     }
-                    (LogicMode::FourValue, None) => {
-                        let raddr = T2;
-                        bce.load_u64(raddr, signal_addr);
-                        bce.fv_set_heap_aligned(rd, rs, raddr, signal_size, InlineAddrOffset::ZERO);
+                    (M::FourValue, None, false) => {
+                        bce.fv_set_whole_heap(
+                            Some(rd),
+                            rs,
+                            signal_addr,
+                            signal_size,
+                            signal_size,
+                            false,
+                            lupdt_index,
+                            watch_index,
+                            plugin_rt_index,
+                        );
                     }
-                    (LogicMode::TwoValue, Some(signal_size)) => {
-                        bce.tv_set_aligned(rd, rs, signal_addr, signal_size)
+                    (M::TwoValue, None, true) => {
+                        bce.tv_set_partial_heap(
+                            Some(rd),
+                            rs,
+                            offset,
+                            src_size,
+                            signal_size,
+                            Some(tv_correct_index),
+                            lupdt_index,
+                            watch_index,
+                            plugin_rt_index,
+                        );
                     }
-                    (LogicMode::FourValue, Some(signal_size)) => {
-                        bce.fv_set_aligned(rd, rs, signal_addr, signal_size)
+                    (M::FourValue, None, true) => {
+                        bce.fv_set_partial_heap(
+                            Some(rd),
+                            rs,
+                            offset,
+                            src_size,
+                            signal_size,
+                            signal_size,
+                            false,
+                            lupdt_index,
+                            watch_index,
+                            plugin_rt_index,
+                        );
                     }
+                    (M::TwoValue, Some(size), false) => bce.tv_set_aligned(
+                        Some(rd),
+                        rs,
+                        signal_addr,
+                        size,
+                        tv_correct_index,
+                        lupdt_index,
+                        watch_index,
+                        plugin_rt_index,
+                        SCRATCH,
+                    ),
+                    (M::FourValue, Some(size), false) => bce.fv_set_aligned(
+                        Some(rd),
+                        rs,
+                        signal_addr,
+                        size,
+                        signal_size,
+                        lupdt_index,
+                        watch_index,
+                        plugin_rt_index,
+                        SCRATCH,
+                    ),
+                    (M::TwoValue, Some(size), true) => bce.tv_set_unaligned(
+                        Some(rd),
+                        rs,
+                        offset,
+                        size,
+                        offset,
+                        src_size,
+                        tv_correct_index,
+                        lupdt_index,
+                        watch_index,
+                        plugin_rt_index,
+                        SCRATCH,
+                    ),
+                    (M::FourValue, Some(size), true) => bce.fv_set_unaligned(
+                        Some(rd),
+                        rs,
+                        offset,
+                        size,
+                        offset,
+                        src_size,
+                        signal_size,
+                        lupdt_index,
+                        watch_index,
+                        plugin_rt_index,
+                        SCRATCH,
+                    ),
                 }
             }
-
-            poke_signal(
-                bce,
-                gl,
-                rd,
-                *signal,
-                io_signals,
-                lupdt_indexes,
-                watch_map,
-                options,
-            );
         }
         I::DriveSlice(dst, signal, src, partial) => {
             // Temporary Register Allocation:
@@ -2433,58 +2530,78 @@ fn lower_instruction(
 
             bce.add(raddr, raddr, rpartial, SixBitSize::N64);
 
-            // TempReg: PARTIAL is no longer used from here.
-            let rpoke_t1 = T4;
-            let rpoke_t2 = T5;
+            let rt_signal = io_signals[signal];
+            let tv_correct_index = rt_signal.as_u64();
+            let lupdt_index = lupdt_indexes.get(&rt_signal).copied();
+            let watch_index =
+                (watch_map.num_watch_indices(*signal) > 0).then(|| rt_signal.as_u64());
+            let plugin_rt_index = options.has_plugins.then_some(rt_signal.as_u64());
+
+            // @NOTE: `raddr` holds a full address, so the relative variants use a zero base and
+            // bound the write to the signal itself. The range is the addressable extent of the
+            // signal; the instruction itself accounts for the width of the write.
+            let range = base_addr..=(base_addr + base_size.get() as u64 - 1);
+
             match (src.mode(), SixBitSize::from_vector_size(src_size)) {
-                (LogicMode::TwoValue, None) => {
-                    bce.tv_set_heap_unaligned(rd, rs, raddr, src_size, base_addr, base_size);
-                }
-                (LogicMode::FourValue, None) => {
-                    let spc_base_addr = base_addr;
-                    let val_base_addr =
-                        HeapAlignment::spc_offset_to_val_offset(signal_size, spc_base_addr);
-                    bce.fv_set_heap_unaligned(
-                        rd,
+                (M::TwoValue, None) => {
+                    bce.tv_set_heaprel(
+                        Some(rd),
                         rs,
                         raddr,
+                        InlineAddrOffset::ZERO,
+                        range,
                         src_size,
-                        spc_base_addr,
-                        val_base_addr,
-                        base_size,
+                        Some(tv_correct_index),
+                        lupdt_index,
+                        watch_index,
+                        plugin_rt_index,
                     );
                 }
-                (LogicMode::TwoValue, Some(src_size)) => {
-                    bce.rel_set_unaligned(rd, rs, raddr, src_size, base_addr, base_size);
-                }
-                (LogicMode::FourValue, Some(src_size)) => {
-                    let (rsspc, rsval) = rs.to_spc_and_val();
-                    bce.rel_set_unaligned(rpoke_t1, rsspc, raddr, src_size, base_addr, base_size);
-                    let val_offset = HeapAlignment::spc_offset_to_val_offset(signal_size, 0);
-                    bce.add_immediate(raddr, raddr, val_offset as i64, T5);
-                    let base_val_addr = base_addr.wrapping_add(val_offset);
-                    bce.rel_set_unaligned(
-                        rpoke_t2,
-                        rsval,
+                (M::FourValue, None) => {
+                    bce.fv_set_heaprel(
+                        Some(rd),
+                        rs,
                         raddr,
+                        InlineAddrOffset::ZERO,
+                        range,
                         src_size,
-                        base_val_addr,
-                        base_size,
+                        signal_size,
+                        false,
+                        lupdt_index,
+                        watch_index,
+                        plugin_rt_index,
                     );
-                    bce.or(rd, rpoke_t1, rpoke_t2);
+                }
+                (M::TwoValue, Some(size)) => {
+                    bce.tv_setrel(
+                        Some(rd),
+                        rs,
+                        raddr,
+                        0,
+                        range,
+                        size,
+                        Some(tv_correct_index),
+                        lupdt_index,
+                        watch_index,
+                        plugin_rt_index,
+                    );
+                }
+                (M::FourValue, Some(size)) => {
+                    bce.fv_setrel(
+                        Some(rd),
+                        rs,
+                        raddr,
+                        0,
+                        range,
+                        size,
+                        signal_size,
+                        false,
+                        lupdt_index,
+                        watch_index,
+                        plugin_rt_index,
+                    );
                 }
             }
-
-            poke_signal(
-                bce,
-                gl,
-                rd,
-                *signal,
-                io_signals,
-                lupdt_indexes,
-                watch_map,
-                options,
-            );
 
             if let Some(branch_offset) = branch_offset {
                 bce.data[branch_offset] = BranchTrue {
@@ -2497,40 +2614,6 @@ fn lower_instruction(
         I::Phi(..) => {
             // These are handles at the basic block level.
         }
-    }
-}
-
-fn poke_signal(
-    bce: &mut BytecodeEncoder,
-    gl: &GlobalContext,
-    rpoke: Reg,
-    signal: SignalKey,
-    io_signals: &VgHashMap<SignalKey, RtSignalKey>,
-    lupdt_indexes: &VgHashMap<RtSignalKey, u64>,
-    watch_map: &WatchMap,
-    options: &LowerBytecodeOptions,
-) {
-    let rt_signal = io_signals[&signal];
-    let lupdt_index = lupdt_indexes.get(&rt_signal);
-    let num_watchers = watch_map.num_watch_indices(signal);
-
-    if gl.signals[signal].mode == LogicMode::TwoValue
-        && (options.has_plugins || lupdt_index.is_some() || num_watchers > 0)
-    {
-        bce.tv_correct_first(rpoke, rt_signal.as_u64());
-    }
-    if options.has_plugins {
-        let index = rt_signal.as_u64();
-        bce.plugin_poke(rpoke, index);
-    }
-    if let Some(lupdt_index) = lupdt_index {
-        bce.set_lupdt(rpoke, *lupdt_index);
-    }
-    if num_watchers == 1 {
-        let index = watch_map.watch_indices(signal).next().unwrap();
-        bce.wake(rpoke, index as u64);
-    } else if num_watchers > 1 {
-        bce.wake_multiple(rpoke, rt_signal.as_u64());
     }
 }
 
@@ -2632,20 +2715,33 @@ fn store_back(
                     Some(offset) => bytecode.stack_offset(scratch, kind, offset),
                 }
 
+                // @NOTE: This writes to the stack rather than to a signal, so no update mask is
+                // needed and nothing has to be poked.
                 match var.mode() {
-                    LogicMode::TwoValue => bytecode.tv_rel_set_aligned(
-                        scratch,
+                    LogicMode::TwoValue => bytecode.tv_setrel(
+                        None,
                         value,
                         scratch,
-                        InlineAddrOffset::ZERO,
+                        0,
+                        0..=u64::MAX,
                         size,
+                        None,
+                        None,
+                        None,
+                        None,
                     ),
-                    LogicMode::FourValue => bytecode.fv_rel_set_aligned(
-                        scratch,
+                    LogicMode::FourValue => bytecode.fv_setrel(
+                        None,
                         value,
                         scratch,
-                        InlineAddrOffset::ZERO,
+                        0,
+                        0..=u64::MAX,
                         size,
+                        size.to_vector_size(),
+                        true,
+                        None,
+                        None,
+                        None,
                     ),
                 }
             }

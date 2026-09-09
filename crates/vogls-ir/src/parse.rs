@@ -11,7 +11,7 @@ use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
     Instruction, IntrinsicOp, LogicMode, ProcessKey, ProcessKind, ResizeOp, SCALAR_VSIZE,
     SelectMerge, ShiftImmOp, Signal, SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey, Time,
-    UnaryOp, VariableKey,
+    UnaryOp, VariableKey, WatchCondition,
 };
 
 #[derive(Debug)]
@@ -1018,10 +1018,16 @@ fn parse_instr<'a>(
 
             let mut signals = Vec::new();
             c.expect_char('[')?;
-            signals.push(parse_signal(c, symbols)?);
+            signals.push(WatchCondition {
+                signal: parse_signal(c, symbols)?,
+                part_select: None,
+            });
             c.trim_cursor();
             while c.next_if_equals(',') {
-                signals.push(parse_signal(c, symbols)?);
+                signals.push(WatchCondition {
+                    signal: parse_signal(c, symbols)?,
+                    part_select: None,
+                });
                 c.trim_cursor();
             }
             c.expect_char(']')?;

@@ -243,6 +243,10 @@ impl LoweredDesign {
                 debug_info.as_mut(),
             );
         }
+        // Pad so that we can take larger slices without bounds checks failing.
+        for _ in 0..16 {
+            bytecode.panic();
+        }
 
         let stack_offset = heap_builder.claim_words(num_stack_words) as u64;
         let mut heap = heap_builder.finish();

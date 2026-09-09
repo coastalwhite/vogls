@@ -620,56 +620,6 @@ impl<'a> Compiler<'a> {
         self.module.clear_context(&mut ctx);
     }
 
-    // --- TR lowering --------------------------------------------------------
-
-    /// Pre-pass: walk one TR's reachable blocks in the *same* DFS order as
-    /// `build_tr`, assigning each `Watch` its listener offset and populating
-    /// `self.listeners` / `self.watch_offset`. Running this over all TRs before
-    /// lowering means drive sites can inline the complete listener wake set.
-    fn collect_listeners(
-        &mut self,
-        process_idx: usize,
-        entry_bb: BasicBlockKey,
-        standing: Option<&[SignalKey]>,
-    ) {
-        let mut seen = vogls_utils::VgHashSet::default();
-        seen.insert(entry_bb);
-        let mut order = vec![entry_bb];
-        let mut stack = vec![entry_bb];
-        while let Some(k) = stack.pop() {
-            self.gl.bbs[k].terminator.for_each_non_temporal_bb(|s| {
-                if seen.insert(s) {
-                    order.push(s);
-                    stack.push(s);
-                }
-            });
-        }
-        for &k in &order {
-            if let BasicBlockTerminator::Watch(tr, signals) = &self.gl.bbs[k].terminator {
-                let target = self.tr_funcs[tr];
-                let offset = self.num_listening;
-                self.num_listening += 1;
-                for sig in signals.iter() {
-                    let rt = self.info.rt_signal_map[sig];
-                    self.listeners[rt.as_usize()].push(Listener { offset, target });
-                }
-                self.watch_offset.insert(k, offset);
-                // If this process is standing and this is its arming Watch (the
-                // watch set equals the standing set), record the offset so the
-                // listener is pre-armed at startup instead of the body running.
-                if let Some(sset) = standing {
-                    if !self.standing_procs.contains(&process_idx)
-                        && sset.len() == signals.len()
-                        && sset.iter().zip(signals.iter()).all(|(a, b)| a == b)
-                    {
-                        self.standing_procs.insert(process_idx);
-                        self.standing_arm_offsets.push(offset);
-                    }
-                }
-            }
-        }
-    }
-
     fn build_tr(
         &mut self,
         fb: &mut FunctionBuilderContext,
@@ -2059,12 +2009,48 @@ pub fn compile<'a>(
     for (pi, (_k, process)) in gl.processes.iter().enumerate() {
         // A process is "standing" (armed but not run at t=0) only if at least
         // one watcher does NOT trigger a t=0 poke — matches the bytecode filter.
-        let standing = process
-            .standing
-            .as_deref()
-            .filter(|w| w.iter().any(|s| !gl.signals[*s].triggers_t0_poke()));
+        let standing = process.standing.as_deref().filter(|conditions| {
+            conditions
+                .iter()
+                .any(|c| !gl.signals[c.signal].triggers_t0_poke())
+        });
         for tr in process.regions.iter() {
-            c.collect_listeners(pi, tr.entry(), standing);
+            let mut seen = vogls_utils::VgHashSet::default();
+            seen.insert(tr.entry());
+            let mut order = vec![tr.entry()];
+            let mut stack = vec![tr.entry()];
+            while let Some(k) = stack.pop() {
+                c.gl.bbs[k].terminator.for_each_non_temporal_bb(|s| {
+                    if seen.insert(s) {
+                        order.push(s);
+                        stack.push(s);
+                    }
+                });
+            }
+            for &k in &order {
+                if let BasicBlockTerminator::Watch(tr, conditions) = &c.gl.bbs[k].terminator {
+                    let target = c.tr_funcs[tr];
+                    let offset = c.num_listening;
+                    c.num_listening += 1;
+                    for condition in conditions.iter() {
+                        let rt = c.info.rt_signal_map[&condition.signal];
+                        c.listeners[rt.as_usize()].push(Listener { offset, target });
+                    }
+                    c.watch_offset.insert(k, offset);
+                    // If this process is standing and this is its arming Watch (the
+                    // watch set equals the standing set), record the offset so the
+                    // listener is pre-armed at startup instead of the body running.
+                    if let Some(sset) = standing {
+                        if !c.standing_procs.contains(&pi)
+                            && sset.len() == conditions.len()
+                            && sset.iter().zip(conditions.iter()).all(|(a, b)| a == b)
+                        {
+                            c.standing_procs.insert(pi);
+                            c.standing_arm_offsets.push(offset);
+                        }
+                    }
+                }
+            }
         }
     }
 

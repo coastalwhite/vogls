@@ -14,11 +14,12 @@ pub enum HeapAlignment {
 impl HeapAlignment {
     #[inline(always)]
     pub fn new(size: VectorSize, mode: LogicMode) -> Self {
-        let mut num_bits = size.get();
-        match mode {
-            LogicMode::TwoValue => {}
-            LogicMode::FourValue => num_bits = num_bits.strict_mul(2),
-        }
+        debug_assert!(mode.is_two_value() || size.get().checked_mul(2).is_some());
+        let shift = match mode {
+            LogicMode::TwoValue => 0,
+            LogicMode::FourValue => 1,
+        };
+        let num_bits = size.get().min(64) << shift;
         match num_bits.min(64).next_power_of_two().trailing_zeros() {
             0 => Self::B1,
             1 => Self::B2,
@@ -40,6 +41,12 @@ impl HeapAlignment {
     pub fn from_elem_offset(self, elem: u64) -> u64 {
         debug_assert_eq!(elem >> (64 - self as u32), 0);
         elem << self as u32
+    }
+
+    #[inline(always)]
+    pub fn to_elem_offset(self, elem: u64) -> u64 {
+        debug_assert!(self.is_aligned(elem));
+        elem >> self as u32
     }
 
     #[inline(always)]
