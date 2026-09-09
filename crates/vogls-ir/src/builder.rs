@@ -7,7 +7,7 @@ use crate::{
     BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, LogicMode, Process,
     ProcessKey, ProcessKind, RandomKind, ResizeOp, ResizeOpSimplification, SCALAR_VSIZE,
     SelectMerge, ShiftImmOp, SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp,
-    UnaryOpSimplification, VSIZE_32, VSIZE_64, VariableKey, VectorSize,
+    UnaryOpSimplification, VSIZE_32, VSIZE_64, VariableKey, VectorSize, WatchCondition,
 };
 
 #[must_use]
@@ -104,7 +104,7 @@ impl ProcessBuilder {
         self.trs.push(tr);
     }
 
-    pub fn set_standing(&self, gl: &mut GlobalContext, signals: Box<[SignalKey]>) {
+    pub fn set_standing(&self, gl: &mut GlobalContext, signals: Box<[WatchCondition]>) {
         gl.processes[self.key.unwrap()].standing = Some(signals);
     }
 
@@ -1081,7 +1081,14 @@ impl BasicBlockBuilder {
         signals: Vec<SignalKey>,
         tr: TemporalRegionKey,
     ) {
-        self.temporal_term_to(gl, BasicBlockTerminator::Watch(tr, signals))
+        let conditions = signals
+            .into_iter()
+            .map(|signal| WatchCondition {
+                signal,
+                part_select: None,
+            })
+            .collect();
+        self.temporal_term_to(gl, BasicBlockTerminator::Watch(tr, conditions))
     }
     pub fn temporal_jump_to(&mut self, gl: &mut GlobalContext, tr: TemporalRegionKey) {
         self.wait_to(gl, Time(0), tr);

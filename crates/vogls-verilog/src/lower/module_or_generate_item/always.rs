@@ -1,5 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{ProcessBuilder, ProcessKind, SignalKey};
+use vogls_ir::{ProcessBuilder, ProcessKind, SignalKey, WatchCondition};
 use vogls_utils::{IndexSet, OrderedSet};
 
 use crate::ast::expr::Expr;
@@ -57,9 +57,17 @@ pub fn lower<'a>(
             return Ok(());
         }
 
+        let conditions = signals
+            .iter()
+            .map(|&signal| WatchCondition {
+                signal,
+                part_select: None,
+            })
+            .collect();
+
         bb_builder.watch_to(mctx.gl(), signals.clone().into(), entry_tr);
 
-        proc_builder.set_standing(mctx.gl(), signals);
+        proc_builder.set_standing(mctx.gl(), conditions);
         proc_builder.finalize(mctx.gl());
 
         return Ok(());

@@ -50,12 +50,25 @@ impl TemporalRegionKey {
 #[derive(Debug, Clone, Copy)]
 pub struct Time(pub u64);
 
+/// A condition for which a [`BasicBlockTerminator::Watch`] triggers.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct WatchCondition {
+    pub signal: SignalKey,
+    pub part_select: Option<SignalSlice>,
+}
+
+impl WatchCondition {
+    pub fn to_ord(self) -> impl Ord {
+        (self.signal, self.part_select.map(|p| (p.lsb(), p.width())))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum BasicBlockTerminator {
     Wait(TemporalRegionKey, Time),
     VariableWait(TemporalRegionKey, VariableKey),
     WaitRegion(TemporalRegionKey, u8),
-    Watch(TemporalRegionKey, Vec<SignalKey>),
+    Watch(TemporalRegionKey, Vec<WatchCondition>),
 
     Jump(BasicBlockKey),
     /// (condition, if_true, if_false)
@@ -224,7 +237,7 @@ impl BasicBlockTerminator {
         }
     }
 
-    pub fn for_each_signal(&self, f: impl FnMut(SignalKey)) {
+    pub fn for_each_signal(&self, mut f: impl FnMut(SignalKey)) {
         match self {
             Self::Branch(..)
             | Self::VariableWait(..)
@@ -232,7 +245,7 @@ impl BasicBlockTerminator {
             | Self::WaitRegion(..)
             | Self::Jump(_)
             | Self::Halt => {}
-            Self::Watch(_, signals) => signals.iter().copied().for_each(f),
+            Self::Watch(_, signals) => signals.iter().copied().for_each(|c| f(c.signal)),
         }
     }
     pub fn map_signal(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
@@ -243,7 +256,7 @@ impl BasicBlockTerminator {
             | Self::WaitRegion(..)
             | Self::Jump(_)
             | Self::Halt => {}
-            Self::Watch(_, signals) => signals.iter_mut().for_each(|s| *s = f(*s)),
+            Self::Watch(_, signals) => signals.iter_mut().for_each(|c| c.signal = f(c.signal)),
         }
     }
 
@@ -2117,7 +2130,7 @@ pub struct Process {
     /// logic. Theoretically, `always (*)` can be scheduled at the end of the `t=0` active region,
     /// but in reality everyone assumes it gets scheduled before everything else. This solves that
     /// problem.
-    pub standing: Option<Box<[SignalKey]>>,
+    pub standing: Option<Box<[WatchCondition]>>,
 
     // @Performance: Use UnitVec here.
     pub regions: Vec<TemporalRegionKey>,

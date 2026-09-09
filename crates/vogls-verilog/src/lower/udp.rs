@@ -2,7 +2,7 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, ProcessBuilder, ProcessKind,
-    SCALAR_VSIZE, Signal, SignalFlags, VariableKey,
+    SCALAR_VSIZE, Signal, SignalFlags, VariableKey, WatchCondition,
 };
 use vogls_utils::OrderedSet;
 
@@ -124,8 +124,16 @@ pub fn lower_udp<'a>(
                 debug_assert_eq!(mctx.gl.bbs[current_entry_bb].region, entry_tr);
                 mctx.gl.bbs[start_bb].terminator =
                     BasicBlockTerminator::Branch(acc, drive_bb, builder.key());
-                mctx.gl.bbs[current_entry_bb].terminator =
-                    BasicBlockTerminator::Watch(entry_tr, ins.items.clone());
+                mctx.gl.bbs[current_entry_bb].terminator = BasicBlockTerminator::Watch(
+                    entry_tr,
+                    ins.items
+                        .iter()
+                        .map(|&signal| WatchCondition {
+                            signal,
+                            part_select: None,
+                        })
+                        .collect(),
+                );
             }
 
             let output_value = builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE));

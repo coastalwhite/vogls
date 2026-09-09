@@ -21,8 +21,7 @@ mod real;
 mod reg;
 mod rtype_binary;
 mod rtype_unary;
-mod set_aligned;
-mod set_unaligned;
+mod set;
 mod stack;
 #[cfg(all(nightly, feature = "tailcall"))]
 mod tailcall;
@@ -49,8 +48,7 @@ pub use load_imm::*;
 pub use real::*;
 pub use rtype_binary::*;
 pub use rtype_unary::*;
-pub use set_aligned::*;
-pub use set_unaligned::*;
+pub use set::*;
 pub use stack::*;
 pub use temporal::*;
 use vogls_world::World;
@@ -448,14 +446,17 @@ opcodes![
     BranchTrue,
     BranchFalse,
     TvSetAligned,
-    TvRelSetAligned,
-    TvSetHeapAligned,
     FvSetAligned,
-    FvRelSetAligned,
-    FvSetHeapAligned,
-    SetUnaligned,
-    RelSetUnaligned,
-    SetHeapUnaligned,
+    TvSetUnaligned,
+    FvSetUnaligned,
+    TvSetRelative,
+    FvSetRelative,
+    TvSetWholeHeap,
+    FvSetWholeHeap,
+    TvSetPartialHeap,
+    FvSetPartialHeap,
+    TvSetHeapRelative,
+    FvSetHeapRelative,
     TvLoadAligned,
     TvLoadRelAligned,
     FvLoadAligned,
@@ -497,6 +498,11 @@ opcodes![
     FvFvHeapSliceX,
     PluginPoke,
     RealInstr,
+    TvSet1,
+    FvSet1,
+    FvSet1Spread,
+    TvSet1Relative,
+    FvSet1Relative,
 ];
 
 #[derive(Clone)]

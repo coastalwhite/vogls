@@ -682,7 +682,14 @@ pub fn create_nba_process(
 
     match mask {
         None => {
-            proc_builder.set_standing(gl, [value].into());
+            proc_builder.set_standing(
+                gl,
+                [vogls_ir::WatchCondition {
+                    signal: value,
+                    part_select: None,
+                }]
+                .into(),
+            );
             let value_v = builder.probe(gl, value);
             builder.wait_region_to(gl, Region::NonBlocking as u8, region_tr);
 
@@ -691,7 +698,14 @@ pub fn create_nba_process(
             builder.watch_to(gl, [value].into(), init_tr);
         }
         Some(mask) => {
-            proc_builder.set_standing(gl, [mask].into());
+            proc_builder.set_standing(
+                gl,
+                [vogls_ir::WatchCondition {
+                    signal: mask,
+                    part_select: None,
+                }]
+                .into(),
+            );
             // We need to conditionally branch here as it might have already been assigned before.
             builder.wait_region_to(gl, Region::NonBlocking as u8, region_tr);
 

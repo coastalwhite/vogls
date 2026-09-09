@@ -6,7 +6,7 @@ use crate::time::TimeFormat;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
     Instruction, IntrinsicOp, LogicMode, Process, RandomKind, ResizeOp, SelectMerge, ShiftImmOp,
-    Signal, Time, UnaryOp, VariableKey,
+    Signal, Time, UnaryOp, VariableKey, WatchCondition,
 };
 
 const INDENT: &str = "  ";
@@ -665,14 +665,14 @@ impl ContextFormat for BasicBlockTerminator {
                 write!(f, "{region}, ")?;
                 LabelDisplay::new_angled(bb.entry()).ctx_fmt(f, ctx)?;
             }
-            Self::Watch(bb, signals) => {
+            Self::Watch(bb, conditions) => {
                 f.write_char(' ')?;
                 f.write_char('[')?;
-                if let Some(fst) = signals.first() {
-                    ctx.gl.signals.get(*fst).unwrap().ctx_fmt(f, ctx)?;
-                    for s in &signals[1..] {
+                if let Some(fst) = conditions.first() {
+                    fst.ctx_fmt(f, ctx)?;
+                    for c in &conditions[1..] {
                         f.write_str(", ")?;
-                        ctx.gl.signals.get(*s).unwrap().ctx_fmt(f, ctx)?;
+                        c.ctx_fmt(f, ctx)?;
                     }
                 }
                 f.write_str("], ")?;
@@ -691,6 +691,21 @@ impl ContextFormat for BasicBlockTerminator {
                 LabelDisplay::new_angled(*false_bb).ctx_fmt(f, ctx)?;
             }
             Self::Halt => {}
+        }
+
+        Ok(())
+    }
+}
+
+impl ContextFormat for WatchCondition {
+    fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result {
+        let Self {
+            signal,
+            part_select,
+        } = self;
+        ctx.gl.signals.get(*signal).unwrap().ctx_fmt(f, ctx)?;
+        if let Some(part_select) = part_select {
+            write!(f, "[{}:{}]", part_select.msb(), part_select.lsb())?;
         }
 
         Ok(())
