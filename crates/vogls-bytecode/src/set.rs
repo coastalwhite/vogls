@@ -572,7 +572,7 @@ fn set_unaligned_inbounds(heap: &mut [u64], offset: u64, value: u64, size: SixBi
 /// straddles a word boundary, so a write which merely *starts* in range can still run past the
 /// end of the addressable region.
 #[inline(always)]
-fn write_in_bounds(offset: u64, size: SixBitSize, lower: u64, upper: u64) -> bool {
+fn is_offset_in_bounds(offset: u64, size: SixBitSize, lower: u64, upper: u64) -> bool {
     let end = offset.wrapping_add(size as u64 - 1);
     (offset >= lower) & (end <= upper) & (end >= offset)
 }
@@ -585,51 +585,14 @@ fn correct_first(
     state: &mut RuntimeState,
 ) {
     let correct_first = decode_bytecode_u64(&additional_slots[*slot_offset..]);
+    *slot_offset += 2;
 
     let woff = (correct_first / 64) as usize;
     let boff = correct_first % 64;
 
-    *updated |= (state.tvl_first_write[woff] & (1u64 << boff)) == 0;
-    state.tvl_first_write[woff] |= 1u64 << boff;
-    *slot_offset += 2;
-}
-
-#[inline(always)]
-fn set_last_update_time(
-    additional_slots: &[Bytecode; 16],
-    slot_offset: &mut usize,
-    state: &mut RuntimeState,
-) {
-    let lupdt_index = decode_bytecode_u64(&additional_slots[*slot_offset..]);
-    state.last_active_time[lupdt_index as usize] = state.time;
-    *slot_offset += 2;
-}
-
-#[inline(always)]
-fn poke_watchers(
-    additional_slots: &[Bytecode; 16],
-    slot_offset: &mut usize,
-    cldctx: &mut ColdContext,
-    schedule: &mut Schedule,
-    listeners: &mut BytecodeListeners,
-) {
-    let watch_index = decode_bytecode_u64(&additional_slots[*slot_offset..]);
-    let watchers = cldctx.watchers.get(watch_index as usize);
-    for &index in watchers {
-        super::temporal::wake(index, schedule, listeners);
-    }
-    *slot_offset += 2;
-}
-
-#[inline(never)]
-fn poke_plugins(additional_slots: &[Bytecode; 16], offset: &mut usize, cldctx: &mut ColdContext) {
-    let rt_index = decode_bytecode_u64(&additional_slots[*offset..]);
-    *offset += 2;
-
-    let rt_index = RtSignalKey::from_usize(rt_index as usize).unwrap();
-    for plugin in cldctx.plugins.iter_mut() {
-        plugin.poke_signal(rt_index);
-    }
+    let word = &mut state.tvl_first_write[woff];
+    *updated |= (*word & (1u64 << boff)) == 0;
+    *word |= 1u64 << boff;
 }
 
 impl BytecodeInstruction for TvSet1 {
@@ -801,8 +764,9 @@ impl BytecodeInstruction for FvSet1Spread {
         }) = self;
 
         // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = &code[*pc as usize..*pc as usize + 16]
-            .try_into()
+        let additional_slots: &[Bytecode; 16] = code
+            .get(*pc as usize..)
+            .and_then(<[_]>::first_chunk)
             .expect("Should be padded");
 
         *pc += self.num_additional_slots() as u64;
@@ -901,8 +865,9 @@ impl BytecodeInstruction for TvSet1Relative {
         }) = self;
 
         // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = &code[*pc as usize..*pc as usize + 16]
-            .try_into()
+        let additional_slots: &[Bytecode; 16] = code
+            .get(*pc as usize..)
+            .and_then(<[_]>::first_chunk)
             .expect("Should be padded");
 
         *pc += self.num_additional_slots() as u64;
@@ -912,7 +877,7 @@ impl BytecodeInstruction for TvSet1Relative {
         let upper_bound = decode_bytecode_u64(&additional_slots[4..]);
         let heap_offset = offset.get(regs[roff]);
 
-        if !write_in_bounds(heap_offset, SixBitSize::N1, lower_bound, upper_bound) {
+        if !is_offset_in_bounds(heap_offset, SixBitSize::N1, lower_bound, upper_bound) {
             // @NOTE: A single bit is either fully in range or fully out, so there is nothing to
             // partially write here.
             std::hint::cold_path();
@@ -1009,8 +974,9 @@ impl BytecodeInstruction for FvSet1Relative {
         }) = self;
 
         // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = &code[*pc as usize..*pc as usize + 16]
-            .try_into()
+        let additional_slots: &[Bytecode; 16] = code
+            .get(*pc as usize..)
+            .and_then(<[_]>::first_chunk)
             .expect("Should be padded");
 
         *pc += self.num_additional_slots() as u64;
@@ -1021,9 +987,7 @@ impl BytecodeInstruction for FvSet1Relative {
         let spread = VectorSize::new(additional_slots[6].0).unwrap();
         let bit_offset = offset.get(regs[roff]);
 
-        if !write_in_bounds(bit_offset, SixBitSize::N1, lower_bound, upper_bound) {
-            // @NOTE: A single bit is either fully in range or fully out, so there is nothing to
-            // partially write here.
+        if !is_offset_in_bounds(bit_offset, SixBitSize::N1, lower_bound, upper_bound) {
             std::hint::cold_path();
             if flags.contains(SetFlags::WRITE_MASK) {
                 regs[rd] = 0;
@@ -1080,8 +1044,9 @@ fn execute_set1<const FOUR_VALUE: bool>(
     } = args;
 
     // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-    let additional_slots: &[Bytecode; 16] = &code[*pc as usize..*pc as usize + 16]
-        .try_into()
+    let additional_slots: &[Bytecode; 16] = code
+        .get(*pc as usize..)
+        .and_then(<[_]>::first_chunk)
         .expect("Should be padded");
 
     *pc += 1; // Offset.
@@ -1138,22 +1103,27 @@ fn poke1(
     cldctx: &mut ColdContext,
 ) {
     if flags.contains(SetFlags::LAST_UPDATE_TIME) {
-        set_last_update_time(additional_slots, &mut slot_offset, state);
+        let lupdt_index = decode_bytecode_u64(&additional_slots[slot_offset..]);
+        state.last_active_time[lupdt_index as usize] = state.time;
+        slot_offset += 2;
     }
 
     if flags.contains(SetFlags::WATCH) {
-        poke_watchers(
-            additional_slots,
-            &mut slot_offset,
-            cldctx,
-            schedule,
-            listeners,
-        );
+        let watch_index = decode_bytecode_u64(&additional_slots[slot_offset..]);
+        let watchers = cldctx.watchers.get(watch_index as usize);
+        for &index in watchers {
+            super::temporal::wake(index, schedule, listeners);
+        }
+        slot_offset += 2;
     }
 
     if flags.contains(SetFlags::PLUGIN_POKE) {
         std::hint::cold_path();
-        poke_plugins(additional_slots, &mut slot_offset, cldctx);
+        let rt_index = decode_bytecode_u64(&additional_slots[slot_offset..]);
+        let rt_index = RtSignalKey::from_usize(rt_index as usize).unwrap();
+        for plugin in cldctx.plugins.iter_mut() {
+            plugin.poke_signal(rt_index);
+        }
     }
 }
 
@@ -1219,8 +1189,9 @@ impl BytecodeInstruction for TvSetAligned {
         }) = self;
 
         // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = &code[*pc as usize..*pc as usize + 16]
-            .try_into()
+        let additional_slots: &[Bytecode; 16] = code
+            .get(*pc as usize..)
+            .and_then(<[_]>::first_chunk)
             .expect("Should be padded");
 
         *pc += self.num_additional_slots() as u64;
@@ -1318,8 +1289,9 @@ impl BytecodeInstruction for FvSetAligned {
         }) = self;
 
         // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = &code[*pc as usize..*pc as usize + 16]
-            .try_into()
+        let additional_slots: &[Bytecode; 16] = code
+            .get(*pc as usize..)
+            .and_then(<[_]>::first_chunk)
             .expect("Should be padded");
 
         *pc += self.num_additional_slots() as u64;
@@ -1420,8 +1392,9 @@ impl BytecodeInstruction for TvSetUnaligned {
         }) = self;
 
         // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = &code[*pc as usize..*pc as usize + 16]
-            .try_into()
+        let additional_slots: &[Bytecode; 16] = code
+            .get(*pc as usize..)
+            .and_then(<[_]>::first_chunk)
             .expect("Should be padded");
 
         *pc += self.num_additional_slots() as u64;
@@ -1518,8 +1491,9 @@ impl BytecodeInstruction for FvSetUnaligned {
         }) = self;
 
         // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = &code[*pc as usize..*pc as usize + 16]
-            .try_into()
+        let additional_slots: &[Bytecode; 16] = code
+            .get(*pc as usize..)
+            .and_then(<[_]>::first_chunk)
             .expect("Should be padded");
 
         *pc += self.num_additional_slots() as u64;
@@ -1622,8 +1596,9 @@ impl BytecodeInstruction for TvSetRelative {
         }) = self;
 
         // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = &code[*pc as usize..*pc as usize + 16]
-            .try_into()
+        let additional_slots: &[Bytecode; 16] = code
+            .get(*pc as usize..)
+            .and_then(<[_]>::first_chunk)
             .expect("Should be padded");
 
         *pc += self.num_additional_slots() as u64;
@@ -1638,7 +1613,7 @@ impl BytecodeInstruction for TvSetRelative {
         // @NOTE: `set_unaligned_inbounds` expects the value to be premasked to `size`.
         let value = size.mask(regs[rs]);
 
-        let update_mask = if write_in_bounds(offset, size, lower_bound, upper_bound) {
+        let update_mask = if is_offset_in_bounds(offset, size, lower_bound, upper_bound) {
             set_unaligned_inbounds(heap, offset, value, size)
         } else {
             // @NOTE: A relative write is expected to land in bounds. A partially or fully
@@ -1744,8 +1719,9 @@ impl BytecodeInstruction for FvSetRelative {
         }) = self;
 
         // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = &code[*pc as usize..*pc as usize + 16]
-            .try_into()
+        let additional_slots: &[Bytecode; 16] = code
+            .get(*pc as usize..)
+            .and_then(<[_]>::first_chunk)
             .expect("Should be padded");
 
         *pc += self.num_additional_slots() as u64;
@@ -1768,7 +1744,7 @@ impl BytecodeInstruction for FvSetRelative {
 
         // @NOTE: Both planes sit at the same relative position within their own plane, so one
         // check covers both.
-        let update_mask = if write_in_bounds(offset, size, lower_bound, upper_bound) {
+        let update_mask = if is_offset_in_bounds(offset, size, lower_bound, upper_bound) {
             set_unaligned_inbounds(heap, offset, spc, size)
                 | set_unaligned_inbounds(heap, val_offset, val, size)
         } else {
@@ -1968,8 +1944,9 @@ macro_rules! impl_set_heap {
                 }) = self;
 
                 // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-                let additional_slots: &[Bytecode; 16] = &code[*pc as usize..*pc as usize + 16]
-                    .try_into()
+                let additional_slots: &[Bytecode; 16] = code
+                    .get(*pc as usize..)
+                    .and_then(<[_]>::first_chunk)
                     .expect("Should be padded");
 
                 *pc += self.num_additional_slots() as u64;
@@ -2111,8 +2088,9 @@ macro_rules! impl_set_heap_relative {
                 }) = self;
 
                 // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-                let additional_slots: &[Bytecode; 16] = &code[*pc as usize..*pc as usize + 16]
-                    .try_into()
+                let additional_slots: &[Bytecode; 16] = code
+                    .get(*pc as usize..)
+                    .and_then(<[_]>::first_chunk)
                     .expect("Should be padded");
 
                 *pc += self.num_additional_slots() as u64;
@@ -2199,6 +2177,38 @@ fn decode_bytecode_u64(slots: &[Bytecode]) -> u64 {
 }
 
 impl BytecodeEncoder {
+    #[allow(clippy::too_many_arguments)]
+    fn flags_for(
+        rd: Option<Reg>,
+        lupdt_index: Option<u64>,
+        watch_index: Option<u64>,
+        plugin_rt_index: Option<u64>,
+    ) -> SetFlags {
+        let mut flags = SetFlags::EMPTY;
+        flags.set(SetFlags::WRITE_MASK, rd.is_some());
+        flags.set(SetFlags::LAST_UPDATE_TIME, lupdt_index.is_some());
+        flags.set(SetFlags::WATCH, watch_index.is_some());
+        flags.set(SetFlags::PLUGIN_POKE, plugin_rt_index.is_some());
+        flags
+    }
+
+    fn encode_poke_slots(
+        &mut self,
+        lupdt_index: Option<u64>,
+        watch_index: Option<u64>,
+        plugin_rt_index: Option<u64>,
+    ) {
+        if let Some(lupdt_index) = lupdt_index {
+            encode_bytecode_u64(self, lupdt_index);
+        }
+        if let Some(watch_index) = watch_index {
+            encode_bytecode_u64(self, watch_index);
+        }
+        if let Some(plugin_rt_index) = plugin_rt_index {
+            encode_bytecode_u64(self, plugin_rt_index);
+        }
+    }
+
     fn set1(
         &mut self,
         rd: Option<Reg>,
@@ -2210,12 +2220,7 @@ impl BytecodeEncoder {
         plugin_rt_index: Option<u64>,
         f: impl FnOnce(Set1) -> Bytecode,
     ) {
-        let mut flags = SetFlags::EMPTY;
-        flags.set(SetFlags::WRITE_MASK, rd.is_some());
-        flags.set(SetFlags::LAST_UPDATE_TIME, lupdt_index.is_some());
-        flags.set(SetFlags::WATCH, watch_index.is_some());
-        flags.set(SetFlags::PLUGIN_POKE, plugin_rt_index.is_some());
-
+        let flags = Self::flags_for(rd, lupdt_index, watch_index, plugin_rt_index);
         self.data.push(f(Set1 {
             rd: rd.unwrap_or(rs),
             rs,
@@ -2349,12 +2354,7 @@ impl BytecodeEncoder {
         }
 
         let base = base_elem;
-        let mut flags = SetFlags::EMPTY;
-        flags.set(SetFlags::WRITE_MASK, rd.is_some());
-        flags.set(SetFlags::LAST_UPDATE_TIME, lupdt_index.is_some());
-        flags.set(SetFlags::WATCH, watch_index.is_some());
-        flags.set(SetFlags::PLUGIN_POKE, plugin_rt_index.is_some());
-
+        let flags = Self::flags_for(rd, lupdt_index, watch_index, plugin_rt_index);
         self.data.push(
             FvSet1Spread(Set1 {
                 rd: rd.unwrap_or(rs),
@@ -2390,12 +2390,7 @@ impl BytecodeEncoder {
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
     ) {
-        let mut flags = SetFlags::EMPTY;
-        flags.set(SetFlags::WRITE_MASK, rd.is_some());
-        flags.set(SetFlags::LAST_UPDATE_TIME, lupdt_index.is_some());
-        flags.set(SetFlags::WATCH, watch_index.is_some());
-        flags.set(SetFlags::PLUGIN_POKE, plugin_rt_index.is_some());
-
+        let flags = Self::flags_for(rd, lupdt_index, watch_index, plugin_rt_index);
         self.data.push(
             TvSet1Relative(SetRelative {
                 rd: rd.unwrap_or(rs),
@@ -2433,12 +2428,7 @@ impl BytecodeEncoder {
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
     ) {
-        let mut flags = SetFlags::EMPTY;
-        flags.set(SetFlags::WRITE_MASK, rd.is_some());
-        flags.set(SetFlags::LAST_UPDATE_TIME, lupdt_index.is_some());
-        flags.set(SetFlags::WATCH, watch_index.is_some());
-        flags.set(SetFlags::PLUGIN_POKE, plugin_rt_index.is_some());
-
+        let flags = Self::flags_for(rd, lupdt_index, watch_index, plugin_rt_index);
         self.data.push(
             FvSet1Relative(SetRelative {
                 rd: rd.unwrap_or(rs),
@@ -2453,38 +2443,6 @@ impl BytecodeEncoder {
         encode_bytecode_u64(self, *range.start());
         encode_bytecode_u64(self, *range.end());
         self.data.push(Bytecode(spread.get()));
-        if let Some(lupdt_index) = lupdt_index {
-            encode_bytecode_u64(self, lupdt_index);
-        }
-        if let Some(watch_index) = watch_index {
-            encode_bytecode_u64(self, watch_index);
-        }
-        if let Some(plugin_rt_index) = plugin_rt_index {
-            encode_bytecode_u64(self, plugin_rt_index);
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn flags_for(
-        rd: Option<Reg>,
-        lupdt_index: Option<u64>,
-        watch_index: Option<u64>,
-        plugin_rt_index: Option<u64>,
-    ) -> SetFlags {
-        let mut flags = SetFlags::EMPTY;
-        flags.set(SetFlags::WRITE_MASK, rd.is_some());
-        flags.set(SetFlags::LAST_UPDATE_TIME, lupdt_index.is_some());
-        flags.set(SetFlags::WATCH, watch_index.is_some());
-        flags.set(SetFlags::PLUGIN_POKE, plugin_rt_index.is_some());
-        flags
-    }
-
-    fn encode_poke_slots(
-        &mut self,
-        lupdt_index: Option<u64>,
-        watch_index: Option<u64>,
-        plugin_rt_index: Option<u64>,
-    ) {
         if let Some(lupdt_index) = lupdt_index {
             encode_bytecode_u64(self, lupdt_index);
         }
