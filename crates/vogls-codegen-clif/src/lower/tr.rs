@@ -3934,28 +3934,33 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                 T::WaitRegion(tr, region) => {
                     let next_tr = self.compiler.tr_funcs[tr];
                     let next_tr_ref = self.compiler.module.declare_func_in_func(next_tr, b.func);
-                    let next_tr_addr = b.ins().func_addr(self.compiler.ptr, next_tr_ref);
 
-                    // regions_base = &schedule->regions
-                    let regions_base = b.ins().load(
-                        self.compiler.ptr,
-                        mem(),
-                        params.schedule,
-                        offset_of!(ScheduleT, regions) as i32,
-                    );
-                    // region_vec = &schedule->regions[region]
-                    let region_vec = b.ins().iadd_imm_u(
-                        regions_base,
-                        (*region as usize * size_of::<FfiVec<EventT>>()) as i64,
-                    );
+                    if *region == 0 {
+                        b.ins().return_call(next_tr_ref, params.as_slice());
+                    } else {
+                        let next_tr_addr = b.ins().func_addr(self.compiler.ptr, next_tr_ref);
 
-                    // Call the push function.
-                    let push = self
-                        .compiler
-                        .module
-                        .declare_func_in_func(self.compiler.push, b.func);
-                    b.ins().call(push, &[region_vec, next_tr_addr]);
-                    self.compiler.tail_pop_next_or_return(b, params);
+                        // regions_base = &schedule->regions
+                        let regions_base = b.ins().load(
+                            self.compiler.ptr,
+                            mem(),
+                            params.schedule,
+                            offset_of!(ScheduleT, regions) as i32,
+                        );
+                        // region_vec = &schedule->regions[region - 1]
+                        let region_vec = b.ins().iadd_imm_u(
+                            regions_base,
+                            ((*region as usize - 1) * size_of::<FfiVec<EventT>>()) as i64,
+                        );
+
+                        // Call the push function.
+                        let push = self
+                            .compiler
+                            .module
+                            .declare_func_in_func(self.compiler.push, b.func);
+                        b.ins().call(push, &[region_vec, next_tr_addr]);
+                        self.compiler.tail_pop_next_or_return(b, params);
+                    }
                 }
                 T::Watch(_tr, _signals) => {
                     // Offset + listener registration were assigned by the pre-pass

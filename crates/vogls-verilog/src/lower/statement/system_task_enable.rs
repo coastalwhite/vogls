@@ -1,7 +1,11 @@
 use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::bits::arithmetic::FvLogicValue;
 use vogls_ir::dyn_format_string::{Base, DynFormatArgument, DynFormatString, Padding};
 use vogls_ir::time::{TimeFormat, TimeResolution, TimeSize, TimeUnit};
-use vogls_ir::{BasicBlockBuilder, Bits, IntrinsicOp, ReadMem, VariableKey};
+use vogls_ir::{
+    BasicBlockBuilder, Bits, IntrinsicOp, ProcessBuilder, ProcessKind, ReadMem, SCALAR_VSIZE,
+    Signal, SignalFlags, VariableKey, WatchCondition,
+};
 use vogls_utils::NonMaxU32;
 
 use crate::ast::AstId;
@@ -9,7 +13,7 @@ use crate::ast::expr::{Expr, UnaryOperator};
 use crate::ast::statement::SystemTaskEnable;
 use crate::elaborate::{VSymbol, determine_module_context};
 use crate::lower::expression::{get_expr_type, lower_expr, to_real};
-use crate::lower::{LowerContext, MutLowerContext, try_resolve_hident};
+use crate::lower::{LowerContext, MutLowerContext, Region, try_resolve_hident};
 use crate::lower::{expression, hident_span, try_resolve_net};
 
 pub fn lower_system_task_enable<'a>(
@@ -75,6 +79,67 @@ pub fn lower_system_task_enable<'a>(
                 IntrinsicOp::Display(Box::new(format_str)),
                 format_string_args.into(),
             );
+        }
+        "strobe" | "strobeb" | "strobeo" | "strobeh" => {
+            let default_base = match system_task_ident {
+                "strobeb" => Base::Binary,
+                "strobeo" => Base::Octal,
+                "strobeh" => Base::Hexadecimal,
+                _ => Base::Decimal,
+            };
+
+            let origin = ctx.arenas.get_span(system_task_enable);
+            let strobe_trigger = mctx.gl.signals.insert(Signal {
+                name: "::STROBE_TRIGGER".into(),
+                size: SCALAR_VSIZE,
+                initialize: None,
+                mode: vogls_ir::LogicMode::TwoValue,
+                flags: SignalFlags::EMPTY,
+                origin,
+            });
+
+            let (mut proc_builder, mut strobe_bb_builder) =
+                ProcessBuilder::new(mctx.gl(), ProcessKind::Monitor, origin);
+            let watch_conditions = [WatchCondition {
+                signal: strobe_trigger,
+                part_select: None,
+            }];
+
+            let entry_tr = proc_builder.entry();
+            let monitor_tr = proc_builder.next_temporal_region(mctx.gl());
+            proc_builder.set_standing(mctx.gl(), watch_conditions.into());
+
+            strobe_bb_builder.wait_region_to(mctx.gl(), Region::Monitor as u8, monitor_tr);
+            strobe_bb_builder.finished_switch_to(mctx.gl(), monitor_tr.entry());
+
+            let (mut format_string_content, format_string_arguments, format_string_args) =
+                lower_write_arguments(
+                    ctx,
+                    mctx,
+                    scope,
+                    system_task_enable,
+                    &mut strobe_bb_builder,
+                    default_base,
+                )?;
+            use std::fmt::Write;
+            writeln!(&mut format_string_content).unwrap();
+            let format_str =
+                DynFormatString::new(format_string_content.into(), format_string_arguments.into());
+            strobe_bb_builder.intrinsic(
+                mctx.gl(),
+                IntrinsicOp::Display(Box::new(format_str)),
+                format_string_args.into(),
+            );
+
+            let zero = strobe_bb_builder.constant(mctx.gl(), FvLogicValue::L0.into());
+            strobe_bb_builder.drive(mctx.gl(), strobe_trigger, zero);
+
+            strobe_bb_builder.watch_to(mctx.gl(), [strobe_trigger].into(), entry_tr);
+
+            proc_builder.finalize(mctx.gl());
+
+            let one = builder.constant(mctx.gl(), FvLogicValue::L1.into());
+            builder.drive(mctx.gl(), strobe_trigger, one);
         }
         "vogls_assert_eq" | "vogls_assert_ne" => {
             if expressions.len() != 2 {

@@ -2115,6 +2115,7 @@ define_process_kinds! {
     Udp => "udp",
     Port => "port",
     Fork => "fork",
+    Monitor => "monitor",
     Other => "other",
 }
 
