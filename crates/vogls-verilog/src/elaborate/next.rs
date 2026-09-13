@@ -2518,6 +2518,7 @@ pub fn finalize_symbol<'a>(
                 connections: Vec::new(),
                 fuse_scratch: Vec::new(),
                 has_vcd: false,
+                monitor: None,
             };
             // @TODO: This should ignore errors with unresolved symbols.
             let res =

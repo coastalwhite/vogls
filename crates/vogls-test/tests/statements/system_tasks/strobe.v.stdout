@@ -1,10 +1,10 @@
-0 display a=1 b=0$
-0 display a=2 b=0$
-0 strobe  a=2 b=3$
-1 strobe  a=4 b=3$
-1 second strobe$
-000111110000$
-0760$
-1f0$
+0 display a=1 b=0
+0 display a=2 b=0
+0 strobe  a=2 b=3
+1 strobe  a=4 b=3
+1 second strobe
+000111110000
+0760
+1f0
 2 strobe  r12=1f0
 

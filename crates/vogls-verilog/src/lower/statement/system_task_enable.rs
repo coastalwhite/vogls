@@ -6,14 +6,14 @@ use vogls_ir::{
     BasicBlockBuilder, Bits, IntrinsicOp, ProcessBuilder, ProcessKind, ReadMem, SCALAR_VSIZE,
     Signal, SignalFlags, VariableKey, WatchCondition,
 };
-use vogls_utils::NonMaxU32;
+use vogls_utils::{NonMaxU32, OrderedSet};
 
 use crate::ast::AstId;
 use crate::ast::expr::{Expr, UnaryOperator};
 use crate::ast::statement::SystemTaskEnable;
 use crate::elaborate::{VSymbol, determine_module_context};
 use crate::lower::expression::{get_expr_type, lower_expr, to_real};
-use crate::lower::{LowerContext, MutLowerContext, Region, try_resolve_hident};
+use crate::lower::{LowerContext, MonitorSignals, MutLowerContext, Region, try_resolve_hident};
 use crate::lower::{expression, hident_span, try_resolve_net};
 
 pub fn lower_system_task_enable<'a>(
@@ -140,6 +140,121 @@ pub fn lower_system_task_enable<'a>(
 
             let one = builder.constant(mctx.gl(), FvLogicValue::L1.into());
             builder.drive(mctx.gl(), strobe_trigger, one);
+        }
+        "monitoron" => {
+            let monitor = mctx
+                .monitor
+                .get_or_insert_with(|| MonitorSignals::new(&mut mctx.gl));
+            let enabled = monitor.enabled;
+
+            let one = builder.constant(mctx.gl(), FvLogicValue::L1.into());
+            builder.drive(mctx.gl(), enabled, one);
+        }
+        "monitoroff" => {
+            let monitor = mctx
+                .monitor
+                .get_or_insert_with(|| MonitorSignals::new(&mut mctx.gl));
+            let enabled = monitor.enabled;
+
+            let zero = builder.constant(mctx.gl(), FvLogicValue::L0.into());
+            builder.drive(mctx.gl(), enabled, zero);
+        }
+        "monitor" | "monitorb" | "monitoro" | "monitorh" => {
+            let default_base = match system_task_ident {
+                "monitorb" => Base::Binary,
+                "monitoro" => Base::Octal,
+                "monitorh" => Base::Hexadecimal,
+                _ => Base::Decimal,
+            };
+
+            let monitor = mctx
+                .monitor
+                .get_or_insert_with(|| MonitorSignals::new(&mut mctx.gl));
+            let monitor_selected = monitor.selected;
+            let monitor_enabled = monitor.enabled;
+            let idx = monitor.next;
+            monitor.next += 1;
+
+            let idxv = builder.constant_u64(mctx.gl(), idx);
+            builder.drive(mctx.gl(), monitor_selected, idxv);
+
+            let origin = ctx.arenas.get_span(system_task_enable);
+            let (mut proc_builder, mut monitor_bb_builder) =
+                ProcessBuilder::new(mctx.gl(), ProcessKind::Monitor, origin);
+            let watch_conditions = [monitor_selected, monitor_enabled];
+
+            let entry_tr = proc_builder.entry();
+            let monitor_tr = proc_builder.next_temporal_region(mctx.gl());
+            proc_builder.set_standing(
+                mctx.gl(),
+                watch_conditions
+                    .iter()
+                    .map(|s| WatchCondition {
+                        signal: *s,
+                        part_select: None,
+                    })
+                    .collect(),
+            );
+
+            let monitor_enabledv = monitor_bb_builder.probe(mctx.gl(), monitor_enabled);
+            let monitor_selectedv = monitor_bb_builder.probe(mctx.gl(), monitor_selected);
+            let do_monitor = monitor_bb_builder.case_equals_constant(
+                mctx.gl(),
+                monitor_selectedv,
+                Bits::new_u64(idx),
+            );
+            let do_monitor = monitor_bb_builder.and(mctx.gl(), do_monitor, monitor_enabledv);
+
+            let (mut true_bb_builder, mut false_bb_builder) =
+                monitor_bb_builder.double_branch(mctx.gl(), do_monitor);
+            false_bb_builder.watch_to(mctx.gl(), watch_conditions.into(), entry_tr);
+
+            true_bb_builder.wait_region_to(mctx.gl(), Region::Monitor as u8, monitor_tr);
+
+            let monitor_enabledv = monitor_bb_builder.probe(mctx.gl(), monitor_enabled);
+            let monitor_selectedv = monitor_bb_builder.probe(mctx.gl(), monitor_selected);
+            let do_monitor = monitor_bb_builder.case_equals_constant(
+                mctx.gl(),
+                monitor_selectedv,
+                Bits::new_u64(idx),
+            );
+            let do_monitor = monitor_bb_builder.and(mctx.gl(), do_monitor, monitor_enabledv);
+
+            let (mut true_bb_builder, mut false_bb_builder) =
+                monitor_bb_builder.double_branch(mctx.gl(), do_monitor);
+            false_bb_builder.watch_to(mctx.gl(), watch_conditions.into(), entry_tr);
+
+            let (mut format_string_content, format_string_arguments, format_string_args) =
+                lower_write_arguments(
+                    ctx,
+                    mctx,
+                    scope,
+                    system_task_enable,
+                    &mut true_bb_builder,
+                    default_base,
+                )?;
+            use std::fmt::Write;
+            writeln!(&mut format_string_content).unwrap();
+            let format_str =
+                DynFormatString::new(format_string_content.into(), format_string_arguments.into());
+            true_bb_builder.intrinsic(
+                mctx.gl(),
+                IntrinsicOp::Display(Box::new(format_str)),
+                format_string_args.into(),
+            );
+
+            let mut sensitivity_list = OrderedSet::new();
+            for expr in expressions.iter() {
+                if let Some(expr) = AstId::transpose_option(expr) {
+                    expression::get_used_signals(ctx, mctx, scope, &mut sensitivity_list, expr)?;
+                }
+            }
+            sensitivity_list.insert(monitor_enabled);
+            sensitivity_list.insert(monitor_selected);
+
+            true_bb_builder.watch_to(mctx.gl(), sensitivity_list.items, entry_tr);
+
+            proc_builder.finalize(mctx.gl());
         }
         "vogls_assert_eq" | "vogls_assert_ne" => {
             if expressions.len() != 2 {
