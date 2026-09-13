@@ -37,7 +37,42 @@ pub struct MutLowerContext {
     pub connections: Vec<vogls_fuse_signals::InputEdge>,
     pub fuse_scratch: Vec<vogls_fuse_signals::Driver>,
     pub has_vcd: bool,
+    pub monitor: Option<MonitorSignals>,
 }
+
+pub struct MonitorSignals {
+    pub enabled: SignalKey,
+    pub selected: SignalKey,
+    pub next: u64,
+}
+
+impl MonitorSignals {
+    pub fn new(gl: &mut GlobalContext) -> Self {
+        let enabled = gl.signals.insert(Signal {
+            name: "__VOGLS_MONITOR_ENABLE".to_string(),
+            size: SCALAR_VSIZE,
+            initialize: Some(FvLogicValue::L1.into()),
+            mode: LogicMode::TwoValue,
+            flags: SignalFlags::EMPTY,
+            origin: TokenRange::default(),
+        });
+        let selected = gl.signals.insert(Signal {
+            name: "__VOGLS_MONITOR_SELECTED".to_string(),
+            size: VSIZE_64,
+            initialize: None,
+            mode: LogicMode::TwoValue,
+            flags: SignalFlags::EMPTY,
+            origin: TokenRange::default(),
+        });
+
+        Self {
+            enabled,
+            selected,
+            next: 0,
+        }
+    }
+}
+
 impl MutLowerContext {
     pub fn gl(&mut self) -> &mut GlobalContext {
         &mut self.gl
@@ -393,12 +428,13 @@ pub fn try_resolve_constant<'a, 's>(
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::bits::arithmetic::FvLogicValue;
 use vogls_ir::time::TimeResolution;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariable, VcdVariableKey};
 use vogls_ir::{
     BasicBlockBuilder, Bits, GlobalContext, LogicMode, ProcessBuilder, ProcessKey, ProcessKind,
-    SignalFlags, SignalKey, VariableKey, VectorSize,
+    SCALAR_VSIZE, Signal, SignalFlags, SignalKey, VSIZE_64, VariableKey, VectorSize,
 };
 use vogls_utils::{IndexMap, Table, VgHashMap};
 

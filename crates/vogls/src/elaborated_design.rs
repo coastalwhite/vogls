@@ -239,6 +239,7 @@ impl<'a> ElaboratedDesign<'a> {
             connections: Vec::new(),
             fuse_scratch: Vec::new(),
             has_vcd: false,
+            monitor: None,
         };
 
         let result = f(&mut ctx, &mut mctx, &self.module_lut);
@@ -362,6 +363,7 @@ impl<'a> ElaboratedDesign<'a> {
             connections: Vec::new(),
             fuse_scratch: Vec::new(),
             has_vcd: false,
+            monitor: None,
         };
 
         // @TODO: Iterate over the modules instead.
