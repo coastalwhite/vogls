@@ -1100,15 +1100,36 @@ impl<'a> Consumable<'a> for SystemTaskEnable<'a> {
             item_parse::<SystemTaskIdentifier>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
         let mut expressions = AstIdRange::default();
         if tkw.next_if_equals(T::LeftParen) {
-            expressions = parse_zero_or_more_delimited::<Expr>(
-                tkw,
-                sc,
-                arenas,
-                ast,
-                T::Comma,
-                diagnostics.as_deref_mut(),
-            )?;
-            tkw.next_expect(T::RightParen, diagnostics.as_deref_mut())?;
+            if !tkw.next_if_equals(T::RightParen) {
+                let mut items = Vec::new();
+                let mut spans = Vec::new();
+
+                loop {
+                    if tkw.next_if_equals(T::Comma) {
+                        items.push(None);
+                        spans.push(TokenRange::at(tkw.offset));
+                        continue;
+                    }
+
+                    let start = tkw.offset;
+                    let item = Expr::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+                    let token_range = TokenRange {
+                        start,
+                        end: tkw.offset,
+                    };
+                    items.push(Some(item));
+                    spans.push(token_range);
+
+                    if tkw.next_if_equals(T::RightParen) {
+                        break;
+                    }
+                    tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
+                }
+
+                let items = ast.extend(items);
+                let loc = arenas.add_tr_range(spans);
+                expressions = AstIdRange { node: items, loc };
+            }
         }
         tkw.next_expect(T::Semicolon, diagnostics)?;
 

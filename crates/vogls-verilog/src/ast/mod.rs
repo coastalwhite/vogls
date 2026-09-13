@@ -26,6 +26,12 @@ impl<'a> AstId<'a, statement::StatementOrNull<'a>> {
         }
     }
 }
+
+impl<'a, T> AstId<'a, T> {
+    pub fn transpose_option(id: AstId<'a, Option<T>>) -> Option<AstId<'a, T>> {
+        id.node.as_ref().map(|node| AstId { node, loc: id.loc })
+    }
+}
 pub struct AstIdRange<'a, T> {
     pub node: &'a [T],
     pub loc: usize,
