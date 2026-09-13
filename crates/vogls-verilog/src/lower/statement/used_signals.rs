@@ -211,7 +211,9 @@ pub fn get_used_signals<'a>(
                 expressions,
             } = &*id;
             for expr in expressions.iter() {
-                expression::get_used_signals(ctx, mctx, scope, signals, expr)?;
+                if let Some(expr) = AstId::transpose_option(expr) {
+                    expression::get_used_signals(ctx, mctx, scope, signals, expr)?;
+                }
             }
         }
         StatementContent::TaskEnable(id) => {

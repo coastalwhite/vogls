@@ -63,7 +63,7 @@ impl BitsFormatOptions {
 }
 
 impl BitsFormatBase {
-    pub fn num_digits(&self, bits: &Bits) -> usize {
+    pub fn num_digits(&self, signed: bool, bits: &Bits) -> usize {
         match self {
             Self::Binary => (bits.size().get() - bits.leading_zeroes()).max(1) as usize,
             Self::Octal => (bits.size().get() - bits.leading_zeroes())
@@ -74,28 +74,27 @@ impl BitsFormatBase {
                 .max(1) as usize,
             Self::Decimal => {
                 if bits.contains_special() {
-                    1
-                } else {
-                    let limbs = value_limbs(bits);
-                    let chunks = decimal_chunks(limbs);
-                    let Some(&top) = chunks.last() else {
-                        return 1;
-                    };
-                    let floor = (chunks.len() - 1) * 19 + top.ilog10() as usize;
-                    let is_pow10 = 10u64.pow(top.ilog10()) == top
-                        && chunks[..chunks.len() - 1].iter().all(|&c| c == 0);
-                    if is_pow10 { floor } else { floor + 1 }
+                    return 1;
                 }
+
+                let (limbs, negative) = decimal_magnitude(bits, signed);
+                let chunks = decimal_chunks(limbs);
+                let digits = match chunks.last() {
+                    None => 1,
+                    Some(&top) => (chunks.len() - 1) * 19 + top.ilog10() as usize + 1,
+                };
+                digits + usize::from(negative)
             }
         }
     }
 
-    pub fn max_num_digits(&self, size: VectorSize) -> usize {
+    pub fn max_num_digits(&self, signed: bool, size: VectorSize) -> usize {
         match self {
             Self::Binary => size.get() as usize,
             Self::Octal => size.get().div_ceil(3) as usize,
             Self::LowerHex | Self::UpperHex => size.get().div_ceil(4) as usize,
-            Self::Decimal => num_decimal_digits(size) as usize,
+            Self::Decimal if signed => num_decimal_digits(size.get() - 1) as usize + 1,
+            Self::Decimal => num_decimal_digits(size.get()) as usize,
         }
     }
 
@@ -152,14 +151,16 @@ impl<'a> fmt::UpperHex for BitsDisplay<'a> {
 fn fmt_bits(bits: &Bits, f: &mut impl fmt::Write, options: &BitsFormatOptions) -> fmt::Result {
     use BitsFormatBase as B;
 
-    let num_digits = options.base.num_digits(bits);
+    let num_digits = options.base.num_digits(options.signed, bits);
     let num_fill = match options.width {
         BitsFormatWidth::Shrink => 0,
-        BitsFormatWidth::Expand => options.base.max_num_digits(bits.size()) - num_digits,
+        BitsFormatWidth::Expand => {
+            options.base.max_num_digits(options.signed, bits.size()) - num_digits
+        }
         BitsFormatWidth::Minimum(width) => {
             let min_width = match options.base {
                 B::Decimal => width,
-                _ => width.max(options.base.max_num_digits(bits.size())),
+                _ => width.max(options.base.max_num_digits(options.signed, bits.size())),
             };
             min_width.saturating_sub(num_digits)
         }
@@ -328,19 +329,73 @@ fn fmt_bits_binary(bits: &Bits, f: &mut impl fmt::Write, separator: Option<char>
 
     Ok(())
 }
-fn fmt_bits_octal(bits: &Bits, f: &mut impl fmt::Write, _separator: Option<char>) -> fmt::Result {
-    if bits.contains_special() {
-        todo!();
+fn fmt_bits_octal(bits: &Bits, f: &mut impl fmt::Write, separator: Option<char>) -> fmt::Result {
+    fn nimble_to_digit(v: u8, s: Option<u8>, nbits: u32) -> char {
+        debug_assert!(nbits <= 3);
+        let mask = (1u8 << nbits) - 1;
+        if let Some(s) = s
+            && s & mask != mask
+        {
+            if s == 0 && v == 0 {
+                'x'
+            } else if s == 0 && v == mask {
+                'z'
+            } else if !s & !v & mask != 0 {
+                'X'
+            } else {
+                'Z'
+            }
+        } else {
+            (b'0' + v).into()
+        }
+    }
+
+    fn extract(words: &[u64], off: u32, w: u32) -> u8 {
+        let idx = (off / 64) as usize;
+        let sh = off % 64;
+        let mut v = words[idx] >> sh;
+        if sh + w > 64 {
+            v |= words[idx + 1] << (64 - sh);
+        }
+        (v & ((1u64 << w) - 1)) as u8
     }
 
     let data_ref = bits.as_data_ref();
-    let (val, _) = data_ref.to_u64_slices();
+    let (val_words, spc_words) = data_ref.to_u64_slices();
+    let nbits = bits.size().get();
 
-    if val.len() > 1 {
-        todo!()
+    let mut written = false;
+    let ndigits = nbits.div_ceil(3);
+    for i in (0..ndigits).rev() {
+        let off = i * 3;
+        let w = (nbits - off).min(3);
+
+        let c = nimble_to_digit(
+            extract(val_words, off, w),
+            spc_words.map(|s| extract(s, off, w)),
+            w,
+        );
+
+        if !written && c == '0' {
+            continue;
+        }
+
+        if written
+            && let Some(separator) = separator
+            && i % 3 == 2
+        {
+            f.write_char(separator)?;
+        }
+
+        f.write_char(c)?;
+        written = true;
     }
 
-    write!(f, "{:o}", val[0])
+    if !written {
+        f.write_char('0')?;
+    }
+
+    Ok(())
 }
 fn fmt_bits_hex(
     bits: &Bits,
@@ -358,7 +413,7 @@ fn fmt_bits_hex(
                 'x'
             } else if s == 0 && v == mask {
                 'z'
-            } else if !s & !v != 0 {
+            } else if !s & !v & mask != 0 {
                 'X'
             } else {
                 'Z'
@@ -538,25 +593,8 @@ fn fmt_bits_decimal(
         return Ok(());
     }
 
-    let mut limbs = value_limbs(bits);
-
-    // Signed values are stored as two's complement within `size` bits; recover
-    // the magnitude by negating when the sign bit is set.
-    let size = bits.size().get();
-    let sign_word = ((size - 1) / 64) as usize;
-    let sign_bit = (size - 1) % 64;
-    let negative = signed && (limbs[sign_word] >> sign_bit) & 1 != 0;
+    let (limbs, negative) = decimal_magnitude(bits, signed);
     if negative {
-        let mut carry = 1u64;
-        for limb in limbs.iter_mut() {
-            let (v, c) = (!*limb).overflowing_add(carry);
-            *limb = v;
-            carry = c as u64;
-        }
-        let off = size % 64;
-        if off != 0 {
-            *limbs.last_mut().unwrap() &= (1u64 << off) - 1;
-        }
         f.write_char('-')?;
     }
 
@@ -573,13 +611,36 @@ fn fmt_bits_decimal(
     }
 }
 
-fn num_decimal_digits(size: VectorSize) -> u32 {
+fn decimal_magnitude(bits: &Bits, signed: bool) -> (Vec<u64>, bool) {
+    let mut limbs = value_limbs(bits);
+
+    let size = bits.size().get();
+    let sign_word = ((size - 1) / 64) as usize;
+    let sign_bit = (size - 1) % 64;
+    let negative = signed && (limbs[sign_word] >> sign_bit) & 1 != 0;
+    if negative {
+        let mut carry = 1u64;
+        for limb in limbs.iter_mut() {
+            let (v, c) = (!*limb).overflowing_add(carry);
+            *limb = v;
+            carry = c as u64;
+        }
+        let off = size % 64;
+        if off != 0 {
+            *limbs.last_mut().unwrap() &= (1u64 << off) - 1;
+        }
+    }
+
+    (limbs, negative)
+}
+
+fn num_decimal_digits(size: u32) -> u32 {
     // @NOTE: This is a bit-twiddling trick that specializes `ceil(log10(pow(2, size) - 1))`.
-    if size.get() < 2 {
+    if size < 2 {
         return 1;
     }
     const C: u128 = 5_553_023_288_523_357_132; // floor(2^64 * log10 2)
-    ((size.get() as u128 * C) >> 64) as u32 + 1
+    ((size as u128 * C) >> 64) as u32 + 1
 }
 
 fn value_limbs(bits: &Bits) -> Vec<u64> {

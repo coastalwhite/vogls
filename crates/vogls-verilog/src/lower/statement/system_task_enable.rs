@@ -26,9 +26,22 @@ pub fn lower_system_task_enable<'a>(
     let system_task_ident = &ctx.arenas.ident_table[system_task_identifier.item.0];
 
     match system_task_ident {
-        "display" => {
+        "display" | "displayb" | "displayo" | "displayh" => {
+            let default_base = match system_task_ident {
+                "displayb" => Base::Binary,
+                "displayo" => Base::Octal,
+                "displayh" => Base::Hexadecimal,
+                _ => Base::Decimal,
+            };
             let (mut format_string_content, format_string_arguments, format_string_args) =
-                lower_write_arguments(ctx, mctx, scope, system_task_enable, &mut builder)?;
+                lower_write_arguments(
+                    ctx,
+                    mctx,
+                    scope,
+                    system_task_enable,
+                    &mut builder,
+                    default_base,
+                )?;
             use std::fmt::Write;
             writeln!(&mut format_string_content).unwrap();
             let format_str =
@@ -39,9 +52,22 @@ pub fn lower_system_task_enable<'a>(
                 format_string_args.into(),
             );
         }
-        "write" => {
+        "write" | "writeb" | "writeo" | "writeh" => {
+            let default_base = match system_task_ident {
+                "writeb" => Base::Binary,
+                "writeo" => Base::Octal,
+                "writeh" => Base::Hexadecimal,
+                _ => Base::Decimal,
+            };
             let (format_string_content, format_string_arguments, format_string_args) =
-                lower_write_arguments(ctx, mctx, scope, system_task_enable, &mut builder)?;
+                lower_write_arguments(
+                    ctx,
+                    mctx,
+                    scope,
+                    system_task_enable,
+                    &mut builder,
+                    default_base,
+                )?;
             let format_str =
                 DynFormatString::new(format_string_content.into(), format_string_arguments.into());
             builder.intrinsic(
@@ -64,6 +90,16 @@ pub fn lower_system_task_enable<'a>(
 
             let lhs = expressions.get(0);
             let rhs = expressions.get(1);
+
+            let (Some(lhs), Some(rhs)) =
+                (AstId::transpose_option(lhs), AstId::transpose_option(rhs))
+            else {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(system_task_enable),
+                    "assertions requires two arguments",
+                );
+                return Err(());
+            };
 
             let l_ty = get_expr_type(
                 &mctx.gl,
@@ -143,7 +179,7 @@ pub fn lower_system_task_enable<'a>(
 
             let (sid, module) = match expressions.first() {
                 Some(expr) => {
-                    let Expr::Ident(ident, exprs, range_expr) = &*expr else {
+                    let Some(Expr::Ident(ident, exprs, range_expr)) = &*expr else {
                         mctx.diagnostics.not_yet_implemented(
                             ctx.arenas.get_span(system_task_enable),
                             "invalid identifier",
@@ -202,6 +238,25 @@ pub fn lower_system_task_enable<'a>(
             let precision_number = expressions.get(1);
             let suffix_string = expressions.get(2);
             let minimum_field_width = expressions.get(3);
+
+            let (
+                Some(units_number),
+                Some(precision_number),
+                Some(suffix_string),
+                Some(minimum_field_width),
+            ) = (
+                AstId::transpose_option(units_number),
+                AstId::transpose_option(precision_number),
+                AstId::transpose_option(suffix_string),
+                AstId::transpose_option(minimum_field_width),
+            )
+            else {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(system_task_enable),
+                    "timeformat requires 4 arguments",
+                );
+                return Err(());
+            };
 
             fn decimal_to_time_resolution(v: i64) -> Option<TimeResolution> {
                 use TimeSize as S;
@@ -300,7 +355,11 @@ pub fn lower_system_task_enable<'a>(
         "dumpfile" => {
             assert!(expressions.len() <= 1);
             mctx.has_vcd = true;
-            let path = match expressions.first().and_then(|e| e.into_str_literal()) {
+            let path = match expressions
+                .first()
+                .as_deref()
+                .and_then(|e| e.and_then(|e| e.into_str_literal()))
+            {
                 None => "dump.vcd".to_string(),
                 Some(str_literal) => {
                     ctx.arenas.text[str_literal.0.start..str_literal.0.end].to_string()
@@ -326,8 +385,8 @@ pub fn lower_system_task_enable<'a>(
         "readmemb" | "readmemh" => {
             assert!((2..=4).contains(&expressions.len()));
             let path = match &*expressions.get(0) {
-                Expr::String(s) => ctx.arenas.text[s.0.start..s.0.end].to_string(),
-                Expr::Ident(ident, exprs, range_exprs)
+                Some(Expr::String(s)) => ctx.arenas.text[s.0.start..s.0.end].to_string(),
+                Some(Expr::Ident(ident, exprs, range_exprs))
                     if exprs.is_empty() && range_exprs.is_none() =>
                 {
                     let sid = try_resolve_hident(
@@ -361,7 +420,7 @@ pub fn lower_system_task_enable<'a>(
                     return Ok(builder);
                 }
             };
-            let Expr::Ident(ident, exprs, range_expr) = &*expressions.get(1) else {
+            let Some(Expr::Ident(ident, exprs, range_expr)) = &*expressions.get(1) else {
                 mctx.diagnostics
                     .not_yet_implemented(ctx.arenas.get_span(system_task_enable), "invalid memory");
                 return Err(());
@@ -437,6 +496,7 @@ pub fn lower_write_arguments<'a>(
     scope: SymbolId,
     system_task_enable: AstId<'a, SystemTaskEnable<'a>>,
     builder: &mut BasicBlockBuilder,
+    default_base: Base,
 ) -> Result<(String, Vec<(usize, DynFormatArgument)>, Vec<VariableKey>), ()> {
     let expressions = system_task_enable.expressions;
     let mut format_string_content = String::new();
@@ -444,6 +504,12 @@ pub fn lower_write_arguments<'a>(
     let mut format_string_args = Vec::new();
     let mut required_arguments_left = 0;
     for expr in expressions.iter() {
+        let Some(expr) = AstId::transpose_option(expr) else {
+            // LRM 17.1.1: Any null argument produces a single space character in the display.
+            format_string_content.push(' ');
+            continue;
+        };
+
         if let Some(str_literal) = expr.into_str_literal() {
             let str_literal = &ctx.arenas.text[str_literal.0.start..str_literal.0.end];
 
@@ -592,11 +658,15 @@ pub fn lower_write_arguments<'a>(
                 format_string_arguments.push((
                     format_string_content.len(),
                     DynFormatArgument {
-                        padding: Padding::default(),
+                        padding: if default_base == Base::Decimal {
+                            Padding::NoPadding
+                        } else {
+                            Padding::ZeroPaddedToSize
+                        },
                         base: if var_ty.is_real() {
                             Base::Float
                         } else {
-                            Base::Decimal
+                            default_base
                         },
                         signed: var_ty.is_signed(),
                         precision: None,

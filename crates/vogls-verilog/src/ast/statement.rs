@@ -255,7 +255,7 @@ pub struct Block<'a> {
 #[derive(Clone, Copy)]
 pub struct SystemTaskEnable<'a> {
     pub system_task_identifier: AstItem<SystemTaskIdentifier>,
-    pub expressions: AstIdRange<'a, Expr<'a>>,
+    pub expressions: AstIdRange<'a, Option<Expr<'a>>>,
 }
 
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 508
