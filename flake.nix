@@ -55,6 +55,12 @@
               overlays = [ rust-overlay.overlays.default ];
             };
 
+            devShells.nightly = pkgs.mkShell {
+              packages = with pkgs; [
+                rustToolchainNightly
+              ];
+						};
+
             devShells.default = pkgs.mkShell {
               packages = with pkgs; [
                 (pythonPlatform.python.withPackages (python-pkgs: [

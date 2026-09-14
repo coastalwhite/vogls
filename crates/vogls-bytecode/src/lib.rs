@@ -776,6 +776,7 @@ impl Schedule {
 
             for plugin in plugins.iter_mut() {
                 plugin.timestep(state);
+
             }
 
             // Stop if there are no more events.

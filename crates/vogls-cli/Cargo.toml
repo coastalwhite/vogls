@@ -9,11 +9,13 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-vogls = { workspace = true, features = ["unstable", "native", "profile", "stdworld"] }
+vogls = { workspace = true, features = ["unstable", "profile", "stdworld"] }
 clap.workspace = true
 
 [lints]
 workspace = true
 
 [features]
+default = ["native"]
 tailcall = ["vogls/tailcall"]
+native = ["vogls/native"]

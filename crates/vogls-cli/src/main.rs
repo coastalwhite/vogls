@@ -257,7 +257,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     timers.start("compilation");
     let (design, mut state) = if compile {
-        lowered.to_cranelift()
+        #[cfg(feature = "native")]
+        {
+            lowered.to_cranelift()
+        }
+
+        #[cfg(not(feature = "native"))]
+        {
+            eprintln!("Feature 'native' is not enabled. Cannot compile");
+            std::process::exit(1);
+        }
     } else {
         lowered.to_bytecode()
     }?;
