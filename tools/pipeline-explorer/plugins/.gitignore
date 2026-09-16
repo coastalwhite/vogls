@@ -1,0 +1,2 @@
+# Built plugin binaries; `just plugin-hazard3` / `just plugin-echo` produce them.
+dist/

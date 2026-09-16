@@ -636,6 +636,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "pipeline-explorer-plugin"
+version = "0.1.0"
+
+[[package]]
+name = "pipeline-explorer-plugin-echo"
+version = "0.1.0"
+dependencies = [
+ "pipeline-explorer-plugin",
+]
+
+[[package]]
+name = "pipeline-explorer-plugin-hazard3"
+version = "0.1.0"
+dependencies = [
+ "pipeline-explorer",
+ "pipeline-explorer-plugin",
+]
+
+[[package]]
 name = "portable-atomic"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

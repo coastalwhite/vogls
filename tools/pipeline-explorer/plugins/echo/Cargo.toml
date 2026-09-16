@@ -1,0 +1,12 @@
+[package]
+name = "pipeline-explorer-plugin-echo"
+version = "0.1.0"
+edition = "2024"
+description = "Smallest possible pipeline-explorer design plugin, used as a test fixture"
+
+[lib]
+name = "pipeline_explorer_plugin_echo"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pipeline-explorer-plugin = { path = "../../plugin" }

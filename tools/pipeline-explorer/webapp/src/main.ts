@@ -3,6 +3,7 @@ import { render as renderEditor } from "./editor.ts";
 import { colors } from "./colors.ts";
 import initialAsm from "./initialAsm.S?raw";
 import type { Trace } from "./types.ts";
+import type { PluginField, PluginManifest } from "./wasm/plugin.ts";
 
 import { PipelineCanvas } from "./pipeline.ts";
 import { ScrubberCanvas } from "./scrubber.ts";
@@ -51,6 +52,15 @@ const chipMenuPanel: HTMLDivElement = document.getElementById(
 )!;
 const chipMenuName: HTMLSpanElement = document.getElementById(
     "chipMenuName",
+)!;
+const uploadBtn: HTMLButtonElement = document.getElementById(
+    "uploadBtn",
+)!;
+const uploadInput: HTMLInputElement = document.getElementById(
+    "uploadInput",
+)!;
+const statusMessageElem: HTMLDivElement = document.getElementById(
+    "statusMessage",
 )!;
 let scrubber: ScrubberCanvas | null = null;
 let pipeline: PipelineCanvas | null = null;
@@ -110,18 +120,42 @@ function setCurrentCycle(cycle: number) {
     }
 }
 
+function setStatusMessage(message: string) {
+    statusMessageElem.innerText = message;
+}
+
 const worker = new Worker(new URL("./wasm/trace-worker.ts", import.meta.url), {
     type: "module",
 });
 worker.onmessage = (e) => {
-    setTrace(e.data);
-    pending -= 1;
-    if (pending == 0) {
-        simStatusElem.innerHTML = `<img src="check.svg"/>`;
+    const message = e.data;
+    switch (message.kind) {
+        case "trace":
+            setStatusMessage("");
+            setTrace(message.trace);
+            settlePending(true);
+            break;
+        case "pluginLoaded":
+            addPlugin(message.proc, message.manifest);
+            break;
+        case "error":
+            setStatusMessage(message.message);
+            settlePending(false);
+            break;
     }
 };
 
-const procConfigFields = {
+function settlePending(ok: boolean) {
+    // A plugin that failed to load never started a simulation, so only count
+    // down when one was actually outstanding.
+    if (pending === 0) return;
+    pending -= 1;
+    if (pending == 0) {
+        simStatusElem.innerHTML = ok ? `<img src="check.svg"/>` : "!";
+    }
+}
+
+const procConfigFields: Record<string, PluginField[]> = {
     "picorv32": [
         { "id": "enable_mul", "type": "checkbox", "title": "Enable MUL", 'default': true },
         { "id": "enable_div", "type": "checkbox", "title": "Enable DIV", 'default': true },
@@ -149,22 +183,17 @@ const procConfigFields = {
 
 function runSim() {
     const assembly = assemblyTextarea.value;
-    const procSelectValue = procSelect.value;
+    const proc = procSelect.value;
     const numCycles = numCyclesInput.value;
 
-    let proc = "ibex";
-    if (procSelectValue === "picorv32") {
-        proc = "picorv32";
-    } else if (procSelectValue === "ibex") {
-        proc = "ibex";
-    } else if (procSelectValue === "neorv32") {
-        proc = "neorv32";
-    } else if (procSelectValue === "hazard3") {
-        proc = "hazard3";
+    const fields = procConfigFields[proc];
+    if (fields === undefined) {
+        setStatusMessage(`unknown design '${proc}'`);
+        return;
     }
 
-    const config = {};
-    for (const field of procConfigFields[proc]) {
+    const config: Record<string, boolean | number> = {};
+    for (const field of fields) {
         const elem = document.getElementById(`pcf-${field["id"]}`);
         if (!(elem instanceof HTMLInputElement)) {
             throw Error("Not an input");
@@ -173,10 +202,14 @@ function runSim() {
             case "checkbox":
                 config[field["id"]] = elem.checked;
                 break;
+            case "number":
+                config[field["id"]] = elem.valueAsNumber;
+                break;
         }
     }
 
     worker.postMessage({
+        "kind": "run",
         "proc": proc,
         "asm": assembly,
         "config": config,
@@ -202,20 +235,24 @@ function onProcSelect() {
     const procSelectValue = procSelect.value;
     chipMenuName.innerText =
         procSelect.options[procSelect.selectedIndex]?.text ?? procSelectValue;
+    const fields = procConfigFields[procSelectValue] ?? [];
     let s =`<table><colgroup><col span="1" style="width: 50%;"><col span="1" style="width: 50%;"></colgroup>`;
-    for (const field of procConfigFields[procSelectValue]) {
+    for (const field of fields) {
         switch (field["type"]) {
             case "checkbox":
                 s += `<tr><td>${field["title"]}</td><td><input type="checkbox" id="pcf-${field["id"]}" ${field["default"] ? 'checked' : ''} /></td></tr>`;
+                break;
+            case "number":
+                s += `<tr><td>${field["title"]}</td><td><input type="number" id="pcf-${field["id"]}" value="${field["default"]}" /></td></tr>`;
                 break;
         }
     }
     s += '</table>'
     // Leave it truly empty when the chip has no options, so the panel's
     // `:not(:empty)` separator stays off.
-    procConfigDetail.innerHTML = procConfigFields[procSelectValue].length ? s : "";
+    procConfigDetail.innerHTML = fields.length ? s : "";
 
-    for (const field of procConfigFields[procSelectValue]) {
+    for (const field of fields) {
         const elem = document.getElementById(`pcf-${field["id"]}`);
         let f = staggerRunSim;
         switch (field["type"]) {
@@ -226,6 +263,45 @@ function onProcSelect() {
 
     unstaggerRunSim();
 }
+
+/**
+ * Registers an uploaded design and switches to it.
+ *
+ * The worker keys plugins by the id in their manifest, so re-uploading a newer
+ * build of the same design replaces it instead of piling up duplicate entries
+ * in the chip menu.
+ */
+function addPlugin(proc: string, manifest: PluginManifest) {
+    procConfigFields[proc] = manifest.fields;
+
+    let option = Array.from(procSelect.options).find((o) => o.value === proc);
+    if (option === undefined) {
+        option = document.createElement("option");
+        option.value = proc;
+        procSelect.add(option);
+    }
+    option.text = manifest.name;
+
+    procSelect.value = proc;
+    setStatusMessage("");
+    onProcSelect();
+}
+
+uploadBtn.addEventListener("click", () => uploadInput.click());
+uploadInput.addEventListener("change", async () => {
+    const file = uploadInput.files?.[0];
+    // Clear it so picking the same file again still fires a change event,
+    // which is what you want while iterating on a plugin build.
+    uploadInput.value = "";
+    if (file === undefined) return;
+
+    setStatusMessage(`loading ${file.name}…`);
+    const bytes = await file.arrayBuffer();
+    worker.postMessage(
+        { "kind": "loadPlugin", "name": file.name, "bytes": bytes },
+        [bytes],
+    );
+});
 assemblyTextarea.value = initialAsm;
 renderEditor();
 numCyclesInput.value = "500";

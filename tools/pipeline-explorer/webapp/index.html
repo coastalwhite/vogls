@@ -11,8 +11,12 @@
 		<div id="statsbar">
 			<div class="mx-4">Cycle <a id="currentCycle">0</a> / <a id="totalCycles">0</a></div>
 			<div id="pipelineStages"></div>
-            <div></div>
-			<!-- <button id="uploadBtn" class="mx-4">Upload <img src="/arrow-rightup.svg" /></button> -->
+			<div id="statusMessage" role="status"></div>
+			<button id="uploadBtn" class="mx-4" type="button"
+			        title="Load a design plugin: a .wasm module built against the pipeline-explorer plugin ABI">
+				Upload design <img src="/arrow-rightup.svg" />
+			</button>
+			<input id="uploadInput" type="file" accept=".wasm,application/wasm" hidden />
 		</div>
 
 		<div id="content">

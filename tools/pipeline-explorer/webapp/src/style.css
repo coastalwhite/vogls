@@ -248,6 +248,37 @@ main #central {
 	border-bottom: 1px solid #000;
 }
 
+/* Errors from a simulation or from loading an uploaded design plugin. */
+#statusMessage {
+	flex: 1;
+	min-width: 0;
+	padding: 0 0.75rem;
+	font-size: 0.85rem;
+	color: #b3261e;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+#statusMessage:empty { display: none; }
+
+#uploadBtn {
+	display: flex;
+	align-items: center;
+	gap: 0.4rem;
+	flex: none;
+	height: 1.6rem;
+	padding: 0 0.6rem;
+	font: inherit;
+	font-size: 0.85rem;
+	color: var(--text-h);
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 0.4rem;
+	cursor: pointer;
+}
+#uploadBtn:hover { background: var(--accent-bg); border-color: var(--accent-border); }
+#uploadBtn img { height: 0.8rem; }
+
 .stage-pipeline {
 	display: flex;
 	align-items: center;

@@ -1,3 +1,4 @@
 *
 !.gitignore
 !trace-worker.ts
+!plugin.ts

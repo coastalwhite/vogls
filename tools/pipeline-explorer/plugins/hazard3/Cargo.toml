@@ -1,0 +1,19 @@
+[package]
+name = "pipeline-explorer-plugin-hazard3"
+version = "0.1.0"
+edition = "2024"
+description = "Hazard3 as an uploadable pipeline-explorer design plugin"
+
+[lib]
+name = "pipeline_explorer_plugin_hazard3"
+crate-type = ["cdylib", "rlib"]
+
+# Prints the same trace the wasm plugin produces, so the end-to-end test can
+# check the ABI round trip against a plain native run.
+[[bin]]
+name = "hazard3-plugin-dump"
+path = "src/dump.rs"
+
+[dependencies]
+pipeline-explorer = { path = "../..", default-features = false, features = ["hazard3"] }
+pipeline-explorer-plugin = { path = "../../plugin" }

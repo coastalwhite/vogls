@@ -3,6 +3,11 @@ members = [
     "crates/*",
     
     "tools/pipeline-explorer",
+    "tools/pipeline-explorer/plugin",
+    # Listed one by one rather than globbed: `plugins/dist` holds the built
+    # .wasm files, and a glob would try to treat it as a crate.
+    "tools/pipeline-explorer/plugins/echo",
+    "tools/pipeline-explorer/plugins/hazard3",
     "tools/trva/trva",
     "tools/trva/cli",
     "tools/trva/snapshot-tests",

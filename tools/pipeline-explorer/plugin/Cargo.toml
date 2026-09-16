@@ -1,0 +1,8 @@
+[package]
+name = "pipeline-explorer-plugin"
+version = "0.1.0"
+edition = "2024"
+description = "Host ABI for uploadable pipeline-explorer design plugins"
+
+[lib]
+name = "pipeline_explorer_plugin"
