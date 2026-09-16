@@ -12,11 +12,8 @@
 			<div class="mx-4">Cycle <a id="currentCycle">0</a> / <a id="totalCycles">0</a></div>
 			<div id="pipelineStages"></div>
 			<div id="statusMessage" role="status"></div>
-			<button id="uploadBtn" class="mx-4" type="button"
-			        title="Load a design plugin: a .wasm module built against the pipeline-explorer plugin ABI">
-				Upload design <img src="/arrow-rightup.svg" />
-			</button>
-			<input id="uploadInput" type="file" accept=".wasm,application/wasm" hidden />
+            <div></div>
+			<!-- <button id="uploadBtn" class="mx-4">Upload <img src="/arrow-rightup.svg" /></button> -->
 		</div>
 
 		<div id="content">
@@ -50,8 +47,13 @@
 								<option value="ibex">Ibex</option>
 								<option value="neorv32">NeoRV32</option>
 								<option value="hazard3">Hazard3</option>
+								<!-- Not a design but an action: picking it opens the file
+								     dialog below, and uploaded designs are inserted above it. -->
+								<option value="__custom__">Custom…</option>
 							</select>
 						</label>
+						<input id="uploadInput" type="file" accept=".wasm,application/wasm" hidden
+						       aria-label="Design plugin (.wasm)" />
 						<label class="chip-menu-row" for="numCyclesInput">
 							<span>Cycles</span>
 							<input type="number" id="numCyclesInput" />

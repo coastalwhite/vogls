@@ -2,14 +2,14 @@
 
 The pipeline explorer bundles four designs into its own wasm binary. A *plugin*
 is the other way in: a standalone `.wasm` carrying one design, which you hand to
-the webapp's **Upload design** button at runtime. Nothing needs rebuilding or
-redeploying on the webapp side, and the design's sources never have to enter
-this repository.
+the webapp at runtime through **Custom…** in its design menu. Nothing needs
+rebuilding or redeploying on the webapp side, and the design's sources never
+have to enter this repository.
 
 ```sh
 just plugin-hazard3      # builds plugins/dist/hazard3.wasm
 just build-site && (cd webapp && npm run preview)
-# then click "Upload design" and pick plugins/dist/hazard3.wasm
+# then open the chip menu, pick "Custom…" and choose plugins/dist/hazard3.wasm
 ```
 
 The uploaded design joins the built-ins in the chip menu, with the knobs its
@@ -70,7 +70,7 @@ pipeline-explorer = { path = "../..", default-features = false, features = ["haz
 
 ```sh
 just test-plugin     # the ABI, headless: loader vs. a native run of the design
-just test-browser    # the upload button itself, in chromium
+just test-browser    # the "Custom…" entry itself, in chromium
 ```
 
 `test-plugin` runs the plugin `.wasm` through the very loader the webapp's

@@ -1,5 +1,5 @@
-// Drives the built site in a real headless Chromium and uploads a design
-// plugin through the actual "Upload design" button.
+// Drives the built site in a real headless Chromium and loads a design plugin
+// the way a user would: "Custom…" in the design dropdown.
 //
 // `plugin-e2e.ts` covers the ABI; this covers the wiring around it -- the file
 // picker, the worker round trip, the new entry in the chip menu, and a trace
@@ -136,6 +136,7 @@ try {
     let nextId = 0;
     const pending = new Map();
     const consoleErrors = [];
+    const seenEvents = [];
     socket.onmessage = (event) => {
         const message = JSON.parse(event.data);
         if (message.id !== undefined) {
@@ -145,6 +146,7 @@ try {
             else entry.resolve(message.result);
             return;
         }
+        seenEvents.push(message.method);
         if (message.method === "Runtime.consoleAPICalled" && message.params.type === "error") {
             consoleErrors.push(message.params.args.map((a) => a.value ?? a.description).join(" "));
         }
@@ -159,11 +161,14 @@ try {
         return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
     }
 
-    async function evaluate(expression) {
+    // `userGesture` grants transient activation: opening a file picker needs
+    // it, and a synthetic event dispatched from here has none of its own.
+    async function evaluate(expression, { userGesture = false } = {}) {
         const result = await send("Runtime.evaluate", {
             expression,
             returnByValue: true,
             awaitPromise: true,
+            userGesture,
         });
         if (result.exceptionDetails) {
             throw new Error(result.exceptionDetails.exception?.description ?? "evaluate failed");
@@ -179,20 +184,47 @@ try {
     // --- the page comes up on a built-in design ----------------------------
 
     console.log("initial load");
-    await waitFor("the app to render", () => evaluate("!!document.getElementById('uploadBtn')"));
+    await waitFor("the app to render", () => evaluate("!!document.getElementById('procSelect')"));
+    const options = () =>
+        evaluate(
+            "Array.from(document.getElementById('procSelect').options).map(o => o.value).join(',')",
+        );
     check(
-        "ships the upload button",
-        await evaluate("document.getElementById('uploadBtn').innerText.trim()") === "Upload design",
+        "offers the built-in designs plus Custom…",
+        await options() === "picorv32,ibex,neorv32,hazard3,__custom__",
+        await options(),
     );
-    const builtins = await evaluate(
-        "Array.from(document.getElementById('procSelect').options).map(o => o.value).join(',')",
+    check(
+        "labels the custom entry",
+        await evaluate(
+            "Array.from(document.getElementById('procSelect').options).at(-1).text",
+        ) === "Custom…",
     );
-    check("starts with the built-in designs", builtins === "picorv32,ibex,neorv32,hazard3", builtins);
     await waitFor("the first simulation", () =>
         evaluate("Number(document.getElementById('totalCycles').innerText) > 0"),
     );
 
-    // --- upload the plugin -------------------------------------------------
+    // --- "Custom…" opens the dialog without becoming the selection ---------
+
+    // Intercepted rather than shown, so choosing "Custom…" surfaces as an
+    // event instead of a dialog nobody can click in headless.
+    await send("Page.setInterceptFileChooserDialog", { enabled: true });
+
+    const before = await evaluate("document.getElementById('procSelect').value");
+    await evaluate(
+        "(() => { const s = document.getElementById('procSelect'); s.value = '__custom__';" +
+            " s.dispatchEvent(new Event('change')); })()",
+        { userGesture: true },
+    );
+    await waitFor("the file dialog", () => seenEvents.includes("Page.fileChooserOpened"), 10000);
+    check("Custom… opens the file dialog", true);
+    check(
+        "Custom… hands the menu back to the current design",
+        await evaluate("document.getElementById('procSelect').value") === before,
+        await evaluate("document.getElementById('procSelect').value"),
+    );
+
+    // --- pick the plugin ---------------------------------------------------
 
     console.log(`uploading ${pluginWasm}`);
     const { root } = await send("DOM.getDocument");
@@ -208,6 +240,11 @@ try {
     check(
         "adds the uploaded design to the chip menu",
         await evaluate("document.getElementById('procSelect').value") === "plugin:hazard3",
+    );
+    check(
+        "inserts it above Custom…",
+        await options() === "picorv32,ibex,neorv32,hazard3,plugin:hazard3,__custom__",
+        await options(),
     );
     check(
         "names it from the manifest",

@@ -13,13 +13,13 @@ build-site: wasm-release webapp-deps
     cd webapp && npm run build
 
 # Build the Hazard3 design plugin: a standalone .wasm to hand to the webapp's
-# "Upload design" button. Note the lack of wasm-bindgen -- a plugin is loaded
+# "Custom…" design entry. Note the lack of wasm-bindgen -- a plugin is loaded
 # with an empty import object, so it must not need any host glue.
 plugin-hazard3:
     cargo build -p pipeline-explorer-plugin-hazard3 --lib --release --target=wasm32-unknown-unknown
     mkdir -p plugins/dist
     cp ../../target/wasm32-unknown-unknown/release/pipeline_explorer_plugin_hazard3.wasm plugins/dist/hazard3.wasm
-    @echo "upload plugins/dist/hazard3.wasm in the webapp"
+    @echo "pick plugins/dist/hazard3.wasm via Custom... in the webapp's design menu"
 
 # The worked example for the plugin ABI, and the test's fixture: it reports its
 # own inputs rather than simulating anything.
@@ -34,7 +34,7 @@ test-plugin: plugin-hazard3 plugin-echo webapp-deps
     cargo build -p pipeline-explorer-plugin-hazard3 --bin hazard3-plugin-dump --release
     cd webapp && npx jiti test/plugin-e2e.ts
 
-# Upload a plugin through the real button, in a real browser. Needs `chromium`
+# Load a plugin through the real "Custom..." entry, in a real browser. Needs `chromium`
 # on PATH.
 test-browser: plugin-hazard3 build-site
     cd webapp && node test/browser-e2e.mjs

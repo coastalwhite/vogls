@@ -53,9 +53,6 @@ const chipMenuPanel: HTMLDivElement = document.getElementById(
 const chipMenuName: HTMLSpanElement = document.getElementById(
     "chipMenuName",
 )!;
-const uploadBtn: HTMLButtonElement = document.getElementById(
-    "uploadBtn",
-)!;
 const uploadInput: HTMLInputElement = document.getElementById(
     "uploadInput",
 )!;
@@ -231,8 +228,26 @@ function unstaggerRunSim() {
     timeoutId = null;
     runSim();
 }
+/** The chip menu entry that opens the file dialog instead of picking a design. */
+const CUSTOM_OPTION = "__custom__";
+
+/** The design that was showing, so "Custom…" can hand the menu back to it. */
+let lastProc = procSelect.value;
+
 function onProcSelect() {
     const procSelectValue = procSelect.value;
+
+    if (procSelectValue === CUSTOM_OPTION) {
+        // "Custom…" is an action, not a design. Put the menu straight back on
+        // the design that was showing before opening the dialog: the app never
+        // sits on an entry it cannot simulate, and a cancelled dialog needs no
+        // handling of its own.
+        procSelect.value = lastProc;
+        uploadInput.click();
+        return;
+    }
+    lastProc = procSelectValue;
+
     chipMenuName.innerText =
         procSelect.options[procSelect.selectedIndex]?.text ?? procSelectValue;
     const fields = procConfigFields[procSelectValue] ?? [];
@@ -278,7 +293,10 @@ function addPlugin(proc: string, manifest: PluginManifest) {
     if (option === undefined) {
         option = document.createElement("option");
         option.value = proc;
-        procSelect.add(option);
+        // Before "Custom…", so that entry stays at the bottom of the list.
+        const custom = Array.from(procSelect.options)
+            .find((o) => o.value === CUSTOM_OPTION);
+        procSelect.add(option, custom ?? null);
     }
     option.text = manifest.name;
 
@@ -287,7 +305,6 @@ function addPlugin(proc: string, manifest: PluginManifest) {
     onProcSelect();
 }
 
-uploadBtn.addEventListener("click", () => uploadInput.click());
 uploadInput.addEventListener("change", async () => {
     const file = uploadInput.files?.[0];
     // Clear it so picking the same file again still fires a change event,
