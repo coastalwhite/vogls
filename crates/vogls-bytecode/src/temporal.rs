@@ -49,10 +49,6 @@ pub struct SetLupdt {
     rcond: Reg,
     index: InlineIndex<20>,
 }
-pub struct TvCorrectFirst {
-    rcond: Reg,
-    index: InlineIndex<20>,
-}
 
 #[inline(always)]
 pub fn wake(index: u64, schedule: &mut Schedule, listeners: &mut BytecodeListeners) {
@@ -547,71 +543,6 @@ impl BytecodeInstruction for SetLupdt {
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
 }
 
-impl BytecodeInstruction for TvCorrectFirst {
-    fn extract(v: Bytecode) -> Self {
-        debug_assert_eq!(v.opcode(), BytecodeOpcode::TvCorrectFirst as u8);
-        let v = v.0;
-        Self {
-            rcond: Reg::new_masked(v >> 8),
-            index: InlineIndex::new_shifted(v, 12),
-        }
-    }
-
-    fn encode(&self) -> Bytecode {
-        Bytecode(
-            BytecodeOpcode::TvCorrectFirst as u32
-                | ((self.rcond as u32) << 8)
-                | (self.index.encode() << 12),
-        )
-    }
-
-    fn num_additional_slots(&self) -> u8 {
-        if self.index.is_inline() { 0 } else { 2 }
-    }
-
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self { rcond, index: idx } = self;
-        write_padded_mnemonic(f, "tv.correct_first")?;
-        write!(f, "{rcond}, {idx}")
-    }
-
-    #[inline(always)]
-    fn execute(
-        self,
-        code: &[Bytecode],
-        regs: &mut Regs,
-        pc: &mut u64,
-        state: &mut RuntimeState,
-        _schedule: &mut Schedule,
-        _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
-    ) {
-        let i = self.index.get(pc, code);
-        let word = (i / 64) as usize;
-        let boff = (i % 64) as usize;
-        let i = &mut state.tvl_first_write[word];
-        regs[self.rcond] |= ((!*i) >> boff) & 1;
-        *i |= 1u64 << boff;
-    }
-
-    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register(
-            "rcond",
-            self.rcond,
-            LogicMode::TwoValue,
-            None,
-        ));
-    }
-    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
-        operands.push(RegInfo::register(
-            "rcond",
-            self.rcond,
-            LogicMode::TwoValue,
-            None,
-        ));
-    }
-}
-
 impl BytecodeEncoder {
     pub fn wake(&mut self, rcond: Reg, index: u64) {
         let inline_index = InlineIndex::new(index);
@@ -678,21 +609,6 @@ impl BytecodeEncoder {
         let inline_index = InlineIndex::new(index);
         self.data.push(
             SetLupdt {
-                rcond,
-                index: inline_index,
-            }
-            .encode(),
-        );
-        if inline_index.0.is_none() {
-            self.data.push(Bytecode((index >> 32) as u32));
-            self.data.push(Bytecode((index & 0xFFFF_FFFF) as u32));
-        }
-    }
-
-    pub fn tv_correct_first(&mut self, rcond: Reg, index: u64) {
-        let inline_index = InlineIndex::new(index);
-        self.data.push(
-            TvCorrectFirst {
                 rcond,
                 index: inline_index,
             }

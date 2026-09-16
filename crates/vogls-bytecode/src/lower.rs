@@ -2304,12 +2304,10 @@ fn lower_instruction(
 
                 match (src.mode(), signal_size == SCALAR_VSIZE) {
                     (M::TwoValue, _) => {
-                        let tv_correct_index = rt_signal.as_u64();
                         bce.tv_set1(
                             Some(rd),
                             rs,
                             addr,
-                            tv_correct_index,
                             lupdt_index,
                             watch_index,
                             plugin_rt_index,
@@ -2344,7 +2342,6 @@ fn lower_instruction(
             } else {
                 const SCRATCH: Reg = T2;
                 let rt_signal = io_signals[signal];
-                let tv_correct_index = rt_signal.as_u64();
                 let lupdt_index = lupdt_indexes.get(&rt_signal).copied();
                 let watch_index =
                     (watch_map.num_watch_indices(*signal) > 0).then(|| rt_signal.as_u64());
@@ -2364,7 +2361,6 @@ fn lower_instruction(
                             rs,
                             signal_addr,
                             src_size,
-                            Some(tv_correct_index),
                             lupdt_index,
                             watch_index,
                             plugin_rt_index,
@@ -2377,7 +2373,6 @@ fn lower_instruction(
                             signal_addr,
                             signal_size,
                             signal_size,
-                            false,
                             lupdt_index,
                             watch_index,
                             plugin_rt_index,
@@ -2390,7 +2385,6 @@ fn lower_instruction(
                             offset,
                             src_size,
                             signal_size,
-                            Some(tv_correct_index),
                             lupdt_index,
                             watch_index,
                             plugin_rt_index,
@@ -2404,7 +2398,6 @@ fn lower_instruction(
                             src_size,
                             signal_size,
                             signal_size,
-                            false,
                             lupdt_index,
                             watch_index,
                             plugin_rt_index,
@@ -2415,7 +2408,6 @@ fn lower_instruction(
                         rs,
                         signal_addr,
                         size,
-                        tv_correct_index,
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2439,7 +2431,6 @@ fn lower_instruction(
                         size,
                         offset,
                         src_size,
-                        tv_correct_index,
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2531,7 +2522,6 @@ fn lower_instruction(
             bce.add(raddr, raddr, rpartial, SixBitSize::N64);
 
             let rt_signal = io_signals[signal];
-            let tv_correct_index = rt_signal.as_u64();
             let lupdt_index = lupdt_indexes.get(&rt_signal).copied();
             let watch_index =
                 (watch_map.num_watch_indices(*signal) > 0).then(|| rt_signal.as_u64());
@@ -2551,7 +2541,6 @@ fn lower_instruction(
                         InlineAddrOffset::ZERO,
                         range,
                         src_size,
-                        Some(tv_correct_index),
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2566,7 +2555,6 @@ fn lower_instruction(
                         range,
                         src_size,
                         signal_size,
-                        false,
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2580,7 +2568,6 @@ fn lower_instruction(
                         0,
                         range,
                         size,
-                        Some(tv_correct_index),
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2595,7 +2582,6 @@ fn lower_instruction(
                         range,
                         size,
                         signal_size,
-                        false,
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2728,7 +2714,6 @@ fn store_back(
                         None,
                         None,
                         None,
-                        None,
                     ),
                     LogicMode::FourValue => bytecode.fv_setrel(
                         None,
@@ -2738,7 +2723,6 @@ fn store_back(
                         0..=u64::MAX,
                         size,
                         size.to_vector_size(),
-                        true,
                         None,
                         None,
                         None,

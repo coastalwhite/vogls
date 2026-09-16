@@ -272,11 +272,14 @@ impl BasicBlockTerminator {
 pub struct SignalFlags(u8);
 
 impl SignalFlags {
-    pub const ALL: Self = Self(0b0011u8);
+    pub const ALL: Self = Self(0b0111u8);
     pub const EMPTY: Self = Self(0b0000u8);
 
     pub const EXT_DRIVE: Self = Self(0b0001u8);
     pub const EXT_PROBE: Self = Self(0b0010u8);
+
+    /// Do not poke standing watchers at the start of the simulation.
+    pub const NO_START_POKE: Self = Self(0b0100u8);
 
     pub fn contains(self, rhs: Self) -> bool {
         self.0 & rhs.0 == rhs.0
@@ -322,6 +325,7 @@ impl fmt::Debug for SignalFlags {
         f.debug_struct("SignalFlags")
             .field("drive", &self.contains(Self::EXT_DRIVE))
             .field("probe", &self.contains(Self::EXT_PROBE))
+            .field("no_start_poke", &self.contains(Self::NO_START_POKE))
             .finish()
     }
 }
@@ -338,13 +342,22 @@ pub struct Signal {
 impl Signal {
     /// Should the signal poke all standing watchers at `t=0`?
     pub fn triggers_t0_poke(&self) -> bool {
-        self.initialize.as_ref().is_some_and(|v| match self.mode {
-            // Two-valued always registers the first write.
+        if self.flags.contains(SignalFlags::NO_START_POKE) {
+            return false;
+        }
+
+        match self.mode {
+            // Two-value logic does not represent `x`. There is an implicit transition from `x->0`
+            // at the start of the simulation. We emulate that behavior by poking all standing
+            // processes.
             LogicMode::TwoValue => true,
 
             // Four-valued logic starts as `x`, so a write of `x` does not trigger a poke.
-            LogicMode::FourValue => v.count_unknown() != v.size().get(),
-        })
+            LogicMode::FourValue => self
+                .initialize
+                .as_ref()
+                .is_some_and(|v| v.count_unknown() != v.size().get()),
+        }
     }
 }
 

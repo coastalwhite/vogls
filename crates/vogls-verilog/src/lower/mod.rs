@@ -53,7 +53,7 @@ impl MonitorSignals {
             size: SCALAR_VSIZE,
             initialize: Some(FvLogicValue::L1.into()),
             mode: LogicMode::TwoValue,
-            flags: SignalFlags::EMPTY,
+            flags: SignalFlags::NO_START_POKE,
             origin: TokenRange::default(),
         });
         let selected = gl.signals.insert(Signal {
@@ -61,14 +61,16 @@ impl MonitorSignals {
             size: VSIZE_64,
             initialize: None,
             mode: LogicMode::TwoValue,
-            flags: SignalFlags::EMPTY,
+            flags: SignalFlags::NO_START_POKE,
             origin: TokenRange::default(),
         });
 
         Self {
             enabled,
             selected,
-            next: 0,
+            // @NOTE: Indices start at 1 so that the first `$monitor` drives `selected` from its
+            // `0` reset value to a different value. This causes watchers to wake up.
+            next: 1,
         }
     }
 }
@@ -699,7 +701,7 @@ pub fn create_nba_process(
             name: mask_name,
             size,
             initialize: None,
-            flags: SignalFlags::EMPTY,
+            flags: SignalFlags::NO_START_POKE,
             mode: LogicMode::TwoValue,
             origin,
         })
@@ -708,7 +710,7 @@ pub fn create_nba_process(
         name: value_name,
         size,
         initialize: None,
-        flags: SignalFlags::EMPTY,
+        flags: SignalFlags::NO_START_POKE,
         mode,
         origin,
     });

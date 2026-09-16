@@ -1,7 +1,6 @@
 use std::io;
 
 use vogls_codegen::Heap;
-use vogls_ir::GlobalContext;
 use vogls_ir::time::TimeFormat;
 use vogls_utils::{TableKey, new_table_key};
 
@@ -26,35 +25,21 @@ pub struct RuntimeState {
     pub heap: Heap,
     pub time: u64,
     pub last_active_time: Vec<u64>,
-    pub tvl_first_write: Vec<u64>,
     pub event_count: u64,
     pub instruction_count: u64,
     pub time_format: TimeFormat,
 }
 
 impl RuntimeState {
-    pub fn new(
-        gl: &GlobalContext,
-        heap: Heap,
-        updated: &[bool],
-        lupdt_updated: &[bool],
-        time_format: TimeFormat,
-    ) -> Self {
-        let mut tvl_first_write = vec![0u64; gl.signals.len().div_ceil(64)];
+    pub fn new(heap: Heap, lupdt_updated: &[bool], time_format: TimeFormat) -> Self {
         let last_active_time = lupdt_updated
             .iter()
             .map(|updated| if *updated { 0 } else { u64::MAX })
             .collect();
-        for (i, updated) in updated.iter().enumerate() {
-            if *updated {
-                tvl_first_write[i / 64] |= 1u64 << (i % 64);
-            }
-        }
         Self {
             heap,
             time: 0,
             last_active_time,
-            tvl_first_write,
             event_count: 0,
             instruction_count: 0,
             time_format,

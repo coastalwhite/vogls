@@ -472,7 +472,6 @@ opcodes![
     RescheduleListen,
     LastUpdateTime,
     SetLupdt,
-    TvCorrectFirst,
     HeapHeapExtend,
     HeapRegExtend,
     HeapHeapTruncate,
