@@ -1,7 +1,8 @@
+# .bss has to start at 0x400: tb.v routes every access at or above that
+# address to its separate `primes` array, which is what prime.S walks.
 build:
-    riscv32-none-elf-as -o prime.o prime.S
-    riscv32-none-elf-ld -Tlink.ld prime.o -o prime
-    riscv32-none-elf-objcopy -Obinary prime prime.bin
+    cargo run --release -p trva-cli -- prime.S --isa rv32im \
+        --text 0x0 --data 0x200 --rodata 0x300 --bss 0x400 -o prime.trva
     python3 createmem.py
 
 verilator-build:
@@ -50,4 +51,4 @@ ibex: build-top-level
 clean:
     rm -rf ./obj_dir
     rm -f ./icarus
-    rm -f prime.o prime prime.bin prime.hex
+    rm -f prime.trva prime.hex

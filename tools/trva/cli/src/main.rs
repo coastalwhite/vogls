@@ -98,7 +98,7 @@ fn main() -> ExitCode {
     let mut output: io::BufWriter<Box<dyn io::Write>> = match output {
         Some(path) => {
             let mut options = std::fs::OpenOptions::new();
-            options.write(true).create(true);
+            options.write(true).create(true).truncate(true);
             match options.open(&path) {
                 Ok(f) => io::BufWriter::new(Box::new(f)),
                 Err(err) => {
