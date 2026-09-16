@@ -16,7 +16,9 @@
 mod terminator;
 mod tr;
 
+use std::io;
 use std::mem::offset_of;
+use std::sync::{Arc, Mutex};
 
 use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{
@@ -118,7 +120,6 @@ struct Sigs {
     event: Signature,
     entry: Signature,
     drive: Signature,
-    next_event: Signature,
     push: Signature,
     sfe: Signature,
     grow: Signature,
@@ -142,7 +143,6 @@ impl Sigs {
             event,
             entry: sysv(&[ptr, ptr, I64, ptr, ptr, ptr], Some(types::I32)),
             drive: sysv(&[ptr, I64, ptr, ptr, ptr], None),
-            next_event: sysv(&[ptr], Some(ptr)),
             push: sysv(&[ptr, ptr], None),
             sfe: sysv(&[ptr, I64, ptr], None),
             grow: sysv(&[ptr], None),
@@ -329,7 +329,6 @@ struct Compiler<'a> {
     ptr: Type,
     fe: TargetFrontendConfig,
     sigs: Sigs,
-    next_event: FuncId,
     push: FuncId,
     sfe: FuncId,
     entry: FuncId,
@@ -360,7 +359,8 @@ struct Compiler<'a> {
     info: SignalInfo<'a>,
     heap_builder: &'a mut HeapBuilder,
 
-    disassembly: bool,
+    emit_clif: Option<Arc<Mutex<dyn io::Write + Send + Sync>>>,
+    emit_disassembly: Option<Arc<Mutex<dyn io::Write + Send + Sync>>>,
 }
 
 impl<'a> Compiler<'a> {
@@ -370,6 +370,8 @@ impl<'a> Compiler<'a> {
         gl: &'a GlobalContext,
         info: SignalInfo<'a>,
         heap_builder: &'a mut HeapBuilder,
+        emit_clif: Option<Arc<Mutex<dyn io::Write + Send + Sync>>>,
+        emit_disassembly: Option<Arc<Mutex<dyn io::Write + Send + Sync>>>,
     ) -> Self {
         let mut fb = settings::builder();
         fb.set("opt_level", "speed").unwrap();
@@ -385,13 +387,11 @@ impl<'a> Compiler<'a> {
         let ptr = module.target_config().pointer_type();
         let fe = module.target_config();
         let sigs = Sigs::new(ptr);
-        let disassembly = std::env::var_os("VOGLS_DISASM").is_some();
         Self {
             module,
             ptr,
             fe,
             sigs,
-            next_event: FuncId::from_u32(0),
             push: FuncId::from_u32(0),
             sfe: FuncId::from_u32(0),
             entry: FuncId::from_u32(0),
@@ -410,7 +410,8 @@ impl<'a> Compiler<'a> {
             gl,
             info,
             heap_builder,
-            disassembly,
+            emit_clif,
+            emit_disassembly,
         }
     }
 
@@ -421,48 +422,6 @@ impl<'a> Compiler<'a> {
     }
 
     // --- schedule helpers (see runtime.rs layout) ---------------------------
-
-    fn build_next_event(&mut self, fb: &mut FunctionBuilderContext) {
-        let mut ctx = self.module.make_context();
-        ctx.func.signature = self.sigs.next_event.clone();
-        ctx.func.name = UserFuncName::user(0, self.next_event.as_u32());
-        {
-            let mut b = FunctionBuilder::new(&mut ctx.func, fb);
-            let entry = b.create_block();
-            let empty = b.create_block();
-            let nonempty = b.create_block();
-            b.append_block_params_for_function_params(entry);
-            b.switch_to_block(entry);
-            let schedule = b.block_params(entry)[0];
-            let active = ioff(&mut b, self.ptr, schedule, layout::SCHED_ACTIVE);
-            let len = b
-                .ins()
-                .load(I64, mem(), active, FfiVec::<EventT>::LEN_OFFSET as i32);
-            b.ins().brif(len, nonempty, &[], empty, &[]);
-            b.switch_to_block(empty);
-            let zero = b.ins().iconst(self.ptr, 0);
-            b.ins().return_(&[zero]);
-            b.switch_to_block(nonempty);
-            let one = b.ins().iconst(I64, 1);
-            let new_len = b.ins().isub(len, one);
-            b.ins()
-                .store(mem(), new_len, active, FfiVec::<EventT>::LEN_OFFSET as i32);
-            let data = b
-                .ins()
-                .load(self.ptr, mem(), active, FfiVec::<EventT>::PTR_OFFSET as i32);
-            let esize = b.ins().iconst(self.ptr, layout::EVENT_SIZE as i64);
-            let off = b.ins().imul(new_len, esize);
-            let elem = b.ins().iadd(data, off);
-            let event = b.ins().load(self.ptr, mem(), elem, 0);
-            b.ins().return_(&[event]);
-            b.seal_all_blocks();
-            b.finalize(self.fe);
-        }
-        self.module
-            .define_function(self.next_event, &mut ctx)
-            .unwrap();
-        self.module.clear_context(&mut ctx);
-    }
 
     fn build_push(&mut self, fb: &mut FunctionBuilderContext) {
         let grow_sig = self.sigs.grow.clone();
@@ -508,6 +467,10 @@ impl<'a> Compiler<'a> {
             b.ins().return_(&[]);
             b.seal_all_blocks();
             b.finalize(self.fe);
+        }
+        if let Some(writer) = self.emit_clif.as_mut() {
+            let mut writer = writer.lock().unwrap();
+            writeln!(writer, "=== event_vec_push ===\n{}", ctx.func.display()).unwrap();
         }
         self.module.define_function(self.push, &mut ctx).unwrap();
         self.module.clear_context(&mut ctx);
@@ -597,6 +560,15 @@ impl<'a> Compiler<'a> {
             b.seal_all_blocks();
             b.finalize(self.fe);
         }
+        if let Some(writer) = self.emit_clif.as_mut() {
+            let mut writer = writer.lock().unwrap();
+            writeln!(
+                writer,
+                "=== schedule_future_event ===\n{}",
+                ctx.func.display()
+            )
+            .unwrap();
+        }
         self.module.define_function(self.sfe, &mut ctx).unwrap();
         self.module.clear_context(&mut ctx);
     }
@@ -616,6 +588,10 @@ impl<'a> Compiler<'a> {
             b.seal_all_blocks();
             b.finalize(self.fe);
         }
+        if let Some(writer) = self.emit_clif.as_mut() {
+            let mut writer = writer.lock().unwrap();
+            writeln!(writer, "=== entry ===\n{}", ctx.func.display()).unwrap();
+        }
         self.module.define_function(self.entry, &mut ctx).unwrap();
         self.module.clear_context(&mut ctx);
     }
@@ -633,14 +609,21 @@ impl<'a> Compiler<'a> {
         let mut builder = TrBuilder::new(&mut ctx, self, fb, func_id, entry_bb);
         builder.lower(bb_phis);
         builder.finalize();
+        if let Some(writer) = self.emit_clif.as_mut() {
+            let mut writer = writer.lock().unwrap();
+            writeln!(
+                writer,
+                "=== tr {process_idx}_{tr_idx} ===\n{}",
+                ctx.func.display()
+            )
+            .unwrap();
+        }
         self.module.define_function(func_id, &mut ctx).unwrap();
-        if self.disassembly {
+        if let Some(writer) = self.emit_disassembly.as_mut() {
+            let mut writer = writer.lock().unwrap();
             if let Some(cc) = ctx.compiled_code() {
                 if let Some(d) = cc.vcode.as_ref() {
-                    eprintln!(
-                        "=== tr {process_idx}_{tr_idx} (func {}) ===\n{d}",
-                        func_id.as_u32()
-                    );
+                    writeln!(writer, "=== tr {process_idx}_{tr_idx} ===\n{d}",).unwrap();
                 }
             }
         }
@@ -1574,8 +1557,7 @@ impl<'a> Compiler<'a> {
         let plugin_sig = self.sigs.plugin_poke.clone();
 
         let mut ctx = self.module.make_context();
-        let dis = std::env::var_os("VOGLS_DISASM").is_some();
-        if dis {
+        if self.emit_disassembly.is_some() {
             ctx.set_disasm(true);
         }
         ctx.func.signature = self.sigs.drive.clone();
@@ -1638,16 +1620,22 @@ impl<'a> Compiler<'a> {
             b.seal_all_blocks();
             b.finalize(self.fe);
         }
+        if let Some(writer) = self.emit_clif.as_mut() {
+            let mut writer = writer.lock().unwrap();
+            writeln!(
+                writer,
+                "=== drive_signal {} ===\n{}",
+                rt.as_usize(),
+                ctx.func.display()
+            )
+            .unwrap();
+        }
         self.module.define_function(func_id, &mut ctx).unwrap();
-        if dis {
+        if let Some(writer) = self.emit_disassembly.as_mut() {
+            let mut writer = writer.lock().unwrap();
             if let Some(cc) = ctx.compiled_code() {
                 if let Some(d) = cc.vcode.as_ref() {
-                    eprintln!(
-                        "=== drive_signal {} (func {}) ===\n{}",
-                        rt.as_usize(),
-                        func_id.as_u32(),
-                        d
-                    );
+                    writeln!(writer, "=== drive_signal {} ===\n{d}", rt.as_usize()).unwrap();
                 }
             }
         }
@@ -1914,13 +1902,22 @@ pub fn compile<'a>(
     info: SignalInfo<'a>,
     heap_builder: &'a mut HeapBuilder,
     num_plugins: usize,
+    emit_clif: Option<Arc<Mutex<dyn io::Write + Send + Sync>>>,
+    emit_disassembly: Option<Arc<Mutex<dyn io::Write + Send + Sync>>>,
 ) -> Result<Compiled, String> {
     let num_signals = info.signal_to_heap.len();
-    let mut c = Compiler::new(num_signals, num_plugins, gl, info, heap_builder);
+    let mut c = Compiler::new(
+        num_signals,
+        num_plugins,
+        gl,
+        info,
+        heap_builder,
+        emit_clif,
+        emit_disassembly,
+    );
     // drive_fn ids, filled below.
     let mut fb = FunctionBuilderContext::new();
 
-    c.next_event = c.declare("next_event", &c.sigs.next_event.clone());
     c.push = c.declare("event_vec_push", &c.sigs.push.clone());
     c.sfe = c.declare("schedule_future_event", &c.sigs.sfe.clone());
     c.entry = c.declare("empty_active_event_queue", &c.sigs.entry.clone());
@@ -1943,7 +1940,6 @@ pub fn compile<'a>(
     }
     c.drive_fn_ids = drive_fn_ids.clone();
 
-    c.build_next_event(&mut fb);
     c.build_push(&mut fb);
     c.build_sfe(&mut fb);
     c.build_entry(&mut fb);

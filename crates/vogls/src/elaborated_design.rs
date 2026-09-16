@@ -562,6 +562,8 @@ impl<'a> ElaboratedDesign<'a> {
             debug_symbols: false,
             output_source: None,
             print_vm_map: false,
+            emit_clif: None,
+            emit_disassembly: None,
             profile: None,
             time_resolution,
         })

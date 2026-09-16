@@ -1,5 +1,5 @@
 use std::fs::read_to_string;
-use std::io::stdout;
+use std::io::{BufWriter, stdout};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -36,6 +36,10 @@ struct Args {
     emit_ir: bool,
     #[arg(long = "emit-vm")]
     emit_vm: bool,
+    #[arg(long = "emit-clif")]
+    emit_clif: bool,
+    #[arg(long = "emit-disasm")]
+    emit_disasm: bool,
     #[arg(long = "emit-process-stats")]
     emit_process_stats: bool,
 
@@ -103,6 +107,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         emit_unoptimized_ir,
         emit_ir,
         emit_vm,
+        emit_clif,
+        emit_disasm,
         emit_process_stats,
         no_run,
         time,
@@ -253,6 +259,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     lowered.debug_symbols = debug_symbols;
     lowered.output_source = output_source.clone();
     lowered.print_vm_map = print_vm_map;
+    let emit_writer: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>> =
+        (emit_clif || emit_disasm).then(|| Arc::new(Mutex::new(BufWriter::new(stdout()))) as _);
+    lowered.emit_clif = emit_clif.then(|| emit_writer.clone().unwrap());
+    lowered.emit_disassembly = emit_disasm.then(|| emit_writer.clone().unwrap());
     lowered.profile = profile;
 
     timers.start("compilation");
@@ -271,6 +281,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         lowered.to_bytecode()
     }?;
     timers.stop();
+
+    if let Some(writer) = &emit_writer {
+        writer.lock().unwrap().flush()?;
+    }
 
     if no_run {
         if timers.enabled {
