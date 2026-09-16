@@ -87,9 +87,12 @@ impl Design {
     ) -> Result<(), Box<dyn std::error::Error>> {
         match (&self.backend, state) {
             #[cfg(feature = "tailcall")]
-            (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => design
-                .execute_inner_tailcall(state, world)
-                .map_err(|_| "execution failed.".into()),
+            (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
+                state.schedule.set_max_time(time);
+                design
+                    .execute_inner_tailcall(state, world)
+                    .map_err(|_| "execution failed.".into())
+            }
             #[cfg(not(feature = "tailcall"))]
             (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
                 state.schedule.set_max_time(time);

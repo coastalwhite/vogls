@@ -1272,6 +1272,7 @@ impl Design {
                 &self.watchers,
                 state.plugins.as_mut(),
                 world,
+                self.time_resolution,
             );
             let mut regs = Regs::new(self.stack_offset);
             let Some(c) = code.get(pc as usize) else {
