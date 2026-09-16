@@ -50,7 +50,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
         func_id: FuncId,
         entry_bb: BasicBlockKey,
     ) -> Self {
-        if compiler.disassembly {
+        if compiler.emit_disassembly.is_some() {
             ctx.set_disasm(true);
         }
 

@@ -1,6 +1,6 @@
-use std::fmt;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::{fmt, io};
 
 use slotmap::SlotMap;
 use vogls_bytecode::lower::{LowerBytecodeOptions, lower_process_to_bytecode};
@@ -44,6 +44,8 @@ pub struct LoweredDesign {
     pub debug_symbols: bool,
     pub output_source: Option<PathBuf>,
     pub print_vm_map: bool,
+    pub emit_clif: Option<Arc<Mutex<dyn io::Write + Send + Sync>>>,
+    pub emit_disassembly: Option<Arc<Mutex<dyn io::Write + Send + Sync>>>,
     pub profile: Option<PathBuf>,
     pub time_resolution: TimeResolution,
 }
@@ -325,8 +327,14 @@ impl LoweredDesign {
             lupdt_indexes: &lupdt_indexes,
         };
 
-        let compiled =
-            vogls_codegen_clif::lower::compile(&self.gl, info, &mut heap_builder, num_plugins)?;
+        let compiled = vogls_codegen_clif::lower::compile(
+            &self.gl,
+            info,
+            &mut heap_builder,
+            num_plugins,
+            self.emit_clif,
+            self.emit_disassembly,
+        )?;
 
         // Reserve a heap scratch region for wide values too large for a stack
         // slot (sized to the largest TR's spilled footprint); pass its base word
