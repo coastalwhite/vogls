@@ -48,7 +48,6 @@ pub mod layout {
     pub const CTX_HEAP_LEN: usize = offset_of!(ColdContextT, heap_len);
     pub const CTX_READMEMS: usize = offset_of!(ColdContextT, readmems);
     pub const CTX_READMEM: usize = offset_of!(ColdContextT, readmem);
-    pub const CTX_FST_POKE: usize = offset_of!(ColdContextT, fst_poke);
     pub const CTX_ICOUNT: usize = offset_of!(ColdContextT, icount);
     pub const CTX_WORLD: usize = offset_of!(ColdContextT, world);
 
@@ -521,8 +520,6 @@ pub struct ColdContextT<'a> {
 
     pub heap_wide_ptr: *mut u64,
 
-    fst_poke: *mut u64,
-
     icount: u64,
 
     // @TODO: This can be turned into some FFI stable fat pointer type. Until that time, just wrap
@@ -786,7 +783,6 @@ impl ClifDesign {
             time_fmts: &self.time_fmts,
             heap_wide_ptr,
             readmem: read_mem,
-            fst_poke: state.runtime.tvl_first_write.as_mut_ptr(),
             icount: state.runtime.instruction_count,
             world: Box::new(world),
         };

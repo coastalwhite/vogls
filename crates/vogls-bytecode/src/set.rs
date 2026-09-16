@@ -113,11 +113,6 @@ struct SetRegRelative {
     rs: Reg,
     roff: Reg,
     flags: SetFlags,
-    /// Whether the write addresses something other than a signal, such as the stack.
-    ///
-    /// Nothing observes such a write, so none of the signal tables (e.g. the first-write table)
-    /// are addressable and no slots are encoded for them.
-    no_signal: bool,
     size: SixBitSize,
 }
 /// A set at a constant address which reads its value from, and writes its update mask to, the
@@ -129,8 +124,6 @@ struct SetHeap {
     rd: Reg,
     rs: Reg,
     flags: SetFlags,
-    /// See [`SetRegRelative::no_signal`].
-    no_signal: bool,
 }
 /// A register-relative set which reads its value from, and writes its update mask to, the heap.
 ///
@@ -140,9 +133,7 @@ struct SetHeapRelative {
     rs: Reg,
     roff: Reg,
     flags: SetFlags,
-    /// See [`SetRegRelative::no_signal`].
-    no_signal: bool,
-    offset: InlineAddrOffset<7>,
+    offset: InlineAddrOffset<8>,
 }
 
 /// Set 1 two-valued logic heap bit and trigger all corresponding signal updates.
@@ -334,8 +325,7 @@ impl SetRegRelative {
             rs: Reg::new_masked(v >> 12),
             roff: Reg::new_masked(v >> 16),
             flags: SetFlags::new_masked(v >> 20),
-            no_signal: (v >> 24) & 1 != 0,
-            size: SixBitSize::new_masked(v >> 25),
+            size: SixBitSize::new_masked(v >> 24),
         }
     }
     #[inline(always)]
@@ -346,8 +336,7 @@ impl SetRegRelative {
                 | ((self.rs as u32) << 12)
                 | ((self.roff as u32) << 16)
                 | (self.flags.encode() << 20)
-                | (u32::from(self.no_signal) << 24)
-                | (self.size.encode() << 25),
+                | (self.size.encode() << 24),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -356,13 +345,9 @@ impl SetRegRelative {
             rs,
             roff,
             flags,
-            no_signal,
             size,
         } = self;
         flags.fmt(f)?;
-        if *no_signal {
-            f.write_str("[N]")?;
-        }
         write!(f, "{rd}, {rs}, {roff}, |{size}|")
     }
 }
@@ -376,7 +361,6 @@ impl SetHeap {
             rd: Reg::new_masked(v >> 8),
             rs: Reg::new_masked(v >> 12),
             flags: SetFlags::new_masked(v >> 16),
-            no_signal: (v >> 20) & 1 != 0,
         }
     }
     #[inline(always)]
@@ -385,21 +369,12 @@ impl SetHeap {
             opcode as u32
                 | ((self.rd as u32) << 8)
                 | ((self.rs as u32) << 12)
-                | (self.flags.encode() << 16)
-                | (u32::from(self.no_signal) << 20),
+                | (self.flags.encode() << 16),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let Self {
-            rd,
-            rs,
-            flags,
-            no_signal,
-        } = self;
+        let Self { rd, rs, flags } = self;
         flags.fmt(f)?;
-        if *no_signal {
-            f.write_str("[N]")?;
-        }
         write!(f, "{rd}, {rs}")
     }
 }
@@ -414,8 +389,7 @@ impl SetHeapRelative {
             rs: Reg::new_masked(v >> 12),
             roff: Reg::new_masked(v >> 16),
             flags: SetFlags::new_masked(v >> 20),
-            no_signal: (v >> 24) & 1 != 0,
-            offset: InlineAddrOffset::new_shifted(v, 25),
+            offset: InlineAddrOffset::new_shifted(v, 24),
         }
     }
     #[inline(always)]
@@ -426,8 +400,7 @@ impl SetHeapRelative {
                 | ((self.rs as u32) << 12)
                 | ((self.roff as u32) << 16)
                 | (self.flags.encode() << 20)
-                | (u32::from(self.no_signal) << 24)
-                | (self.offset.encode() << 25),
+                | (self.offset.encode() << 24),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -436,13 +409,9 @@ impl SetHeapRelative {
             rs,
             roff,
             flags,
-            no_signal,
             offset,
         } = self;
         flags.fmt(f)?;
-        if *no_signal {
-            f.write_str("[N]")?;
-        }
         write!(f, "{rd}, {rs}, {roff}, {offset}")
     }
 }
@@ -577,27 +546,9 @@ fn is_offset_in_bounds(offset: u64, size: SixBitSize, lower: u64, upper: u64) ->
     (offset >= lower) & (end <= upper) & (end >= offset)
 }
 
-#[inline(always)]
-fn correct_first(
-    updated: &mut bool,
-    additional_slots: &[Bytecode; 16],
-    slot_offset: &mut usize,
-    state: &mut RuntimeState,
-) {
-    let correct_first = decode_bytecode_u64(&additional_slots[*slot_offset..]);
-    *slot_offset += 2;
-
-    let woff = (correct_first / 64) as usize;
-    let boff = correct_first % 64;
-
-    let word = &mut state.tvl_first_write[woff];
-    *updated |= (*word & (1u64 << boff)) == 0;
-    *word |= 1u64 << boff;
-}
-
 impl BytecodeInstruction for TvSet1 {
     fn num_additional_slots(&self) -> u8 {
-        let slots = 1 + 2 + self.0.flags.num_additional_slots();
+        let slots = 1 + self.0.flags.num_additional_slots();
         debug_assert!(slots <= 16);
         slots
     }
@@ -809,7 +760,6 @@ impl BytecodeInstruction for TvSet1Relative {
         let mut slots = self.0.flags.num_additional_slots();
         slots += 2; // Base.
         slots += 4; // Upper & Lower bound.
-        slots += 2; // TV Correct first.
         debug_assert!(slots <= 16);
         slots
     }
@@ -889,9 +839,7 @@ impl BytecodeInstruction for TvSet1Relative {
 
         let heap = state.heap.0.as_mut();
         let value = regs[rs];
-        let mut updated =
-            set_unaligned_inbounds(heap, base + heap_offset, value, SixBitSize::N1) != 0;
-        correct_first(&mut updated, additional_slots, &mut 6, state);
+        let updated = set_unaligned_inbounds(heap, base + heap_offset, value, SixBitSize::N1) != 0;
 
         if flags.contains(SetFlags::WRITE_MASK) {
             regs[rd] = u64::from(updated);
@@ -903,7 +851,7 @@ impl BytecodeInstruction for TvSet1Relative {
 
         poke1(
             additional_slots,
-            8,
+            6,
             flags,
             regs,
             state,
@@ -1050,15 +998,14 @@ fn execute_set1<const FOUR_VALUE: bool>(
         .expect("Should be padded");
 
     *pc += 1; // Offset.
-    *pc += if FOUR_VALUE { 0 } else { 2 }; // TV Correct first.
     *pc += flags.num_additional_slots() as u64; // Flag slots.
 
     let code_offset = additional_slots[0].0;
     let heap_offset = ((code_offset as u64) << 12) | (imm12 as u64);
 
-    let mut slot_offset = 1;
+    let slot_offset = 1;
     let heap = state.heap.0.as_mut();
-    let mut updated = if FOUR_VALUE {
+    let updated = if FOUR_VALUE {
         let (rsspc, rsval) = rs.to_spc_and_val();
         let (spc, val) = (regs[rsspc], regs[rsval]);
         fv_set_aligned(heap, heap_offset, spc, val, SixBitSize::N1) != 0
@@ -1066,10 +1013,6 @@ fn execute_set1<const FOUR_VALUE: bool>(
         let src = regs[rs];
         tv_set_aligned(heap, heap_offset, src, SixBitSize::N1) != 0
     };
-
-    if !FOUR_VALUE {
-        correct_first(&mut updated, additional_slots, &mut slot_offset, state);
-    }
 
     if flags.contains(SetFlags::WRITE_MASK) {
         regs[rd] = u64::from(updated);
@@ -1131,7 +1074,6 @@ impl BytecodeInstruction for TvSetAligned {
     fn num_additional_slots(&self) -> u8 {
         let mut slots = self.0.flags.num_additional_slots();
         slots += 1; // Base.
-        slots += 2; // TV Correct first.
         debug_assert!(slots <= 16);
         slots
     }
@@ -1202,9 +1144,7 @@ impl BytecodeInstruction for TvSetAligned {
 
         let heap = state.heap.0.as_mut();
         let update_mask = tv_set_aligned(heap, offset, regs[rs], size);
-        let mut updated = update_mask != 0;
-
-        correct_first(&mut updated, additional_slots, &mut 1, state);
+        let updated = update_mask != 0;
 
         if flags.contains(SetFlags::WRITE_MASK) {
             regs[rd] = update_mask;
@@ -1216,7 +1156,7 @@ impl BytecodeInstruction for TvSetAligned {
 
         poke1(
             additional_slots,
-            3,
+            1,
             flags,
             regs,
             state,
@@ -1334,7 +1274,6 @@ impl BytecodeInstruction for TvSetUnaligned {
     fn num_additional_slots(&self) -> u8 {
         let mut slots = self.0.flags.num_additional_slots();
         slots += 2; // Base.
-        slots += 2; // TV Correct first.
         debug_assert!(slots <= 16);
         slots
     }
@@ -1404,9 +1343,7 @@ impl BytecodeInstruction for TvSetUnaligned {
 
         let heap = state.heap.0.as_mut();
         let update_mask = set_unaligned_inbounds(heap, offset, size.mask(regs[rs]), size);
-        let mut updated = update_mask != 0;
-
-        correct_first(&mut updated, additional_slots, &mut 2, state);
+        let updated = update_mask != 0;
 
         if flags.contains(SetFlags::WRITE_MASK) {
             regs[rd] = update_mask;
@@ -1418,7 +1355,7 @@ impl BytecodeInstruction for TvSetUnaligned {
 
         poke1(
             additional_slots,
-            4,
+            2,
             flags,
             regs,
             state,
@@ -1536,10 +1473,7 @@ impl BytecodeInstruction for TvSetRelative {
         let mut slots = 0;
         slots += 2; // Base.
         slots += 4; // Upper & Lower bound.
-        if !self.0.no_signal {
-            slots += 2; // TV Correct first.
-            slots += self.0.flags.num_additional_slots();
-        }
+        slots += self.0.flags.num_additional_slots();
         debug_assert!(slots <= 16);
         slots
     }
@@ -1591,7 +1525,6 @@ impl BytecodeInstruction for TvSetRelative {
             rs,
             roff,
             flags,
-            no_signal,
             size,
         }) = self;
 
@@ -1623,15 +1556,7 @@ impl BytecodeInstruction for TvSetRelative {
             set_unaligned_oob(heap, offset, value, size, lower_bound, upper_bound)
         };
 
-        // @NOTE: A write which does not address a signal has no first-write table to index into
-        // and nothing to poke.
-        if no_signal {
-            return;
-        }
-
-        let mut updated = update_mask != 0;
-
-        correct_first(&mut updated, additional_slots, &mut 6, state);
+        let updated = update_mask != 0;
 
         if flags.contains(SetFlags::WRITE_MASK) {
             regs[rd] = update_mask;
@@ -1643,7 +1568,7 @@ impl BytecodeInstruction for TvSetRelative {
 
         poke1(
             additional_slots,
-            8,
+            6,
             flags,
             regs,
             state,
@@ -1660,9 +1585,7 @@ impl BytecodeInstruction for FvSetRelative {
         slots += 2; // Base.
         slots += 4; // Upper & Lower bound.
         slots += 1; // Spread.
-        if !self.0.no_signal {
-            slots += self.0.flags.num_additional_slots();
-        }
+        slots += self.0.flags.num_additional_slots();
         debug_assert!(slots <= 16);
         slots
     }
@@ -1714,7 +1637,6 @@ impl BytecodeInstruction for FvSetRelative {
             rs,
             roff,
             flags,
-            no_signal,
             size,
         }) = self;
 
@@ -1762,8 +1684,7 @@ impl BytecodeInstruction for FvSetRelative {
             regs[rd] = update_mask;
         }
 
-        // @NOTE: A write which does not address a signal has nothing to poke.
-        if no_signal || update_mask == 0 {
+        if update_mask == 0 {
             return;
         }
 
@@ -1881,12 +1802,7 @@ macro_rules! impl_set_heap {
         impl BytecodeInstruction for $name {
             fn num_additional_slots(&self) -> u8 {
                 let mut slots = Self::END_SLOT as u8;
-                if !self.0.no_signal {
-                    if !$four_value {
-                        slots += 2; // TV Correct first.
-                    }
-                    slots += self.0.flags.num_additional_slots();
-                }
+                slots += self.0.flags.num_additional_slots();
                 debug_assert!(slots <= 16);
                 slots
             }
@@ -1936,12 +1852,7 @@ macro_rules! impl_set_heap {
                 listeners: &mut BytecodeListeners,
                 cldctx: &mut ColdContext,
             ) {
-                let Self(SetHeap {
-                    rd,
-                    rs,
-                    flags,
-                    no_signal,
-                }) = self;
+                let Self(SetHeap { rd, rs, flags }) = self;
 
                 // @NOTE: We ensured the code buffer is padded with at least 16 elements.
                 let additional_slots: &[Bytecode; 16] = code
@@ -1970,17 +1881,7 @@ macro_rules! impl_set_heap {
                     rd, rs, flags, base, size, spread, base, base_size, regs, state, cldctx,
                 );
 
-                // @NOTE: A write which does not address a signal has no first-write table to
-                // index into and nothing to poke.
-                if no_signal {
-                    return;
-                }
-
-                let mut updated = updated;
-                let mut slot_offset = Self::END_SLOT;
-                if !$four_value {
-                    correct_first(&mut updated, additional_slots, &mut slot_offset, state);
-                }
+                let slot_offset = Self::END_SLOT;
 
                 if !updated {
                     return;
@@ -2017,12 +1918,7 @@ macro_rules! impl_set_heap_relative {
         impl BytecodeInstruction for $name {
             fn num_additional_slots(&self) -> u8 {
                 let mut slots = Self::END_SLOT as u8;
-                if !self.0.no_signal {
-                    if !$four_value {
-                        slots += 2; // TV Correct first.
-                    }
-                    slots += self.0.flags.num_additional_slots();
-                }
+                slots += self.0.flags.num_additional_slots();
                 debug_assert!(slots <= 16);
                 slots
             }
@@ -2083,7 +1979,6 @@ macro_rules! impl_set_heap_relative {
                     rs,
                     roff,
                     flags,
-                    no_signal,
                     offset,
                 }) = self;
 
@@ -2127,17 +2022,7 @@ macro_rules! impl_set_heap_relative {
                     cldctx,
                 );
 
-                // @NOTE: A write which does not address a signal has no first-write table to
-                // index into and nothing to poke.
-                if no_signal {
-                    return;
-                }
-
-                let mut updated = updated;
-                let mut slot_offset = Self::END_SLOT;
-                if !$four_value {
-                    correct_first(&mut updated, additional_slots, &mut slot_offset, state);
-                }
+                let slot_offset = Self::END_SLOT;
 
                 if !updated {
                     return;
@@ -2214,7 +2099,6 @@ impl BytecodeEncoder {
         rd: Option<Reg>,
         rs: Reg,
         offset: u64,
-        tv_correct_index: Option<u64>,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2229,9 +2113,6 @@ impl BytecodeEncoder {
         }));
         self.data
             .push(Bytecode(((offset >> 12) & 0xFFFF_FFFF) as u32));
-        if let Some(tv_correct_index) = tv_correct_index {
-            encode_bytecode_u64(self, tv_correct_index);
-        }
         if let Some(lupdt_index) = lupdt_index {
             encode_bytecode_u64(self, lupdt_index);
         }
@@ -2248,7 +2129,6 @@ impl BytecodeEncoder {
         rd: Option<Reg>,
         rs: Reg,
         offset: u64,
-        tv_correct_index: u64,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2263,7 +2143,6 @@ impl BytecodeEncoder {
                 0,
                 InlineAddrOffset::ZERO,
                 0..=u64::MAX,
-                tv_correct_index,
                 lupdt_index,
                 watch_index,
                 plugin_rt_index,
@@ -2275,7 +2154,6 @@ impl BytecodeEncoder {
             rd,
             rs,
             offset,
-            Some(tv_correct_index),
             lupdt_index,
             watch_index,
             plugin_rt_index,
@@ -2313,7 +2191,6 @@ impl BytecodeEncoder {
             rd,
             rs,
             offset,
-            None,
             lupdt_index,
             watch_index,
             plugin_rt_index,
@@ -2385,7 +2262,6 @@ impl BytecodeEncoder {
         base: u64,
         offset: InlineAddrOffset<8>,
         range: RangeInclusive<u64>,
-        tv_correct_index: u64,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2404,7 +2280,6 @@ impl BytecodeEncoder {
         encode_bytecode_u64(self, base);
         encode_bytecode_u64(self, *range.start());
         encode_bytecode_u64(self, *range.end());
-        encode_bytecode_u64(self, tv_correct_index);
         if let Some(lupdt_index) = lupdt_index {
             encode_bytecode_u64(self, lupdt_index);
         }
@@ -2461,7 +2336,6 @@ impl BytecodeEncoder {
         rs: Reg,
         at: u64,
         size: SixBitSize,
-        tv_correct_index: u64,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2480,7 +2354,6 @@ impl BytecodeEncoder {
                 0,
                 0..=u64::MAX,
                 size,
-                Some(tv_correct_index),
                 lupdt_index,
                 watch_index,
                 plugin_rt_index,
@@ -2500,7 +2373,6 @@ impl BytecodeEncoder {
             .encode(),
         );
         self.data.push(Bytecode(base_elem as u32));
-        encode_bytecode_u64(self, tv_correct_index);
         self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
     }
 
@@ -2531,7 +2403,6 @@ impl BytecodeEncoder {
                 0..=u64::MAX,
                 size,
                 spread,
-                false,
                 lupdt_index,
                 watch_index,
                 plugin_rt_index,
@@ -2564,7 +2435,6 @@ impl BytecodeEncoder {
         size: SixBitSize,
         base: u64,
         base_size: VectorSize,
-        tv_correct_index: u64,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2579,7 +2449,6 @@ impl BytecodeEncoder {
                 0,
                 base..=base + base_size.get() as u64 - 1,
                 size,
-                Some(tv_correct_index),
                 lupdt_index,
                 watch_index,
                 plugin_rt_index,
@@ -2603,7 +2472,6 @@ impl BytecodeEncoder {
             .encode(),
         );
         encode_bytecode_u64(self, base);
-        encode_bytecode_u64(self, tv_correct_index);
         self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
     }
 
@@ -2632,7 +2500,6 @@ impl BytecodeEncoder {
                 base..=base + base_size.get() as u64 - 1,
                 size,
                 spread,
-                false,
                 lupdt_index,
                 watch_index,
                 plugin_rt_index,
@@ -2663,8 +2530,6 @@ impl BytecodeEncoder {
     #[allow(clippy::too_many_arguments)]
     /// Encode a two-value register-relative set.
     ///
-    /// A `tv_correct_index` of [`None`] marks the write as not addressing a signal, which skips
-    /// the first-write correction and every poke.
     pub fn tv_setrel(
         &mut self,
         rd: Option<Reg>,
@@ -2673,7 +2538,6 @@ impl BytecodeEncoder {
         base: u64,
         range: RangeInclusive<u64>,
         size: SixBitSize,
-        tv_correct_index: Option<u64>,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2685,7 +2549,6 @@ impl BytecodeEncoder {
                 rs,
                 roff,
                 flags,
-                no_signal: tv_correct_index.is_none(),
                 size,
             })
             .encode(),
@@ -2693,16 +2556,12 @@ impl BytecodeEncoder {
         encode_bytecode_u64(self, base);
         encode_bytecode_u64(self, *range.start());
         encode_bytecode_u64(self, *range.end());
-        if let Some(tv_correct_index) = tv_correct_index {
-            encode_bytecode_u64(self, tv_correct_index);
-            self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
-        }
+        self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
     }
 
     #[allow(clippy::too_many_arguments)]
     /// Encode a four-value register-relative set.
     ///
-    /// `no_signal` marks the write as not addressing a signal, which skips every poke.
     #[allow(clippy::too_many_arguments)]
     pub fn fv_setrel(
         &mut self,
@@ -2713,7 +2572,6 @@ impl BytecodeEncoder {
         range: RangeInclusive<u64>,
         size: SixBitSize,
         spread: VectorSize,
-        no_signal: bool,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2725,7 +2583,6 @@ impl BytecodeEncoder {
                 rs,
                 roff,
                 flags,
-                no_signal,
                 size,
             })
             .encode(),
@@ -2734,9 +2591,7 @@ impl BytecodeEncoder {
         encode_bytecode_u64(self, *range.start());
         encode_bytecode_u64(self, *range.end());
         self.data.push(Bytecode(spread.get()));
-        if !no_signal {
-            self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
-        }
+        self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
     }
 
     /// Encode a two-value heap set which covers the whole signal.
@@ -2748,7 +2603,6 @@ impl BytecodeEncoder {
         rs: Reg,
         base: u64,
         size: VectorSize,
-        tv_correct_index: Option<u64>,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2759,16 +2613,12 @@ impl BytecodeEncoder {
                 rd: rd.unwrap_or(rs),
                 rs,
                 flags,
-                no_signal: tv_correct_index.is_none(),
             })
             .encode(),
         );
         encode_bytecode_u64(self, base);
         self.data.push(Bytecode(size.get()));
-        if let Some(tv_correct_index) = tv_correct_index {
-            encode_bytecode_u64(self, tv_correct_index);
-            self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
-        }
+        self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
     }
 
     /// Encode a four-value heap set which covers the whole signal.
@@ -2782,7 +2632,6 @@ impl BytecodeEncoder {
         base: u64,
         size: VectorSize,
         spread: VectorSize,
-        no_signal: bool,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2793,16 +2642,13 @@ impl BytecodeEncoder {
                 rd: rd.unwrap_or(rs),
                 rs,
                 flags,
-                no_signal,
             })
             .encode(),
         );
         encode_bytecode_u64(self, base);
         self.data.push(Bytecode(size.get()));
         self.data.push(Bytecode(spread.get()));
-        if !no_signal {
-            self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
-        }
+        self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
     }
 
     /// Encode a two-value heap set into part of a signal.
@@ -2816,7 +2662,6 @@ impl BytecodeEncoder {
         base: u64,
         size: VectorSize,
         base_size: VectorSize,
-        tv_correct_index: Option<u64>,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2827,17 +2672,13 @@ impl BytecodeEncoder {
                 rd: rd.unwrap_or(rs),
                 rs,
                 flags,
-                no_signal: tv_correct_index.is_none(),
             })
             .encode(),
         );
         encode_bytecode_u64(self, base);
         self.data.push(Bytecode(size.get()));
         self.data.push(Bytecode(base_size.get()));
-        if let Some(tv_correct_index) = tv_correct_index {
-            encode_bytecode_u64(self, tv_correct_index);
-            self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
-        }
+        self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
     }
 
     /// Encode a four-value heap set into part of a signal.
@@ -2850,7 +2691,6 @@ impl BytecodeEncoder {
         size: VectorSize,
         base_size: VectorSize,
         spread: VectorSize,
-        no_signal: bool,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2861,7 +2701,6 @@ impl BytecodeEncoder {
                 rd: rd.unwrap_or(rs),
                 rs,
                 flags,
-                no_signal,
             })
             .encode(),
         );
@@ -2869,9 +2708,7 @@ impl BytecodeEncoder {
         self.data.push(Bytecode(size.get()));
         self.data.push(Bytecode(base_size.get()));
         self.data.push(Bytecode(spread.get()));
-        if !no_signal {
-            self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
-        }
+        self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
     }
 
     /// Encode a two-value heap set at a register-relative address.
@@ -2881,10 +2718,9 @@ impl BytecodeEncoder {
         rd: Option<Reg>,
         rs: Reg,
         roff: Reg,
-        offset: InlineAddrOffset<7>,
+        offset: InlineAddrOffset<8>,
         range: RangeInclusive<u64>,
         size: VectorSize,
-        tv_correct_index: Option<u64>,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2896,7 +2732,6 @@ impl BytecodeEncoder {
                 rs,
                 roff,
                 flags,
-                no_signal: tv_correct_index.is_none(),
                 offset,
             })
             .encode(),
@@ -2904,10 +2739,7 @@ impl BytecodeEncoder {
         encode_bytecode_u64(self, *range.start());
         encode_bytecode_u64(self, *range.end());
         self.data.push(Bytecode(size.get()));
-        if let Some(tv_correct_index) = tv_correct_index {
-            encode_bytecode_u64(self, tv_correct_index);
-            self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
-        }
+        self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
     }
 
     /// Encode a four-value heap set at a register-relative address.
@@ -2917,11 +2749,10 @@ impl BytecodeEncoder {
         rd: Option<Reg>,
         rs: Reg,
         roff: Reg,
-        offset: InlineAddrOffset<7>,
+        offset: InlineAddrOffset<8>,
         range: RangeInclusive<u64>,
         size: VectorSize,
         spread: VectorSize,
-        no_signal: bool,
         lupdt_index: Option<u64>,
         watch_index: Option<u64>,
         plugin_rt_index: Option<u64>,
@@ -2933,7 +2764,6 @@ impl BytecodeEncoder {
                 rs,
                 roff,
                 flags,
-                no_signal,
                 offset,
             })
             .encode(),
@@ -2942,8 +2772,6 @@ impl BytecodeEncoder {
         encode_bytecode_u64(self, *range.end());
         self.data.push(Bytecode(size.get()));
         self.data.push(Bytecode(spread.get()));
-        if !no_signal {
-            self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
-        }
+        self.encode_poke_slots(lupdt_index, watch_index, plugin_rt_index);
     }
 }

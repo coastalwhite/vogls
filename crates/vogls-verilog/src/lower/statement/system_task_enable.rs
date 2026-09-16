@@ -94,7 +94,7 @@ pub fn lower_system_task_enable<'a>(
                 size: SCALAR_VSIZE,
                 initialize: None,
                 mode: vogls_ir::LogicMode::TwoValue,
-                flags: SignalFlags::EMPTY,
+                flags: SignalFlags::NO_START_POKE,
                 origin,
             });
 

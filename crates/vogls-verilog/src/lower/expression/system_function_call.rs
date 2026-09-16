@@ -877,7 +877,7 @@ fn get_prob_dist_fn_seed<'a>(
                     size: VSIZE_32,
                     initialize: Some(Bits::new_zeroed(VSIZE_32)),
                     mode: LogicMode::TwoValue,
-                    flags: SignalFlags::EMPTY,
+                    flags: SignalFlags::NO_START_POKE,
                     origin: TokenRange::default(),
                 })
             });

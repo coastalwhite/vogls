@@ -251,7 +251,6 @@ impl LoweredDesign {
         let stack_offset = heap_builder.claim_words(num_stack_words) as u64;
         let mut heap = heap_builder.finish();
         let mut lupdt_updated = vec![false; lupdt_indexes.len()];
-        let mut updated = vec![false; self.gl.signals.len()];
 
         for (key, signal) in &self.gl.signals {
             if let Some(initialize) = &signal.initialize {
@@ -261,12 +260,11 @@ impl LoweredDesign {
                 if let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
                     lupdt_updated[*lupdt_idx as usize] = true;
                 }
-                updated[rt_key.as_usize()] = true;
             }
         }
 
         let time_format = TimeFormat::new(self.time_resolution);
-        let runtime = RuntimeState::new(&self.gl, heap, &updated, &lupdt_updated, time_format);
+        let runtime = RuntimeState::new(heap, &lupdt_updated, time_format);
         let state = vogls_bytecode::State {
             runtime,
             plugins,
@@ -345,7 +343,6 @@ impl LoweredDesign {
         let design = compiled.into_design(self.time_resolution, scratch_base_word, NUM_REGIONS);
 
         let mut lupdt_updated = vec![false; lupdt_indexes.len()];
-        let mut updated = vec![false; self.gl.signals.len()];
         for (key, signal) in &self.gl.signals {
             if let Some(initialize) = &signal.initialize {
                 let rt_key = rt_signal_map[&key];
@@ -354,13 +351,11 @@ impl LoweredDesign {
                 if let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
                     lupdt_updated[*lupdt_idx as usize] = true;
                 }
-                updated[rt_key.as_usize()] = true;
             }
         }
 
         let time_format = vogls_ir::time::TimeFormat::new(self.time_resolution);
-        let runtime =
-            vogls_runtime::RuntimeState::new(&self.gl, heap, &updated, &lupdt_updated, time_format);
+        let runtime = vogls_runtime::RuntimeState::new(heap, &lupdt_updated, time_format);
         let mut state = design.new_state(num_listening, NUM_REGIONS, runtime, &self.gl);
         state.plugins = plugins;
         let state = DesignState::Cranelift(state);

@@ -1044,18 +1044,7 @@ impl<'a> Compiler<'a> {
         };
         let changed = b.ins().icmp(IntCC::NotEqual, src, old_field);
 
-        // fst_poke: force a poke the first time a two-value signal is written.
-        let guard = {
-            let fp = b
-                .ins()
-                .load(self.ptr, mem(), params.cldctx, layout::CTX_FST_POKE as i32);
-            let idx = rt.as_usize();
-            let w = b.ins().load(I64, mem(), fp, ((idx / 64) * 8) as i32);
-            let sh = b.ins().ushr_imm_u(w, (idx % 64) as i64);
-            let bit = b.ins().band_imm_u(sh, 1);
-            let never = b.ins().icmp_imm_u(IntCC::Equal, bit, 0);
-            b.ins().bor(never, changed)
-        };
+        let guard = changed;
 
         let do_bb = b.create_block();
         let merge = b.create_block();
@@ -1105,7 +1094,7 @@ impl<'a> Compiler<'a> {
         b.switch_to_block(merge);
     }
 
-    /// Full-width four-value drive: poke-if-changed (no fst_poke for FV) + store.
+    /// Full-width four-value drive: poke-if-changed + store.
     fn lower_drive_fv(
         &mut self,
         b: &mut FunctionBuilder,
@@ -1185,7 +1174,6 @@ impl<'a> Compiler<'a> {
     /// `collect_listeners` pre-pass to have run first.
     fn call_drive_signal(&mut self, b: &mut FunctionBuilder, params: &Params, rt: RtSignalKey) {
         let idx = rt.as_usize();
-        let is_tv = self.info.signal_mode[idx] == LogicMode::TwoValue;
         let lupdt = self.info.lupdt_indexes.get(&rt).copied();
         let listeners: Vec<(u32, FuncId)> = self.listeners[idx]
             .iter()
@@ -1200,15 +1188,6 @@ impl<'a> Compiler<'a> {
             params.last_active_time,
             params.cldctx,
         );
-
-        if is_tv {
-            let fp = b
-                .ins()
-                .load(self.ptr, mem(), cldctx, layout::CTX_FST_POKE as i32);
-            let w = b.ins().load(I64, mem(), fp, ((idx / 64) * 8) as i32);
-            let nw = b.ins().bor_imm_u(w, 1i64 << (idx % 64));
-            b.ins().store(mem(), nw, fp, ((idx / 64) * 8) as i32);
-        }
 
         if num_plugins > 0 {
             let plugins = b
@@ -1351,20 +1330,7 @@ impl<'a> Compiler<'a> {
         let changed = b.inst_results(call)[0];
         let ch = b.ins().icmp_imm_u(IntCC::NotEqual, changed, 0);
 
-        // Two-value signals also poke on the first write (fst_poke).
-        let poke = if is_fv {
-            ch
-        } else {
-            let fp = b
-                .ins()
-                .load(self.ptr, mem(), cldctx, layout::CTX_FST_POKE as i32);
-            let idx = rt.as_usize();
-            let w = b.ins().load(I64, mem(), fp, ((idx / 64) * 8) as i32);
-            let sh = b.ins().ushr_imm_u(w, (idx % 64) as i64);
-            let bit = b.ins().band_imm_u(sh, 1);
-            let never = b.ins().icmp_imm_u(IntCC::Equal, bit, 0);
-            b.ins().bor(never, ch)
-        };
+        let poke = ch;
         let drive_bb = b.create_block();
         b.ins().brif(poke, drive_bb, &[], merge, &[]);
         b.switch_to_block(drive_bb);
@@ -1497,18 +1463,7 @@ impl<'a> Compiler<'a> {
             let new = insert_bits(b, cur, src_val, off, s_size);
             let new = maskv(b, new, d_size);
             let changed = b.ins().icmp(IntCC::NotEqual, new, cur);
-            // fst_poke: match the two-value full/partial drive path.
-            let cldctx = params.cldctx;
-            let fp = b
-                .ins()
-                .load(self.ptr, mem(), cldctx, layout::CTX_FST_POKE as i32);
-            let idx = rt.as_usize();
-            let w = b.ins().load(I64, mem(), fp, ((idx / 64) * 8) as i32);
-            let sh = b.ins().ushr_imm_u(w, (idx % 64) as i64);
-            let bit = b.ins().band_imm_u(sh, 1);
-            let never = b.ins().icmp_imm_u(IntCC::Equal, bit, 0);
-            let poke = b.ins().bor(never, changed);
-            let guard = b.ins().band(poke, off_known);
+            let guard = b.ins().band(changed, off_known);
             b.ins().brif(guard, do_bb, &[], merge, &[]);
             b.switch_to_block(do_bb);
             self.call_drive_signal(b, params, rt);
@@ -1610,7 +1565,6 @@ impl<'a> Compiler<'a> {
         func_id: FuncId,
     ) {
         let idx = rt.as_usize();
-        let is_tv = self.info.signal_mode[idx] == LogicMode::TwoValue;
         let lupdt = self.info.lupdt_indexes.get(&rt).copied();
         let listeners: Vec<(u32, FuncId)> = self.listeners[idx]
             .iter()
@@ -1634,16 +1588,6 @@ impl<'a> Compiler<'a> {
             let p: Vec<Value> = b.block_params(entry).to_vec();
             let (schedule, time, listening, last_active_time, cldctx) =
                 (p[0], p[1], p[2], p[3], p[4]);
-
-            // fst_poke: mark this two-value signal as written.
-            if is_tv {
-                let fp = b
-                    .ins()
-                    .load(self.ptr, mem(), cldctx, layout::CTX_FST_POKE as i32);
-                let w = b.ins().load(I64, mem(), fp, ((idx / 64) * 8) as i32);
-                let nw = b.ins().bor_imm_u(w, 1i64 << (idx % 64));
-                b.ins().store(mem(), nw, fp, ((idx / 64) * 8) as i32);
-            }
 
             // Poke each plugin with this signal id.
             if num_plugins > 0 {
