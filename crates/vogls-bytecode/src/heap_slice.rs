@@ -95,10 +95,6 @@ pub fn execute<const SRC_FV: bool, const FILL_WITH_X: bool, const OFFSET_IS_FV: 
     let heap = state.heap.0.as_ref();
     let src = regs[rs];
     let fst = 'fst: {
-        if OFFSET_IS_FV {
-            break 'fst valid_mask;
-        }
-
         let start_offset = src.wrapping_add(start as u64);
         let end_offset = src.wrapping_add(end as u64);
         let word = (start_offset / 64) as usize;
