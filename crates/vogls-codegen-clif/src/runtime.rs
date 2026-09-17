@@ -49,6 +49,9 @@ pub mod layout {
     pub const CTX_READMEMS: usize = offset_of!(ColdContextT, readmems);
     pub const CTX_READMEM: usize = offset_of!(ColdContextT, readmem);
     pub const CTX_ICOUNT: usize = offset_of!(ColdContextT, icount);
+    pub const CTX_PENDING_EVENT: usize = offset_of!(ColdContextT, pending_event);
+    pub const CTX_PENDING_REGION: usize = offset_of!(ColdContextT, pending_region);
+    pub const CTX_PENDING_TIME: usize = offset_of!(ColdContextT, pending_time);
     pub const CTX_WORLD: usize = offset_of!(ColdContextT, world);
 
     pub const BITSREF_SIZEOF: usize = size_of::<super::BitsRefT>();
@@ -522,6 +525,14 @@ pub struct ColdContextT<'a> {
 
     icount: u64,
 
+    // Scratch slots for grow region / schedule. `pending_region` is the
+    // `WaitRegion` region number (1-based, as in the IR) whose vector the event
+    // goes onto, which is what lets one shared helper serve every region rather
+    // than one helper per region.
+    pending_event: EventT,
+    pending_time: Time,
+    pending_region: u64,
+
     // @TODO: This can be turned into some FFI stable fat pointer type. Until that time, just wrap
     // it in a pointer.
     #[expect(clippy::redundant_allocation)]
@@ -557,12 +568,26 @@ pub struct ScheduleT {
     pub next_time: Time,
 }
 
-#[derive(Clone)]
 pub struct Schedule {
     active_region: Vec<EventT>,
     regions: Box<[Vec<EventT>]>,
     future: Vec<TimedEventT>,
     next_time: Time,
+}
+
+impl Clone for Schedule {
+    fn clone(&self) -> Self {
+        // We need to keep the same capacity as rely on the invariant that `active_region.len() >=
+        // # Procs`.
+        let mut active_region = Vec::with_capacity(self.active_region.capacity());
+        active_region.extend_from_slice(&self.active_region);
+        Self {
+            active_region,
+            regions: self.regions.clone(),
+            future: self.future.clone(),
+            next_time: self.next_time,
+        }
+    }
 }
 
 impl Schedule {
@@ -762,6 +787,14 @@ impl ClifDesign {
         world: &mut dyn World,
         max_time: u64,
     ) -> Result<(), ()> {
+        // The active regions is assumed to be preallocated. This leads to UB if violated.
+        assert!(
+            state.schedule.active_region.capacity() >= self.procs.len(),
+            "active region must be pre-sized to the process count: capacity {} < {} processes",
+            state.schedule.active_region.capacity(),
+            self.procs.len(),
+        );
+
         let empty_active_event_queue_fn = self.entry;
         let heap_wide_ptr = unsafe {
             state
@@ -784,6 +817,9 @@ impl ClifDesign {
             heap_wide_ptr,
             readmem: read_mem,
             icount: state.runtime.instruction_count,
+            pending_event: EventT::from_ptr(std::ptr::null()),
+            pending_time: 0,
+            pending_region: 0,
             world: Box::new(world),
         };
         let return_value = state.schedule.with_t(|schedule| {

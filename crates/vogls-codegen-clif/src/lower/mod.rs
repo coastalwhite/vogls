@@ -120,8 +120,6 @@ struct Sigs {
     event: Signature,
     entry: Signature,
     drive: Signature,
-    push: Signature,
-    sfe: Signature,
     grow: Signature,
     plugin_poke: Signature,
     fmt: Signature,
@@ -143,8 +141,6 @@ impl Sigs {
             event,
             entry: sysv(&[ptr, ptr, I64, ptr, ptr, ptr], Some(types::I32)),
             drive: sysv(&[ptr, I64, ptr, ptr, ptr], None),
-            push: sysv(&[ptr, ptr], None),
-            sfe: sysv(&[ptr, I64, ptr], None),
             grow: sysv(&[ptr], None),
             plugin_poke: sysv(&[ptr, I64], None),
             fmt: sysv(&[ptr, I64, ptr], None),
@@ -329,10 +325,16 @@ struct Compiler<'a> {
     ptr: Type,
     fe: TargetFrontendConfig,
     sigs: Sigs,
-    push: FuncId,
-    sfe: FuncId,
     entry: FuncId,
     tr_funcs: VgHashMap<TemporalRegionKey, FuncId>,
+
+    // Tailcall-able functions that first grow the target region or schedule queue, push an entry
+    // and then go to the next event.
+    //
+    // Making this a tailcall-able function ensures that no stackframe is required in the hotpath.
+    wait_region_grow: Option<FuncId>,
+    wait_time_grow: Option<FuncId>,
+
     drive_fn_ids: Vec<FuncId>,
     /// Listeners per signal (by `RtSignalKey::as_usize`), collected while
     /// lowering `Watch` terminators.
@@ -392,10 +394,10 @@ impl<'a> Compiler<'a> {
             ptr,
             fe,
             sigs,
-            push: FuncId::from_u32(0),
-            sfe: FuncId::from_u32(0),
             entry: FuncId::from_u32(0),
             tr_funcs: VgHashMap::default(),
+            wait_region_grow: None,
+            wait_time_grow: None,
             drive_fn_ids: Vec::new(),
             listeners: (0..num_signals).map(|_| Vec::new()).collect(),
             num_listening: 0,
@@ -423,69 +425,32 @@ impl<'a> Compiler<'a> {
 
     // --- schedule helpers (see runtime.rs layout) ---------------------------
 
-    fn build_push(&mut self, fb: &mut FunctionBuilderContext) {
-        let grow_sig = self.sigs.grow.clone();
-        let mut ctx = self.module.make_context();
-        ctx.func.signature = self.sigs.push.clone();
-        ctx.func.name = UserFuncName::user(0, self.push.as_u32());
-        {
-            let mut b = FunctionBuilder::new(&mut ctx.func, fb);
-            let entry = b.create_block();
-            let grow_bb = b.create_block();
-            let store_bb = b.create_block();
-            b.append_block_params_for_function_params(entry);
-            b.switch_to_block(entry);
-            let vec = b.block_params(entry)[0];
-            let event = b.block_params(entry)[1];
-            let len = b
-                .ins()
-                .load(I64, mem(), vec, FfiVec::<EventT>::LEN_OFFSET as i32);
-            let cap = b
-                .ins()
-                .load(I64, mem(), vec, FfiVec::<EventT>::CAP_OFFSET as i32);
-            let full = b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, len, cap);
-            b.ins().brif(full, grow_bb, &[], store_bb, &[]);
-            b.switch_to_block(grow_bb);
-            let grow_fn = b
-                .ins()
-                .load(self.ptr, mem(), vec, FfiVec::<EventT>::GROW_OFFSET as i32);
-            let gr = b.import_signature(grow_sig);
-            b.ins().call_indirect(gr, grow_fn, &[vec]);
-            b.ins().jump(store_bb, &[]);
-            b.switch_to_block(store_bb);
-            let data = b
-                .ins()
-                .load(self.ptr, mem(), vec, FfiVec::<EventT>::PTR_OFFSET as i32);
-            let esize = b.ins().iconst(self.ptr, layout::EVENT_SIZE as i64);
-            let off = b.ins().imul(len, esize);
-            let elem = b.ins().iadd(data, off);
-            b.ins().store(mem(), event, elem, 0);
-            let one = b.ins().iconst(I64, 1);
-            let nl = b.ins().iadd(len, one);
-            b.ins()
-                .store(mem(), nl, vec, FfiVec::<EventT>::LEN_OFFSET as i32);
-            b.ins().return_(&[]);
-            b.seal_all_blocks();
-            b.finalize(self.fe);
-        }
-        if let Some(writer) = self.emit_clif.as_mut() {
-            let mut writer = writer.lock().unwrap();
-            writeln!(writer, "=== event_vec_push ===\n{}", ctx.func.display()).unwrap();
-        }
-        self.module.define_function(self.push, &mut ctx).unwrap();
-        self.module.clear_context(&mut ctx);
-    }
-
-    /// Inline the body of `event_vec_push` into the *active* region at a call
-    /// site. The active region is pre-sized to the process count and never grows
-    /// (see `ClifDesign::run`'s drain-based region advance and `new_state`'s
-    /// reservation), so we omit the capacity check + grow `call_indirect`
-    /// entirely. This leaves no call on the listener-wake path, which is what
-    /// lets an inlined-drive TR stay leaf (no frame / callee-save prologue).
+    /// Push `event` onto `vec` inline, assuming spare capacity: no capacity
+    /// check and no grow `call_indirect`.
+    ///
+    /// For the *active* region that holds unconditionally: it is pre-sized to
+    /// the process count and never grows (see `ClifDesign::run`'s drain-based
+    /// region advance and `new_state`'s reservation). For the other regions the
+    /// `WaitRegion` site checks capacity first and diverts a full region to its
+    /// `grow_and_push_in_region_then_next_event` helper. Either way no call is
+    /// left on the hot path, which is what lets an inlined-drive or
+    /// `WaitRegion` TR stay leaf (no frame / callee-save prologue).
     fn emit_push_inline(&mut self, b: &mut FunctionBuilder, vec: Value, event: Value) {
         let len = b
             .ins()
             .load(I64, mem(), vec, FfiVec::<EventT>::LEN_OFFSET as i32);
+        self.emit_push_inline_at(b, vec, event, len);
+    }
+
+    /// As [`Self::emit_push_inline`], for a caller that has already loaded
+    /// `vec.length` (the `WaitRegion` capacity check).
+    fn emit_push_inline_at(
+        &mut self,
+        b: &mut FunctionBuilder,
+        vec: Value,
+        event: Value,
+        len: Value,
+    ) {
         let data = b
             .ins()
             .load(self.ptr, mem(), vec, FfiVec::<EventT>::PTR_OFFSET as i32);
@@ -499,78 +464,96 @@ impl<'a> Compiler<'a> {
             .store(mem(), nl, vec, FfiVec::<EventT>::LEN_OFFSET as i32);
     }
 
-    fn build_sfe(&mut self, fb: &mut FunctionBuilderContext) {
-        let grow_sig = self.sigs.grow.clone();
-        let mut ctx = self.module.make_context();
-        ctx.func.signature = self.sigs.sfe.clone();
-        ctx.func.name = UserFuncName::user(0, self.sfe.as_u32());
-        {
-            let mut b = FunctionBuilder::new(&mut ctx.func, fb);
-            let entry = b.create_block();
-            let grow_bb = b.create_block();
-            let store_bb = b.create_block();
-            b.append_block_params_for_function_params(entry);
-            b.switch_to_block(entry);
-            let schedule = b.block_params(entry)[0];
-            let time = b.block_params(entry)[1];
-            let event = b.block_params(entry)[2];
-            let future = ioff(&mut b, self.ptr, schedule, layout::SCHED_FUTURE);
-            let len = b
-                .ins()
-                .load(I64, mem(), future, FfiVec::<EventT>::LEN_OFFSET as i32);
-            let cap = b
-                .ins()
-                .load(I64, mem(), future, FfiVec::<EventT>::CAP_OFFSET as i32);
-            let full = b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, len, cap);
-            b.ins().brif(full, grow_bb, &[], store_bb, &[]);
-            b.switch_to_block(grow_bb);
-            let grow_fn = b.ins().load(
-                self.ptr,
-                mem(),
-                future,
-                FfiVec::<EventT>::GROW_OFFSET as i32,
-            );
-            let gr = b.import_signature(grow_sig);
-            b.ins().call_indirect(gr, grow_fn, &[future]);
-            b.ins().jump(store_bb, &[]);
-            b.switch_to_block(store_bb);
-            let data = b
-                .ins()
-                .load(self.ptr, mem(), future, FfiVec::<EventT>::PTR_OFFSET as i32);
-            let esize = b.ins().iconst(self.ptr, layout::TIMED_EVENT_SIZE as i64);
-            let off = b.ins().imul(len, esize);
-            let elem = b.ins().iadd(data, off);
-            b.ins()
-                .store(mem(), event, elem, layout::TIMED_EVENT_EVENT as i32);
-            b.ins()
-                .store(mem(), time, elem, layout::TIMED_EVENT_TIME as i32);
-            let one = b.ins().iconst(I64, 1);
-            let nl = b.ins().iadd(len, one);
-            b.ins()
-                .store(mem(), nl, future, FfiVec::<EventT>::LEN_OFFSET as i32);
-            // next_time = min(next_time, time); relies on invariant
-            // "future empty => next_time == u64::MAX" (maintained by the driver).
-            let nt = b
-                .ins()
-                .load(I64, mem(), schedule, layout::SCHED_NEXT_TIME as i32);
-            let new_nt = b.ins().umin(nt, time);
-            b.ins()
-                .store(mem(), new_nt, schedule, layout::SCHED_NEXT_TIME as i32);
-            b.ins().return_(&[]);
-            b.seal_all_blocks();
-            b.finalize(self.fe);
-        }
-        if let Some(writer) = self.emit_clif.as_mut() {
-            let mut writer = writer.lock().unwrap();
-            writeln!(
-                writer,
-                "=== schedule_future_event ===\n{}",
-                ctx.func.display()
-            )
-            .unwrap();
-        }
-        self.module.define_function(self.sfe, &mut ctx).unwrap();
-        self.module.clear_context(&mut ctx);
+    /// Schedule `event` at `time` on the future queue, then continue to the
+    /// next active event.
+    ///
+    /// The `WaitRegion` treatment, for `Wait`/`VariableWait`: with spare
+    /// capacity the timed event is stored inline, and a full queue hands
+    /// `(event, time)` to `grow_and_push_future_then_next_event` through the
+    /// cold context and tail-calls it. Growing is the only part that needs a
+    /// call, so the TR keeps none on its hot path.
+    fn emit_schedule_future_event(
+        &mut self,
+        b: &mut FunctionBuilder,
+        params: &Params,
+        event: Value,
+        time: Value,
+    ) {
+        let future = ioff(b, self.ptr, params.schedule, layout::SCHED_FUTURE);
+
+        let grow_bb = b.create_block();
+        let push_bb = b.create_block();
+        b.set_cold_block(grow_bb);
+
+        let len = b
+            .ins()
+            .load(I64, mem(), future, FfiVec::<EventT>::LEN_OFFSET as i32);
+        let cap = b
+            .ins()
+            .load(I64, mem(), future, FfiVec::<EventT>::CAP_OFFSET as i32);
+        let full = b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, len, cap);
+        b.ins().brif(full, grow_bb, &[], push_bb, &[]);
+
+        b.switch_to_block(grow_bb);
+        b.ins().store(
+            mem(),
+            event,
+            params.cldctx,
+            layout::CTX_PENDING_EVENT as i32,
+        );
+        b.ins()
+            .store(mem(), time, params.cldctx, layout::CTX_PENDING_TIME as i32);
+        let helper = match self.wait_time_grow {
+            None => {
+                let id = self.declare(
+                    "grow_and_push_future_then_next_event",
+                    &self.sigs.event.clone(),
+                );
+                self.wait_time_grow = Some(id);
+                id
+            }
+            Some(id) => id,
+        };
+        let helper_ref = self.module.declare_func_in_func(helper, b.func);
+        b.ins().return_call(helper_ref, params.as_slice());
+
+        b.switch_to_block(push_bb);
+        self.emit_push_future_inline_at(b, params.schedule, future, event, time, len);
+        self.tail_pop_next_or_return(b, params);
+    }
+
+    /// Store the timed event `(event, time)` at `future[len]` and bump the
+    /// length, assuming spare capacity, then fold `time` into
+    /// `schedule->next_time`.
+    fn emit_push_future_inline_at(
+        &mut self,
+        b: &mut FunctionBuilder,
+        schedule: Value,
+        future: Value,
+        event: Value,
+        time: Value,
+        len: Value,
+    ) {
+        let data = b
+            .ins()
+            .load(self.ptr, mem(), future, FfiVec::<EventT>::PTR_OFFSET as i32);
+        let off = b.ins().imul_imm_u(len, layout::TIMED_EVENT_SIZE as i64);
+        let elem = b.ins().iadd(data, off);
+        b.ins()
+            .store(mem(), event, elem, layout::TIMED_EVENT_EVENT as i32);
+        b.ins()
+            .store(mem(), time, elem, layout::TIMED_EVENT_TIME as i32);
+        let nl = b.ins().iadd_imm_s(len, 1);
+        b.ins()
+            .store(mem(), nl, future, FfiVec::<EventT>::LEN_OFFSET as i32);
+        // next_time = min(next_time, time); relies on invariant
+        // "future empty => next_time == u64::MAX" (maintained by the driver).
+        let nt = b
+            .ins()
+            .load(I64, mem(), schedule, layout::SCHED_NEXT_TIME as i32);
+        let new_nt = b.ins().umin(nt, time);
+        b.ins()
+            .store(mem(), new_nt, schedule, layout::SCHED_NEXT_TIME as i32);
     }
 
     fn build_entry(&mut self, fb: &mut FunctionBuilderContext) {
@@ -1918,8 +1901,6 @@ pub fn compile<'a>(
     // drive_fn ids, filled below.
     let mut fb = FunctionBuilderContext::new();
 
-    c.push = c.declare("event_vec_push", &c.sigs.push.clone());
-    c.sfe = c.declare("schedule_future_event", &c.sigs.sfe.clone());
     c.entry = c.declare("empty_active_event_queue", &c.sigs.entry.clone());
 
     let event_sig = c.sigs.event.clone();
@@ -1940,8 +1921,6 @@ pub fn compile<'a>(
     }
     c.drive_fn_ids = drive_fn_ids.clone();
 
-    c.build_push(&mut fb);
-    c.build_sfe(&mut fb);
     c.build_entry(&mut fb);
 
     // Pre-pass: collect all listeners (in the same order build_tr discovers
@@ -2003,6 +1982,117 @@ pub fn compile<'a>(
         for (ti, tr) in process.regions.iter().enumerate() {
             c.build_tr(&mut fb, pi, ti, tr.entry(), &bb_phis);
         }
+    }
+
+    // These functions provide tailcall-able variants for `Wait`, `VariableWait` and `WaitRegion`
+    // when the event doesn't fit in the capacity anymore.
+    if let Some(func_id) = c.wait_region_grow {
+        let grow_sig = c.sigs.grow.clone();
+        let mut ctx = c.module.make_context();
+        ctx.func.signature = c.sigs.event.clone();
+        ctx.func.name = UserFuncName::user(0, func_id.as_u32());
+        {
+            let mut b = FunctionBuilder::new(&mut ctx.func, &mut fb);
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            let params = Params::from_block_params(&mut b, entry);
+
+            // region_vec = &schedule->regions[pending_region - 1]
+            let region = b
+                .ins()
+                .load(I64, mem(), params.cldctx, layout::CTX_PENDING_REGION as i32);
+            let regions_base =
+                b.ins()
+                    .load(c.ptr, mem(), params.schedule, layout::SCHED_REGIONS as i32);
+            let idx = b.ins().iadd_imm_s(region, -1);
+            let off = b.ins().imul_imm_u(idx, size_of::<FfiVec<EventT>>() as i64);
+            let region_vec = b.ins().iadd(regions_base, off);
+
+            // (*region_vec->grow)(region_vec)
+            let grow_fn = b.ins().load(
+                c.ptr,
+                mem(),
+                region_vec,
+                FfiVec::<EventT>::GROW_OFFSET as i32,
+            );
+            let gr = b.import_signature(grow_sig);
+            b.ins().call_indirect(gr, grow_fn, &[region_vec]);
+
+            let event = b.ins().load(
+                c.ptr,
+                mem(),
+                params.cldctx,
+                layout::CTX_PENDING_EVENT as i32,
+            );
+            c.emit_push_inline(&mut b, region_vec, event);
+
+            c.tail_pop_next_or_return(&mut b, &params);
+            b.seal_all_blocks();
+            b.finalize(c.fe);
+        }
+        if let Some(writer) = c.emit_clif.as_mut() {
+            let mut writer = writer.lock().unwrap();
+            writeln!(
+                writer,
+                "=== grow_and_push_in_region_then_next_event ===\n{}",
+                ctx.func.display()
+            )
+            .unwrap();
+        }
+        c.module.define_function(func_id, &mut ctx).unwrap();
+        c.module.clear_context(&mut ctx);
+    }
+    if let Some(func_id) = c.wait_time_grow {
+        let grow_sig = c.sigs.grow.clone();
+        let mut ctx = c.module.make_context();
+        ctx.func.signature = c.sigs.event.clone();
+        ctx.func.name = UserFuncName::user(0, func_id.as_u32());
+        {
+            let mut b = FunctionBuilder::new(&mut ctx.func, &mut fb);
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            let params = Params::from_block_params(&mut b, entry);
+
+            let future = ioff(&mut b, c.ptr, params.schedule, layout::SCHED_FUTURE);
+
+            // (*future->grow)(future)
+            let grow_fn = b
+                .ins()
+                .load(c.ptr, mem(), future, FfiVec::<EventT>::GROW_OFFSET as i32);
+            let gr = b.import_signature(grow_sig);
+            b.ins().call_indirect(gr, grow_fn, &[future]);
+
+            let event = b.ins().load(
+                c.ptr,
+                mem(),
+                params.cldctx,
+                layout::CTX_PENDING_EVENT as i32,
+            );
+            let time = b
+                .ins()
+                .load(I64, mem(), params.cldctx, layout::CTX_PENDING_TIME as i32);
+            let len = b
+                .ins()
+                .load(I64, mem(), future, FfiVec::<EventT>::LEN_OFFSET as i32);
+            c.emit_push_future_inline_at(&mut b, params.schedule, future, event, time, len);
+
+            c.tail_pop_next_or_return(&mut b, &params);
+            b.seal_all_blocks();
+            b.finalize(c.fe);
+        }
+        if let Some(writer) = c.emit_clif.as_mut() {
+            let mut writer = writer.lock().unwrap();
+            writeln!(
+                writer,
+                "=== grow_and_push_future_then_next_event ===\n{}",
+                ctx.func.display()
+            )
+            .unwrap();
+        }
+        c.module.define_function(func_id, &mut ctx).unwrap();
+        c.module.clear_context(&mut ctx);
     }
 
     // Generate drive_signal_{i} bodies now that listeners are collected.
