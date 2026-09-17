@@ -3351,7 +3351,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     b.ins().load(ptr, mem(), cldctx, layout::CTX_READMEM as i32);
                                 let mut sig = Signature::new(CallConv::SystemV);
                                 sig.params
-                                    .extend([ptr, I64, types::I8, ptr].map(AbiParam::new));
+                                    .extend([ptr, I64, types::I8, ptr, ptr].map(AbiParam::new));
                                 let sr = b.import_signature(sig);
                                 b.ins().call_indirect(
                                     sr,
@@ -3885,14 +3885,12 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                     } else {
                         let next_time = b.ins().iadd_imm_u(params.time, time.0 as i64);
                         let next_tr_addr = b.ins().func_addr(self.compiler.ptr, next_tr_ref);
-                        let sfe = self
-                            .compiler
-                            .module
-                            .declare_func_in_func(self.compiler.sfe, b.func);
-                        b.ins()
-                            .call(sfe, &[params.schedule, next_time, next_tr_addr]);
-
-                        self.compiler.tail_pop_next_or_return(b, params);
+                        self.compiler.emit_schedule_future_event(
+                            b,
+                            params,
+                            next_tr_addr,
+                            next_time,
+                        );
                     }
                 }
                 T::VariableWait(tr, delay) => {
@@ -3923,13 +3921,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                     b.switch_to_block(later_bb);
                     let next_time = b.ins().iadd(params.time, d);
                     let next_tr_addr = b.ins().func_addr(self.compiler.ptr, next_tr_ref);
-                    let sfe = self
-                        .compiler
-                        .module
-                        .declare_func_in_func(self.compiler.sfe, b.func);
-                    b.ins()
-                        .call(sfe, &[params.schedule, next_time, next_tr_addr]);
-                    self.compiler.tail_pop_next_or_return(b, params);
+                    self.compiler
+                        .emit_schedule_future_event(b, params, next_tr_addr, next_time);
                 }
                 T::WaitRegion(tr, region) => {
                     let next_tr = self.compiler.tr_funcs[tr];
@@ -3938,8 +3931,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                     if *region == 0 {
                         b.ins().return_call(next_tr_ref, params.as_slice());
                     } else {
-                        let next_tr_addr = b.ins().func_addr(self.compiler.ptr, next_tr_ref);
-
                         // regions_base = &schedule->regions
                         let regions_base = b.ins().load(
                             self.compiler.ptr,
@@ -3953,12 +3944,61 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             ((*region as usize - 1) * size_of::<FfiVec<EventT>>()) as i64,
                         );
 
-                        // Call the push function.
-                        let push = self
-                            .compiler
-                            .module
-                            .declare_func_in_func(self.compiler.push, b.func);
-                        b.ins().call(push, &[region_vec, next_tr_addr]);
+                        // Attempt to push into the target region, if there is not enough capacity
+                        // tailcall into a function that first grows the target region and then
+                        // pushes the event.
+                        let grow_bb = b.create_block();
+                        let push_bb = b.create_block();
+                        b.set_cold_block(grow_bb);
+
+                        let len = b.ins().load(
+                            I64,
+                            mem(),
+                            region_vec,
+                            FfiVec::<EventT>::LEN_OFFSET as i32,
+                        );
+                        let cap = b.ins().load(
+                            I64,
+                            mem(),
+                            region_vec,
+                            FfiVec::<EventT>::CAP_OFFSET as i32,
+                        );
+                        let full = b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, len, cap);
+                        b.ins().brif(full, grow_bb, &[], push_bb, &[]);
+
+                        b.switch_to_block(grow_bb);
+                        let cold_tr_addr = b.ins().func_addr(self.compiler.ptr, next_tr_ref);
+                        b.ins().store(
+                            mem(),
+                            cold_tr_addr,
+                            params.cldctx,
+                            layout::CTX_PENDING_EVENT as i32,
+                        );
+                        let region_idx = b.ins().iconst(I64, i64::from(*region));
+                        b.ins().store(
+                            mem(),
+                            region_idx,
+                            params.cldctx,
+                            layout::CTX_PENDING_REGION as i32,
+                        );
+                        let helper = match self.compiler.wait_region_grow {
+                            None => {
+                                let id = self.compiler.declare(
+                                    "grow_and_push_in_region_then_next_event",
+                                    &self.compiler.sigs.event.clone(),
+                                );
+                                self.compiler.wait_region_grow = Some(id);
+                                id
+                            }
+                            Some(id) => id,
+                        };
+                        let helper_ref = self.compiler.module.declare_func_in_func(helper, b.func);
+                        b.ins().return_call(helper_ref, params.as_slice());
+
+                        b.switch_to_block(push_bb);
+                        let next_tr_addr = b.ins().func_addr(self.compiler.ptr, next_tr_ref);
+                        self.compiler
+                            .emit_push_inline_at(b, region_vec, next_tr_addr, len);
                         self.compiler.tail_pop_next_or_return(b, params);
                     }
                 }
