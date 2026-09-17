@@ -1837,7 +1837,7 @@ impl BinaryImmOp {
                 }
             }
             O::Min => {
-                if src.mode() == LogicMode::TwoValue {
+                if src.mode() == LogicMode::FourValue {
                     S::Keep
                 } else if imm.eq_zero() {
                     S::Immediate
@@ -1848,7 +1848,7 @@ impl BinaryImmOp {
                 }
             }
             O::Max => {
-                if src.mode() == LogicMode::TwoValue {
+                if src.mode() == LogicMode::FourValue {
                     S::Keep
                 } else if imm.count_ones() == imm.size().get() {
                     S::Immediate
