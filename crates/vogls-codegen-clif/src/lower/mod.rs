@@ -39,7 +39,7 @@ use vogls_ir::{
     TemporalRegionKey, VariableKey, VectorSize,
 };
 use vogls_runtime::RtSignalKey;
-use vogls_utils::{TableKey, VgHashMap};
+use vogls_utils::VgHashMap;
 
 use crate::ffi::FfiVec;
 use crate::runtime::{ColdContextT, EventT, ScheduleT, layout};
@@ -119,7 +119,6 @@ impl SignalInfo<'_> {
 struct Sigs {
     event: Signature,
     entry: Signature,
-    drive: Signature,
     grow: Signature,
     plugin_poke: Signature,
     fmt: Signature,
@@ -140,7 +139,6 @@ impl Sigs {
         Self {
             event,
             entry: sysv(&[ptr, ptr, I64, ptr, ptr, ptr], Some(types::I32)),
-            drive: sysv(&[ptr, I64, ptr, ptr, ptr], None),
             grow: sysv(&[ptr], None),
             plugin_poke: sysv(&[ptr, I64], None),
             fmt: sysv(&[ptr, I64, ptr], None),
@@ -156,7 +154,6 @@ pub struct Compiled {
     pub module: JITModule,
     pub entry: FuncId,
     pub procs: Vec<FuncId>,
-    pub drive_fns: Vec<FuncId>,
     pub watch_offsets: Vec<u32>,
     pub watch_entries: Vec<(u32, FuncId)>,
     pub num_listening: usize,
@@ -174,12 +171,11 @@ impl Compiled {
         heap_wide_ptr: u64,
         num_regions: u8,
     ) -> crate::runtime::ClifDesign {
-        use crate::runtime::{ClifDesign, ClifWatchers, DriveFn, EmptyActiveEventQueueFn, EventT};
+        use crate::runtime::{ClifDesign, ClifWatchers, EmptyActiveEventQueueFn, EventT};
         let Compiled {
             module,
             entry: entry_id,
             procs: proc_ids,
-            drive_fns: drive_ids,
             watch_offsets,
             watch_entries,
             dyn_fmt_strs,
@@ -195,12 +191,6 @@ impl Compiled {
             .iter()
             .map(|&id| EventT::from_ptr(module.get_finalized_function(id)))
             .collect();
-        let drive_fns = drive_ids
-            .iter()
-            .map(|&id| unsafe {
-                std::mem::transmute::<*const u8, DriveFn>(module.get_finalized_function(id))
-            })
-            .collect();
         let watch_entries = watch_entries
             .iter()
             .map(|&(offset, id)| (offset, EventT::from_ptr(module.get_finalized_function(id))))
@@ -210,7 +200,6 @@ impl Compiled {
             module,
             entry,
             procs,
-            drive_fns,
             watchers,
             dyn_fmt_strs,
             read_mems,
@@ -335,7 +324,6 @@ struct Compiler<'a> {
     wait_region_grow: Option<FuncId>,
     wait_time_grow: Option<FuncId>,
 
-    drive_fn_ids: Vec<FuncId>,
     /// Listeners per signal (by `RtSignalKey::as_usize`), collected while
     /// lowering `Watch` terminators.
     listeners: Vec<Vec<Listener>>,
@@ -398,7 +386,6 @@ impl<'a> Compiler<'a> {
             tr_funcs: VgHashMap::default(),
             wait_region_grow: None,
             wait_time_grow: None,
-            drive_fn_ids: Vec::new(),
             listeners: (0..num_signals).map(|_| Vec::new()).collect(),
             num_listening: 0,
             watch_offset: VgHashMap::default(),
@@ -1522,108 +1509,6 @@ impl<'a> Compiler<'a> {
         let zero = b.ins().iconst(types::I32, 0);
         b.ins().return_(&[zero]);
     }
-
-    /// Generate the per-signal poke routine `drive_signal_{rt}`.
-    fn build_drive_signal(
-        &mut self,
-        fb: &mut FunctionBuilderContext,
-        rt: RtSignalKey,
-        func_id: FuncId,
-    ) {
-        let idx = rt.as_usize();
-        let lupdt = self.info.lupdt_indexes.get(&rt).copied();
-        let listeners: Vec<(u32, FuncId)> = self.listeners[idx]
-            .iter()
-            .map(|l| (l.offset, l.target))
-            .collect();
-        let num_plugins = self.num_plugins;
-        let plugin_sig = self.sigs.plugin_poke.clone();
-
-        let mut ctx = self.module.make_context();
-        if self.emit_disassembly.is_some() {
-            ctx.set_disasm(true);
-        }
-        ctx.func.signature = self.sigs.drive.clone();
-        ctx.func.name = UserFuncName::user(0, func_id.as_u32());
-        {
-            let mut b = FunctionBuilder::new(&mut ctx.func, fb);
-            let entry = b.create_block();
-            b.append_block_params_for_function_params(entry);
-            b.switch_to_block(entry);
-            let p: Vec<Value> = b.block_params(entry).to_vec();
-            let (schedule, time, listening, last_active_time, cldctx) =
-                (p[0], p[1], p[2], p[3], p[4]);
-
-            // Poke each plugin with this signal id.
-            if num_plugins > 0 {
-                let plugins = b
-                    .ins()
-                    .load(self.ptr, mem(), cldctx, layout::CTX_PLUGINS as i32);
-                let poke = b
-                    .ins()
-                    .load(self.ptr, mem(), cldctx, layout::CTX_PLUGIN_POKE as i32);
-                let sig_ref = b.import_signature(plugin_sig);
-                let id = b.ins().iconst(I64, rt.as_u64() as i64);
-                for i in 0..num_plugins {
-                    let pl = b.ins().iadd_imm_u(plugins, (i * PLUGIN_STATE_SIZE) as i64);
-                    b.ins().call_indirect(sig_ref, poke, &[pl, id]);
-                }
-            }
-
-            // last_active_time for signals with a LastUpdateTime reader.
-            if let Some(li) = lupdt {
-                b.ins()
-                    .store(mem(), time, last_active_time, (li * 8) as i32);
-            }
-
-            // Wake armed listeners.
-            for (offset, target) in listeners {
-                let wake = b.create_block();
-                let next = b.create_block();
-                let w = b
-                    .ins()
-                    .load(I64, mem(), listening, ((offset / 64) * 8) as i32);
-                // Test the bit directly (isel: `test $mask, reg; jnz`) rather than
-                // shifting it down first, and keep `w` live for the clear below.
-                let bit = b.ins().band_imm_u(w, 1i64 << (offset % 64));
-                b.ins().brif(bit, wake, &[], next, &[]);
-                b.switch_to_block(wake);
-                let cleared = b.ins().bxor_imm_u(w, 1i64 << (offset % 64));
-                b.ins()
-                    .store(mem(), cleared, listening, ((offset / 64) * 8) as i32);
-                let active = ioff(&mut b, self.ptr, schedule, layout::SCHED_ACTIVE);
-                let fr = self.module.declare_func_in_func(target, b.func);
-                let ta = b.ins().func_addr(self.ptr, fr);
-                self.emit_push_inline(&mut b, active, ta);
-                b.ins().jump(next, &[]);
-                b.switch_to_block(next);
-            }
-
-            b.ins().return_(&[]);
-            b.seal_all_blocks();
-            b.finalize(self.fe);
-        }
-        if let Some(writer) = self.emit_clif.as_mut() {
-            let mut writer = writer.lock().unwrap();
-            writeln!(
-                writer,
-                "=== drive_signal {} ===\n{}",
-                rt.as_usize(),
-                ctx.func.display()
-            )
-            .unwrap();
-        }
-        self.module.define_function(func_id, &mut ctx).unwrap();
-        if let Some(writer) = self.emit_disassembly.as_mut() {
-            let mut writer = writer.lock().unwrap();
-            if let Some(cc) = ctx.compiled_code() {
-                if let Some(d) = cc.vcode.as_ref() {
-                    writeln!(writer, "=== drive_signal {} ===\n{d}", rt.as_usize()).unwrap();
-                }
-            }
-        }
-        self.module.clear_context(&mut ctx);
-    }
 }
 
 /// `size_of::<RuntimePluginState>()` == `size_of::<Box<dyn RuntimePlugin>>()`
@@ -1904,7 +1789,6 @@ pub fn compile<'a>(
     c.entry = c.declare("empty_active_event_queue", &c.sigs.entry.clone());
 
     let event_sig = c.sigs.event.clone();
-    let drive_sig = c.sigs.drive.clone();
     let mut procs = Vec::new();
     for (pi, (_k, process)) in gl.processes.iter().enumerate() {
         let mut fst = None;
@@ -1915,12 +1799,6 @@ pub fn compile<'a>(
         }
         procs.push(fst.unwrap());
     }
-    let mut drive_fn_ids = Vec::new();
-    for i in 0..num_signals {
-        drive_fn_ids.push(c.declare(&format!("drive_signal_{i}"), &drive_sig));
-    }
-    c.drive_fn_ids = drive_fn_ids.clone();
-
     c.build_entry(&mut fb);
 
     // Pre-pass: collect all listeners (in the same order build_tr discovers
@@ -2095,15 +1973,6 @@ pub fn compile<'a>(
         c.module.clear_context(&mut ctx);
     }
 
-    // Generate drive_signal_{i} bodies now that listeners are collected.
-    for i in 0..num_signals {
-        c.build_drive_signal(
-            &mut fb,
-            RtSignalKey::from_usize(i).unwrap(),
-            drive_fn_ids[i],
-        );
-    }
-
     c.module.finalize_definitions().unwrap();
 
     // Flatten the per-signal listener sets into CSR form for `ClifWatchers`.
@@ -2121,7 +1990,6 @@ pub fn compile<'a>(
         module: c.module,
         entry: c.entry,
         procs,
-        drive_fns: drive_fn_ids,
         watch_offsets,
         watch_entries,
         num_listening: c.num_listening as usize,
