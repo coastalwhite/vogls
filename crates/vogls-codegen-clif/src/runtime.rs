@@ -110,10 +110,6 @@ pub type EmptyActiveEventQueueFn = extern "C" fn(
     NonNull<ColdContextT>,
 ) -> ReturnValue;
 
-/// A per-signal "poke" routine used by [`ClifDesign::poke_signal`].
-pub type DriveFn =
-    extern "C" fn(NonNull<ScheduleT>, Time, Listening, LastActiveTime, NonNull<ColdContextT>);
-
 #[repr(C)]
 pub struct BitsRefT {
     size: u32,
@@ -689,8 +685,6 @@ pub struct ClifDesign {
     /// One process entry-point per process, in process order (the `PROCS` array
     /// equivalent).
     procs: Vec<EventT>,
-    #[expect(dead_code)]
-    drive_fns: Vec<DriveFn>,
     /// Per-signal listener wake sets, consulted by [`Self::poke_signal`].
     watchers: ClifWatchers,
     dyn_fmt_strs: Vec<DynFormatString>,
@@ -713,7 +707,6 @@ impl ClifDesign {
         module: JITModule,
         entry: EmptyActiveEventQueueFn,
         procs: Vec<EventT>,
-        drive_fns: Vec<DriveFn>,
         watchers: ClifWatchers,
         dyn_fmt_strs: Vec<DynFormatString>,
         read_mems: Vec<(HeapRef, ReadMem)>,
@@ -728,7 +721,6 @@ impl ClifDesign {
             module: JITCode::new(module),
             entry,
             procs,
-            drive_fns,
             watchers,
             dyn_fmt_strs,
             heap_wide_ptr,
