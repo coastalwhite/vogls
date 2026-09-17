@@ -1,12 +1,6 @@
 proc other {
 *TR0:
-  jump <L1>
-.L1:
   %t0 = vogls.display "Always\n"
-  jump <L2>
-.L2:
   %t1 = vogls.display "Always\n"
-  jump <L3>
-.L3:
   halt
 }

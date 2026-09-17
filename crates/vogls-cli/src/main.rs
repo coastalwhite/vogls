@@ -83,6 +83,8 @@ struct Args {
     no_thread_empty_blocks: bool,
     #[arg(long)]
     no_merge_temporal_regions: bool,
+    #[arg(long)]
+    no_merge_lone_jump_targets: bool,
 
     #[arg(short = 'I', long = "include-dir")]
     include_dirs: Vec<PathBuf>,
@@ -130,6 +132,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         no_peephole_optimization,
         no_thread_empty_blocks,
         no_merge_temporal_regions,
+        no_merge_lone_jump_targets,
         print_vm_map,
         include_dirs,
         profile,
@@ -241,6 +244,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         flags.set(OptFlags::PEEPHOLE, !no_peephole_optimization);
         flags.set(OptFlags::THREAD_EMPTY_BLOCKS, !no_thread_empty_blocks);
         flags.set(OptFlags::MERGE_TEMPORAL_REGIONS, !no_merge_temporal_regions);
+        flags.set(
+            OptFlags::MERGE_LONE_JUMP_TARGETS,
+            !no_merge_lone_jump_targets,
+        );
         lowered.optimize(Optimizations {
             rounds: opt_rounds,
             flags,

@@ -22,7 +22,7 @@ use crate::{
 pub struct OptFlags(u64);
 
 impl OptFlags {
-    pub const ALL: Self = Self(0x3Fu64);
+    pub const ALL: Self = Self(0x7Fu64);
     pub const EMPTY: Self = Self(0u64);
 
     pub const CONSTANT_PROPAGATION: Self = Self(1u64 << 0);
@@ -31,6 +31,7 @@ impl OptFlags {
     pub const PEEPHOLE: Self = Self(1u64 << 3);
     pub const THREAD_EMPTY_BLOCKS: Self = Self(1u64 << 4);
     pub const MERGE_TEMPORAL_REGIONS: Self = Self(1u64 << 5);
+    pub const MERGE_LONE_JUMP_TARGETS: Self = Self(1u64 << 6);
 
     pub fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
@@ -157,6 +158,14 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], opts
             remove_needles_branches(gl, process, &mut scratch_stack, &mut scratch_seen);
             if opts.flags.contains(OptFlags::THREAD_EMPTY_BLOCKS) {
                 simplify_cfg::thread_empty_blocks(
+                    gl,
+                    process,
+                    &mut scratch_stack,
+                    &mut scratch_seen,
+                );
+            }
+            if opts.flags.contains(OptFlags::MERGE_LONE_JUMP_TARGETS) {
+                simplify_cfg::merge_lone_jump_targets(
                     gl,
                     process,
                     &mut scratch_stack,

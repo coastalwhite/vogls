@@ -135,6 +135,70 @@ pub fn thread_empty_blocks(
     }
 }
 
+/// Merge a block into its predecessor when that predecessor is its only one.
+///
+/// Where [`thread_empty_blocks`] rewrites edges *past* a block that carries nothing,
+/// this absorbs a block that carries real instructions but is only ever entered one way: if `A`
+/// ends in `Jump(B)` and `A` is `B`'s only predecessor, `B`'s instructions move into `A` and `A`
+/// takes `B`'s terminator. The jump disappears, and the bigger block gives the per-block passes
+/// (CSE, peephole) more to work with on the next round.
+pub fn merge_lone_jump_targets(
+    gl: &mut GlobalContext,
+    process: ProcessKey,
+    scratch_stack: &mut Vec<BasicBlockKey>,
+    scratch_seen: &mut VgHashSet<BasicBlockKey>,
+) {
+    let blocks = collect_blocks(gl, process, scratch_stack, scratch_seen);
+
+    let mut predecessors = VgHashMap::<BasicBlockKey, u32>::default();
+    for &k in &blocks {
+        gl.bbs[k].terminator.for_each_non_temporal_bb(|s| {
+            *predecessors.entry(s).or_insert(0) += 1;
+        });
+    }
+
+    let mut blocked = VgHashSet::default();
+    for &k in &blocks {
+        for i in &gl.bbs[k].instrs {
+            if let Instruction::Phi(_, srcs) = i {
+                // A phi inside the absorbed block would end up naming the block it now lives in,
+                // and one in a successor would still name the block that is going away.
+                blocked.insert(k);
+                for (bb, _) in srcs.iter() {
+                    blocked.insert(*bb);
+                }
+            }
+        }
+    }
+    for tr in &gl.processes[process].regions {
+        blocked.insert(tr.entry());
+    }
+
+    let mut removed = VgHashSet::default();
+    for &a in &blocks {
+        if removed.contains(&a) {
+            continue;
+        }
+        // Absorbing `b` can expose another lone jump, so keep going until `a` ends in something
+        // else. Only `a` can ever absorb `b`, since `b` has exactly one predecessor.
+        while let BasicBlockTerminator::Jump(b) = gl.bbs[a].terminator {
+            if b == a
+                || removed.contains(&b)
+                || blocked.contains(&b)
+                || predecessors.get(&b).copied() != Some(1)
+            {
+                break;
+            }
+            let Some(block) = gl.bbs.remove(b) else {
+                break;
+            };
+            gl.bbs[a].instrs.extend(block.instrs);
+            gl.bbs[a].terminator = block.terminator;
+            removed.insert(b);
+        }
+    }
+}
+
 /// Drop temporal regions that only hand over to the next one.
 pub fn remove_passthrough_regions(
     gl: &mut GlobalContext,
