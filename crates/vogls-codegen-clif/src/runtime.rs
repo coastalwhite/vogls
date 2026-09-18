@@ -71,7 +71,6 @@ pub mod layout {
     pub const FN_RTL_ERLANG: usize = offset_of!(FnTable, rtl_dist_erlang);
     pub const FN_REAL_OP: usize = offset_of!(FnTable, real_op);
     pub const FN_WIDE_BINOP: usize = offset_of!(FnTable, wide_binop);
-    pub const FN_WIDE_DRIVE: usize = offset_of!(FnTable, wide_drive);
     pub const FN_WIDE_SLICE: usize = offset_of!(FnTable, wide_slice);
 
     /// Size of a `readmems` entry: `(HeapRef, ReadMem)`.
@@ -140,9 +139,6 @@ pub struct FnTable {
     /// Wide / cold binary ops, dispatched by [`WideCode`] on heap-layout word
     /// arrays. `(op, dst, lhs, rhs, dsize, ssize)`.
     wide_binop: extern "C" fn(u32, *mut u64, *const u64, *const u64, u32, u32),
-
-    /// Partial write into a wide signal: (heap, base_word, src, dsize, offset, ssize, is_fv) -> changed.
-    wide_drive: extern "C" fn(*mut u64, u32, *const u64, u32, u32, u32, u32) -> u64,
 
     /// Extract dsize bits at offset from a wide source: (dst, src, offset, dsize, ssize, src_is_fv, fill_with_x).
     wide_slice: extern "C" fn(*mut u64, *const u64, u32, u32, u32, u32, u32),
@@ -396,45 +392,6 @@ extern "C" fn wide_binop(
     }
 }
 
-/// Partial write of a (>64) signal: insert `src` (`ssize` bits) at bit `offset`
-/// into the signal stored at `heap[base_word..]` (`dsize` bits). Four-value
-/// signals set the special and value planes separately. Returns whether the
-/// stored value changed (for the poke decision).
-extern "C" fn wide_drive(
-    heap: *mut u64,
-    base_word: u32,
-    src: *const u64,
-    dsize: u32,
-    offset: u32,
-    ssize: u32,
-    is_fv: u32,
-) -> u64 {
-    use vogls_bits::set_subslice::tv_l_set;
-    let ds = VectorSize::new(dsize).unwrap();
-    let ss = VectorSize::new(ssize).unwrap();
-    let dnw = (dsize as usize).div_ceil(64);
-    let snw = (ssize as usize).div_ceil(64);
-    // SAFETY: the JIT passes a valid heap pointer and word-sized src slot.
-    // `tv_l_set` returns whether it changed anything (only touches affected
-    // words — cheap even for large memory signals).
-    unsafe {
-        let base = heap.add(base_word as usize);
-        if is_fv != 0 {
-            let spc_dst = std::slice::from_raw_parts_mut(base, dnw);
-            let spc_src = std::slice::from_raw_parts(src, snw);
-            let c1 = tv_l_set(spc_dst, spc_src, ds, offset, ss);
-            let val_dst = std::slice::from_raw_parts_mut(base.add(dnw), dnw);
-            let val_src = std::slice::from_raw_parts(src.add(snw), snw);
-            let c2 = tv_l_set(val_dst, val_src, ds, offset, ss);
-            u64::from(c1 || c2)
-        } else {
-            let dst = std::slice::from_raw_parts_mut(base, dnw);
-            let s = std::slice::from_raw_parts(src, snw);
-            u64::from(tv_l_set(dst, s, ds, offset, ss))
-        }
-    }
-}
-
 /// Extract `dsize` bits at bit `offset` from a (wide) source into `dst`.
 /// `src_is_fv` selects the four-value vs two-value source layout; `fill_with_x`
 /// (used by Slice) makes out-of-range bits x and forces a four-value dst.
@@ -487,7 +444,6 @@ impl FnTable {
             rtl_dist_erlang: random_shims::rtl_dist_erlang,
             real_op,
             wide_binop,
-            wide_drive,
             wide_slice,
             set_time_format,
         }
