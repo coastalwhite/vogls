@@ -34,9 +34,10 @@ use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 use vogls_codegen::{HeapBuilder, HeapRef, SixBitSize};
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::time::{TimeFormat, TimeResolution};
+use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, GlobalContext, LogicMode, ShiftImmOp, SignalKey,
-    TemporalRegionKey, VariableKey, VectorSize,
+    TemporalRegionKey, VariableKey, VectorSize, WatchEdge,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::VgHashMap;
@@ -218,6 +219,111 @@ impl Compiled {
 struct Listener {
     offset: u32,
     target: FuncId,
+    /// Which transition wakes it. A directed edge is only ever recorded on a two-valued signal,
+    /// whose drives know the level each bit settles on and so can decide the edge themselves.
+    edge: WatchEdge,
+    /// The bit of the signal a directed edge watches. Always 0 for `WatchEdge::Any`, which covers
+    /// the signal as a whole here.
+    bit: u32,
+}
+
+/// The bits on which a four-valued write took `edge`, going from (`xspc`, `xval`) to
+/// (`yspc`, `yval`).
+///
+/// This is `vogls_bits::edge::fv_posedge_u64` / `fv_negedge_u64` emitted inline, so a transition
+/// through `x` or `z` counts the same way it does everywhere else: `0` to `x` is a posedge, `x` to
+/// `0` a negedge, and `x` to `z` neither.
+fn fv_edge_mask(
+    b: &mut FunctionBuilder,
+    edge: WatchEdge,
+    xspc: Value,
+    xval: Value,
+    yspc: Value,
+    yval: Value,
+) -> Value {
+    let not = |b: &mut FunctionBuilder, v: Value| b.ins().bxor_imm_u(v, -1);
+    // Posedge reads the value planes as they are; negedge is the same shape with both inverted.
+    let (xval, yval) = match edge {
+        WatchEdge::Posedge => (xval, yval),
+        WatchEdge::Negedge => (not(b, xval), not(b, yval)),
+        WatchEdge::Any { .. } => unreachable!("Only a directed edge has a mask"),
+    };
+
+    // Leaving a known level: x was that level, and y is no longer definitely it.
+    let nxval = not(b, xval);
+    let left = b.ins().band(xspc, nxval);
+    let nyspc = not(b, yspc);
+    let reaches = b.ins().bor(nyspc, yval);
+    let left = b.ins().band(left, reaches);
+
+    // Arriving at one: x was not known, and y now definitely is that level.
+    let nxspc = not(b, xspc);
+    let arrived = b.ins().band(nxspc, yspc);
+    let arrived = b.ins().band(arrived, yval);
+
+    b.ins().bor(left, arrived)
+}
+
+/// The bits of a slice written at `off` that moved, as a mask of the *value* written rather than
+/// of the signal -- so it is shifted back down and trimmed to `s_size`.
+///
+/// An unknown offset writes nothing, so it moves nothing.
+fn slice_moved(
+    b: &mut FunctionBuilder,
+    cur: Value,
+    new: Value,
+    off: Value,
+    off_known: Value,
+    s_size: u32,
+) -> Value {
+    let d = b.ins().bxor(new, cur);
+    let d = b.ins().ushr(d, off);
+    let d = maskv(b, d, s_size);
+    let zero = b.ins().iconst(I64, 0);
+    b.ins().select(off_known, d, zero)
+}
+
+/// The changed-bits mask a drive produced: which of the bits it wrote actually moved. This is
+/// what `Instruction::Drive` names as its destination, and it is as wide as the value written.
+///
+/// It is computed before the drive branches on whether anything changed, so it is defined whether
+/// or not the write went ahead -- all zeroes in the latter case, which is exactly right.
+pub enum DriveMask {
+    /// A mask that fits one machine word.
+    Word(Value),
+    /// One word per `u64` of a value too wide for that.
+    Words(Vec<Value>),
+    /// The drive could not say. The destination is left all zeroes.
+    Unknown,
+}
+
+/// What a drive can tell the wake set about the bits it wrote.
+///
+/// That is everything a watch needs: which of those bits moved, and which way. A drive passes
+/// `None` in place of this only where it cannot produce it at all -- it is not a way of saying "no
+/// drive happened", since every drive site has one.
+#[derive(Clone, Copy)]
+enum DrivenBits<'a> {
+    /// A write that fits a single machine word, covering `size` bits from `bit` of the signal.
+    Word {
+        bit: u32,
+        size: u32,
+        /// The value plane, after and before. For a two-valued drive this is the whole value.
+        new: Value,
+        old: Value,
+        /// Four-valued only: the `spc` plane after and before, saying which of those bits hold a
+        /// known `0`/`1` rather than `x` or `z`. A two-valued drive's bits are all known by
+        /// construction.
+        spc: Option<(Value, Value)>,
+    },
+    /// A write into a signal too wide for one word, described word by word: `words[i]` is a word
+    /// index within the signal, `moved[i]` the bits of it that changed and `new[i]` what it
+    /// settled on. Only the words an edge watch looks at need be listed.
+    Words {
+        words: &'a [usize],
+        moved: &'a [Value],
+        new: &'a [Value],
+    },
 }
 
 /// Wide (>64-bit) values with at most this many u64 words are stored in a
@@ -330,7 +436,9 @@ struct Compiler<'a> {
     num_listening: u32,
     /// Offset assigned to each `Watch` terminator, keyed by the BB it terminates.
     /// Populated by the listener pre-pass so drive sites can inline the wake set.
-    watch_offset: VgHashMap<BasicBlockKey, u32>,
+    /// The IR's watch map, shared with the bytecode backend: it numbers every watch and groups
+    /// them by signal, so neither backend invents its own idea of what a watch covers.
+    watch_map: WatchMap,
     num_plugins: usize,
     dyn_fmt_strs: Vec<DynFormatString>,
     read_mems: Vec<(HeapRef, vogls_ir::ReadMem)>,
@@ -357,6 +465,7 @@ impl<'a> Compiler<'a> {
     fn new(
         num_signals: usize,
         num_plugins: usize,
+        watch_map: WatchMap,
         gl: &'a GlobalContext,
         info: SignalInfo<'a>,
         heap_builder: &'a mut HeapBuilder,
@@ -388,7 +497,7 @@ impl<'a> Compiler<'a> {
             wait_time_grow: None,
             listeners: (0..num_signals).map(|_| Vec::new()).collect(),
             num_listening: 0,
-            watch_offset: VgHashMap::default(),
+            watch_map,
             num_plugins,
             dyn_fmt_strs: Vec::new(),
             read_mems: Vec::new(),
@@ -971,7 +1080,7 @@ impl<'a> Compiler<'a> {
         src: Value,
         size: u32,
         offset: u32,
-    ) {
+    ) -> DriveMask {
         let (href, rt, _mode) = self.info.heap_ref(signal);
         let bit = href.offset.bit_offset + offset as usize;
         let word = bit / 64;
@@ -996,6 +1105,8 @@ impl<'a> Compiler<'a> {
             maskv(b, comb, size)
         };
         let changed = b.ins().icmp(IntCC::NotEqual, src, old_field);
+        let moved = b.ins().bxor(src, old_field);
+        let moved = maskv(b, moved, size);
 
         let guard = changed;
 
@@ -1004,7 +1115,14 @@ impl<'a> Compiler<'a> {
         b.ins().brif(guard, do_bb, &[], merge, &[]);
 
         b.switch_to_block(do_bb);
-        self.call_drive_signal(b, params, rt);
+        let drive = Some(DrivenBits::Word {
+            bit: offset,
+            size,
+            new: src,
+            old: old_field,
+            spc: None,
+        });
+        self.call_drive_signal(b, params, rt, drive);
         // store src into the signal field (read-modify-write).
         if !crosses {
             if size == 64 && shift == 0 {
@@ -1045,6 +1163,7 @@ impl<'a> Compiler<'a> {
         }
         b.ins().jump(merge, &[]);
         b.switch_to_block(merge);
+        DriveMask::Word(moved)
     }
 
     /// Full-width four-value drive: poke-if-changed + store.
@@ -1056,7 +1175,7 @@ impl<'a> Compiler<'a> {
         src_val: Value,
         src_spc: Value,
         size: u32,
-    ) {
+    ) -> DriveMask {
         let (href, rt, _) = self.info.heap_ref(signal);
         let heap = params.heap_ptr;
         let word = href.offset.bit_offset / 64;
@@ -1065,6 +1184,7 @@ impl<'a> Compiler<'a> {
         let do_bb = b.create_block();
         let merge = b.create_block();
 
+        let moved;
         if size <= 32 {
             // Packed field of 2*size bits at [shift, shift + 2*size).
             let psize = 2 * size;
@@ -1078,9 +1198,23 @@ impl<'a> Compiler<'a> {
             };
             let old_field = maskv(b, of, psize);
             let changed = b.ins().icmp(IntCC::NotEqual, new_packed, old_field);
+            // Both planes sit in this one word, so a bit moved if either of its halves did.
+            let d = b.ins().bxor(new_packed, old_field);
+            let dv = b.ins().ushr_imm_u(d, size as i64);
+            let m = b.ins().bor(d, dv);
+            moved = maskv(b, m, size);
             b.ins().brif(changed, do_bb, &[], merge, &[]);
             b.switch_to_block(do_bb);
-            self.call_drive_signal(b, params, rt);
+            let old_spc = maskv(b, old_field, size);
+            let old_val = b.ins().ushr_imm_u(old_field, size as i64);
+            let drive = Some(DrivenBits::Word {
+                bit: 0,
+                size,
+                new: src_val,
+                old: old_val,
+                spc: Some((src_spc, old_spc)),
+            });
+            self.call_drive_signal(b, params, rt, drive);
             if psize == 64 && shift == 0 {
                 b.ins().store(mem(), new_packed, heap, (word * 8) as i32);
             } else {
@@ -1108,9 +1242,20 @@ impl<'a> Compiler<'a> {
             let c1 = b.ins().icmp(IntCC::NotEqual, src_spc, old_spc);
             let c2 = b.ins().icmp(IntCC::NotEqual, src_val, old_val);
             let changed = b.ins().bor(c1, c2);
+            let ds = b.ins().bxor(src_spc, old_spc);
+            let dv = b.ins().bxor(src_val, old_val);
+            let m = b.ins().bor(ds, dv);
+            moved = maskv(b, m, size);
             b.ins().brif(changed, do_bb, &[], merge, &[]);
             b.switch_to_block(do_bb);
-            self.call_drive_signal(b, params, rt);
+            let drive = Some(DrivenBits::Word {
+                bit: 0,
+                size,
+                new: src_val,
+                old: old_val,
+                spc: Some((src_spc, old_spc)),
+            });
+            self.call_drive_signal(b, params, rt, drive);
             let ms = maskv(b, src_spc, size);
             let mv = maskv(b, src_val, size);
             b.ins().store(mem(), ms, heap, (word * 8) as i32);
@@ -1118,6 +1263,7 @@ impl<'a> Compiler<'a> {
         }
         b.ins().jump(merge, &[]);
         b.switch_to_block(merge);
+        DriveMask::Word(moved)
     }
 
     /// Inline the drive_signal body (mirrors build_drive_signal) at a drive
@@ -1125,13 +1271,30 @@ impl<'a> Compiler<'a> {
     /// body has no calls (absent plugins), so an inlined-drive TR stays leaf:
     /// no frame, no callee-save spills. Correct listener sets require the
     /// `collect_listeners` pre-pass to have run first.
-    fn call_drive_signal(&mut self, b: &mut FunctionBuilder, params: &Params, rt: RtSignalKey) {
+    ///
+    /// `drive` describes the write that got here, where the caller can: it is what lets an edge
+    /// listener tell whether its bit moved, and which way. A drive that cannot produce it passes
+    /// `None`, and a directed edge listener on such a signal is then unserviceable.
+    fn call_drive_signal(
+        &mut self,
+        b: &mut FunctionBuilder,
+        params: &Params,
+        rt: RtSignalKey,
+        drive: Option<DrivenBits<'_>>,
+    ) {
         let idx = rt.as_usize();
         let lupdt = self.info.lupdt_indexes.get(&rt).copied();
-        let listeners: Vec<(u32, FuncId)> = self.listeners[idx]
+        let listeners: Vec<(u32, FuncId, WatchEdge, u32)> = self.listeners[idx]
             .iter()
-            .map(|l| (l.offset, l.target))
+            .map(|l| (l.offset, l.target, l.edge, l.bit))
             .collect();
+        assert!(
+            drive.is_some()
+                || listeners
+                    .iter()
+                    .all(|(_, _, e, _)| matches!(e, WatchEdge::Any { .. })),
+            "Edge watch on a signal whose drive does not know the level it settles on"
+        );
         let num_plugins = self.num_plugins;
 
         let (schedule, time, listening, last_active_time, cldctx) = (
@@ -1162,14 +1325,100 @@ impl<'a> Compiler<'a> {
                 .store(mem(), time, last_active_time, (li * 8) as i32);
         }
 
-        for (offset, target) in listeners {
+        for (offset, target, edge, watched_bit) in listeners {
+            // @NOTE: A drive that does not reach the watched bit cannot have moved it, so there is
+            // no edge for this listener and nothing to emit at all.
+            if matches!(edge, WatchEdge::Posedge | WatchEdge::Negedge) {
+                match drive.expect("Checked above") {
+                    DrivenBits::Word { bit, size, .. } => {
+                        if watched_bit < bit || watched_bit - bit >= size {
+                            continue;
+                        }
+                    }
+                    DrivenBits::Words { words, .. } => {
+                        if !words.contains(&(watched_bit as usize / 64)) {
+                            continue;
+                        }
+                    }
+                }
+            }
+
             let wake = b.create_block();
             let next = b.create_block();
             let w = b
                 .ins()
                 .load(I64, mem(), listening, ((offset / 64) * 8) as i32);
             let bit = b.ins().band_imm_u(w, 1i64 << (offset % 64));
-            b.ins().brif(bit, wake, &[], next, &[]);
+            // @NOTE: The drive only reaches here once the value actually changed, so a bit that
+            // settles high got there from low: the new level *is* the edge.
+            let guard = match edge {
+                WatchEdge::Any { .. } => bit,
+                WatchEdge::Posedge | WatchEdge::Negedge => {
+                    let armed = b.ins().icmp_imm_u(IntCC::NotEqual, bit, 0);
+                    let invert = |b: &mut FunctionBuilder, v: Value| b.ins().bxor_imm_u(v, -1);
+                    let (took_edge, shift) = match drive.expect("Checked above") {
+                        DrivenBits::Word {
+                            bit,
+                            size,
+                            new,
+                            old,
+                            spc,
+                        } => {
+                            let took = match spc {
+                                // A four-valued bit can move between four levels, so the edge is
+                                // worked out from both planes rather than read off the new value.
+                                Some((new_spc, old_spc)) => {
+                                    fv_edge_mask(b, edge, old_spc, old, new_spc, new)
+                                }
+                                None if size == 1 => {
+                                    // @NOTE: A one-bit drive only gets here once it changed
+                                    // something, and it has only the one bit to have changed: the
+                                    // level it settles on is the edge, nothing further to check.
+                                    match edge {
+                                        WatchEdge::Posedge => new,
+                                        _ => invert(b, new),
+                                    }
+                                }
+                                None => {
+                                    // @NOTE: A wider drive reaches here when *any* of its bits
+                                    // changed, which says nothing about this one. A bit that held
+                                    // its level across the write had no edge, whatever that level.
+                                    let moved = b.ins().bxor(new, old);
+                                    let level = match edge {
+                                        WatchEdge::Posedge => new,
+                                        _ => invert(b, new),
+                                    };
+                                    b.ins().band(moved, level)
+                                }
+                            };
+                            (took, i64::from(watched_bit - bit))
+                        }
+                        // @NOTE: The drive already worked out which bits it moved, word by word,
+                        // to decide whether to poke at all. The watched bit lives in exactly one
+                        // of those words, so only that word's mask is of any interest here.
+                        DrivenBits::Words { words, moved, new } => {
+                            let i = words
+                                .iter()
+                                .position(|&w| w == watched_bit as usize / 64)
+                                .expect("Checked above");
+                            let level = match edge {
+                                WatchEdge::Posedge => new[i],
+                                _ => invert(b, new[i]),
+                            };
+                            let took = b.ins().band(moved[i], level);
+                            (took, i64::from(watched_bit % 64))
+                        }
+                    };
+                    let shifted = match shift {
+                        0 => took_edge,
+                        n => b.ins().ushr_imm_u(took_edge, n),
+                    };
+                    let bit0 = b.ins().band_imm_u(shifted, 1);
+                    let matches = b.ins().icmp_imm_u(IntCC::NotEqual, bit0, 0);
+                    b.ins().band(armed, matches)
+                }
+            };
+            b.ins().brif(guard, wake, &[], next, &[]);
             b.switch_to_block(wake);
             let cleared = b.ins().bxor_imm_u(w, 1i64 << (offset % 64));
             b.ins()
@@ -1236,7 +1485,7 @@ impl<'a> Compiler<'a> {
         vmap: &VgHashMap<VariableKey, Variable>,
         spc_map: &VgHashMap<VariableKey, Variable>,
         wide_map: &WideMap,
-    ) {
+    ) -> DriveMask {
         let (href, rt, mode) = self.info.heap_ref(signal);
         let heap = params.heap_ptr;
         let base_word = (href.offset.bit_offset / 64) as i64;
@@ -1245,10 +1494,33 @@ impl<'a> Compiler<'a> {
         let is_fv = mode == LogicMode::FourValue;
         let src_ptr = self.value_words_ptr(b, src, vmap, spc_map, wide_map, params.cldctx);
 
+        // @NOTE: The shim writes out of line, so what the signal held is gone once it returns.
+        // Only the words an edge watch reads have to survive that, and usually there are none, so
+        // this reloads just those -- rather than the whole signal -- on either side of the call.
+        let watched_words: Vec<usize> = if is_fv {
+            Vec::new()
+        } else {
+            let mut ws: Vec<usize> = self.listeners[rt.as_usize()]
+                .iter()
+                .filter(|l| l.edge.is_directed())
+                .map(|l| l.bit as usize / 64)
+                .collect();
+            ws.sort_unstable();
+            ws.dedup();
+            ws
+        };
+
         let do_bb = b.create_block();
         let merge = b.create_block();
         b.ins().brif(off_known, do_bb, &[], merge, &[]);
         b.switch_to_block(do_bb);
+        let before: Vec<Value> = watched_words
+            .iter()
+            .map(|&w| {
+                b.ins()
+                    .load(I64, mem(), heap, ((base_word as usize + w) * 8) as i32)
+            })
+            .collect();
 
         let cldctx = params.cldctx;
         let fnp = b.ins().load(
@@ -1287,9 +1559,29 @@ impl<'a> Compiler<'a> {
         let drive_bb = b.create_block();
         b.ins().brif(poke, drive_bb, &[], merge, &[]);
         b.switch_to_block(drive_bb);
-        self.call_drive_signal(b, params, rt);
+        let after: Vec<Value> = watched_words
+            .iter()
+            .map(|&w| {
+                b.ins()
+                    .load(I64, mem(), heap, ((base_word as usize + w) * 8) as i32)
+            })
+            .collect();
+        let moved: Vec<Value> = before
+            .iter()
+            .zip(after.iter())
+            .map(|(&x, &y)| b.ins().bxor(x, y))
+            .collect();
+        let drive = (!watched_words.is_empty()).then(|| DrivenBits::Words {
+            words: &watched_words,
+            moved: &moved,
+            new: &after,
+        });
+        self.call_drive_signal(b, params, rt, drive);
         b.ins().jump(merge, &[]);
         b.switch_to_block(merge);
+        // @NOTE: The shim writes out of line and reports only whether anything changed, so which
+        // bits moved is not recoverable here without reading the whole signal back twice.
+        DriveMask::Unknown
     }
 
     /// Extract `d_size` bits at bit `offset` from a wide source (pointed to by
@@ -1401,13 +1693,14 @@ impl<'a> Compiler<'a> {
         s_size: u32,
         off: Value,
         off_known: Value,
-    ) {
+    ) -> DriveMask {
         let (href, rt, mode) = self.info.heap_ref(signal);
         let d_size = self.gl.signals[signal].size.get();
         let heap = params.heap_ptr;
         let base_bit = href.offset.bit_offset;
         let do_bb = b.create_block();
         let merge = b.create_block();
+        let moved;
         if mode == LogicMode::TwoValue {
             let cur = read_heap_field(b, heap, base_bit, d_size);
             // Mask to the field width: an insert whose bits land at/after d_size
@@ -1417,9 +1710,20 @@ impl<'a> Compiler<'a> {
             let new = maskv(b, new, d_size);
             let changed = b.ins().icmp(IntCC::NotEqual, new, cur);
             let guard = b.ins().band(changed, off_known);
+            moved = slice_moved(b, cur, new, off, off_known, s_size);
             b.ins().brif(guard, do_bb, &[], merge, &[]);
             b.switch_to_block(do_bb);
-            self.call_drive_signal(b, params, rt);
+            // @NOTE: Where the insert landed is only known at run time, but it does not need
+            // to be: `new` and `cur` are the whole field either way, so the bits that moved fall
+            // out of comparing them whatever the offset turned out to be.
+            let drive = Some(DrivenBits::Word {
+                bit: 0,
+                size: d_size,
+                new,
+                old: cur,
+                spc: None,
+            });
+            self.call_drive_signal(b, params, rt, drive);
             write_heap_field(b, heap, base_bit, d_size, new);
         } else {
             let (cur_val, cur_spc) = fv_load(b, heap, href, d_size);
@@ -1434,13 +1738,26 @@ impl<'a> Compiler<'a> {
             let c2 = b.ins().icmp(IntCC::NotEqual, new_spc, cur_spc);
             let ch = b.ins().bor(c1, c2);
             let guard = b.ins().band(ch, off_known);
+            let dv = b.ins().bxor(new_val, cur_val);
+            let ds = b.ins().bxor(new_spc, cur_spc);
+            let both = b.ins().bor(dv, ds);
+            let zero = b.ins().iconst(I64, 0);
+            moved = slice_moved(b, zero, both, off, off_known, s_size);
             b.ins().brif(guard, do_bb, &[], merge, &[]);
             b.switch_to_block(do_bb);
-            self.call_drive_signal(b, params, rt);
+            let drive = Some(DrivenBits::Word {
+                bit: 0,
+                size: d_size,
+                new: new_val,
+                old: cur_val,
+                spc: Some((new_spc, cur_spc)),
+            });
+            self.call_drive_signal(b, params, rt, drive);
             self.fv_store(b, heap, href, d_size, new_val, new_spc);
         }
         b.ins().jump(merge, &[]);
         b.switch_to_block(merge);
+        DriveMask::Word(moved)
     }
 
     /// Inline instructions for "get next event or return" as a tailcall.
@@ -1777,6 +2094,7 @@ pub fn compile<'a>(
     let mut c = Compiler::new(
         num_signals,
         num_plugins,
+        WatchMap::new(&gl.bbs),
         gl,
         info,
         heap_builder,
@@ -1801,17 +2119,48 @@ pub fn compile<'a>(
     }
     c.build_entry(&mut fb);
 
-    // Pre-pass: collect all listeners (in the same order build_tr discovers
-    // them) so drive sites can inline the complete wake set.
+    // Listeners come straight from the watch map, which has already numbered every watch and
+    // sorted them by signal, so a drive site can inline its complete wake set.
+    c.num_listening = c.watch_map.num_watches() as u32;
+    let listeners: Vec<(usize, Listener)> = c
+        .watch_map
+        .watchers()
+        .iter()
+        .filter_map(|(condition, index)| {
+            // @NOTE: The watch map covers every block in the slot map, and some belong to no
+            // process: the gate-level uart-aes bench leaves exactly one temporal region detached,
+            // at every optimization level, so this is not the optimizer dropping it. A watch whose
+            // target region no process lists can never be armed, so nothing can wake it and there
+            // is no function to wake it into. It keeps its index -- and so its bit in `listening`
+            // -- which just goes unused. Where those regions come from is still unexplained.
+            let target = *c.tr_funcs.get(&c.watch_map.watch_target(*index))?;
+            let rt = c.info.rt_signal_map[&condition.signal];
+            let listener = Listener {
+                offset: *index as u32,
+                target,
+                edge: condition.edge,
+                bit: condition.offset,
+            };
+            Some((rt.as_usize(), listener))
+        })
+        .collect();
+    for (rt, listener) in listeners {
+        c.listeners[rt].push(listener);
+    }
+
+    // A process is "standing" (armed but not run at t=0) only if at least one watcher does NOT
+    // trigger a t=0 poke -- matches the bytecode filter. Its arming Watch is the first one whose
+    // watch set equals the standing set, in the order `build_tr` discovers them, so this walk has
+    // to keep visiting blocks in that order even though the listeners no longer come from it.
     for (pi, (_k, process)) in gl.processes.iter().enumerate() {
-        // A process is "standing" (armed but not run at t=0) only if at least
-        // one watcher does NOT trigger a t=0 poke — matches the bytecode filter.
-        let standing = process.standing.as_deref().filter(|conditions| {
+        let Some(standing) = process.standing.as_deref().filter(|conditions| {
             conditions
                 .iter()
                 .any(|c| !gl.signals[c.signal].triggers_t0_poke())
-        });
-        for tr in process.regions.iter() {
+        }) else {
+            continue;
+        };
+        'process: for tr in process.regions.iter() {
             let mut seen = vogls_utils::VgHashSet::default();
             seen.insert(tr.entry());
             let mut order = vec![tr.entry()];
@@ -1825,27 +2174,16 @@ pub fn compile<'a>(
                 });
             }
             for &k in &order {
-                if let BasicBlockTerminator::Watch(tr, conditions) = &c.gl.bbs[k].terminator {
-                    let target = c.tr_funcs[tr];
-                    let offset = c.num_listening;
-                    c.num_listening += 1;
-                    for condition in conditions.iter() {
-                        let rt = c.info.rt_signal_map[&condition.signal];
-                        c.listeners[rt.as_usize()].push(Listener { offset, target });
-                    }
-                    c.watch_offset.insert(k, offset);
-                    // If this process is standing and this is its arming Watch (the
-                    // watch set equals the standing set), record the offset so the
-                    // listener is pre-armed at startup instead of the body running.
-                    if let Some(sset) = standing {
-                        if !c.standing_procs.contains(&pi)
-                            && sset.len() == conditions.len()
-                            && sset.iter().zip(conditions.iter()).all(|(a, b)| a == b)
-                        {
-                            c.standing_procs.insert(pi);
-                            c.standing_arm_offsets.push(offset);
-                        }
-                    }
+                let BasicBlockTerminator::Watch(_, conditions) = &c.gl.bbs[k].terminator else {
+                    continue;
+                };
+                if standing.len() == conditions.len()
+                    && standing.iter().zip(conditions.iter()).all(|(a, b)| a == b)
+                {
+                    c.standing_procs.insert(pi);
+                    c.standing_arm_offsets
+                        .push(c.watch_map.get_watch_index(k) as u32);
+                    break 'process;
                 }
             }
         }

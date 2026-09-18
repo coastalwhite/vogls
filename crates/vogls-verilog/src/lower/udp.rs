@@ -128,10 +128,7 @@ pub fn lower_udp<'a>(
                     entry_tr,
                     ins.items
                         .iter()
-                        .map(|&signal| WatchCondition {
-                            signal,
-                            part_select: None,
-                        })
+                        .map(|&signal| WatchCondition::entire_signal(&mctx.gl, signal))
                         .collect(),
                 );
             }
