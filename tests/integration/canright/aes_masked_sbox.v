@@ -142,8 +142,19 @@ module tb();
             for (i = 0; i < 256; i = i + 1) begin
                 #2 data_i = i ^ mask_i;
                 #2
+`ifdef COMPAT
+                if ((sbox_fwd_o ^ sbox_fwd_mask_o) != SBOX_LUT[2047 - 8*i-:8]) begin
+                    $display("Mismatch!");
+                    $finish;
+                end
+                if ((sbox_inv_o ^ sbox_inv_mask_o) != SBOX_INV_LUT[2047 - 8*i-:8]) begin
+                    $display("Mismatch!");
+                    $finish;
+                end
+`else
                 $vogls_assert_eq(sbox_fwd_o ^ sbox_fwd_mask_o, SBOX_LUT    [2047 - 8*i-:8]);
                 $vogls_assert_eq(sbox_inv_o ^ sbox_inv_mask_o, SBOX_INV_LUT[2047 - 8*i-:8]);
+`endif
             end
         end
 	end

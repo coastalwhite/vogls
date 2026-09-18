@@ -21,9 +21,12 @@ module tb();
 endmodule
 `endif
 
+`ifndef __AES_SQUARE_GF2P2
+`define __AES_SQUARE_GF2P2
 module aes_square_gf2p2(data_i, data_o);
     input  [1:0] data_i;
     output [1:0] data_o;
 
     assign data_o = { data_i[0], data_i[1] };
 endmodule
+`endif
