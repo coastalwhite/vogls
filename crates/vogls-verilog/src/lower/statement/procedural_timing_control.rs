@@ -2,7 +2,7 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
     BasicBlockBuilder, Bits, LogicMode, ProcessBuilder, SCALAR_VSIZE, Signal, SignalFlags,
-    TIME_VSIZE, Time, VariableKey,
+    TIME_VSIZE, Time, VariableKey, WatchEdge,
 };
 use vogls_utils::OrderedSet;
 
@@ -163,8 +163,28 @@ pub fn lower<'a>(
                     conditions.push((condition, dummy, net, *expr));
                     signals.push(signal);
                 }
+                // When every entry is an edge on a one-bit two-valued signal, the watch itself
+                // can decide the edge from the level the signal settles on, and any wake is a real
+                // trigger. The whole software check then goes away: no `EVENT_BEFORE` snapshot, no
+                // `posedge`/`negedge`, no re-arm branch.
+                //
+                // It has to be all or nothing. The snapshot is only refreshed when the process
+                // wakes, so filtering the opposite transition out for *some* entries while others
+                // still read the snapshot leaves those stale, and the process stops triggering
+                // altogether.
+                //
+                // Four-valued signals qualify too. `posedge` there also fires on transitions
+                // through x/z, which the settled level alone cannot express -- but both backends
+                // decide the edge from the value planes before and after, not from the level, so
+                // they express it exactly.
+                let watch_decides_edge = !conditions.is_empty()
+                    && conditions.iter().zip(signals.iter()).all(|((c, ..), &s)| {
+                        matches!(c, WatchCondition::Posedge | WatchCondition::Negedge)
+                            && mctx.gl.signals[s].size == SCALAR_VSIZE
+                    });
+
                 let mut before_signals = Vec::new();
-                if contains_edge {
+                if contains_edge && !watch_decides_edge {
                     for (_, v, net, _) in conditions.iter_mut() {
                         *v = net.net.probe(mctx.gl(), &mut builder);
                         let before_signal = mctx.gl.signals.insert(Signal {
@@ -181,9 +201,31 @@ pub fn lower<'a>(
                 }
 
                 let middle_tr = proc_builder.next_temporal_region(mctx.gl());
-                builder.watch_to(mctx.gl(), signals, middle_tr);
+                // @NOTE: Edges only go on the watch when they replace the software check.
+                // Otherwise the check is still the one deciding, and the backends have to keep
+                // waking on both transitions so it gets to run.
+                if watch_decides_edge {
+                    let watch_conditions = signals
+                        .iter()
+                        .zip(conditions.iter())
+                        .map(|(&signal, (condition, ..))| vogls_ir::WatchCondition {
+                            signal,
+                            edge: match condition {
+                                WatchCondition::Posedge => WatchEdge::Posedge,
+                                WatchCondition::Negedge => WatchEdge::Negedge,
+                                WatchCondition::None => {
+                                    unreachable!("Checked by watch_decides_edge")
+                                }
+                            },
+                            offset: 0,
+                        })
+                        .collect();
+                    builder.watch_conditions_to(mctx.gl(), watch_conditions, middle_tr);
+                } else {
+                    builder.watch_to(mctx.gl(), signals, middle_tr);
+                }
                 builder.finished_switch_to(mctx.gl(), middle_tr.entry());
-                if contains_edge {
+                if contains_edge && !watch_decides_edge {
                     let mut acc = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
                     for ((condition, _, _, expr), before_signal) in
                         conditions.into_iter().zip(before_signals)

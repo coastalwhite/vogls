@@ -1083,11 +1083,17 @@ impl BasicBlockBuilder {
     ) {
         let conditions = signals
             .into_iter()
-            .map(|signal| WatchCondition {
-                signal,
-                part_select: None,
-            })
+            .map(|signal| WatchCondition::entire_signal(gl, signal))
             .collect();
+        self.temporal_term_to(gl, BasicBlockTerminator::Watch(tr, conditions))
+    }
+    /// Watch a set of conditions that already carry their own edges and slices.
+    pub fn watch_conditions_to(
+        &mut self,
+        gl: &mut GlobalContext,
+        conditions: Vec<WatchCondition>,
+        tr: TemporalRegionKey,
+    ) {
         self.temporal_term_to(gl, BasicBlockTerminator::Watch(tr, conditions))
     }
     pub fn temporal_jump_to(&mut self, gl: &mut GlobalContext, tr: TemporalRegionKey) {

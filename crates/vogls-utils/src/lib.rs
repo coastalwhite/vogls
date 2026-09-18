@@ -31,3 +31,14 @@ pub fn saturating_rem<T: std::ops::Rem<T, Output = T> + Copy + PartialEq + Defau
     let r = a % b;
     if r == T::default() { b } else { r }
 }
+
+pub fn range_excl_overlap<T: PartialOrd>(a: &std::ops::Range<T>, b: &std::ops::Range<T>) -> bool {
+    (a.start < b.end) & (b.start < a.end)
+}
+
+pub fn range_incl_overlap<T: PartialOrd>(
+    a: &std::ops::RangeInclusive<T>,
+    b: &std::ops::RangeInclusive<T>,
+) -> bool {
+    (a.start() <= b.end()) & (b.start() <= a.end())
+}

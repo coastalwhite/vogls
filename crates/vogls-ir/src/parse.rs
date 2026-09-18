@@ -11,7 +11,7 @@ use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
     Instruction, IntrinsicOp, LogicMode, ProcessKey, ProcessKind, ResizeOp, SCALAR_VSIZE,
     SelectMerge, ShiftImmOp, Signal, SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey, Time,
-    UnaryOp, VariableKey, WatchCondition,
+    UnaryOp, VariableKey, WatchCondition, WatchEdge,
 };
 
 #[derive(Debug)]
@@ -1018,16 +1018,10 @@ fn parse_instr<'a>(
 
             let mut signals = Vec::new();
             c.expect_char('[')?;
-            signals.push(WatchCondition {
-                signal: parse_signal(c, symbols)?,
-                part_select: None,
-            });
+            signals.push(parse_watch_condition(c, symbols, gl)?);
             c.trim_cursor();
             while c.next_if_equals(',') {
-                signals.push(WatchCondition {
-                    signal: parse_signal(c, symbols)?,
-                    part_select: None,
-                });
+                signals.push(parse_watch_condition(c, symbols, gl)?);
                 c.trim_cursor();
             }
             c.expect_char(']')?;
@@ -1109,6 +1103,72 @@ fn parse_signal<'a>(
             error: format!("unknown signal: '{ident}'"),
         })
     })?)
+}
+
+/// Parse one entry of a watch list: a signal, optionally narrowed to `[msb:lsb]` or directed
+/// with `[posedge]` / `[negedge]` (plus a bit offset, where the signal is not a scalar).
+fn parse_watch_condition<'a>(
+    c: &mut Cursor<'a>,
+    symbols: &Symbols<'a>,
+    gl: &GlobalContext,
+) -> Result<WatchCondition, Box<ParseError>> {
+    let signal = parse_signal(c, symbols)?;
+    if !c.next_if_equals('[') {
+        return Ok(WatchCondition::entire_signal(gl, signal));
+    }
+
+    c.trim_cursor();
+    let directed = if c.starts_with("posedge") {
+        Some(WatchEdge::Posedge)
+    } else if c.starts_with("negedge") {
+        Some(WatchEdge::Negedge)
+    } else {
+        None
+    };
+
+    let condition = match directed {
+        Some(edge) => {
+            c.expect_keyword(if edge == WatchEdge::Posedge {
+                "posedge"
+            } else {
+                "negedge"
+            })?;
+            c.trim_cursor();
+            // @NOTE: The offset is only spelled out where it is not implied, which is to say for
+            // an edge on a single bit of a wider signal.
+            let offset = if c.is_next_equal_to(']') {
+                0
+            } else {
+                parse_u32(c)?
+            };
+            WatchCondition {
+                signal,
+                edge,
+                offset,
+            }
+        }
+        None => {
+            let msb = parse_u32(c)?;
+            c.trim_cursor();
+            c.expect_char(':')?;
+            let lsb = parse_u32(c)?;
+            let Some(bit_length) = msb.checked_sub(lsb).and_then(|w| VectorSize::new(w + 1)) else {
+                return Err(Box::new(ParseError {
+                    at: c.offset,
+                    error: format!("watch part select [{msb}:{lsb}] is not a valid range"),
+                }));
+            };
+            WatchCondition {
+                signal,
+                edge: WatchEdge::Any { bit_length },
+                offset: lsb,
+            }
+        }
+    };
+
+    c.trim_cursor();
+    c.expect_char(']')?;
+    Ok(condition)
 }
 
 fn parse_imm(c: &mut Cursor) -> Result<Bits, Box<ParseError>> {

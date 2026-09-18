@@ -54,12 +54,67 @@ pub struct Time(pub u64);
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct WatchCondition {
     pub signal: SignalKey,
-    pub part_select: Option<SignalSlice>,
+    pub edge: WatchEdge,
+    pub offset: u32,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WatchEdge {
+    Any { bit_length: VectorSize },
+    Posedge,
+    Negedge,
 }
 
 impl WatchCondition {
     pub fn to_ord(self) -> impl Ord {
-        (self.signal, self.part_select.map(|p| (p.lsb(), p.width())))
+        (self.signal, self.offset, self.edge)
+    }
+
+    pub fn entire_signal(gl: &GlobalContext, signal: SignalKey) -> Self {
+        Self {
+            signal,
+            edge: WatchEdge::Any {
+                bit_length: gl.signals[signal].size,
+            },
+            offset: 0,
+        }
+    }
+
+    /// This same watch, once its signal has been fused into `part_select` of `to`.
+    ///
+    /// The edge and the width carry over untouched -- a rename does not change which transition of
+    /// which bits the process is waiting for -- and only the offset moves, to where those bits now
+    /// sit within the signal they were folded into.
+    pub fn fused_into(self, to: SignalKey, part_select: Option<SignalSlice>) -> Self {
+        Self {
+            signal: to,
+            edge: self.edge,
+            offset: self.offset + part_select.map_or(0, |p| p.lsb()),
+        }
+    }
+
+    pub fn slice(self) -> SignalSlice {
+        SignalSlice::from_width(self.offset, self.bit_length()).expect("Invalid slice")
+    }
+
+    pub fn bit_length(self) -> VectorSize {
+        self.edge.bit_length()
+    }
+}
+
+impl WatchEdge {
+    /// Does this watch ask for one direction of transition, rather than any change?
+    #[inline(always)]
+    pub fn is_directed(self) -> bool {
+        matches!(self, WatchEdge::Posedge | WatchEdge::Negedge)
+    }
+
+    #[inline(always)]
+    pub fn bit_length(self) -> VectorSize {
+        match self {
+            WatchEdge::Any { bit_length } => bit_length,
+            WatchEdge::Posedge | WatchEdge::Negedge => SCALAR_VSIZE,
+        }
     }
 }
 
@@ -2239,5 +2294,13 @@ impl SignalSlice {
 
     pub fn overlaps(self, other: Self) -> bool {
         self.lsb() <= other.msb() && other.lsb() <= self.msb()
+    }
+
+    pub fn overlapping_slice(self, other: Self) -> Option<SignalSlice> {
+        Self::new(self.msb().min(other.msb()), self.lsb().max(other.lsb()))
+    }
+
+    pub fn contains(self, idx: u32) -> bool {
+        (self.lsb()..=self.msb()).contains(&idx)
     }
 }

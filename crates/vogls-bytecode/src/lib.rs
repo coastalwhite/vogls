@@ -26,6 +26,7 @@ mod stack;
 #[cfg(all(nightly, feature = "tailcall"))]
 mod tailcall;
 mod temporal;
+mod watch;
 
 use reg::{Reg, Regs};
 use vogls_bits::BitsDataRef;
@@ -52,6 +53,7 @@ pub use set::*;
 pub use stack::*;
 pub use temporal::*;
 use vogls_world::World;
+pub use watch::*;
 
 use std::sync::Arc;
 
@@ -75,22 +77,6 @@ pub struct State {
     pub plugins: Vec<RuntimePluginState>,
     pub schedule: Schedule,
     pub listeners: BytecodeListeners,
-}
-
-pub struct BytecodeWatchers {
-    pub offsets: Vec<u64>,
-    pub watchers: Vec<u64>,
-}
-
-impl BytecodeWatchers {
-    #[inline(always)]
-    pub fn get(&self, index: usize) -> &[u64] {
-        let end = index.saturating_add(1);
-        assert!(end < self.offsets.len());
-        let start = self.offsets[index];
-        let end = self.offsets[index.saturating_add(1)];
-        &self.watchers[start as usize..end as usize]
-    }
 }
 
 impl Clone for State {
@@ -464,14 +450,11 @@ opcodes![
     LoadRelUnaligned,
     LoadHeapAligned,
     LoadHeapUnaligned,
-    Wake,
-    WakeMultiple,
     RescheduleWait,
     RescheduleRegion,
     NextEvent,
     RescheduleListen,
     LastUpdateTime,
-    SetLupdt,
     HeapHeapExtend,
     HeapRegExtend,
     HeapHeapTruncate,
@@ -495,7 +478,6 @@ opcodes![
     FvTvHeapSliceX,
     FvFvHeapSlice0,
     FvFvHeapSliceX,
-    PluginPoke,
     RealInstr,
     TvSet1,
     FvSet1,
@@ -1300,7 +1282,7 @@ impl Design {
 
     pub fn poke_signal(&self, state: &mut State, key: RtSignalKey) {
         for index in self.watchers.get(key.as_usize()) {
-            wake(*index, &mut state.schedule, &mut state.listeners);
+            wake_all(*index, &mut state.schedule, &mut state.listeners);
         }
     }
 }

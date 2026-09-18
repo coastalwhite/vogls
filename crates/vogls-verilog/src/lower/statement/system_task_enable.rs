@@ -100,10 +100,7 @@ pub fn lower_system_task_enable<'a>(
 
             let (mut proc_builder, mut strobe_bb_builder) =
                 ProcessBuilder::new(mctx.gl(), ProcessKind::Monitor, origin);
-            let watch_conditions = [WatchCondition {
-                signal: strobe_trigger,
-                part_select: None,
-            }];
+            let watch_conditions = [WatchCondition::entire_signal(&mctx.gl, strobe_trigger)];
 
             let entry_tr = proc_builder.entry();
             let monitor_tr = proc_builder.next_temporal_region(mctx.gl());
@@ -181,20 +178,15 @@ pub fn lower_system_task_enable<'a>(
             let origin = ctx.arenas.get_span(system_task_enable);
             let (mut proc_builder, mut monitor_bb_builder) =
                 ProcessBuilder::new(mctx.gl(), ProcessKind::Monitor, origin);
-            let watch_conditions = [monitor_selected, monitor_enabled];
+            let watch_signals = [monitor_selected, monitor_enabled];
 
             let entry_tr = proc_builder.entry();
             let monitor_tr = proc_builder.next_temporal_region(mctx.gl());
-            proc_builder.set_standing(
-                mctx.gl(),
-                watch_conditions
-                    .iter()
-                    .map(|s| WatchCondition {
-                        signal: *s,
-                        part_select: None,
-                    })
-                    .collect(),
-            );
+            let watch_conditions = watch_signals
+                .iter()
+                .map(|s| WatchCondition::entire_signal(&mctx.gl, *s))
+                .collect();
+            proc_builder.set_standing(mctx.gl(), watch_conditions);
 
             let monitor_enabledv = monitor_bb_builder.probe(mctx.gl(), monitor_enabled);
             let monitor_selectedv = monitor_bb_builder.probe(mctx.gl(), monitor_selected);
@@ -207,7 +199,7 @@ pub fn lower_system_task_enable<'a>(
 
             let (mut true_bb_builder, mut false_bb_builder) =
                 monitor_bb_builder.double_branch(mctx.gl(), do_monitor);
-            false_bb_builder.watch_to(mctx.gl(), watch_conditions.into(), entry_tr);
+            false_bb_builder.watch_to(mctx.gl(), watch_signals.into(), entry_tr);
 
             true_bb_builder.wait_region_to(mctx.gl(), Region::Monitor as u8, monitor_tr);
 
@@ -222,7 +214,7 @@ pub fn lower_system_task_enable<'a>(
 
             let (mut true_bb_builder, mut false_bb_builder) =
                 monitor_bb_builder.double_branch(mctx.gl(), do_monitor);
-            false_bb_builder.watch_to(mctx.gl(), watch_conditions.into(), entry_tr);
+            false_bb_builder.watch_to(mctx.gl(), watch_signals.into(), entry_tr);
 
             let (mut format_string_content, format_string_arguments, format_string_args) =
                 lower_write_arguments(

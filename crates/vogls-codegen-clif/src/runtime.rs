@@ -745,7 +745,7 @@ impl ClifDesign {
         // wake before re-arming), so `num_processes` is a hard upper bound and
         // the active region never needs to grow. The drain-based region advance
         // in `run` preserves this reserved buffer.
-        let mut active_region = Vec::with_capacity(gl.processes.len());
+        let mut active_region = Vec::with_capacity(gl.processes.len() + 1);
         active_region.extend(
             (0..gl.processes.len())
                 .filter(|i| !self.standing_procs.contains(i))
@@ -781,7 +781,7 @@ impl ClifDesign {
     ) -> Result<(), ()> {
         // The active regions is assumed to be preallocated. This leads to UB if violated.
         assert!(
-            state.schedule.active_region.capacity() >= self.procs.len(),
+            state.schedule.active_region.capacity() >= self.procs.len() + 1,
             "active region must be pre-sized to the process count: capacity {} < {} processes",
             state.schedule.active_region.capacity(),
             self.procs.len(),

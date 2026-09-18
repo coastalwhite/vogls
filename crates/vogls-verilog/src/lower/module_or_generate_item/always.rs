@@ -59,10 +59,7 @@ pub fn lower<'a>(
 
         let conditions = signals
             .iter()
-            .map(|&signal| WatchCondition {
-                signal,
-                part_select: None,
-            })
+            .map(|&signal| WatchCondition::entire_signal(&mctx.gl, signal))
             .collect();
 
         bb_builder.watch_to(mctx.gl(), signals.clone().into(), entry_tr);

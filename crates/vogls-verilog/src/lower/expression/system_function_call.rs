@@ -9,6 +9,7 @@ use vogls_ir::{
 use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskIdentifier;
 use crate::ast::{AstId, AstIdRange, AstItem};
+use crate::lower::VSymbolTable;
 use crate::lower::expression::{
     coerce_to_max_size_ty, lower_expr, sign_or_zero_extend, to_real, truncate_or_extend,
 };
@@ -586,6 +587,49 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 VType::UnsignedNet(TIME_VSIZE),
             )))
         }
+        // `$vogls_drive(sig, value)` drives `sig` and evaluates to the changed-bits mask the
+        // drive produced -- which bits of the signal the write actually moved. That mask is what
+        // decides pokes and watch wakes, and is otherwise invisible from Verilog.
+        "vogls_drive" => {
+            let Some(arguments) = arguments.filter(|a| a.len() == 2) else {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_item_span(ident),
+                    "drive requires two arguments",
+                );
+                return Err(());
+            };
+
+            let (target, value) = (arguments.get(0), arguments.get(1));
+            let Expr::Ident(arg_ident, array_exprs, bitslice) = &*target else {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_item_span(ident),
+                    "drive expects an identifier",
+                );
+                return Err(());
+            };
+            if !array_exprs.is_empty() || bitslice.is_some() {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_item_span(ident),
+                    "drive expects a whole signal",
+                );
+                return Err(());
+            }
+
+            let net_symbol = try_resolve_net(
+                scope,
+                &ctx.table,
+                ctx.arenas,
+                *arg_ident,
+                &mut mctx.diagnostics,
+            )?;
+            let signal = net_symbol.net.probe_signal();
+            let size = mctx.gl.signals[signal].size;
+
+            let (value, value_ty) = lower_expr(ctx, mctx, scope, builder, value, None)?;
+            let value = truncate_or_extend(mctx.gl(), builder, value, value_ty, size);
+            let mask = builder.drive_opt_partial(mctx.gl(), signal, value, None);
+            Ok(Some((mask, VType::UnsignedNet(size))))
+        }
         "vogls_slice" => {
             let Some(arguments) = arguments else {
                 mctx.diagnostics.not_yet_implemented(
@@ -652,6 +696,8 @@ pub fn lower_unevaluated_system_function_call<'a>(
 
 pub fn lower_unevaluated_system_function_call_ty<'a>(
     arenas: &'a AstArenas,
+    table: &VSymbolTable,
+    scope: SymbolId,
     diagnostics: &mut Diagnostics,
     expr: AstId<Expr>,
     ident: AstItem<SystemTaskIdentifier>,
@@ -680,6 +726,21 @@ pub fn lower_unevaluated_system_function_call_ty<'a>(
         "vogls_lupdt" => {
             ensure_num_args_equal!(1);
             Ok(Some(VType::UnsignedNet(TIME_VSIZE)))
+        }
+        "vogls_drive" => {
+            ensure_num_args_equal!(2);
+            // The mask is as wide as the signal driven, which the symbol table knows without any
+            // of it having been lowered yet.
+            let target = arguments.unwrap().get(0);
+            let Expr::Ident(arg_ident, ..) = &*target else {
+                diagnostics.not_yet_implemented(
+                    arenas.get_item_span(ident),
+                    "drive expects an identifier",
+                );
+                return Err(());
+            };
+            let net = try_resolve_net(scope, table, arenas, *arg_ident, diagnostics)?;
+            Ok(Some(VType::UnsignedNet(net.ty.bit_length())))
         }
         "vogls_slice" => {
             ensure_num_args_equal!(3);

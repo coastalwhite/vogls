@@ -5,8 +5,8 @@ use std::fmt::{Display, Write};
 use crate::time::TimeFormat;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, IntrinsicOp, LogicMode, Process, RandomKind, ResizeOp, SelectMerge, ShiftImmOp,
-    Signal, Time, UnaryOp, VariableKey, WatchCondition,
+    Instruction, IntrinsicOp, LogicMode, Process, RandomKind, ResizeOp, SCALAR_VSIZE, SelectMerge,
+    ShiftImmOp, Signal, Time, UnaryOp, VariableKey, WatchCondition, WatchEdge,
 };
 
 const INDENT: &str = "  ";
@@ -701,13 +701,33 @@ impl ContextFormat for WatchCondition {
     fn ctx_fmt(&self, f: &mut fmt::Formatter<'_>, ctx: &DisplayContext<'_>) -> fmt::Result {
         let Self {
             signal,
-            part_select,
+            edge,
+            offset,
         } = self;
-        ctx.gl.signals.get(*signal).unwrap().ctx_fmt(f, ctx)?;
-        if let Some(part_select) = part_select {
-            write!(f, "[{}:{}]", part_select.msb(), part_select.lsb())?;
+        let signal = &ctx.gl.signals[*signal];
+        signal.ctx_fmt(f, ctx)?;
+        match edge {
+            WatchEdge::Any { bit_length } => {
+                if *offset != 0 || *bit_length != signal.size {
+                    let part_select = self.slice();
+                    write!(f, "[{}:{}]", part_select.msb(), part_select.lsb())?;
+                }
+            }
+            WatchEdge::Posedge => {
+                f.write_str("[posedge")?;
+                if *offset != 0 || signal.size != SCALAR_VSIZE {
+                    write!(f, " {offset}")?;
+                }
+                f.write_str("]")?;
+            }
+            WatchEdge::Negedge => {
+                f.write_str("[negedge")?;
+                if *offset != 0 || signal.size != SCALAR_VSIZE {
+                    write!(f, " {offset}")?;
+                }
+                f.write_str("]")?;
+            }
         }
-
         Ok(())
     }
 }
