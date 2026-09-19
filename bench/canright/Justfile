@@ -1,8 +1,10 @@
+# `-DCOMPAT` picks the testbench's portable self-check, since `$vogls_assert_eq` is a
+# vogls-only system task.
 verilator-build:
-    verilator ./aes_masked_sbox.v --binary --top-module tb --timing -Wno-UNOPTFLAT
+    verilator ./aes_masked_sbox.v --binary --top-module tb --timing -Wno-UNOPTFLAT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -DCOMPAT
 
 icarus-build:
-    iverilog ./aes_masked_sbox.v -s tb -o icarus
+    iverilog ./aes_masked_sbox.v -s tb -DCOMPAT -o icarus
 
 run-verilator:
     @time just verilator-build
