@@ -4,7 +4,9 @@ use std::{fmt, io};
 
 use slotmap::SlotMap;
 use vogls_bytecode::lower::{LowerBytecodeOptions, lower_process_to_bytecode};
-use vogls_bytecode::{BytecodeEncoder, BytecodeListeners, BytecodeWatchers, Schedule};
+use vogls_bytecode::{
+    BytecodeEncoder, BytecodeListeners, BytecodeWatcher, BytecodeWatchers, Schedule,
+};
 use vogls_codegen::lsra::StackTracker;
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
 use vogls_frontend::ident_table::IdentTable;
@@ -201,7 +203,7 @@ impl LoweredDesign {
             .then(vogls_bytecode::profile::BytecodeDebugInfo::default);
 
         let mut offsets = vec![0u64; rt_signal_map.len() + 1];
-        let mut watchers = vec![0u64; watch_map.watchers().len()];
+        let mut watchers = vec![BytecodeWatcher::default(); watch_map.watchers().len()];
         for (signal, range) in watch_map.map() {
             offsets[rt_signal_map[signal].as_usize()] = range.len() as u64;
         }
@@ -220,7 +222,7 @@ impl LoweredDesign {
                 .zip(
                     watch_map.watchers()[range.clone()]
                         .iter()
-                        .map(|(_, v)| *v as u64),
+                        .map(|(c, v)| BytecodeWatcher::from_condition(*v as u64, *c)),
                 )
                 .for_each(|(d, s)| *d = s);
         }

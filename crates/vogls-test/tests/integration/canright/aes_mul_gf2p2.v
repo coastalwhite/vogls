@@ -107,6 +107,8 @@ module tb();
 endmodule
 `endif
 
+`ifndef __AES_MUL_GF2P2
+`define __AES_MUL_GF2P2
 module aes_mul_gf2p2(a_i, b_i, z_o);
     input [1:0]  a_i;
     input [1:0]  b_i;
@@ -120,3 +122,4 @@ module aes_mul_gf2p2(a_i, b_i, z_o);
 
     assign z_o = { a ^ b, c ^ b };
 endmodule
+`endif
