@@ -13,7 +13,7 @@ run-vogls-interpret:
     vogls tb.v -m tb -DGLS -DICE40_U --timings --opt-rounds=1
 
 run-vogls-compile:
-    vogls tb.v -m tb -C --timings --opt-rounds=1 --vcd dump.vcd
+    vogls tb.v -m tb -C -DGLS -DICE40_U --timings --opt-rounds=1
 
 run-benchmark:
     @./run_benchmarks.sh
