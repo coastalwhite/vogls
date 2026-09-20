@@ -32,7 +32,7 @@ pub struct Assembler {
     current_section: SectionKind,
 
     isa: Isa,
-    handlers: hashbrown::HashMap<&'static str, MnemonicHandler, RandomState>,
+    handlers: hashbrown::HashMap<&'static str, Mnemonic, RandomState>,
 }
 
 enum BranchKind {
@@ -221,6 +221,64 @@ enum TargetLabel {
 
 type MnemonicHandler = fn(&mut Assembler, &mut SourceCursor) -> AssembleResult<()>;
 
+/// One entry of the mnemonic dispatch table.
+///
+/// The base ISA is a hand-written handler per mnemonic; a custom instruction
+/// carries its operand shape and encoder instead, so registering one at runtime
+/// needs no code generation. Both live in the same table, which is what makes a
+/// custom mnemonic indistinguishable from a built-in one at the parse site.
+#[derive(Clone, Copy)]
+enum Mnemonic {
+    Builtin(MnemonicHandler),
+    Custom(CustomOperands),
+}
+
+/// The operand shape of a custom instruction, together with its encoder.
+///
+/// Only the shapes custom instructions have needed so far; a mnemonic taking
+/// anything else has no way to be registered yet.
+#[derive(Clone, Copy)]
+pub enum CustomOperands {
+    /// `mnemonic xd` -- one destination register.
+    Rd(fn(XRegIdent) -> u32),
+    /// `mnemonic xd, xs` -- a destination and one source register.
+    RdRs(fn(XRegIdent, XRegIdent) -> u32),
+}
+
+/// A mnemonic outside the base ISA, as registered with
+/// [`Assembler::add_custom_instruction`].
+///
+/// A design that extends the ISA -- with an opcode of its own, or with a
+/// shorthand that encodes as instructions the ISA already has -- describes each
+/// addition with one of these, and the assembler then accepts it like any other
+/// mnemonic. The encoder returns the instruction word to emit, so what the
+/// mnemonic stands for is entirely up to it.
+#[derive(Clone, Copy)]
+pub struct CustomInstruction {
+    /// The mnemonic to accept: lowercase, no operands.
+    pub mnemonic: &'static str,
+    /// How to parse and encode its operands.
+    pub operands: CustomOperands,
+}
+
+impl CustomInstruction {
+    /// Creates a custom instruction of the form `mnemonic xd`.
+    pub const fn rd(mnemonic: &'static str, encode: fn(XRegIdent) -> u32) -> Self {
+        Self {
+            mnemonic,
+            operands: CustomOperands::Rd(encode),
+        }
+    }
+
+    /// Creates a custom instruction of the form `mnemonic xd, xs`.
+    pub const fn rd_rs(mnemonic: &'static str, encode: fn(XRegIdent, XRegIdent) -> u32) -> Self {
+        Self {
+            mnemonic,
+            operands: CustomOperands::RdRs(encode),
+        }
+    }
+}
+
 impl Assembler {
     pub fn new(isa: Isa, positions: SectionPositions) -> Self {
         let mut handlers = hashbrown::HashMap::default();
@@ -242,6 +300,27 @@ impl Assembler {
             isa,
             handlers,
         }
+    }
+
+    /// Registers instructions outside the base ISA, in builder position.
+    pub fn with_custom_instructions(mut self, instructions: &[CustomInstruction]) -> Self {
+        for instruction in instructions {
+            self.add_custom_instruction(*instruction);
+        }
+        self
+    }
+
+    /// Registers an instruction outside the base ISA.
+    ///
+    /// The mnemonic joins the dispatch table the base ISA lives in, so it has to
+    /// be registered before the source using it is added. A mnemonic the base
+    /// ISA already defines is *replaced*, silently: a design extending the ISA
+    /// is expected to encode into the RISC-V custom opcode space, and nothing
+    /// here checks that it did.
+    pub fn add_custom_instruction(&mut self, instruction: CustomInstruction) -> &mut Self {
+        self.handlers
+            .insert(instruction.mnemonic, Mnemonic::Custom(instruction.operands));
+        self
     }
 
     pub fn with_source(mut self, content: &str) -> AssembleResult<Self> {
@@ -314,10 +393,15 @@ impl Assembler {
                 ".bss" => self.current_section = SectionKind::Bss,
 
                 _ => {
-                    let Some(handler) = self.handlers.get(label) else {
+                    let Some(&mnemonic) = self.handlers.get(label) else {
                         return Err(Box::new(cursor.new_err("unknown mnemonic or directive")));
                     };
-                    (handler)(self, &mut cursor)?;
+                    match mnemonic {
+                        Mnemonic::Builtin(handler) => (handler)(self, &mut cursor)?,
+                        Mnemonic::Custom(operands) => {
+                            self.parse_custom_instr(&mut cursor, operands)?
+                        }
+                    }
                 }
             }
             cursor.take_stmt_end()?;
@@ -466,6 +550,29 @@ impl Assembler {
         cursor.expect_byte(b')')?;
 
         self.text.push_le_u32(new(rs1, rs2, imm));
+        Ok(())
+    }
+
+    fn parse_custom_instr(
+        &mut self,
+        cursor: &mut SourceCursor<'_>,
+        operands: CustomOperands,
+    ) -> AssembleResult<()> {
+        match operands {
+            CustomOperands::Rd(encode) => self.parse_rd(cursor, encode),
+            CustomOperands::RdRs(encode) => self.parse_rd_rs(cursor, encode),
+        }
+    }
+
+    fn parse_rd(
+        &mut self,
+        cursor: &mut SourceCursor<'_>,
+        new: impl Fn(XRegIdent) -> u32,
+    ) -> AssembleResult<()> {
+        cursor.take_separator()?;
+        let rd = cursor.take_gp_register()?;
+
+        self.text.push_le_u32(new(rd));
         Ok(())
     }
 
@@ -799,7 +906,7 @@ impl Assembler {
 
 fn fill_handlers(
     isa: Isa,
-    handlers: &mut hashbrown::HashMap<&'static str, MnemonicHandler, RandomState>,
+    handlers: &mut hashbrown::HashMap<&'static str, Mnemonic, RandomState>,
 ) -> Result<(), Ext> {
     macro_rules! handler {
         ($fn_name:ident, |$asm:ident, $cursor:ident| $handle:expr) => {{
@@ -810,7 +917,7 @@ fn fill_handlers(
                 $handle
                 Ok(())
             }
-            $fn_name
+            Mnemonic::Builtin($fn_name)
         }};
         ($fn_name:ident, @load $name:ty) => {
             handler!($fn_name, |asm, c| {
@@ -1325,5 +1432,80 @@ fn resolve_target_label(
             panic!("local label not found");
         }
         TargetLabel::Global(lbl) => symbols[*lbl].unwrap().1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use self::isa::ExtensionSet;
+    use super::*;
+
+    const RV32I: Isa = Isa {
+        exts: ExtensionSet::EMPTY,
+        xlen: XLen::Rv32,
+    };
+
+    const POSITIONS: SectionPositions = SectionPositions {
+        text: 0,
+        data: 0,
+        rodata: 0,
+        bss: 0,
+    };
+
+    /// `sq xd, xs` in the `custom-0` opcode, `funct3 = 0`.
+    const RD_RS: CustomInstruction = CustomInstruction::rd_rs("sq", |rd, rs| {
+        ((rs as u32) << 15) | ((rd as u32) << 7) | 0xB
+    });
+    /// `one xd` in the `custom-0` opcode, `funct3 = 1`.
+    const RD: CustomInstruction =
+        CustomInstruction::rd("one", |rd| (1 << 12) | ((rd as u32) << 7) | 0xB);
+
+    fn assemble(source: &str, custom: &[CustomInstruction]) -> AssembleResult<Box<[u8]>> {
+        Ok(Assembler::new(RV32I, POSITIONS)
+            .with_custom_instructions(custom)
+            .with_source(source)?
+            .assemble()
+            .text)
+    }
+
+    fn words(text: &[u8]) -> Vec<u32> {
+        text.chunks_exact(4)
+            .map(|c| u32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    }
+
+    #[test]
+    fn a_custom_mnemonic_assembles_like_a_builtin_one() {
+        let text = assemble("addi a0, zero, 3\nsq a1, a0\none a2\n", &[RD_RS, RD]).unwrap();
+        assert_eq!(
+            words(&text)[1..],
+            [
+                ((XRegIdent::A0 as u32) << 15) | ((XRegIdent::A1 as u32) << 7) | 0xB,
+                (1 << 12) | ((XRegIdent::A2 as u32) << 7) | 0xB,
+            ]
+        );
+    }
+
+    #[test]
+    fn an_unregistered_custom_mnemonic_is_unknown() {
+        let err = assemble("sq a1, a0\n", &[]).unwrap_err();
+        assert!(err.to_string().contains("unknown mnemonic"), "{err}");
+    }
+
+    #[test]
+    fn a_custom_mnemonic_takes_exactly_its_operands() {
+        // One operand short, and one too many: the extra one is left sitting
+        // where the end of the statement has to be.
+        assert!(assemble("sq a1\n", &[RD_RS]).is_err());
+        assert!(assemble("one a2, a3\n", &[RD]).is_err());
+    }
+
+    #[test]
+    fn registering_a_builtin_mnemonic_replaces_it() {
+        // Documented, and worth pinning down: a design may redefine a mnemonic,
+        // and nothing warns it that it did.
+        let shadow = CustomInstruction::rd("addi", |rd| ((rd as u32) << 7) | 0xB);
+        let text = assemble("addi a0\n", &[shadow]).unwrap();
+        assert_eq!(words(&text), [((XRegIdent::A0 as u32) << 7) | 0xB]);
     }
 }

@@ -94,6 +94,29 @@ for (const config of configurations) {
     traces.push(JSON.stringify(trace.traces));
 }
 
+// The mnemonics this plugin adds on top of the base ISA. They are shorthands
+// for instructions the design already runs, so the same program written either
+// way has to assemble, trace and disassemble identically -- and the manifest has
+// to name them, which is what the editor highlights.
+console.log("custom instructions");
+check(
+    "declares them in its manifest",
+    JSON.stringify(manifest.instructions) === '["square","l1"]',
+    JSON.stringify(manifest.instructions),
+);
+
+const shorthand = assembly
+    .replace("mul  t0, s1, s1", "square t0, s1")
+    .replace("li   s1, 1", "l1   s1");
+check("the fixture is written both ways", shorthand !== assembly);
+
+const defaults = Object.fromEntries(manifest.fields.map((f) => [f.id, f.default === true]));
+check(
+    "trace like the instructions they stand for",
+    canonical(plugin.run(shorthand, defaults, cycles)) ===
+        canonical(plugin.run(assembly, defaults, cycles)),
+);
+
 // This repo's Hazard3 instance traps a few cycles out of reset whatever it is
 // given -- a pure `addi` program traces the same as the demo one -- so its
 // output cannot show that a knob was honoured. The echo fixture below pins

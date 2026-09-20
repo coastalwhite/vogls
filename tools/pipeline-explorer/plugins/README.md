@@ -66,6 +66,50 @@ depends on `pipeline-explorer` with `default-features = false`, which drops the
 pipeline-explorer = { path = "../..", default-features = false, features = ["hazard3"] }
 ```
 
+## Custom instructions
+
+A plugin may accept mnemonics the base ISA does not have. `trva` dispatches
+mnemonics through a table a plugin can add to, and
+`pipeline_explorer_plugin::custom` holds the entries this repo ships:
+
+| mnemonic | assembles to |
+| --- | --- |
+| `square xd, xs` | `mul xd, xs, xs` |
+| `l1 xd` | `li xd, 1` |
+
+They are shorthands, not new opcodes: they encode as instructions the design
+already runs, so no RTL has to change and they behave exactly like what they
+stand for. `square` is a `mul`, so it needs the M extension like any other.
+
+The [`hazard3`](hazard3) plugin registers them, which is all it takes:
+
+```rust
+use pipeline_explorer_plugin::custom;
+
+let value = get_hazard3_trace(assembly, num_cycles, &config, custom::ALL)?;
+```
+
+Registering is per design and nothing does it on a plugin's behalf — the
+explorer's own Hazard3 entry passes none, so `square` there is still an unknown
+mnemonic. A design that wants different shorthands does not have to take these:
+`CustomInstruction::rd` and `::rd_rs` take a mnemonic and an encoder, for the
+`mnemonic xd` and `mnemonic xd, xs` shapes. The encoder returns the word to
+emit, so the mnemonic can stand for whatever the design pleases. A mnemonic the
+base ISA already defines is silently replaced.
+
+Because they assemble to ordinary instructions, the listing shows what they
+became — `square t0, s1` reads back as `mul t0,s1,s1` — the way the base ISA's
+own pseudo-instructions do.
+
+Finally, a manifest may name its mnemonics so the editor highlights them:
+
+```json
+{ "abi": 1, "id": "my-cpu", "name": "My CPU", "fields": [],
+  "instructions": ["square", "l1"] }
+```
+
+That list is cosmetic. What makes a mnemonic assemble is the registration above.
+
 ## Testing
 
 ```sh

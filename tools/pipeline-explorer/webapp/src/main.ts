@@ -1,5 +1,5 @@
 import "./style.css";
-import { render as renderEditor } from "./editor.ts";
+import { render as renderEditor, setCustomInstructions } from "./editor.ts";
 import { colors } from "./colors.ts";
 import initialAsm from "./initialAsm.S?raw";
 import type { Trace } from "./types.ts";
@@ -178,6 +178,13 @@ const procConfigFields: Record<string, PluginField[]> = {
     ],
 };
 
+/**
+ * The mnemonics each design accepts on top of the base ISA, taken from an
+ * uploaded plugin's manifest. The bundled designs implement the base ISA and
+ * nothing else, so they have no entry.
+ */
+const procCustomInstructions: Record<string, string[]> = {};
+
 function runSim() {
     const assembly = assemblyTextarea.value;
     const proc = procSelect.value;
@@ -250,6 +257,11 @@ function onProcSelect() {
 
     chipMenuName.innerText =
         procSelect.options[procSelect.selectedIndex]?.text ?? procSelectValue;
+    // The editor highlights the design's own instructions, so switching designs
+    // has to re-highlight whatever is already typed.
+    setCustomInstructions(procCustomInstructions[procSelectValue] ?? []);
+    renderEditor();
+
     const fields = procConfigFields[procSelectValue] ?? [];
     let s =`<table><colgroup><col span="1" style="width: 50%;"><col span="1" style="width: 50%;"></colgroup>`;
     for (const field of fields) {
@@ -288,6 +300,7 @@ function onProcSelect() {
  */
 function addPlugin(proc: string, manifest: PluginManifest) {
     procConfigFields[proc] = manifest.fields;
+    procCustomInstructions[proc] = manifest.instructions;
 
     let option = Array.from(procSelect.options).find((o) => o.value === proc);
     if (option === undefined) {

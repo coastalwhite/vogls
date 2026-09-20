@@ -39,9 +39,15 @@
 //!   "name": "Hazard3",
 //!   "fields": [
 //!     { "id": "extension_m", "type": "checkbox", "title": "Enable M Extension", "default": true }
-//!   ]
+//!   ],
+//!   "instructions": ["square", "l1"]
 //! }
 //! ```
+//!
+//! `instructions` is optional and names the mnemonics this design accepts on top
+//! of the base ISA, so the webapp's editor highlights them like any other
+//! instruction. It is cosmetic: what makes them assemble is the plugin
+//! registering them with its assembler, which [`custom`] covers.
 //!
 //! Field types are `checkbox` (a bool) and `number`. The host passes the
 //! configuration to `pe_run` as an array of little-endian `u32`s holding one
@@ -71,6 +77,12 @@
 //! 1-based index of the instruction slot occupying the stage.
 
 use std::alloc::Layout;
+
+pub mod custom;
+
+/// The assembler, re-exported so a plugin defining a mnemonic of its own does
+/// not have to depend on it separately. See [`custom`].
+pub use trva;
 
 /// ABI version implemented by this crate.
 ///
@@ -323,8 +335,11 @@ mod tests {
     /// Reads a host buffer back the way the webapp's loader does.
     fn take_host_buffer(ptr: usize) -> Vec<u8> {
         let base = ptr as *const u8;
-        let len =
-            u32::from_le_bytes(unsafe { std::slice::from_raw_parts(base, 4) }.try_into().unwrap());
+        let len = u32::from_le_bytes(
+            unsafe { std::slice::from_raw_parts(base, 4) }
+                .try_into()
+                .unwrap(),
+        );
         let payload = unsafe { std::slice::from_raw_parts(base.add(4), len as usize) }.to_vec();
         unsafe { free_buffer(ptr) };
         payload
@@ -346,7 +361,10 @@ mod tests {
     fn alloc_round_trips() {
         let ptr = alloc(8);
         unsafe { std::ptr::write_bytes(ptr as *mut u8, 0xab, 8) };
-        assert_eq!(unsafe { std::slice::from_raw_parts(ptr as *const u8, 8) }, [0xab; 8]);
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(ptr as *const u8, 8) },
+            [0xab; 8]
+        );
         unsafe { dealloc(ptr, 8) };
         // A zero-length request is legal and must survive being freed.
         unsafe { dealloc(alloc(0), 0) };
@@ -396,8 +414,7 @@ mod tests {
             std::ptr::copy_nonoverlapping(cfg_bytes.as_ptr(), cfg_ptr as *mut u8, cfg_bytes.len())
         };
 
-        let out =
-            unsafe { run_abi(asm_ptr, asm.len(), cfg_ptr, cfg.len(), num_cycles, run) };
+        let out = unsafe { run_abi(asm_ptr, asm.len(), cfg_ptr, cfg.len(), num_cycles, run) };
         unsafe { dealloc(asm_ptr, asm.len()) };
         unsafe { dealloc(cfg_ptr, cfg_bytes.len()) };
         take_host_buffer(out)

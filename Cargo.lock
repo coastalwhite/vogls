@@ -638,6 +638,9 @@ dependencies = [
 [[package]]
 name = "pipeline-explorer-plugin"
 version = "0.1.0"
+dependencies = [
+ "trva",
+]
 
 [[package]]
 name = "pipeline-explorer-plugin-echo"

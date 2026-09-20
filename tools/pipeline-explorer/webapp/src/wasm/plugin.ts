@@ -22,6 +22,12 @@ export type PluginManifest = {
     id: string;
     name: string;
     fields: PluginField[];
+    /**
+     * Mnemonics this design accepts on top of the base ISA, so the editor
+     * highlights them. Purely cosmetic: what makes them assemble is the plugin
+     * registering them with its assembler.
+     */
+    instructions: string[];
 };
 
 type PluginExports = {
@@ -156,7 +162,33 @@ function parseManifest(json: string): PluginManifest {
         };
     });
 
-    return { abi: PLUGIN_ABI_VERSION, id: manifest.id, name: manifest.name, fields };
+    return {
+        abi: PLUGIN_ABI_VERSION,
+        id: manifest.id,
+        name: manifest.name,
+        fields,
+        instructions: parseInstructions(manifest.instructions),
+    };
+}
+
+/**
+ * Reads the optional `instructions` list. A design without instructions of its
+ * own simply has none, so a missing list is not an error -- but a malformed one
+ * is, rather than being quietly dropped into the editor's highlighting.
+ */
+function parseInstructions(raw: unknown): string[] {
+    if (raw === undefined) return [];
+    if (!Array.isArray(raw)) {
+        throw new Error("plugin manifest 'instructions' is not an array");
+    }
+    return raw.map((mnemonic: unknown, i: number): string => {
+        // A mnemonic is one word: anything else could not be typed as an
+        // instruction in the first place.
+        if (typeof mnemonic !== "string" || !/^[^\s,]+$/.test(mnemonic)) {
+            throw new Error(`plugin manifest instruction ${i} is not a mnemonic`);
+        }
+        return mnemonic;
+    });
 }
 
 /** One uploaded design, ready to be run. */

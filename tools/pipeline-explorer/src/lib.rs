@@ -2,7 +2,7 @@ use std::fmt;
 
 use trva::error::AssembleError;
 use trva::isa::{ExtensionSet, Isa};
-use trva::{Assembler, SectionPositions};
+use trva::{Assembler, CustomInstruction, SectionPositions};
 use vogls::design::{Arena, Macro};
 use vogls::frontend::symbol_table::SymbolId;
 use vogls::ir::Mode;
@@ -419,10 +419,15 @@ pub fn get_ibex_trace(
 }
 
 #[cfg(feature = "hazard3")]
+/// `custom` are mnemonics to accept on top of the base ISA, for a caller
+/// extending what this design's programs may be written in; see
+/// `pipeline_explorer_plugin::custom`. The webapp's own Hazard3 entry passes
+/// none, so only a plugin that asks for them gets them.
 pub fn get_hazard3_trace(
     assembly: &str,
     num_cycles: u32,
     cfg: &Hazard3Config,
+    custom: &[CustomInstruction],
 ) -> Result<ReturnValue, TraceError> {
     let mut builder = vogls::DesignBuilder::new();
     let mut arena = Arena::default();
@@ -497,6 +502,7 @@ pub fn get_hazard3_trace(
         bss: 1024u32,
     };
     let program = Assembler::new(RV32IM, positions)
+        .with_custom_instructions(custom)
         .with_source(assembly)?
         .assemble();
 

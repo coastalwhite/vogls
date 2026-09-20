@@ -86,7 +86,9 @@ pub fn get_js_hazard3_trace(
         branch_predictor: get_bool!(config, "branch_predictor"),
         fast_branchcmp: get_bool!(config, "fast_branchcmp"),
     };
-    let trace = crate::get_hazard3_trace(assembly, num_cycles, &config)?;
+    // The bundled entry is the plain design: mnemonics beyond the base ISA are
+    // something a plugin brings with it.
+    let trace = crate::get_hazard3_trace(assembly, num_cycles, &config, &[])?;
     Ok(trace.into_object())
 }
 

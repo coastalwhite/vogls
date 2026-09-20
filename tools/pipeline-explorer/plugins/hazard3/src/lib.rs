@@ -13,10 +13,12 @@
 //! ```
 
 use pipeline_explorer::{Hazard3Config, get_hazard3_trace};
-use pipeline_explorer_plugin::{Trace, cfg_bool};
+use pipeline_explorer_plugin::{Trace, cfg_bool, custom};
 
 /// The knobs the webapp renders, in the order `run` reads them out of the
-/// configuration array.
+/// configuration array, plus the mnemonics this plugin accepts on top of the
+/// base ISA. `instructions` is what the editor highlights; [`custom::ALL`] in
+/// `run` is what assembles them.
 pub const MANIFEST: &str = r#"{
   "abi": 1,
   "id": "hazard3",
@@ -29,7 +31,8 @@ pub const MANIFEST: &str = r#"{
     { "id": "reduced_bypass",  "type": "checkbox", "title": "Reduced Bypass Network",      "default": false },
     { "id": "branch_predictor","type": "checkbox", "title": "Branch Predictor",            "default": false },
     { "id": "fast_branchcmp",  "type": "checkbox", "title": "Fast Branch Compare",         "default": true  }
-  ]
+  ],
+  "instructions": ["square", "l1"]
 }"#;
 
 /// Reads the positional configuration back into the shape the design code
@@ -48,8 +51,13 @@ pub fn config_from(cfg: &[u32]) -> Hazard3Config {
 
 /// Assembles `assembly`, runs it on Hazard3, and reports where each
 /// instruction sat in the pipeline every cycle.
+///
+/// The custom mnemonics are registered here rather than implemented in the
+/// design: they are shorthands for instructions Hazard3 already runs, so the
+/// trace shows what they stand for. `square` is a `mul`, and so needs the M
+/// extension like any other.
 pub fn run(assembly: &str, cfg: &[u32], num_cycles: u32) -> Result<Trace, String> {
-    let value = get_hazard3_trace(assembly, num_cycles, &config_from(cfg))
+    let value = get_hazard3_trace(assembly, num_cycles, &config_from(cfg), custom::ALL)
         .map_err(|err| err.to_string())?;
     Ok(Trace {
         instructions: value.instructions,

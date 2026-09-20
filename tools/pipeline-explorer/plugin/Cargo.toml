@@ -6,3 +6,9 @@ description = "Host ABI for uploadable pipeline-explorer design plugins"
 
 [lib]
 name = "pipeline_explorer_plugin"
+
+[dependencies]
+# The assembler, for the custom instructions in `custom`: a plugin assembling
+# its own program needs it anyway, and both sides have to agree on how a
+# mnemonic is registered.
+trva = { workspace = true }

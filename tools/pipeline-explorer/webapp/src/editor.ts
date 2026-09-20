@@ -47,22 +47,37 @@ const INSTR = `
   csrr csrw csrs csrc csrwi csrsi csrci
   rdcycle rdtime rdinstret
   mret sret wfi sfence.vma
-`.trim().split(/\s+/).sort((x, y) => y.length - x.length);  // fence.i before fence
+`.trim().split(/\s+/);
  
 /* ---------- highlighting ---------- */
  
 const esc   = s => s.replace(/[&<>]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[c]));
 const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  
-const RULES = new RegExp(
+// Longest-first, so `fence.i` wins over `fence` -- and so a custom instruction
+// built on top of a base mnemonic is not cut short by it.
+const byLength = names => [...names].sort((x, y) => y.length - x.length);
+
+const buildRules = instructions => new RegExp(
     '(#[^\\n]*|\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/)'   // 1 comment
   + '|("(?:[^"\\\\\\n]|\\\\.)*")'                        // 2 string
   + '|((?:\\d+|[.A-Za-z_$][\\w$.]*):)'                   // 3 label
   + '|(\\.[A-Za-z_][\\w.]*)'                             // 4 directive
   + '|\\b(' + REGS.map(reEsc).join('|') + ')\\b'         // 5 register
-  + '|\\b(' + INSTR.map(reEsc).join('|') + ')\\b'        // 6 instruction
+  + '|\\b(' + instructions.map(reEsc).join('|') + ')\\b' // 6 instruction
   + '|\\b(0[xX][0-9a-fA-F]+|\\d+)\\b'                    // 7 number
 , 'g');
+
+let RULES = buildRules(byLength(INSTR));
+
+/**
+ * Sets the mnemonics the current design accepts on top of the base ISA: an
+ * uploaded plugin's `instructions` manifest list. They highlight like any other
+ * instruction. The caller re-renders.
+ */
+export function setCustomInstructions(mnemonics) {
+  RULES = buildRules(byLength([...INSTR, ...mnemonics]));
+}
  
 export function render() {
   // trailing newline so the last empty line still has height
