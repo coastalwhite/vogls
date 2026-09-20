@@ -9,3 +9,10 @@ proptest-regressions/
 /*.dot
 __pycache__
 *.so
+
+# Benchmark outputs (bench/run-all.sh, `nix run .#bench`)
+bench/*/log-*
+bench/*/timings.csv
+bench/*/obj_dir/
+bench/*/icarus
+bench/*/dump.vcd
