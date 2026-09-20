@@ -56,11 +56,9 @@ plt.ylabel("T-Test score")
 plt.axhline(y=4.5, color="r", linestyle="-")
 plt.axhline(y=-4.5, color="r", linestyle="-")
 plt.tight_layout()
-plt.savefig("out.svg")
-os.system("inkview out.svg")
+plt.savefig("tvla.svg")
 
 
 with open("plan.dot", "w") as f:
     f.write(tvla.to_dot_graph())
 os.system("dot -o plan.svg -Tsvg plan.dot")
-os.system("inkview plan.svg")
