@@ -42,7 +42,11 @@
             };
             rustToolchain = pkgs.rust-bin.stable.latest.default.override {
               targets = [ buildTarget ];
-              extensions = [ "rust-src" "llvm-tools-preview" "rust-analyzer" ];
+              extensions = [
+                "rust-src"
+                "llvm-tools-preview"
+                "rust-analyzer"
+              ];
             };
             rustPlatform = pkgs.makeRustPlatform {
               cargo = rustToolchain;
@@ -56,10 +60,10 @@
             };
 
             devShells.nightly = pkgs.mkShell {
-              packages = with pkgs; [
+              packages = [
                 rustToolchainNightly
               ];
-						};
+            };
 
             devShells.default = pkgs.mkShell {
               packages = with pkgs; [
@@ -89,18 +93,19 @@
               ];
 
               postVenvCreation = ''
+                echo 'HELLO WORLD!'
                 unset CONDA_PREFIX 
                 uv pip install -r crates/vogls-python/pyproject.toml
+              '';
+              venvDir = ".venv";
+              postShellHook = ''
+                export RUST_SRC_PATH="${rustToolchain}/lib/rustlib/src/rust/library"
                 export NIX_LD_LIBRARY_PATH="${
                   pkgs.lib.makeLibraryPath [
                     stdenv.cc.cc.lib
                   ]
                 }:$PYTHON_SHARED_LIB"
                 export LD_LIBRARY_PATH="${stdenv.cc.cc.lib}/lib:$PYTHON_SHARED_LIB"
-              '';
-              venvDir = ".venv";
-              shellHook = ''
-                export RUST_SRC_PATH="${rustToolchain}/lib/rustlib/src/rust/library"
               '';
             };
 
@@ -117,7 +122,7 @@
                 pythonPlatform.build
 
                 just
-								uv
+                uv
                 rustToolchain
                 wasm-bindgen-cli_0_2_114
 
