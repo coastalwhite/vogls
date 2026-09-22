@@ -368,6 +368,8 @@ pub fn get_expr_type<'a>(
                 if !item.dispatched {
                     match system_function_call::lower_unevaluated_system_function_call_ty(
                         arenas,
+                        table,
+                        scope,
                         diagnostics,
                         expr,
                         ident,

@@ -72,7 +72,7 @@ use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::VcdValue;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, Instruction, IntrinsicOp,
-    ProcessBuilder, Signal, SignalFlags, SignalKey, SignalSlice, VectorSize, WatchCondition,
+    ProcessBuilder, Signal, SignalFlags, SignalKey, SignalSlice, VectorSize,
 };
 use vogls_utils::{OrderedSet, Table, VgHashMap, VgHashSet};
 
@@ -532,10 +532,7 @@ impl FuseGraphOptimizer {
                 conditions.retain_mut(|c| match self.fused_signals.get(&c.signal) {
                     None => true,
                     Some(FuseTarget::Signal(to, part_select)) => {
-                        *c = WatchCondition {
-                            signal: *to,
-                            part_select: *part_select,
-                        };
+                        *c = c.fused_into(*to, *part_select);
                         true
                     }
                     Some(FuseTarget::Constant(_)) => false,
@@ -559,10 +556,7 @@ impl FuseGraphOptimizer {
             standing_vec.retain_mut(|c| match self.fused_signals.get(&c.signal) {
                 None => true,
                 Some(FuseTarget::Signal(to, part_select)) => {
-                    *c = WatchCondition {
-                        signal: *to,
-                        part_select: *part_select,
-                    };
+                    *c = c.fused_into(*to, *part_select);
                     true
                 }
                 Some(FuseTarget::Constant(_)) => false,
@@ -707,7 +701,7 @@ impl FuseGraph {
                     }
 
                     // C3: Either
-                    // - signal is not observed for LastUpdateTime or Watched
+                    // - signal is not observed for LastUpdateTime
                     // - or other the fused signal is used in its entirety
                     if v.flags.contains(NodeFlags::LUPDT) | v.flags.contains(NodeFlags::WATCH)
                         && edge.driver_slice != SignalSlice::with_end(nodes[edge.driver].size)

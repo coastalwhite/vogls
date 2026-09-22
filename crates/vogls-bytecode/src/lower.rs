@@ -2307,7 +2307,8 @@ fn lower_instruction(
                         bce.tv_set1(
                             Some(rd),
                             rs,
-                            addr,
+                            signal_addr,
+                            *partial as u64,
                             lupdt_index,
                             watch_index,
                             plugin_rt_index,
@@ -2322,7 +2323,6 @@ fn lower_instruction(
                             lupdt_index,
                             watch_index,
                             plugin_rt_index,
-                            SCRATCH,
                         );
                     }
                     (M::FourValue, false) => {
@@ -2361,6 +2361,7 @@ fn lower_instruction(
                             rs,
                             signal_addr,
                             src_size,
+                            0,
                             lupdt_index,
                             watch_index,
                             plugin_rt_index,
@@ -2373,6 +2374,7 @@ fn lower_instruction(
                             signal_addr,
                             signal_size,
                             signal_size,
+                            0,
                             lupdt_index,
                             watch_index,
                             plugin_rt_index,
@@ -2385,6 +2387,7 @@ fn lower_instruction(
                             offset,
                             src_size,
                             signal_size,
+                            u64::from(*partial),
                             lupdt_index,
                             watch_index,
                             plugin_rt_index,
@@ -2398,6 +2401,7 @@ fn lower_instruction(
                             src_size,
                             signal_size,
                             signal_size,
+                            u64::from(*partial),
                             lupdt_index,
                             watch_index,
                             plugin_rt_index,
@@ -2408,6 +2412,7 @@ fn lower_instruction(
                         rs,
                         signal_addr,
                         size,
+                        0,
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2419,6 +2424,7 @@ fn lower_instruction(
                         signal_addr,
                         size,
                         signal_size,
+                        0,
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2431,6 +2437,7 @@ fn lower_instruction(
                         size,
                         offset,
                         src_size,
+                        u64::from(*partial),
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2444,6 +2451,7 @@ fn lower_instruction(
                         offset,
                         src_size,
                         signal_size,
+                        u64::from(*partial),
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2456,7 +2464,6 @@ fn lower_instruction(
             // Temporary Register Allocation:
             // T0:    RS       (ADDR / VAL / SPC)
             // T1:    RS       (VAL)
-            // T2:    ROFF     (ADDR / VAL / SPC)
             // T3:    RPOKE    (BOOL)
             // T4:    RPARTIAL (ADDR / VAL / SPC)
             // T5:    RPARTIAL (VAL)
@@ -2483,14 +2490,12 @@ fn lower_instruction(
             let signal_size = gl.signals[*signal].size;
             let src_size = gl.vars.size(*src);
 
-            let raddr = T2;
             let signal_addr = signal_address(*signal, signals, io_signals);
 
             let base_addr = signal_addr;
             let base_size = signal_size;
 
             let mut branch_offset: Option<usize> = None;
-            bce.load_u64(raddr, signal_addr);
             let mut rpartial = to_reg(
                 bce,
                 *partial,
@@ -2519,17 +2524,16 @@ fn lower_instruction(
                 }
             }
 
-            bce.add(raddr, raddr, rpartial, SixBitSize::N64);
-
             let rt_signal = io_signals[signal];
             let lupdt_index = lupdt_indexes.get(&rt_signal).copied();
             let watch_index =
                 (watch_map.num_watch_indices(*signal) > 0).then(|| rt_signal.as_u64());
             let plugin_rt_index = options.has_plugins.then_some(rt_signal.as_u64());
 
-            // @NOTE: `raddr` holds a full address, so the relative variants use a zero base and
-            // bound the write to the signal itself. The range is the addressable extent of the
-            // signal; the instruction itself accounts for the width of the write.
+            // @NOTE: `rpartial` is handed over as the bit within the signal, with the signal's
+            // own base alongside it, rather than the two added together. That is the coordinate a
+            // watch is stated in, and the clamp range cannot stand in for it: the range bounds the
+            // addressable extent of the write, which for an array element starts at the element.
             let range = base_addr..=(base_addr + base_size.get() as u64 - 1);
 
             match (src.mode(), SixBitSize::from_vector_size(src_size)) {
@@ -2537,10 +2541,12 @@ fn lower_instruction(
                     bce.tv_set_heaprel(
                         Some(rd),
                         rs,
-                        raddr,
+                        rpartial,
                         InlineAddrOffset::ZERO,
                         range,
+                        signal_addr,
                         src_size,
+                        0,
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2550,11 +2556,13 @@ fn lower_instruction(
                     bce.fv_set_heaprel(
                         Some(rd),
                         rs,
-                        raddr,
+                        rpartial,
                         InlineAddrOffset::ZERO,
                         range,
+                        signal_addr,
                         src_size,
                         signal_size,
+                        0,
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2564,10 +2572,11 @@ fn lower_instruction(
                     bce.tv_setrel(
                         Some(rd),
                         rs,
-                        raddr,
-                        0,
+                        rpartial,
+                        signal_addr,
                         range,
                         size,
+                        0,
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2577,11 +2586,12 @@ fn lower_instruction(
                     bce.fv_setrel(
                         Some(rd),
                         rs,
-                        raddr,
-                        0,
+                        rpartial,
+                        signal_addr,
                         range,
                         size,
                         signal_size,
+                        0,
                         lupdt_index,
                         watch_index,
                         plugin_rt_index,
@@ -2711,6 +2721,7 @@ fn store_back(
                         0,
                         0..=u64::MAX,
                         size,
+                        0,
                         None,
                         None,
                         None,
@@ -2723,6 +2734,7 @@ fn store_back(
                         0..=u64::MAX,
                         size,
                         size.to_vector_size(),
+                        0,
                         None,
                         None,
                         None,

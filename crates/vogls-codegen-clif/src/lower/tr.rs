@@ -26,20 +26,21 @@ use crate::lower::{
 };
 use crate::runtime::{ColdContextT, EventT, FnTable, ScheduleT, layout};
 
+use super::drive::DriveOffset;
 use super::{Compiler, WideMap, top_i64, wide_load, wide_store};
 
 pub struct TrBuilder<'a, 'b> {
-    compiler: &'a mut Compiler<'b>,
-    b: FunctionBuilder<'a>,
+    pub(super) compiler: &'a mut Compiler<'b>,
+    pub(super) b: FunctionBuilder<'a>,
 
     blocks: VgHashMap<BasicBlockKey, Block>,
     order: Vec<BasicBlockKey>,
 
-    vmap: VgHashMap<VariableKey, Variable>,
-    spc_map: VgHashMap<VariableKey, Variable>,
-    wide_map: WideMap,
+    pub(super) vmap: VgHashMap<VariableKey, Variable>,
+    pub(super) spc_map: VgHashMap<VariableKey, Variable>,
+    pub(super) wide_map: WideMap,
 
-    params: Params,
+    pub(super) params: Params,
 }
 
 impl<'a, 'b> TrBuilder<'a, 'b> {
@@ -135,12 +136,27 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
     }
 
     pub fn lower(&mut self, bb_phis: &VgHashMap<BasicBlockKey, Vec<(VariableKey, VariableKey)>>) {
-        for &k in &self.order {
+        // The drive lowering is a method, so the walk cannot hold a borrow of `self`.
+        let order = self.order.clone();
+        for k in order {
             self.b.switch_to_block(self.blocks[&k]);
-            let bb = &self.compiler.gl.bbs[k];
+            let gl: &'b vogls_ir::GlobalContext = self.compiler.gl;
+            let bb = &gl.bbs[k];
             for instr in &bb.instrs {
                 if matches!(instr, Instruction::Phi(..)) {
                     continue;
+                }
+                match instr {
+                    Instruction::Drive(dst, signal, src, offset) => {
+                        self.emit_drive(*dst, *signal, *src, DriveOffset::Imm(*offset));
+                        continue;
+                    }
+                    Instruction::DriveSlice(dst, signal, src, index) => {
+                        let offset = self.dyn_offset(*index);
+                        self.emit_drive(*dst, *signal, *src, offset);
+                        continue;
+                    }
+                    _ => {}
                 }
 
                 let b = &mut self.b;
@@ -1263,16 +1279,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }
                             (O::Negedge, _, M::FourValue, _, _, _) => {
                                 map!((lval, lspc), (rval, rspc) => @tv {
-                                    // Negedge: (xspc & xval & (!yspc | !yval)) | (!xspc & yspc & !yval)
-                                    let nxspc = b.ins().bnot(lspc);
-                                    let nyspc = b.ins().bnot(rspc);
-                                    let nyval = b.ins().bnot(rval);
-                                    let t0 = b.ins().band(lspc, lval);
-                                    let t1 = b.ins().bor(nyspc, nyval);
-                                    let a = b.ins().band(t0, t1);
-                                    let t2 = b.ins().band(nxspc, rspc);
-                                    let c = b.ins().band(t2, nyval);
-                                    b.ins().bor(a, c)
+                                    clif_fv_negedge(b, lval, lspc, rval, rspc)
                                 })
                             }
                             (O::CaseEquality, _, M::TwoValue, _, Some(_), _) => {
@@ -3659,157 +3666,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
 
                         b.switch_to_block(done_bb);
                     }
-                    Instruction::Drive(dst, signal, src, offset) => {
-                        let ssize = gl.vars.size(*src).get();
-                        let d_size = gl.signals[*signal].size.get();
-
-                        let (_href, _rt, mode) = info.heap_ref(*signal);
-                        // A wide (>64) signal driven by a four-value or wide source needs
-                        // the multi-word drive. A two-value narrow source into a wide
-                        // signal is still a single-word partial write (lower_drive_tv).
-                        if SixBitSize::from_vector_size(gl.signals[*signal].size).is_none()
-                            && (mode == LogicMode::FourValue || ssize > 64)
-                        {
-                            if *offset == 0 && ssize == d_size {
-                                let (href, rt, _mode) = info.heap_ref(*signal);
-                                let heap = params.heap_ptr;
-                                let base = href.offset.bit_offset / 64;
-                                let n = nwords(sz(*src));
-                                let words = if is_fv(*src) { 2 * n } else { n };
-                                let loc = wide_map[src];
-                                let mut acc = b.ins().iconst(I64, 0);
-                                for i in 0..words {
-                                    let sw = wide_load(b, ptr, params.cldctx, loc, i);
-                                    let hw = b.ins().load(
-                                        I64,
-                                        mem(),
-                                        heap,
-                                        ((base + i as usize) * 8) as i32,
-                                    );
-                                    let d = b.ins().bxor(sw, hw);
-                                    acc = b.ins().bor(acc, d);
-                                }
-                                let changed = b.ins().icmp_imm_u(IntCC::NotEqual, acc, 0);
-                                let do_bb = b.create_block();
-                                let merge = b.create_block();
-                                b.ins().brif(changed, do_bb, &[], merge, &[]);
-                                b.switch_to_block(do_bb);
-                                self.compiler.call_drive_signal(b, params, rt);
-                                for i in 0..words {
-                                    let sw = wide_load(b, ptr, params.cldctx, loc, i);
-                                    b.ins().store(
-                                        mem(),
-                                        sw,
-                                        heap,
-                                        ((base + i as usize) * 8) as i32,
-                                    );
-                                }
-                                b.ins().jump(merge, &[]);
-                                b.switch_to_block(merge);
-                            } else {
-                                let offc = b.ins().iconst(I64, *offset as i64);
-                                let one = b.ins().iconst(types::I8, 1);
-                                self.compiler.emit_wide_drive(
-                                    b, params, *signal, *src, offc, one, vmap, spc_map, wide_map,
-                                );
-                            }
-                        } else if mode == LogicMode::TwoValue {
-                            // lower_drive_tv already handles two-value partial writes.
-                            let sv = get(b, *src);
-                            self.compiler
-                                .lower_drive_tv(b, params, *signal, sv, ssize, *offset);
-                        } else if *offset == 0 && ssize == d_size {
-                            let sv = get(b, *src);
-                            let ss = spc_get(b, *src);
-                            self.compiler
-                                .lower_drive_fv(b, params, *signal, sv, ss, ssize);
-                        } else {
-                            // Four-value partial drive at a constant offset.
-                            let sv = get(b, *src);
-                            let ss = spc_get(b, *src);
-                            let offc = b.ins().iconst(I64, *offset as i64);
-                            let one = b.ins().iconst(types::I8, 1);
-                            self.compiler.drive_partial(
-                                b,
-                                params,
-                                *signal,
-                                sv,
-                                Some(ss),
-                                ssize,
-                                offc,
-                                one,
-                            );
-                        }
-                        // The dst is the changed-bits mask (src-sized, two-value); it is
-                        // currently stubbed to zero. A wide dst lives in the wide storage.
-                        match SixBitSize::from_vector_size(gl.vars.size(*dst)) {
-                            Some(_) => {
-                                let zero = b.ins().iconst(I64, 0);
-                                b.def_var(vmap[dst], zero);
-                            }
-                            None => wide_fill(
-                                b,
-                                ptr,
-                                params.cldctx,
-                                wide_map[dst],
-                                gl.vars.size(*dst).get(),
-                                dst.mode(),
-                                vogls_bits::arithmetic::FvLogicValue::L0,
-                            ),
-                        }
-                    }
-                    Instruction::DriveSlice(dst, signal, src, index) => {
-                        let (_href, _rt, mode) = info.heap_ref(*signal);
-                        let ssize = gl.vars.size(*src).get();
-                        let index_size = gl.vars.size(*index).get();
-                        // A wide (>64) signal needs the multi-word drive; drive_partial
-                        // below writes a single-word (<=64) signal.
-                        if SixBitSize::from_vector_size(gl.signals[*signal].size).is_none() {
-                            let off = rv(b, *index, 0);
-                            let off_known = if is_fv(*index) {
-                                let os = rs(b, *index, 0);
-                                b.ins().icmp_imm_u(IntCC::Equal, os, mask_of(sz(*index)))
-                            } else {
-                                b.ins().iconst(types::I8, 1)
-                            };
-                            self.compiler.emit_wide_drive(
-                                b, params, *signal, *src, off, off_known, vmap, spc_map, wide_map,
-                            );
-                        } else {
-                            let off = get(b, *index);
-                            let off_known = if index.mode().is_four_value() {
-                                let os = spc_get(b, *index);
-                                b.ins().icmp_imm_u(IntCC::Equal, os, mask_of(index_size))
-                            } else {
-                                b.ins().iconst(types::I8, 1)
-                            };
-                            let sv = get(b, *src);
-                            let src_spc = if mode == LogicMode::FourValue {
-                                Some(spc_get(b, *src))
-                            } else {
-                                None
-                            };
-                            self.compiler.drive_partial(
-                                b, params, *signal, sv, src_spc, ssize, off, off_known,
-                            );
-                        }
-                        // The dst is the changed-bits mask (src-sized, two-value); it is
-                        // currently stubbed to zero. A wide dst lives in the wide storage.
-                        match SixBitSize::from_vector_size(gl.vars.size(*dst)) {
-                            Some(_) => {
-                                let zero = b.ins().iconst(I64, 0);
-                                b.def_var(vmap[dst], zero);
-                            }
-                            None => wide_fill(
-                                b,
-                                ptr,
-                                params.cldctx,
-                                wide_map[dst],
-                                gl.vars.size(*dst).get(),
-                                dst.mode(),
-                                vogls_bits::arithmetic::FvLogicValue::L0,
-                            ),
-                        }
+                    Instruction::Drive(..) | Instruction::DriveSlice(..) => {
+                        unreachable!("lowered before the operand closures are built")
                     }
                 }
             }
@@ -4005,7 +3863,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                 T::Watch(_tr, _signals) => {
                     // Offset + listener registration were assigned by the pre-pass
                     // (collect_listeners); here we only arm the listener bit.
-                    let offset = self.compiler.watch_offset[&k];
+                    let offset = self.compiler.watch_map.get_watch_index(k) as u32;
                     // Arm the listener: set the bit in `listening`.
                     let w = b
                         .ins()
@@ -4023,6 +3881,200 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
         self.b.seal_all_blocks();
         self.b.finalize(self.compiler.fe);
     }
+}
+
+pub(super) fn clif_wide_tv_reduce_or(
+    b: &mut FunctionBuilder,
+    ptr: Type,
+    src_ptr: Value,
+    size: VectorSize,
+) -> Value {
+    let acc = b.ins().iconst(I64, 0);
+    let end_ptr = b
+        .ins()
+        .iadd_imm_u(src_ptr, (size.get().div_ceil(64) * 8) as i64);
+
+    let loop_bb = b.create_block();
+    let post_bb = b.create_block();
+
+    b.append_block_param(loop_bb, ptr);
+    b.append_block_param(loop_bb, I64);
+
+    b.ins().jump(loop_bb, &[src_ptr.into(), acc.into()]);
+
+    b.switch_to_block(loop_bb);
+    let cur_ptr = b.block_params(loop_bb)[0];
+    let cur_acc = b.block_params(loop_bb)[1];
+
+    let acc = b.ins().load(I64, mem(), cur_ptr, 0);
+    let new_acc = b.ins().bor(cur_acc, acc);
+
+    let next_ptr = b.ins().iadd_imm_u(cur_ptr, 8);
+    let is_lt = b.ins().icmp(IntCC::UnsignedLessThan, next_ptr, end_ptr);
+    b.ins().brif(
+        is_lt,
+        loop_bb,
+        &[next_ptr.into(), new_acc.into()],
+        post_bb,
+        &[],
+    );
+
+    b.switch_to_block(post_bb);
+    new_acc
+}
+
+pub(super) fn clif_wide_tv_slice_reduce_or(
+    b: &mut FunctionBuilder,
+    ptr: Type,
+    src_ptr: Value,
+    offset: u32,
+    size: VectorSize,
+) -> Value {
+    let woff = offset / 64;
+    let boff = offset % 64;
+
+    let mut acc = b.ins().load(I64, mem(), src_ptr, (woff * 8) as i32);
+    if boff > 0 {
+        acc = b.ins().ushr_imm_u(acc, boff as i64);
+    }
+    if size.get() < 64 - boff {
+        acc = b
+            .ins()
+            .band_imm_u(acc, 1u64.unbounded_shl(size.get()).wrapping_sub(1) as i64);
+    }
+
+    let rem_size = size.get().saturating_sub(64 - boff);
+    let Some(rem_size) = VectorSize::new(rem_size) else {
+        return acc;
+    };
+
+    let start_ptr = b
+        .ins()
+        .iadd_imm_u(src_ptr, (offset.div_ceil(64) * 8) as i64);
+    let end_ptr = b
+        .ins()
+        .iadd_imm_u(start_ptr, ((rem_size.get() / 64) * 8) as i64);
+
+    if rem_size.get() > 64 {
+        let loop_bb = b.create_block();
+        let post_bb = b.create_block();
+
+        b.append_block_param(loop_bb, ptr);
+        b.append_block_param(loop_bb, I64);
+
+        b.ins().jump(loop_bb, &[start_ptr.into(), acc.into()]);
+        b.switch_to_block(loop_bb);
+
+        let cur_ptr = b.block_params(loop_bb)[0];
+        let cur_acc = b.block_params(loop_bb)[1];
+
+        let iter_acc = b.ins().load(I64, mem(), cur_ptr, 0);
+        let new_acc = b.ins().bor(cur_acc, iter_acc);
+
+        let next_ptr = b.ins().iadd_imm_u(cur_ptr, 8);
+        let is_lt = b.ins().icmp(IntCC::UnsignedLessThan, next_ptr, end_ptr);
+        b.ins().brif(
+            is_lt,
+            loop_bb,
+            &[next_ptr.into(), new_acc.into()],
+            post_bb,
+            &[],
+        );
+
+        b.switch_to_block(post_bb);
+        acc = new_acc;
+    }
+
+    if let Some(last_word_size) = SixBitSize::last_word_size(rem_size) {
+        let last_word = b.ins().load(I64, mem(), end_ptr, 0);
+        let last_word = b
+            .ins()
+            .band_imm_u(last_word, last_word_size.mask(u64::MAX) as i64);
+        acc = b.ins().bor(acc, last_word);
+    }
+
+    acc
+}
+
+pub(super) fn clif_conditional_wake_listeners(
+    compiler: &mut Compiler,
+    params: &Params,
+    b: &mut FunctionBuilder,
+    cond: Value,
+    condition_idx: &mut usize,
+) {
+    let watchers = compiler.watch_map.watchers();
+    let (cur_condition, _) = watchers[*condition_idx];
+
+    let wake_bb = b.create_block();
+    let post_bb = b.create_block();
+
+    b.ins().brif(cond, wake_bb, &[], post_bb, &[]);
+
+    b.switch_to_block(wake_bb);
+
+    const ACTIVE_PTR_OFFSET: i32 =
+        (offset_of!(ScheduleT, active_region) + FfiVec::<EventT>::PTR_OFFSET) as i32;
+    const ACTIVE_LEN_OFFSET: i32 =
+        (offset_of!(ScheduleT, active_region) + FfiVec::<EventT>::LEN_OFFSET) as i32;
+
+    // log2(size_of(ptr))
+    let ptr_shift = compiler.ptr.bytes().trailing_zeros() as i64;
+
+    let active_ptr = b.ins().load(I64, mem(), params.schedule, ACTIVE_PTR_OFFSET);
+    let active_length = b.ins().load(I64, mem(), params.schedule, ACTIVE_LEN_OFFSET);
+    let active_offset = b.ins().ishl_imm_u(active_length, ptr_shift);
+    let mut active_ptr = b.ins().iadd(active_ptr, active_offset);
+
+    while let Some((condition, idx)) = watchers.get(*condition_idx)
+        && *condition == cur_condition
+    {
+        // @NOTE: A watch whose target region belongs to no process has no function to wake into,
+        // and nothing can ever arm it either (see `compile`), so it has no listener at all.
+        let Some(&target) = compiler
+            .tr_funcs
+            .get(&compiler.watch_map.watch_target(*idx))
+        else {
+            *condition_idx += 1;
+            continue;
+        };
+
+        let woff = idx / 64;
+        let boff = idx % 64;
+        let current_word = b
+            .ins()
+            .load(I64, mem(), params.listening, (woff * 8) as i32);
+
+        let mut is_listening = current_word;
+        if boff > 0 {
+            is_listening = b.ins().ushr_imm_u(is_listening, boff as i64);
+        }
+        if boff < 63 {
+            is_listening = b.ins().band_imm_u(is_listening, 1);
+        }
+        let cleared = b.ins().band_imm_u(current_word, (!(1u64 << boff)) as i64);
+        b.ins()
+            .store(mem(), cleared, params.listening, (woff * 8) as i32);
+        let fr = compiler.module.declare_func_in_func(target, b.func);
+        let ta = b.ins().func_addr(compiler.ptr, fr);
+        b.ins().store(mem(), ta, active_ptr, 0);
+
+        let ptr_increment = b.ins().ishl_imm_u(is_listening, ptr_shift);
+        active_ptr = b.ins().iadd(active_ptr, ptr_increment);
+
+        *condition_idx += 1;
+    }
+
+    let active_base_ptr = b.ins().load(I64, mem(), params.schedule, ACTIVE_PTR_OFFSET);
+
+    // new_length = (offset_ptr - base_ptr) / size_of::<ptr>();
+    let new_length = b.ins().isub(active_ptr, active_base_ptr);
+    let new_length = b.ins().ushr_imm_u(new_length, ptr_shift);
+    b.ins()
+        .store(mem(), new_length, params.schedule, ACTIVE_LEN_OFFSET);
+
+    b.ins().jump(post_bb, &[]);
+    b.switch_to_block(post_bb);
 }
 
 /// Four-value bitwise AND of two operands given as `(val, spc)` planes,
@@ -4175,6 +4227,25 @@ fn clif_fv_copyz(
     let spc = b.ins().band(lspc, ncm);
     let val = b.ins().bor(lval, cm0);
     (val, spc)
+}
+
+pub(super) fn clif_fv_negedge(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> Value {
+    // Negedge: (xspc & xval & (!yspc | !yval)) | (!xspc & yspc & !yval)
+    let nxspc = b.ins().bnot(lspc);
+    let nyspc = b.ins().bnot(rspc);
+    let nyval = b.ins().bnot(rval);
+    let t0 = b.ins().band(lspc, lval);
+    let t1 = b.ins().bor(nyspc, nyval);
+    let a = b.ins().band(t0, t1);
+    let t2 = b.ins().band(nxspc, rspc);
+    let c = b.ins().band(t2, nyval);
+    b.ins().bor(a, c)
 }
 
 fn sign_extend(

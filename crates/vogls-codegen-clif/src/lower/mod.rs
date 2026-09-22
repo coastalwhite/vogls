@@ -13,6 +13,7 @@
 //! backend does not emit is the VCD dump family (`$dumpfile`/`$dumpvars`, a
 //! bytecode-only feature), which fails cleanly at compile time.
 
+mod drive;
 mod terminator;
 mod tr;
 
@@ -34,6 +35,7 @@ use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 use vogls_codegen::{HeapBuilder, HeapRef, SixBitSize};
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::time::{TimeFormat, TimeResolution};
+use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, GlobalContext, LogicMode, ShiftImmOp, SignalKey,
     TemporalRegionKey, VariableKey, VectorSize,
@@ -330,7 +332,9 @@ struct Compiler<'a> {
     num_listening: u32,
     /// Offset assigned to each `Watch` terminator, keyed by the BB it terminates.
     /// Populated by the listener pre-pass so drive sites can inline the wake set.
-    watch_offset: VgHashMap<BasicBlockKey, u32>,
+    /// The IR's watch map, shared with the bytecode backend: it numbers every watch and groups
+    /// them by signal, so neither backend invents its own idea of what a watch covers.
+    watch_map: WatchMap,
     num_plugins: usize,
     dyn_fmt_strs: Vec<DynFormatString>,
     read_mems: Vec<(HeapRef, vogls_ir::ReadMem)>,
@@ -357,6 +361,7 @@ impl<'a> Compiler<'a> {
     fn new(
         num_signals: usize,
         num_plugins: usize,
+        watch_map: WatchMap,
         gl: &'a GlobalContext,
         info: SignalInfo<'a>,
         heap_builder: &'a mut HeapBuilder,
@@ -388,7 +393,7 @@ impl<'a> Compiler<'a> {
             wait_time_grow: None,
             listeners: (0..num_signals).map(|_| Vec::new()).collect(),
             num_listening: 0,
-            watch_offset: VgHashMap::default(),
+            watch_map,
             num_plugins,
             dyn_fmt_strs: Vec::new(),
             read_mems: Vec::new(),
@@ -963,335 +968,6 @@ impl<'a> Compiler<'a> {
         b.inst_results(call)[0]
     }
 
-    fn lower_drive_tv(
-        &mut self,
-        b: &mut FunctionBuilder,
-        params: &Params,
-        signal: SignalKey,
-        src: Value,
-        size: u32,
-        offset: u32,
-    ) {
-        let (href, rt, _mode) = self.info.heap_ref(signal);
-        let bit = href.offset.bit_offset + offset as usize;
-        let word = bit / 64;
-        let shift = bit % 64;
-        let crosses = shift + size as usize > 64;
-
-        let oldw = b.ins().load(I64, mem(), params.heap_ptr, (word * 8) as i32);
-        let old_field = if !crosses {
-            let s = if shift == 0 {
-                oldw
-            } else {
-                b.ins().ushr_imm_u(oldw, shift as i64)
-            };
-            maskv(b, s, size)
-        } else {
-            let w1 = b
-                .ins()
-                .load(I64, mem(), params.heap_ptr, ((word + 1) * 8) as i32);
-            let lo = b.ins().ushr_imm_u(oldw, shift as i64);
-            let hi = b.ins().ishl_imm_u(w1, (64 - shift) as i64);
-            let comb = b.ins().bor(lo, hi);
-            maskv(b, comb, size)
-        };
-        let changed = b.ins().icmp(IntCC::NotEqual, src, old_field);
-
-        let guard = changed;
-
-        let do_bb = b.create_block();
-        let merge = b.create_block();
-        b.ins().brif(guard, do_bb, &[], merge, &[]);
-
-        b.switch_to_block(do_bb);
-        self.call_drive_signal(b, params, rt);
-        // store src into the signal field (read-modify-write).
-        if !crosses {
-            if size == 64 && shift == 0 {
-                b.ins()
-                    .store(mem(), src, params.heap_ptr, (word * 8) as i32);
-            } else {
-                let keep = !(mask_u64(size) << shift);
-                let cur = b.ins().load(I64, mem(), params.heap_ptr, (word * 8) as i32);
-                let cleared = b.ins().band_imm_u(cur, keep as i64);
-                let masked_src = maskv(b, src, size);
-                let placed = if shift == 0 {
-                    masked_src
-                } else {
-                    b.ins().ishl_imm_u(masked_src, shift as i64)
-                };
-                let neww = b.ins().bor(cleared, placed);
-                b.ins()
-                    .store(mem(), neww, params.heap_ptr, (word * 8) as i32);
-            }
-        } else {
-            let masked_src = maskv(b, src, size);
-            let lo_size = 64 - shift;
-            let cur0 = b.ins().load(I64, mem(), params.heap_ptr, (word * 8) as i32);
-            let cleared0 = b.ins().band_imm_u(cur0, mask_u64(shift as u32) as i64);
-            let placed0 = b.ins().ishl_imm_u(masked_src, shift as i64);
-            let new0 = b.ins().bor(cleared0, placed0);
-            b.ins()
-                .store(mem(), new0, params.heap_ptr, (word * 8) as i32);
-            let hi_size = size as usize - lo_size;
-            let cur1 = b
-                .ins()
-                .load(I64, mem(), params.heap_ptr, ((word + 1) * 8) as i32);
-            let cleared1 = b.ins().band_imm_u(cur1, (!mask_u64(hi_size as u32)) as i64);
-            let hi_src = b.ins().ushr_imm_u(masked_src, lo_size as i64);
-            let new1 = b.ins().bor(cleared1, hi_src);
-            b.ins()
-                .store(mem(), new1, params.heap_ptr, ((word + 1) * 8) as i32);
-        }
-        b.ins().jump(merge, &[]);
-        b.switch_to_block(merge);
-    }
-
-    /// Full-width four-value drive: poke-if-changed + store.
-    fn lower_drive_fv(
-        &mut self,
-        b: &mut FunctionBuilder,
-        params: &Params,
-        signal: SignalKey,
-        src_val: Value,
-        src_spc: Value,
-        size: u32,
-    ) {
-        let (href, rt, _) = self.info.heap_ref(signal);
-        let heap = params.heap_ptr;
-        let word = href.offset.bit_offset / 64;
-        let shift = href.offset.bit_offset % 64;
-
-        let do_bb = b.create_block();
-        let merge = b.create_block();
-
-        if size <= 32 {
-            // Packed field of 2*size bits at [shift, shift + 2*size).
-            let psize = 2 * size;
-            let vh = b.ins().ishl_imm_u(src_val, size as i64);
-            let new_packed = b.ins().bor(vh, src_spc);
-            let oldw = b.ins().load(I64, mem(), heap, (word * 8) as i32);
-            let of = if shift == 0 {
-                oldw
-            } else {
-                b.ins().ushr_imm_u(oldw, shift as i64)
-            };
-            let old_field = maskv(b, of, psize);
-            let changed = b.ins().icmp(IntCC::NotEqual, new_packed, old_field);
-            b.ins().brif(changed, do_bb, &[], merge, &[]);
-            b.switch_to_block(do_bb);
-            self.call_drive_signal(b, params, rt);
-            if psize == 64 && shift == 0 {
-                b.ins().store(mem(), new_packed, heap, (word * 8) as i32);
-            } else {
-                let keep = !(mask_u64(psize) << shift);
-                let cur = b.ins().load(I64, mem(), heap, (word * 8) as i32);
-                let cleared = b.ins().band_imm_u(cur, keep as i64);
-                let placed = if shift == 0 {
-                    new_packed
-                } else {
-                    b.ins().ishl_imm_u(new_packed, shift as i64)
-                };
-                let neww = b.ins().bor(cleared, placed);
-                b.ins().store(mem(), neww, heap, (word * 8) as i32);
-            }
-        } else {
-            // Split words: spc @ word, val @ word+1 (word-aligned).
-            let old_spc = {
-                let w = b.ins().load(I64, mem(), heap, (word * 8) as i32);
-                maskv(b, w, size)
-            };
-            let old_val = {
-                let w = b.ins().load(I64, mem(), heap, ((word + 1) * 8) as i32);
-                maskv(b, w, size)
-            };
-            let c1 = b.ins().icmp(IntCC::NotEqual, src_spc, old_spc);
-            let c2 = b.ins().icmp(IntCC::NotEqual, src_val, old_val);
-            let changed = b.ins().bor(c1, c2);
-            b.ins().brif(changed, do_bb, &[], merge, &[]);
-            b.switch_to_block(do_bb);
-            self.call_drive_signal(b, params, rt);
-            let ms = maskv(b, src_spc, size);
-            let mv = maskv(b, src_val, size);
-            b.ins().store(mem(), ms, heap, (word * 8) as i32);
-            b.ins().store(mem(), mv, heap, ((word + 1) * 8) as i32);
-        }
-        b.ins().jump(merge, &[]);
-        b.switch_to_block(merge);
-    }
-
-    /// Inline the drive_signal body (mirrors build_drive_signal) at a drive
-    /// site. With the active-region push no longer carrying a grow call, this
-    /// body has no calls (absent plugins), so an inlined-drive TR stays leaf:
-    /// no frame, no callee-save spills. Correct listener sets require the
-    /// `collect_listeners` pre-pass to have run first.
-    fn call_drive_signal(&mut self, b: &mut FunctionBuilder, params: &Params, rt: RtSignalKey) {
-        let idx = rt.as_usize();
-        let lupdt = self.info.lupdt_indexes.get(&rt).copied();
-        let listeners: Vec<(u32, FuncId)> = self.listeners[idx]
-            .iter()
-            .map(|l| (l.offset, l.target))
-            .collect();
-        let num_plugins = self.num_plugins;
-
-        let (schedule, time, listening, last_active_time, cldctx) = (
-            params.schedule,
-            params.time,
-            params.listening,
-            params.last_active_time,
-            params.cldctx,
-        );
-
-        if num_plugins > 0 {
-            let plugins = b
-                .ins()
-                .load(self.ptr, mem(), cldctx, layout::CTX_PLUGINS as i32);
-            let poke = b
-                .ins()
-                .load(self.ptr, mem(), cldctx, layout::CTX_PLUGIN_POKE as i32);
-            let sig_ref = b.import_signature(self.sigs.plugin_poke.clone());
-            let id = b.ins().iconst(I64, rt.as_u64() as i64);
-            for i in 0..num_plugins {
-                let pl = b.ins().iadd_imm_u(plugins, (i * PLUGIN_STATE_SIZE) as i64);
-                b.ins().call_indirect(sig_ref, poke, &[pl, id]);
-            }
-        }
-
-        if let Some(li) = lupdt {
-            b.ins()
-                .store(mem(), time, last_active_time, (li * 8) as i32);
-        }
-
-        for (offset, target) in listeners {
-            let wake = b.create_block();
-            let next = b.create_block();
-            let w = b
-                .ins()
-                .load(I64, mem(), listening, ((offset / 64) * 8) as i32);
-            let bit = b.ins().band_imm_u(w, 1i64 << (offset % 64));
-            b.ins().brif(bit, wake, &[], next, &[]);
-            b.switch_to_block(wake);
-            let cleared = b.ins().bxor_imm_u(w, 1i64 << (offset % 64));
-            b.ins()
-                .store(mem(), cleared, listening, ((offset / 64) * 8) as i32);
-            let active = ioff(b, self.ptr, schedule, layout::SCHED_ACTIVE);
-            let fr = self.module.declare_func_in_func(target, b.func);
-            let ta = b.ins().func_addr(self.ptr, fr);
-            self.emit_push_inline(b, active, ta);
-            b.ins().jump(next, &[]);
-            b.switch_to_block(next);
-        }
-    }
-
-    /// Store a `size`-bit (<=64) four-value (val, spc) pair into the signal's
-    /// heap storage — packed (<=32) or split spc/val words (33..=64).
-    fn fv_store(
-        &self,
-        b: &mut FunctionBuilder,
-        heap: Value,
-        href: HeapRef,
-        size: u32,
-        val: Value,
-        spc: Value,
-    ) {
-        let word = href.offset.bit_offset / 64;
-        let shift = href.offset.bit_offset % 64;
-        if size <= 32 {
-            let psize = 2 * size;
-            let vh = b.ins().ishl_imm_u(val, size as i64);
-            let packed = b.ins().bor(vh, spc);
-            if psize == 64 && shift == 0 {
-                b.ins().store(mem(), packed, heap, (word * 8) as i32);
-            } else {
-                let keep = !(mask_u64(psize) << shift);
-                let cur = b.ins().load(I64, mem(), heap, (word * 8) as i32);
-                let cleared = b.ins().band_imm_u(cur, keep as i64);
-                let placed = if shift == 0 {
-                    packed
-                } else {
-                    b.ins().ishl_imm_u(packed, shift as i64)
-                };
-                let neww = b.ins().bor(cleared, placed);
-                b.ins().store(mem(), neww, heap, (word * 8) as i32);
-            }
-        } else {
-            let ms = maskv(b, spc, size);
-            let mv = maskv(b, val, size);
-            b.ins().store(mem(), ms, heap, (word * 8) as i32);
-            b.ins().store(mem(), mv, heap, ((word + 1) * 8) as i32);
-        }
-    }
-
-    /// Partial/variable-offset drive into a wide (>64) signal, via the wide_drive
-    /// shim (which does the read-modify-write and reports whether it changed).
-    #[expect(clippy::too_many_arguments)]
-    fn emit_wide_drive(
-        &mut self,
-        b: &mut FunctionBuilder,
-        params: &Params,
-        signal: SignalKey,
-        src: VariableKey,
-        offset: Value,
-        off_known: Value,
-        vmap: &VgHashMap<VariableKey, Variable>,
-        spc_map: &VgHashMap<VariableKey, Variable>,
-        wide_map: &WideMap,
-    ) {
-        let (href, rt, mode) = self.info.heap_ref(signal);
-        let heap = params.heap_ptr;
-        let base_word = (href.offset.bit_offset / 64) as i64;
-        let d_size = self.gl.signals[signal].size.get();
-        let s_size = self.gl.vars.size(src).get();
-        let is_fv = mode == LogicMode::FourValue;
-        let src_ptr = self.value_words_ptr(b, src, vmap, spc_map, wide_map, params.cldctx);
-
-        let do_bb = b.create_block();
-        let merge = b.create_block();
-        b.ins().brif(off_known, do_bb, &[], merge, &[]);
-        b.switch_to_block(do_bb);
-
-        let cldctx = params.cldctx;
-        let fnp = b.ins().load(
-            self.ptr,
-            mem(),
-            cldctx,
-            (layout::CTX_FN_TABLE + layout::FN_WIDE_DRIVE) as i32,
-        );
-        let mut sig = Signature::new(CallConv::SystemV);
-        sig.params.extend(
-            [
-                self.ptr,
-                types::I32,
-                self.ptr,
-                types::I32,
-                types::I32,
-                types::I32,
-                types::I32,
-            ]
-            .map(AbiParam::new),
-        );
-        sig.returns.push(AbiParam::new(I64));
-        let sr = b.import_signature(sig);
-        let bw = b.ins().iconst(types::I32, base_word);
-        let dsc = b.ins().iconst(types::I32, d_size as i64);
-        let offc = b.ins().ireduce(types::I32, offset);
-        let ssc = b.ins().iconst(types::I32, s_size as i64);
-        let fvc = b.ins().iconst(types::I32, i64::from(is_fv));
-        let call = b
-            .ins()
-            .call_indirect(sr, fnp, &[heap, bw, src_ptr, dsc, offc, ssc, fvc]);
-        let changed = b.inst_results(call)[0];
-        let ch = b.ins().icmp_imm_u(IntCC::NotEqual, changed, 0);
-
-        let poke = ch;
-        let drive_bb = b.create_block();
-        b.ins().brif(poke, drive_bb, &[], merge, &[]);
-        b.switch_to_block(drive_bb);
-        self.call_drive_signal(b, params, rt);
-        b.ins().jump(merge, &[]);
-        b.switch_to_block(merge);
-    }
-
     /// Extract `d_size` bits at bit `offset` from a wide source (pointed to by
     /// `src_ptr`, `s_size` bits) into `dst`, via the wide_slice shim. Used for
     /// wide Slice / SliceImm / Probe. `fill_with_x` (Slice) forces a four-value
@@ -1384,63 +1060,6 @@ impl<'a> Compiler<'a> {
                 b.def_var(vmap[&dst], val);
             }
         }
-    }
-
-    /// Partial drive: insert `s_size` bits of `src_val`(/`src_spc`) at bit offset
-    /// `off` into a signal of width `d_size` (<=64), poking if the field changes.
-    /// Handles constant offsets (Drive) and runtime offsets (DriveSlice); an
-    /// unknown four-value offset (`off_known` false) suppresses the write.
-    #[expect(clippy::too_many_arguments)]
-    fn drive_partial(
-        &mut self,
-        b: &mut FunctionBuilder,
-        params: &Params,
-        signal: SignalKey,
-        src_val: Value,
-        src_spc: Option<Value>,
-        s_size: u32,
-        off: Value,
-        off_known: Value,
-    ) {
-        let (href, rt, mode) = self.info.heap_ref(signal);
-        let d_size = self.gl.signals[signal].size.get();
-        let heap = params.heap_ptr;
-        let base_bit = href.offset.bit_offset;
-        let do_bb = b.create_block();
-        let merge = b.create_block();
-        if mode == LogicMode::TwoValue {
-            let cur = read_heap_field(b, heap, base_bit, d_size);
-            // Mask to the field width: an insert whose bits land at/after d_size
-            // (e.g. an out-of-range index like a[1] on a 1-bit reg) must be a
-            // no-op, not leak bits or spuriously poke.
-            let new = insert_bits(b, cur, src_val, off, s_size);
-            let new = maskv(b, new, d_size);
-            let changed = b.ins().icmp(IntCC::NotEqual, new, cur);
-            let guard = b.ins().band(changed, off_known);
-            b.ins().brif(guard, do_bb, &[], merge, &[]);
-            b.switch_to_block(do_bb);
-            self.call_drive_signal(b, params, rt);
-            write_heap_field(b, heap, base_bit, d_size, new);
-        } else {
-            let (cur_val, cur_spc) = fv_load(b, heap, href, d_size);
-            let sspc = src_spc.unwrap_or(src_val);
-            // Mask to the field width so out-of-range inserted bits neither leak
-            // into neighbouring bits nor spuriously mark the field changed.
-            let new_val = insert_bits(b, cur_val, src_val, off, s_size);
-            let new_val = maskv(b, new_val, d_size);
-            let new_spc = insert_bits(b, cur_spc, sspc, off, s_size);
-            let new_spc = maskv(b, new_spc, d_size);
-            let c1 = b.ins().icmp(IntCC::NotEqual, new_val, cur_val);
-            let c2 = b.ins().icmp(IntCC::NotEqual, new_spc, cur_spc);
-            let ch = b.ins().bor(c1, c2);
-            let guard = b.ins().band(ch, off_known);
-            b.ins().brif(guard, do_bb, &[], merge, &[]);
-            b.switch_to_block(do_bb);
-            self.call_drive_signal(b, params, rt);
-            self.fv_store(b, heap, href, d_size, new_val, new_spc);
-        }
-        b.ins().jump(merge, &[]);
-        b.switch_to_block(merge);
     }
 
     /// Inline instructions for "get next event or return" as a tailcall.
@@ -1572,83 +1191,6 @@ fn ioff(b: &mut FunctionBuilder, _ptr: Type, base: Value, off: usize) -> Value {
     }
 }
 
-/// Insert `ins_size` low bits of `ins` at runtime bit offset `off` into `cur`.
-fn insert_bits(
-    b: &mut FunctionBuilder,
-    cur: Value,
-    ins: Value,
-    off: Value,
-    ins_size: u32,
-) -> Value {
-    let m = mask_of(ins_size);
-    let mc = b.ins().iconst(I64, m);
-    let mask_sh = b.ins().ishl(mc, off);
-    let notm = b.ins().bnot(mask_sh);
-    let cleared = b.ins().band(cur, notm);
-    let insm = b.ins().band_imm_u(ins, m);
-    let placed = b.ins().ishl(insm, off);
-    b.ins().bor(cleared, placed)
-}
-
-/// Read a `size`-bit (<=64) field at absolute heap bit position `bit`.
-fn read_heap_field(b: &mut FunctionBuilder, heap: Value, bit: usize, size: u32) -> Value {
-    let word = bit / 64;
-    let shift = bit % 64;
-    let w0 = b.ins().load(I64, mem(), heap, (word * 8) as i32);
-    if shift + size as usize <= 64 {
-        let s = if shift == 0 {
-            w0
-        } else {
-            b.ins().ushr_imm_u(w0, shift as i64)
-        };
-        maskv(b, s, size)
-    } else {
-        let w1 = b.ins().load(I64, mem(), heap, ((word + 1) * 8) as i32);
-        let lo = b.ins().ushr_imm_u(w0, shift as i64);
-        let hi = b.ins().ishl_imm_u(w1, (64 - shift) as i64);
-        let comb = b.ins().bor(lo, hi);
-        maskv(b, comb, size)
-    }
-}
-
-/// Write a `size`-bit (<=64) field `val` at absolute heap bit position `bit` (RMW).
-fn write_heap_field(b: &mut FunctionBuilder, heap: Value, bit: usize, size: u32, val: Value) {
-    let word = bit / 64;
-    let shift = bit % 64;
-    let crosses = shift + size as usize > 64;
-    if !crosses {
-        if size == 64 && shift == 0 {
-            b.ins().store(mem(), val, heap, (word * 8) as i32);
-        } else {
-            let keep = !(mask_u64(size) << shift);
-            let cur = b.ins().load(I64, mem(), heap, (word * 8) as i32);
-            let cleared = b.ins().band_imm_u(cur, keep as i64);
-            let masked = maskv(b, val, size);
-            let placed = if shift == 0 {
-                masked
-            } else {
-                b.ins().ishl_imm_u(masked, shift as i64)
-            };
-            let neww = b.ins().bor(cleared, placed);
-            b.ins().store(mem(), neww, heap, (word * 8) as i32);
-        }
-    } else {
-        let masked = maskv(b, val, size);
-        let lo_size = 64 - shift;
-        let cur0 = b.ins().load(I64, mem(), heap, (word * 8) as i32);
-        let cleared0 = b.ins().band_imm_u(cur0, mask_u64(shift as u32) as i64);
-        let placed0 = b.ins().ishl_imm_u(masked, shift as i64);
-        let new0 = b.ins().bor(cleared0, placed0);
-        b.ins().store(mem(), new0, heap, (word * 8) as i32);
-        let hi_size = size as usize - lo_size;
-        let cur1 = b.ins().load(I64, mem(), heap, ((word + 1) * 8) as i32);
-        let cleared1 = b.ins().band_imm_u(cur1, (!mask_u64(hi_size as u32)) as i64);
-        let hi_src = b.ins().ushr_imm_u(masked, lo_size as i64);
-        let new1 = b.ins().bor(cleared1, hi_src);
-        b.ins().store(mem(), new1, heap, ((word + 1) * 8) as i32);
-    }
-}
-
 /// Extract a `d_size`-bit four-value field at runtime bit offset `off` from a
 /// source held as `src_nwords` value words at `val_ptr` (and, for four-value
 /// sources, `src_nwords` special words at `spc_ptr`). Bits at or past `s_size`,
@@ -1777,6 +1319,7 @@ pub fn compile<'a>(
     let mut c = Compiler::new(
         num_signals,
         num_plugins,
+        WatchMap::new(&gl.bbs),
         gl,
         info,
         heap_builder,
@@ -1801,17 +1344,46 @@ pub fn compile<'a>(
     }
     c.build_entry(&mut fb);
 
-    // Pre-pass: collect all listeners (in the same order build_tr discovers
-    // them) so drive sites can inline the complete wake set.
+    // Listeners come straight from the watch map, which has already numbered every watch and
+    // sorted them by signal, so a drive site can inline its complete wake set.
+    c.num_listening = c.watch_map.num_watches() as u32;
+    let listeners: Vec<(usize, Listener)> = c
+        .watch_map
+        .watchers()
+        .iter()
+        .filter_map(|(condition, index)| {
+            // @NOTE: The watch map covers every block in the slot map, and some belong to no
+            // process: the gate-level uart-aes bench leaves exactly one temporal region detached,
+            // at every optimization level, so this is not the optimizer dropping it. A watch whose
+            // target region no process lists can never be armed, so nothing can wake it and there
+            // is no function to wake it into. It keeps its index -- and so its bit in `listening`
+            // -- which just goes unused. Where those regions come from is still unexplained.
+            let target = *c.tr_funcs.get(&c.watch_map.watch_target(*index))?;
+            let rt = c.info.rt_signal_map[&condition.signal];
+            let listener = Listener {
+                offset: *index as u32,
+                target,
+            };
+            Some((rt.as_usize(), listener))
+        })
+        .collect();
+    for (rt, listener) in listeners {
+        c.listeners[rt].push(listener);
+    }
+
+    // A process is "standing" (armed but not run at t=0) only if at least one watcher does NOT
+    // trigger a t=0 poke -- matches the bytecode filter. Its arming Watch is the first one whose
+    // watch set equals the standing set, in the order `build_tr` discovers them, so this walk has
+    // to keep visiting blocks in that order even though the listeners no longer come from it.
     for (pi, (_k, process)) in gl.processes.iter().enumerate() {
-        // A process is "standing" (armed but not run at t=0) only if at least
-        // one watcher does NOT trigger a t=0 poke — matches the bytecode filter.
-        let standing = process.standing.as_deref().filter(|conditions| {
+        let Some(standing) = process.standing.as_deref().filter(|conditions| {
             conditions
                 .iter()
                 .any(|c| !gl.signals[c.signal].triggers_t0_poke())
-        });
-        for tr in process.regions.iter() {
+        }) else {
+            continue;
+        };
+        'process: for tr in process.regions.iter() {
             let mut seen = vogls_utils::VgHashSet::default();
             seen.insert(tr.entry());
             let mut order = vec![tr.entry()];
@@ -1825,27 +1397,16 @@ pub fn compile<'a>(
                 });
             }
             for &k in &order {
-                if let BasicBlockTerminator::Watch(tr, conditions) = &c.gl.bbs[k].terminator {
-                    let target = c.tr_funcs[tr];
-                    let offset = c.num_listening;
-                    c.num_listening += 1;
-                    for condition in conditions.iter() {
-                        let rt = c.info.rt_signal_map[&condition.signal];
-                        c.listeners[rt.as_usize()].push(Listener { offset, target });
-                    }
-                    c.watch_offset.insert(k, offset);
-                    // If this process is standing and this is its arming Watch (the
-                    // watch set equals the standing set), record the offset so the
-                    // listener is pre-armed at startup instead of the body running.
-                    if let Some(sset) = standing {
-                        if !c.standing_procs.contains(&pi)
-                            && sset.len() == conditions.len()
-                            && sset.iter().zip(conditions.iter()).all(|(a, b)| a == b)
-                        {
-                            c.standing_procs.insert(pi);
-                            c.standing_arm_offsets.push(offset);
-                        }
-                    }
+                let BasicBlockTerminator::Watch(_, conditions) = &c.gl.bbs[k].terminator else {
+                    continue;
+                };
+                if standing.len() == conditions.len()
+                    && standing.iter().zip(conditions.iter()).all(|(a, b)| a == b)
+                {
+                    c.standing_procs.insert(pi);
+                    c.standing_arm_offsets
+                        .push(c.watch_map.get_watch_index(k) as u32);
+                    break 'process;
                 }
             }
         }
