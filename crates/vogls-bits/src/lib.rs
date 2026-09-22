@@ -1233,24 +1233,6 @@ impl Bits {
         }
     }
 
-    pub fn clog10(&self) -> u32 {
-        match self.as_data_ref() {
-            BitsDataRef::InlineTv(v) => {
-                if v == 0 {
-                    1
-                } else {
-                    v.ilog10()
-                }
-            }
-
-            // @TODO: This is inaccurate
-            BitsDataRef::SeparateTv(_) => {
-                (f64::from(self.leading_zeroes()) / 10.0f64.log2()).ceil() as u32
-            }
-            _ => todo!(),
-        }
-    }
-
     pub fn select_bit(&self, at: u32) -> bool {
         assert!(at < self.size().get());
         (self.as_slice()[(at / 8) as usize] >> (at % 8)) & 1 != 0
