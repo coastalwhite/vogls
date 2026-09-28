@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{self, Cursor, stderr, stdin, stdout};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::file::{FileId, FileIdFfi, FileOpenOptions};
@@ -10,6 +10,8 @@ use crate::{World, WorldError, WorldResult};
 struct FileTable {
     open: Vec<Option<std::fs::File>>,
     free_list: Vec<FileId>,
+
+    cwd: Option<PathBuf>,
 }
 
 impl FileTable {
@@ -17,7 +19,12 @@ impl FileTable {
         Self {
             open: Vec::new(),
             free_list: Vec::new(),
+            cwd: None,
         }
+    }
+
+    pub fn set_current_dir(&mut self, path: impl Into<PathBuf>) {
+        self.cwd = Some(path.into());
     }
 
     pub fn open(&mut self, path: &Path, options: FileOpenOptions) -> WorldResult<FileId> {
@@ -30,7 +37,11 @@ impl FileTable {
             .append(options.contains(FileOpenOptions::APPEND))
             .truncate(options.contains(FileOpenOptions::TRUNCATE));
 
-        let file = open_options.open(path)?;
+        let file = match self.cwd.as_ref() {
+            None => open_options.open(path),
+            Some(_) if path.is_absolute() => open_options.open(path),
+            Some(cwd) => open_options.open(&cwd.join(path)),
+        }?;
         let file_id = match self.free_list.pop() {
             Some(id) => {
                 self.open[id.to_ffi() as usize] = Some(file);
@@ -84,6 +95,10 @@ impl StdWorld {
             file_table: FileTable::new(),
         }
     }
+
+    pub fn set_current_dir(&mut self, path: impl Into<PathBuf>) {
+        self.file_table.set_current_dir(path);
+    }
 }
 
 impl World for StdWorld {
@@ -116,7 +131,12 @@ impl World for StdWorld {
     }
 
     fn read_to_string(&mut self, path: &'_ Path) -> WorldResult<String> {
-        std::fs::read_to_string(path).map_err(WorldError::from)
+        match self.file_table.cwd.as_ref() {
+            None => std::fs::read_to_string(path),
+            Some(_) if path.is_absolute() => std::fs::read_to_string(path),
+            Some(cwd) => std::fs::read_to_string(&cwd.join(path)),
+        }
+        .map_err(WorldError::from)
     }
 }
 
@@ -172,6 +192,12 @@ pub struct StdWorldCaptured {
     pub stdout: IoWriteCapture,
     pub stderr: IoWriteCapture,
     pub stdin: IoReadCapture,
+}
+
+impl StdWorldCaptured {
+    pub fn set_current_dir(&mut self, path: impl Into<PathBuf>) {
+        self.inner.set_current_dir(path)
+    }
 }
 
 impl World for StdWorldCaptured {

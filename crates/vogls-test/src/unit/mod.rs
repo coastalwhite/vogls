@@ -13,8 +13,8 @@ use vogls::design::{Arena, Macro};
 use vogls::{DesignBuilder, LogicMode, Optimizations, StdWorldCaptured, VirDesignBuilder};
 use vogls_ir::time::{TimeResolution, TimeSize};
 
-use self::info::{Backend, ExpectedFail, SelectLogicMode, TestInfo, TestPhase};
-use crate::{ANSI_END, ANSI_GREEN, ANSI_RED};
+use self::info::{ExpectedFail, SelectLogicMode, TestInfo, TestPhase};
+use crate::{ANSI_END, ANSI_GREEN, ANSI_RED, Backend};
 
 mod info;
 
@@ -42,7 +42,7 @@ pub struct UnitArgs {
     num_threads: usize,
 }
 impl UnitArgs {
-    pub fn run(&self) -> Result<std::process::ExitCode, Box<dyn Error>> {
+    pub fn run(&self) -> Result<std::process::ExitCode, Box<dyn Error + Send + Sync>> {
         let manifest_path = env!("CARGO_WORKSPACE_DIR");
         let tests_dir = Path::new(manifest_path).join("tests");
 
@@ -57,9 +57,11 @@ impl UnitArgs {
             let entry = entry?;
             let file_type = entry.file_type()?;
             if file_type.is_dir() {
-                let walker = std::fs::read_dir(entry.path())?;
                 walkers.push(w);
-                walkers.push(walker);
+                if !entry.path().join("test.toml").exists() {
+                    let walker = std::fs::read_dir(entry.path())?;
+                    walkers.push(walker);
+                }
                 continue;
             } else if file_type.is_file()
                 && (entry.file_name().as_encoded_bytes().ends_with(b".v")

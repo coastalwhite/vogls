@@ -1,0 +1,10 @@
+name       = "prime"
+top_module = "tb"
+sources    = ["tb.v", "../../../submodules/picorv32/picorv32.v"]
+defines    = []
+mode       = "two-valued"
+output = """
+Trap Detected!
+Prime =       7919
+[FINISH]
+"""

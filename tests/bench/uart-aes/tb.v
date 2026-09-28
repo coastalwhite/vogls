@@ -1,7 +1,7 @@
 `ifdef GLS
 `define NO_ICE40_DEFAULT_ASSIGNMENTS
-`include "../../submodules/fpga-tools/ice40/cells_sim.v"
-`include "../../submodules/fpga-tools/components/uart.v"
+`include "../../../submodules/fpga-tools/ice40/cells_sim.v"
+`include "../../../submodules/fpga-tools/components/uart.v"
 `include "./build/gtl.v"
 `else
 `include "./uart-hello.v"
