@@ -43,9 +43,8 @@ pub struct UnitArgs {
 }
 impl UnitArgs {
     pub fn run(&self) -> Result<std::process::ExitCode, Box<dyn Error>> {
-        let manifest_path = env!("CARGO_MANIFEST_PATH");
-        let manifest_dir = Path::new(manifest_path).parent().unwrap();
-        let tests_dir = manifest_dir.join("tests");
+        let manifest_path = env!("CARGO_WORKSPACE_DIR");
+        let tests_dir = Path::new(manifest_path).join("tests");
 
         let walker = std::fs::read_dir(&tests_dir)?;
         let mut paths = Vec::new();
