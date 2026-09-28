@@ -1,3 +1,4 @@
+pico_path := "../../../submodules/picorv32/picorv32.v"
 # .bss has to start at 0x400: tb.v routes every access at or above that
 # address to its separate `primes` array, which is what prime.S walks.
 build:
@@ -6,10 +7,10 @@ build:
     python3 createmem.py
 
 verilator-build:
-    verilator tb.v ../../submodules/picorv32/picorv32.v --binary --top-module tb --timing
+    verilator tb.v ${{pico_path}} --binary --top-module tb --timing
 
 icarus-build:
-    iverilog tb.v ../../submodules/picorv32/picorv32.v -s tb -o icarus
+    iverilog tb.v ${{pico_path}} -s tb -o icarus
 
 run-verilator:
     @time just verilator-build
@@ -20,10 +21,10 @@ run-icarus:
     @time ./icarus
 
 run-vogls-interpret:
-    vogls tb.v ../../submodules/picorv32/picorv32.v -m tb --timings --opt-rounds=1
+    vogls tb.v ${{pico_path}} -m tb --timings --opt-rounds=1
 
 run-vogls-compile:
-    vogls tb.v ../../submodules/picorv32/picorv32.v -m tb -C --timings --opt-rounds=1
+    vogls tb.v ${{pico_path}} -m tb -C --timings --opt-rounds=1
 
 run-benchmark:
     @./run_benchmarks.sh
