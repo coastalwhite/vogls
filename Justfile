@@ -24,7 +24,7 @@ test *FLAGS:
 
 integration-test-setup:
     git submodule update --init
-    cd tests/bench/prime && {{just_executable()}} build
+    {{just_executable()}} -f tests/bench/prime/Justfile build
 
 integration-test *FLAGS:
     cargo build --bin vogls-test --profile=release

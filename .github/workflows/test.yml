@@ -33,7 +33,7 @@ jobs:
 
       - uses: extractions/setup-just@f8a3cce218d9f83db3a2ecd90e41ac3de6cdfd9b # tag=v3
         with:
-          just-version: 1.5.0
+          just-version: 1.43.1
 
       - name: cargo generate-lockfile
         if: hashFiles('Cargo.lock') == ''
