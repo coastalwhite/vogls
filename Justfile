@@ -20,7 +20,7 @@ test-cranelift *FLAGS:
 
 test *FLAGS:
     cargo build --bin vogls-test --profile=fast-dev
-    ./target/fast-dev/vogls-test {{FLAGS}}
+    ./target/fast-dev/vogls-test unit {{FLAGS}}
 
 coverage:
     cargo llvm-cov clean --workspace
