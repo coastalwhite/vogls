@@ -41,3 +41,6 @@ jobs:
 
       - name: Tests
         run: just test
+
+      - name: Integration Tests
+        run: just integration-test

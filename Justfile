@@ -22,6 +22,10 @@ test *FLAGS:
     cargo build --bin vogls-test --profile=fast-dev
     ./target/fast-dev/vogls-test unit {{FLAGS}}
 
+integration-test *FLAGS:
+    cargo build --bin vogls-test --profile=release
+    ./target/release/vogls-test integration {{FLAGS}}
+
 coverage:
     cargo llvm-cov clean --workspace
     # cargo llvm-cov --no-report test
