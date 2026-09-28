@@ -43,4 +43,6 @@ jobs:
         run: just test
 
       - name: Integration Tests
-        run: just integration-test
+        run: |
+          just integration-test-setup
+          just integration-test

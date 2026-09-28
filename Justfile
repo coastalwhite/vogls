@@ -22,6 +22,10 @@ test *FLAGS:
     cargo build --bin vogls-test --profile=fast-dev
     ./target/fast-dev/vogls-test unit {{FLAGS}}
 
+integration-test-setup:
+    git submodule update --init
+    cd tests/bench/prime && {{just_executable()}} build
+
 integration-test *FLAGS:
     cargo build --bin vogls-test --profile=release
     ./target/release/vogls-test integration {{FLAGS}}
