@@ -1,0 +1,8 @@
+name       = "uart-aes"
+top_module = "tb"
+sources    = ["tb.v"]
+defines    = ["GLS", "ICE40_U"]
+output = """
+Output = 7aca0fd9bcd6ec7c9f97466616e6a282
+[FINISH]
+"""

@@ -6,13 +6,9 @@ use std::str::FromStr;
 use vogls::{LogicMode, OptFlags};
 use vogls_ir::time::TimeUnit;
 
-use super::VerifyOutput;
+use crate::Backend;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Backend {
-    Bytecode,
-    Cranelift,
-}
+use super::VerifyOutput;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectLogicMode {

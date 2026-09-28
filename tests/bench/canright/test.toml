@@ -1,0 +1,4 @@
+name       = "canright"
+top_module = "tb"
+sources    = ["aes_masked_sbox.v"]
+defines    = []
