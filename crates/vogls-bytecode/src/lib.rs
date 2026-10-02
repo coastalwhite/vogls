@@ -16,6 +16,7 @@ mod itype_binary;
 mod load;
 mod load_imm;
 pub mod lower;
+mod poke;
 pub mod profile;
 mod real;
 mod reg;
@@ -46,6 +47,7 @@ pub use intrinsics::*;
 pub use itype_binary::*;
 pub use load::*;
 pub use load_imm::*;
+pub use poke::*;
 pub use real::*;
 pub use rtype_binary::*;
 pub use rtype_unary::*;
@@ -146,7 +148,8 @@ impl Bytecode {
     }
 
     fn unwrap_size(self) -> VectorSize {
-        VectorSize::new(self.0).expect("Expected non-zero size")
+        debug_assert!(self.0 > 0);
+        VectorSize::new(self.0.max(1)).unwrap()
     }
 }
 
@@ -484,6 +487,18 @@ opcodes![
     FvSet1Spread,
     TvSet1Relative,
     FvSet1Relative,
+    TvPokePosedge,
+    TvPokeNegedge,
+    FvPokePosedge,
+    FvPokeNegedge,
+    PokeEdgeRelative,
+    HeapShiftReduceOr,
+    HeapShiftReduceOrRel,
+    ShiftReduceOr,
+    ShiftReduceOrOutlined,
+    Wake,
+    SetLastUpdateTime,
+    PluginPoke,
 ];
 
 #[derive(Clone)]
@@ -525,6 +540,10 @@ impl<const N: usize> InlineNBitSize<N> {
             return Self(Some(size));
         }
         Self(None)
+    }
+
+    fn is_inline(self) -> bool {
+        self.0.is_some()
     }
 }
 
@@ -1282,7 +1301,7 @@ impl Design {
 
     pub fn poke_signal(&self, state: &mut State, key: RtSignalKey) {
         for index in self.watchers.get(key.as_usize()) {
-            wake_all(*index, &mut state.schedule, &mut state.listeners);
+            wake_at_index(*index, &mut state.schedule, &mut state.listeners);
         }
     }
 }

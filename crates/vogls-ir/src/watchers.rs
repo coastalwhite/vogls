@@ -65,7 +65,7 @@ impl WatchMap {
     pub fn watch_target(&self, index: usize) -> TemporalRegionKey {
         self.targets[index]
     }
-     
+
     pub fn num_watches(&self) -> usize {
         self.targets.len()
     }
@@ -92,5 +92,12 @@ impl WatchMap {
 
     pub fn watchers(&self) -> &[(WatchCondition, usize)] {
         &self.watchers
+    }
+
+    pub fn signal_watchers(&self, signal: SignalKey) -> &[(WatchCondition, usize)] {
+        match self.map.get(&signal) {
+            None => &[],
+            Some(range) => &self.watchers[range.clone()],
+        }
     }
 }

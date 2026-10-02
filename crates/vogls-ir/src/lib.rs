@@ -2303,4 +2303,8 @@ impl SignalSlice {
     pub fn contains(self, idx: u32) -> bool {
         (self.lsb()..=self.msb()).contains(&idx)
     }
+
+    pub fn to_range_inclusive(&self) -> std::ops::RangeInclusive<u32> {
+        self.lsb()..=self.msb()
+    }
 }

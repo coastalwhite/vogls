@@ -4,9 +4,7 @@ use std::{fmt, io};
 
 use slotmap::SlotMap;
 use vogls_bytecode::lower::{LowerBytecodeOptions, lower_process_to_bytecode};
-use vogls_bytecode::{
-    BytecodeEncoder, BytecodeListeners, BytecodeWatcher, BytecodeWatchers, Schedule,
-};
+use vogls_bytecode::{BytecodeEncoder, BytecodeListeners, BytecodeWatchers, Schedule};
 use vogls_codegen::lsra::StackTracker;
 use vogls_codegen::{HeapBuilder, HeapOffset, HeapRef};
 use vogls_frontend::ident_table::IdentTable;
@@ -16,7 +14,7 @@ use vogls_ir::ProcessKind;
 use vogls_ir::optimize::Optimizations;
 use vogls_ir::time::{TimeFormat, TimeResolution};
 use vogls_ir::watchers::WatchMap;
-use vogls_ir::{GlobalContext, LogicMode, SCALAR_VSIZE, Signal, SignalKey};
+use vogls_ir::{GlobalContext, LogicMode, SCALAR_VSIZE, Signal, SignalKey, SignalSlice};
 use vogls_runtime::plugins::RuntimePlugin;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_utils::{TableKey as _, VgHashMap};
@@ -203,7 +201,9 @@ impl LoweredDesign {
             .then(vogls_bytecode::profile::BytecodeDebugInfo::default);
 
         let mut offsets = vec![0u64; rt_signal_map.len() + 1];
-        let mut watchers = vec![BytecodeWatcher::default(); watch_map.watchers().len()];
+        let mut watchers = vec![0u64; watch_map.watchers().len()];
+        let mut watcher_offsets =
+            vec![SignalSlice::with_end(SCALAR_VSIZE); watch_map.watchers().len()];
         for (signal, range) in watch_map.map() {
             offsets[rt_signal_map[signal].as_usize()] = range.len() as u64;
         }
@@ -219,14 +219,22 @@ impl LoweredDesign {
             let end = offsets[rt_signal + 1];
             watchers[start as usize..end as usize]
                 .iter_mut()
+                .zip(&mut watcher_offsets[start as usize..end as usize])
                 .zip(
                     watch_map.watchers()[range.clone()]
                         .iter()
-                        .map(|(c, v)| BytecodeWatcher::from_condition(*v as u64, *c)),
+                        .map(|(c, v)| (*v as u64, c.slice())),
                 )
-                .for_each(|(d, s)| *d = s);
+                .for_each(|((d, o), (s, slice))| {
+                    *d = s;
+                    *o = slice;
+                });
         }
-        let bc_watch_map = BytecodeWatchers { offsets, watchers };
+        let bc_watch_map = BytecodeWatchers {
+            offsets,
+            watchers,
+            watcher_offsets,
+        };
 
         for (process_index, process) in self.gl.processes.keys().enumerate() {
             lower_process_to_bytecode(

@@ -1,3 +1,5 @@
+use std::cmp;
+
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_codegen::lsra::{Slot, StackOffsets, StackTracker};
 use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef, SixBitSize, insert_bb_phis};
@@ -5,7 +7,8 @@ use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
     GlobalContext, Instruction, IntrinsicOp, LabelDisplay, LogicMode, ProcessKey, ResizeOp,
-    SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalKey, UnaryOp, VSIZE_64, VariableKey, VariableMap,
+    SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalKey, SignalSlice, UnaryOp, VSIZE_64, VariableKey,
+    VariableMap, VectorSize, WatchEdge,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
@@ -2267,6 +2270,8 @@ fn lower_instruction(
             // T4:    RPARTIAL (ADDR / VAL / SPC)
             // T5:    RPARTIAL (VAL)
 
+            use LogicMode as M;
+
             let rd = to_reg(
                 bce,
                 *dst,
@@ -2291,64 +2296,132 @@ fn lower_instruction(
 
             let signal_addr = signal_address(*signal, signals, io_signals);
 
-            use LogicMode as M;
+            if let Some(watcher_range) = watch_map.map().get(signal) {
+                let watchers = watch_map.watchers();
+                let mut range_offset = 0;
+                for slice in vogls_utils::IterSliceContinguous::new(
+                    &watchers[watcher_range.clone()],
+                    |(c, _)| c,
+                ) {
+                    let start = (watcher_range.start + range_offset) as u64;
+                    let end = start + slice.len() as u64;
+                    range_offset += slice.len();
+
+                    let (condition, _) = slice[0];
+
+                    const ROFF: Reg = T5;
+                    const SCRATCH: Reg = T4;
+                    match condition.edge {
+                        WatchEdge::Any { bit_length: _ } => continue,
+                        WatchEdge::Posedge | WatchEdge::Negedge
+                            if !(*partial..*partial + src_size.get())
+                                .contains(&condition.offset) =>
+                        {
+                            continue;
+                        }
+                        WatchEdge::Posedge
+                            if src_size == SCALAR_VSIZE && signal_size == SCALAR_VSIZE =>
+                        {
+                            match src.mode() {
+                                M::TwoValue => {
+                                    bce.tv_poke_posedge(rs, signal_addr, 0, start, end, SCRATCH)
+                                }
+                                M::FourValue => {
+                                    bce.fv_poke_posedge(rs, signal_addr, 0, start, end, SCRATCH)
+                                }
+                            }
+                        }
+                        WatchEdge::Negedge
+                            if src_size == SCALAR_VSIZE && signal_size == SCALAR_VSIZE =>
+                        {
+                            match src.mode() {
+                                M::TwoValue => {
+                                    bce.tv_poke_negedge(rs, signal_addr, 0, start, end, SCRATCH)
+                                }
+                                M::FourValue => {
+                                    bce.fv_poke_negedge(rs, signal_addr, 0, start, end, SCRATCH)
+                                }
+                            }
+                        }
+                        WatchEdge::Posedge => {
+                            bce.load_u64(ROFF, *partial as u64);
+                            match src.mode() {
+                                M::TwoValue => bce.tv_poke_posedge_rel(
+                                    rs,
+                                    ROFF,
+                                    signal_addr,
+                                    condition.offset,
+                                    signal_size,
+                                    src_size,
+                                    start,
+                                    end,
+                                ),
+                                M::FourValue => bce.fv_poke_posedge_rel(
+                                    rs,
+                                    ROFF,
+                                    signal_addr,
+                                    condition.offset,
+                                    signal_size,
+                                    src_size,
+                                    start,
+                                    end,
+                                ),
+                            }
+                        }
+                        WatchEdge::Negedge => {
+                            bce.load_u64(ROFF, *partial as u64);
+                            match src.mode() {
+                                M::TwoValue => bce.tv_poke_negedge_rel(
+                                    rs,
+                                    ROFF,
+                                    signal_addr,
+                                    condition.offset,
+                                    signal_size,
+                                    src_size,
+                                    start,
+                                    end,
+                                ),
+                                M::FourValue => bce.fv_poke_negedge_rel(
+                                    rs,
+                                    ROFF,
+                                    signal_addr,
+                                    condition.offset,
+                                    signal_size,
+                                    src_size,
+                                    start,
+                                    end,
+                                ),
+                            }
+                        }
+                    }
+                }
+            }
+
             if src_size == SCALAR_VSIZE {
                 let addr = signal_addr + *partial as u64;
 
                 const SCRATCH: Reg = T2;
-                let rt_signal = io_signals[signal];
-                let lupdt_index = lupdt_indexes.get(&rt_signal).copied();
-                let watch_index =
-                    (watch_map.num_watch_indices(*signal) > 0).then(|| rt_signal.as_u64());
-                let plugin_rt_index = options.has_plugins.then_some(rt_signal.as_u64());
-
                 match (src.mode(), signal_size == SCALAR_VSIZE) {
                     (M::TwoValue, _) => {
-                        bce.tv_set1(
-                            Some(rd),
-                            rs,
-                            signal_addr,
-                            *partial as u64,
-                            lupdt_index,
-                            watch_index,
-                            plugin_rt_index,
-                            SCRATCH,
-                        );
+                        bce.tv_set1(rd, rs, addr, SCRATCH);
                     }
                     (M::FourValue, true) => {
-                        bce.fv_set1(
-                            Some(rd),
-                            rs,
-                            addr,
-                            lupdt_index,
-                            watch_index,
-                            plugin_rt_index,
-                        );
+                        bce.fv_set1(rd, rs, addr, SCRATCH);
                     }
                     (M::FourValue, false) => {
                         bce.fv_set1spread(
-                            Some(rd),
+                            rd,
                             rs,
                             signal_addr,
                             *partial as u64,
                             signal_size,
-                            lupdt_index,
-                            watch_index,
-                            plugin_rt_index,
                             SCRATCH,
                         );
                     }
                 }
             } else {
                 const SCRATCH: Reg = T2;
-                let rt_signal = io_signals[signal];
-                let lupdt_index = lupdt_indexes.get(&rt_signal).copied();
-                let watch_index =
-                    (watch_map.num_watch_indices(*signal) > 0).then(|| rt_signal.as_u64());
-                let plugin_rt_index = options.has_plugins.then_some(rt_signal.as_u64());
-
                 let is_partial = *partial != 0 || signal_size != src_size;
-                let offset = signal_addr.wrapping_add(u64::from(*partial));
 
                 match (
                     src.mode(),
@@ -2356,107 +2429,116 @@ fn lower_instruction(
                     is_partial,
                 ) {
                     (M::TwoValue, None, false) => {
-                        bce.tv_set_whole_heap(
-                            Some(rd),
-                            rs,
-                            signal_addr,
-                            src_size,
-                            0,
-                            lupdt_index,
-                            watch_index,
-                            plugin_rt_index,
-                        );
+                        bce.tv_set_whole_heap(rd, rs, signal_addr, src_size);
                     }
                     (M::FourValue, None, false) => {
-                        bce.fv_set_whole_heap(
-                            Some(rd),
-                            rs,
-                            signal_addr,
-                            signal_size,
-                            signal_size,
-                            0,
-                            lupdt_index,
-                            watch_index,
-                            plugin_rt_index,
-                        );
+                        bce.fv_set_whole_heap(rd, rs, signal_addr, src_size);
                     }
                     (M::TwoValue, None, true) => {
                         bce.tv_set_partial_heap(
                             Some(rd),
                             rs,
-                            offset,
+                            signal_addr,
                             src_size,
                             signal_size,
-                            u64::from(*partial),
-                            lupdt_index,
-                            watch_index,
-                            plugin_rt_index,
+                            *partial,
                         );
                     }
                     (M::FourValue, None, true) => {
                         bce.fv_set_partial_heap(
                             Some(rd),
                             rs,
-                            offset,
+                            signal_addr,
                             src_size,
                             signal_size,
-                            signal_size,
-                            u64::from(*partial),
-                            lupdt_index,
-                            watch_index,
-                            plugin_rt_index,
+                            *partial,
                         );
                     }
-                    (M::TwoValue, Some(size), false) => bce.tv_set_aligned(
-                        Some(rd),
-                        rs,
-                        signal_addr,
-                        size,
-                        0,
-                        lupdt_index,
-                        watch_index,
-                        plugin_rt_index,
-                        SCRATCH,
-                    ),
-                    (M::FourValue, Some(size), false) => bce.fv_set_aligned(
-                        Some(rd),
-                        rs,
-                        signal_addr,
-                        size,
-                        signal_size,
-                        0,
-                        lupdt_index,
-                        watch_index,
-                        plugin_rt_index,
-                        SCRATCH,
-                    ),
+                    (M::TwoValue, Some(size), false) => {
+                        bce.tv_set_aligned(Some(rd), rs, signal_addr, size, 0, SCRATCH)
+                    }
+                    (M::FourValue, Some(size), false) => {
+                        bce.fv_set_aligned(Some(rd), rs, signal_addr, size, signal_size, 0, SCRATCH)
+                    }
                     (M::TwoValue, Some(size), true) => bce.tv_set_unaligned(
                         Some(rd),
                         rs,
-                        offset,
                         size,
-                        offset,
-                        src_size,
+                        signal_addr,
                         u64::from(*partial),
-                        lupdt_index,
-                        watch_index,
-                        plugin_rt_index,
                         SCRATCH,
                     ),
                     (M::FourValue, Some(size), true) => bce.fv_set_unaligned(
                         Some(rd),
                         rs,
-                        offset,
                         size,
-                        offset,
-                        src_size,
+                        signal_addr,
                         signal_size,
                         u64::from(*partial),
-                        lupdt_index,
-                        watch_index,
-                        plugin_rt_index,
                         SCRATCH,
                     ),
+                }
+            }
+
+            let rt_signal = io_signals[signal];
+            let lupdt_index = lupdt_indexes.get(&rt_signal).copied();
+            let plugin_rt_index = options.has_plugins.then_some(rt_signal);
+            let drive_slice = SignalSlice::from_width(*partial, src_size).unwrap();
+
+            const SCRATCH1: Reg = T0;
+            const SCRATCH2: Reg = T2;
+            let mask_any = match SixBitSize::from_vector_size(src_size) {
+                None => {
+                    bce.heap_tv_reduce_or(SCRATCH1, rd, src_size);
+                    SCRATCH1
+                }
+                Some(_) => rd,
+            };
+
+            if let Some(index) = lupdt_index {
+                bce.set_lupdt(mask_any, index);
+            }
+            if let Some(rt_signal) = plugin_rt_index {
+                bce.plugin_poke(mask_any, rt_signal);
+            }
+            if let Some(watcher_range) = watch_map.map().get(signal) {
+                let watchers = watch_map.watchers();
+                let mut range_offset = 0;
+                for slice in vogls_utils::IterSliceContinguous::new(
+                    &watchers[watcher_range.clone()],
+                    |(c, _)| c,
+                ) {
+                    let start = (watcher_range.start + range_offset) as u64;
+                    let end = start + slice.len() as u64;
+                    range_offset += slice.len();
+
+                    let (condition, _) = slice[0];
+                    if condition.edge.is_directed() || !condition.slice().overlaps(drive_slice) {
+                        continue;
+                    }
+
+                    let rel_offset = condition.offset.saturating_sub(*partial);
+                    let rel_size = cmp::min(
+                        src_size,
+                        VectorSize::new(condition.bit_length().get() - rel_offset).unwrap(),
+                    );
+
+                    match SixBitSize::from_vector_size(src_size) {
+                        Some(_) => bce.wake(
+                            rd,
+                            rel_offset as u8,
+                            SixBitSize::from_vector_size(rel_size).unwrap(),
+                            start,
+                            end,
+                        ),
+                        None if condition.offset == 0 && signal_size == condition.bit_length() => {
+                            bce.wake(mask_any, 0, SixBitSize::N64, start, end)
+                        }
+                        None => {
+                            bce.heap_shift_reduce_or(SCRATCH2, rd, src_size, condition.offset);
+                            bce.wake(SCRATCH2, 0, SixBitSize::N64, start, end);
+                        }
+                    }
                 }
             }
         }
@@ -2524,17 +2606,74 @@ fn lower_instruction(
                 }
             }
 
-            let rt_signal = io_signals[signal];
-            let lupdt_index = lupdt_indexes.get(&rt_signal).copied();
-            let watch_index =
-                (watch_map.num_watch_indices(*signal) > 0).then(|| rt_signal.as_u64());
-            let plugin_rt_index = options.has_plugins.then_some(rt_signal.as_u64());
-
             // @NOTE: `rpartial` is handed over as the bit within the signal, with the signal's
             // own base alongside it, rather than the two added together. That is the coordinate a
             // watch is stated in, and the clamp range cannot stand in for it: the range bounds the
             // addressable extent of the write, which for an array element starts at the element.
-            let range = base_addr..=(base_addr + base_size.get() as u64 - 1);
+            let bounds = 0..=base_size.get() as u32 - 1;
+
+            if let Some(watcher_range) = watch_map.map().get(signal) {
+                let watchers = watch_map.watchers();
+                let mut range_offset = 0;
+                for slice in vogls_utils::IterSliceContinguous::new(
+                    &watchers[watcher_range.clone()],
+                    |(c, _)| c,
+                ) {
+                    let start = (watcher_range.start + range_offset) as u64;
+                    let end = start + slice.len() as u64;
+                    range_offset += slice.len();
+
+                    let (condition, _) = slice[0];
+
+                    match condition.edge {
+                        WatchEdge::Any { bit_length: _ } => continue,
+                        WatchEdge::Posedge => match src.mode() {
+                            M::TwoValue => bce.tv_poke_posedge_rel(
+                                rs,
+                                rpartial,
+                                signal_addr,
+                                condition.offset,
+                                signal_size,
+                                src_size,
+                                start,
+                                end,
+                            ),
+                            M::FourValue => bce.fv_poke_posedge_rel(
+                                rs,
+                                rpartial,
+                                signal_addr,
+                                condition.offset,
+                                signal_size,
+                                src_size,
+                                start,
+                                end,
+                            ),
+                        },
+                        WatchEdge::Negedge => match src.mode() {
+                            M::TwoValue => bce.tv_poke_negedge_rel(
+                                rs,
+                                rpartial,
+                                signal_addr,
+                                condition.offset,
+                                signal_size,
+                                src_size,
+                                start,
+                                end,
+                            ),
+                            M::FourValue => bce.fv_poke_negedge_rel(
+                                rs,
+                                rpartial,
+                                signal_addr,
+                                condition.offset,
+                                signal_size,
+                                src_size,
+                                start,
+                                end,
+                            ),
+                        },
+                    }
+                }
+            }
 
             match (src.mode(), SixBitSize::from_vector_size(src_size)) {
                 (M::TwoValue, None) => {
@@ -2543,13 +2682,10 @@ fn lower_instruction(
                         rs,
                         rpartial,
                         InlineAddrOffset::ZERO,
-                        range,
-                        signal_addr,
+                        bounds.clone(),
+                        base_addr,
                         src_size,
-                        0,
-                        lupdt_index,
-                        watch_index,
-                        plugin_rt_index,
+                        base_size,
                     );
                 }
                 (M::FourValue, None) => {
@@ -2558,44 +2694,94 @@ fn lower_instruction(
                         rs,
                         rpartial,
                         InlineAddrOffset::ZERO,
-                        range,
-                        signal_addr,
+                        bounds.clone(),
+                        base_addr,
                         src_size,
                         signal_size,
-                        0,
-                        lupdt_index,
-                        watch_index,
-                        plugin_rt_index,
                     );
                 }
                 (M::TwoValue, Some(size)) => {
-                    bce.tv_setrel(
-                        Some(rd),
-                        rs,
-                        rpartial,
-                        signal_addr,
-                        range,
-                        size,
-                        0,
-                        lupdt_index,
-                        watch_index,
-                        plugin_rt_index,
-                    );
+                    bce.tv_setrel(Some(rd), rs, rpartial, signal_addr, bounds.clone(), size);
                 }
                 (M::FourValue, Some(size)) => {
                     bce.fv_setrel(
                         Some(rd),
                         rs,
                         rpartial,
-                        signal_addr,
-                        range,
+                        base_addr,
+                        bounds.clone(),
                         size,
                         signal_size,
-                        0,
-                        lupdt_index,
-                        watch_index,
-                        plugin_rt_index,
                     );
+                }
+            }
+
+            let rt_signal = io_signals[signal];
+            let lupdt_index = lupdt_indexes.get(&rt_signal).copied();
+            let plugin_rt_index = options.has_plugins.then_some(rt_signal);
+
+            const SCRATCH1: Reg = T0;
+            const SCRATCH2: Reg = T2;
+            let mask_any = match SixBitSize::from_vector_size(src_size) {
+                None => {
+                    bce.heap_tv_reduce_or(SCRATCH1, rd, src_size);
+                    SCRATCH1
+                }
+                Some(_) => rd,
+            };
+
+            if let Some(index) = lupdt_index {
+                bce.set_lupdt(mask_any, index);
+            }
+            if let Some(rt_signal) = plugin_rt_index {
+                bce.plugin_poke(mask_any, rt_signal);
+            }
+            if let Some(watcher_range) = watch_map.map().get(signal) {
+                let watchers = watch_map.watchers();
+                let mut range_offset = 0;
+                for slice in vogls_utils::IterSliceContinguous::new(
+                    &watchers[watcher_range.clone()],
+                    |(c, _)| c,
+                ) {
+                    let start = (watcher_range.start + range_offset) as u64;
+                    let end = start + slice.len() as u64;
+                    range_offset += slice.len();
+
+                    let (condition, _) = slice[0];
+                    if condition.edge.is_directed() {
+                        continue;
+                    }
+
+                    match SixBitSize::from_vector_size(src_size) {
+                        _ if condition.offset == 0 && signal_size == condition.bit_length() => {
+                            bce.wake(mask_any, 0, SixBitSize::N64, start, end)
+                        }
+                        Some(_) => {
+                            bce.shift_reduce_or(
+                                SCRATCH2,
+                                rd,
+                                rpartial,
+                                condition.slice().to_range_inclusive(),
+                            );
+                            bce.wake(
+                                SCRATCH2,
+                                condition.offset as u8,
+                                SixBitSize::from_vector_size(condition.bit_length()).unwrap(),
+                                start,
+                                end,
+                            );
+                        }
+                        None => {
+                            bce.heap_shift_reduce_or_rel(
+                                SCRATCH2,
+                                rd,
+                                rpartial,
+                                src_size,
+                                condition.slice().to_range_inclusive(),
+                            );
+                            bce.wake(SCRATCH2, 0, SixBitSize::N64, start, end);
+                        }
+                    }
                 }
             }
 
@@ -2714,30 +2900,17 @@ fn store_back(
                 // @NOTE: This writes to the stack rather than to a signal, so no update mask is
                 // needed and nothing has to be poked.
                 match var.mode() {
-                    LogicMode::TwoValue => bytecode.tv_setrel(
-                        None,
-                        value,
-                        scratch,
-                        0,
-                        0..=u64::MAX,
-                        size,
-                        0,
-                        None,
-                        None,
-                        None,
-                    ),
+                    LogicMode::TwoValue => {
+                        bytecode.tv_setrel(None, value, scratch, 0, 0..=u32::MAX, size)
+                    }
                     LogicMode::FourValue => bytecode.fv_setrel(
                         None,
                         value,
                         scratch,
                         0,
-                        0..=u64::MAX,
+                        0..=u32::MAX,
                         size,
                         size.to_vector_size(),
-                        0,
-                        None,
-                        None,
-                        None,
                     ),
                 }
             }
