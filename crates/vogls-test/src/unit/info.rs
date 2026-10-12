@@ -149,6 +149,7 @@ fn parse_opts(s: &str) -> Option<OptFlags> {
         "common_subexpr_elim" => OptFlags::COMMON_SUBEXPR_ELIM,
         "deadcode_elimination" => OptFlags::DEADCODE_ELIMINATION,
         "peephole" => OptFlags::PEEPHOLE,
+        "merge-lone-jump-targets" => OptFlags::MERGE_LONE_JUMP_TARGETS,
         _ => return None,
     })
 }

@@ -79,6 +79,8 @@ struct Args {
     no_common_subexpr_elim: bool,
     #[arg(long)]
     no_peephole_optimization: bool,
+    #[arg(long)]
+    no_merge_lone_jump_targets: bool,
 
     #[arg(short = 'I', long = "include-dir")]
     include_dirs: Vec<PathBuf>,
@@ -124,6 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         no_deadcode_elimination,
         no_common_subexpr_elim,
         no_peephole_optimization,
+        no_merge_lone_jump_targets,
         print_vm_map,
         include_dirs,
         profile,
@@ -233,6 +236,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         flags.set(OptFlags::DEADCODE_ELIMINATION, !no_deadcode_elimination);
         flags.set(OptFlags::COMMON_SUBEXPR_ELIM, !no_common_subexpr_elim);
         flags.set(OptFlags::PEEPHOLE, !no_peephole_optimization);
+        flags.set(
+            OptFlags::MERGE_LONE_JUMP_TARGETS,
+            !no_merge_lone_jump_targets,
+        );
         lowered.optimize(Optimizations {
             rounds: opt_rounds,
             flags,
