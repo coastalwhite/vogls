@@ -11,6 +11,7 @@ pub mod deadcode_elimination;
 // pub mod dominator;
 pub mod merge_lone_jump_targets;
 pub mod peephole;
+pub mod remove_empty_temporal_regions;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
@@ -22,7 +23,7 @@ use crate::{
 pub struct OptFlags(u64);
 
 impl OptFlags {
-    pub const ALL: Self = Self(0x1Fu64);
+    pub const ALL: Self = Self(0x3Fu64);
     pub const EMPTY: Self = Self(0u64);
 
     pub const CONSTANT_PROPAGATION: Self = Self(1u64 << 0);
@@ -30,6 +31,7 @@ impl OptFlags {
     pub const COMMON_SUBEXPR_ELIM: Self = Self(1u64 << 2);
     pub const PEEPHOLE: Self = Self(1u64 << 3);
     pub const MERGE_LONE_JUMP_TARGETS: Self = Self(1u64 << 4);
+    pub const REMOVE_EMPTY_TEMPORAL_REGIONS: Self = Self(1u64 << 5);
 
     pub fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
@@ -163,6 +165,16 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], opts
                     &mut scratch_seen,
                     &mut scratch_num_pred,
                     &mut scratch_bb_map,
+                );
+            }
+            if opts.flags.contains(OptFlags::REMOVE_EMPTY_TEMPORAL_REGIONS) {
+                remove_empty_temporal_regions::remove_empty_temporal_regions(
+                    gl,
+                    process,
+                    &mut scratch_stack,
+                    &mut scratch_seen,
+                    &mut scratch_bb_map,
+                    &mut scratch_mfr,
                 );
             }
             remove_needles_branches(gl, process, &mut scratch_stack, &mut scratch_seen);

@@ -81,6 +81,8 @@ struct Args {
     no_peephole_optimization: bool,
     #[arg(long)]
     no_merge_lone_jump_targets: bool,
+    #[arg(long)]
+    no_remove_empty_temporal_regions: bool,
 
     #[arg(short = 'I', long = "include-dir")]
     include_dirs: Vec<PathBuf>,
@@ -127,6 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         no_common_subexpr_elim,
         no_peephole_optimization,
         no_merge_lone_jump_targets,
+        no_remove_empty_temporal_regions,
         print_vm_map,
         include_dirs,
         profile,
@@ -239,6 +242,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         flags.set(
             OptFlags::MERGE_LONE_JUMP_TARGETS,
             !no_merge_lone_jump_targets,
+        );
+        flags.set(
+            OptFlags::REMOVE_EMPTY_TEMPORAL_REGIONS,
+            !no_remove_empty_temporal_regions,
         );
         lowered.optimize(Optimizations {
             rounds: opt_rounds,

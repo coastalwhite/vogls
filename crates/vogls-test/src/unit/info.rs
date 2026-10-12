@@ -150,6 +150,7 @@ fn parse_opts(s: &str) -> Option<OptFlags> {
         "deadcode_elimination" => OptFlags::DEADCODE_ELIMINATION,
         "peephole" => OptFlags::PEEPHOLE,
         "merge-lone-jump-targets" => OptFlags::MERGE_LONE_JUMP_TARGETS,
+        "remove-empty-temporal-regions" => OptFlags::REMOVE_EMPTY_TEMPORAL_REGIONS,
         _ => return None,
     })
 }
