@@ -9,6 +9,7 @@ pub mod constant_propagation;
 pub mod control_flow_graph_dot;
 pub mod deadcode_elimination;
 // pub mod dominator;
+pub mod merge_lone_jump_targets;
 pub mod peephole;
 
 use crate::{
@@ -21,13 +22,14 @@ use crate::{
 pub struct OptFlags(u64);
 
 impl OptFlags {
-    pub const ALL: Self = Self(0xFu64);
+    pub const ALL: Self = Self(0x1Fu64);
     pub const EMPTY: Self = Self(0u64);
 
     pub const CONSTANT_PROPAGATION: Self = Self(1u64 << 0);
     pub const DEADCODE_ELIMINATION: Self = Self(1u64 << 1);
     pub const COMMON_SUBEXPR_ELIM: Self = Self(1u64 << 2);
     pub const PEEPHOLE: Self = Self(1u64 << 3);
+    pub const MERGE_LONE_JUMP_TARGETS: Self = Self(1u64 << 4);
 
     pub fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
@@ -113,6 +115,8 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], opts
     let mut scratch_seen = VgHashSet::default();
     let mut scratch_mfr = VgHashSet::default();
     let mut scratch_map = VgHashMap::default();
+    let mut scratch_num_pred = VgHashMap::default();
+    let mut scratch_bb_map = VgHashMap::default();
     for &process in processes {
         if !gl.processes.contains_key(process) {
             continue;
@@ -149,6 +153,16 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], opts
                     process,
                     &mut scratch_stack,
                     &mut scratch_seen,
+                );
+            }
+            if opts.flags.contains(OptFlags::MERGE_LONE_JUMP_TARGETS) {
+                merge_lone_jump_targets::merge_lone_jump_targets(
+                    gl,
+                    process,
+                    &mut scratch_stack,
+                    &mut scratch_seen,
+                    &mut scratch_num_pred,
+                    &mut scratch_bb_map,
                 );
             }
             remove_needles_branches(gl, process, &mut scratch_stack, &mut scratch_seen);
