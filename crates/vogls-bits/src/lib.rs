@@ -1146,7 +1146,11 @@ impl Bits {
                     rhs_val[nwords - 1],
                     rhs_spc.map_or(mask, |s| s[nwords - 1]),
                 );
-                Self::from_boxed_slice(Mode::TwoValue, size, dst.into())
+                if size <= Mode::TwoValue.max_inline_size() {
+                    Self::from_u64(size, dst[0])
+                } else {
+                    Self::from_boxed_slice(Mode::TwoValue, size, dst.into())
+                }
             }
         }
     }
