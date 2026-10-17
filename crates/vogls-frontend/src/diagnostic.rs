@@ -49,7 +49,9 @@ impl<'a, T> Diagnostic<'a, T> {
 }
 
 fn get_display_line<'a>(content: &'a str, line_offsets: &[usize], line: usize) -> &'a str {
-    content[line_offsets[line]..line_offsets[line + 1]].trim_end()
+    let start = line_offsets[line];
+    let end = line_offsets.get(line + 1).copied().unwrap_or(content.len());
+    content[start..end].trim_end()
 }
 
 impl<'a, T: fmt::Display> fmt::Display for Diagnostic<'a, T> {
