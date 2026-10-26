@@ -5315,6 +5315,14 @@ fn clif_conditional_wake_listeners(
     while let Some((condition, idx)) = watchers.get(*condition_idx)
         && *condition == cur_condition
     {
+        let Some(&target) = compiler
+            .tr_funcs
+            .get(&compiler.watch_map.watch_target(*idx))
+        else {
+            *condition_idx += 1;
+            continue;
+        };
+
         let woff = idx / 64;
         let boff = idx % 64;
         let current_word = b
@@ -5331,7 +5339,6 @@ fn clif_conditional_wake_listeners(
         let cleared = b.ins().band_imm_u(current_word, (!(1u64 << boff)) as i64);
         b.ins()
             .store(mem(), cleared, params.listening, (woff * 8) as i32);
-        let target = compiler.tr_funcs[&compiler.watch_map.watch_target(*idx)];
         let fr = compiler.module.declare_func_in_func(target, b.func);
         let ta = b.ins().func_addr(compiler.ptr, fr);
         b.ins().store(mem(), ta, active_ptr, 0);
