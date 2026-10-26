@@ -10,6 +10,7 @@ use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskIdentifier;
 use crate::ast::{AstId, AstIdRange, AstItem};
 use crate::lower::VSymbolTable;
+use crate::lower::addressing::{Address, LValueAddressingContext, lower_addressing};
 use crate::lower::expression::{
     coerce_to_max_size_ty, lower_expr, sign_or_zero_extend, to_real, truncate_or_extend,
 };
@@ -587,9 +588,6 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 VType::UnsignedNet(TIME_VSIZE),
             )))
         }
-        // `$vogls_drive(sig, value)` drives `sig` and evaluates to the changed-bits mask the
-        // drive produced -- which bits of the signal the write actually moved. That mask is what
-        // decides pokes and watch wakes, and is otherwise invisible from Verilog.
         "vogls_drive" => {
             let Some(arguments) = arguments.filter(|a| a.len() == 2) else {
                 mctx.diagnostics.not_yet_implemented(
@@ -607,14 +605,6 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 );
                 return Err(());
             };
-            if !array_exprs.is_empty() || bitslice.is_some() {
-                mctx.diagnostics.not_yet_implemented(
-                    ctx.arenas.get_item_span(ident),
-                    "drive expects a whole signal",
-                );
-                return Err(());
-            }
-
             let net_symbol = try_resolve_net(
                 scope,
                 &ctx.table,
@@ -623,12 +613,44 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 &mut mctx.diagnostics,
             )?;
             let signal = net_symbol.net.probe_signal();
-            let size = mctx.gl.signals[signal].size;
+
+            // The bit-select and part-selects decide both how wide the driven
+            // value is and where it lands in the signal.
+            let mut actx = LValueAddressingContext {
+                ctx,
+                mctx,
+                builder,
+                loc: target.loc,
+                scope,
+            };
+            let Address {
+                elem_offset,
+                output_width,
+                array,
+                is_unsigned: _,
+            } = lower_addressing(
+                &mut actx,
+                net_symbol.ty.bit_length(),
+                &net_symbol.dims,
+                net_symbol.transform,
+                array_exprs.iter(),
+                bitslice.map(|r| r.into()),
+            )?;
+
+            // @TODO: Use array overflow.
+            let partial = match (elem_offset, array) {
+                (Some(elem_offset), Some((array_offset, _array_overflow))) => {
+                    Some(builder.plus(mctx.gl(), elem_offset, array_offset))
+                }
+                (Some(elem_offset), None) => Some(elem_offset),
+                (None, Some((array_offset, _array_overflow))) => Some(array_offset),
+                (None, None) => None,
+            };
 
             let (value, value_ty) = lower_expr(ctx, mctx, scope, builder, value, None)?;
-            let value = truncate_or_extend(mctx.gl(), builder, value, value_ty, size);
-            let mask = builder.drive_opt_partial(mctx.gl(), signal, value, None);
-            Ok(Some((mask, VType::UnsignedNet(size))))
+            let value = truncate_or_extend(mctx.gl(), builder, value, value_ty, output_width);
+            let mask = builder.drive_opt_partial(mctx.gl(), signal, value, partial);
+            Ok(Some((mask, VType::UnsignedNet(output_width))))
         }
         "vogls_slice" => {
             let Some(arguments) = arguments else {

@@ -4026,7 +4026,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let src_nwords = src_size.get().div_ceil(64);
                                 let src_full_nwords = src_size.get() / 64;
                                 let start_heap_ptr =
-                                    b.ins().iadd_imm_u(heap_ptr, (heap_offset / 8) as i64);
+                                    b.ins().iadd_imm_u(heap_ptr, (woff * 8) as i64);
                                 let start_val_ptr = wide_map[src].addr(b, ptr, params.cldctx, 0);
                                 let start_mask_ptr = wide_map[dst].addr(b, ptr, params.cldctx, 0);
                                 let end_heap_ptr = b

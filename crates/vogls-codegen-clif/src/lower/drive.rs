@@ -8,7 +8,7 @@ use super::{I64, mem};
 pub fn load_bit(b: &mut FunctionBuilder, base_ptr: Value, bit: u64) -> Value {
     let word = b.ins().load(I64, mem(), base_ptr, ((bit / 64) * 8) as i32);
     let mut v = word;
-    if bit.is_multiple_of(64) {
+    if !bit.is_multiple_of(64) {
         v = b.ins().ushr_imm_u(v, (bit % 64) as i64);
     }
     if bit % 64 < 63 {
