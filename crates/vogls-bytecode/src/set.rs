@@ -449,12 +449,6 @@ fn is_offset_in_bounds(offset: u32, size: SixBitSize, lower: u32, upper: u32) ->
     (offset >= lower) & (end <= upper) & (end >= offset)
 }
 
-#[inline(always)]
-fn is_offset_in_bounds_vs(offset: u32, size: VectorSize, lower: u32, upper: u32) -> bool {
-    let end = offset.wrapping_add(size.get() - 1);
-    (offset >= lower) & (end <= upper) & (end >= offset)
-}
-
 impl BytecodeInstruction for TvSet1 {
     fn num_additional_slots(&self) -> u8 {
         1

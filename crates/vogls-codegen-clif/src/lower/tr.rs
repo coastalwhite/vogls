@@ -21,13 +21,14 @@ use vogls_ir::{
 use vogls_utils::VgHashMap;
 
 use crate::ffi::FfiVec;
+use crate::lower::drive::{load_bit, load_fv_bit, load_var_bit};
 use crate::lower::{
     F64, I64, PLUGIN_STATE_SIZE, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, cast, dyn_slice_read,
-    fv_load, ioff, mask_of, maskv, maskvsbs, mem, nwords, var_words,
+    fv_load, mask_of, maskv, maskvsbs, mem, nwords, var_words,
 };
 use crate::runtime::{ColdContextT, EventT, FnTable, ScheduleT, layout};
 
-use super::{Compiler, DriveMask, DrivenBits, WideMap, top_i64, wide_load, wide_store};
+use super::{Compiler, WideMap, top_i64, wide_load, wide_store};
 
 pub struct TrBuilder<'a, 'b> {
     compiler: &'a mut Compiler<'b>,
@@ -3698,30 +3699,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 }
 
                                 WatchEdge::Posedge | WatchEdge::Negedge => {
-                                    let woff = (heap_offset as u64 + condition.offset as u64) / 64;
-                                    let boff = (heap_offset as u64 + condition.offset as u64) % 64;
                                     let relative_offset = condition.offset - *offset;
-
-                                    fn load_bit(
-                                        b: &mut FunctionBuilder,
-                                        base_ptr: Value,
-                                        bit: u64,
-                                    ) -> Value {
-                                        let word = b.ins().load(
-                                            I64,
-                                            mem(),
-                                            base_ptr,
-                                            ((bit / 64) * 8) as i32,
-                                        );
-                                        let mut v = word;
-                                        if bit % 64 != 0 {
-                                            v = b.ins().ushr_imm_u(v, (bit % 64) as i64);
-                                        }
-                                        if bit % 64 < 63 {
-                                            v = b.ins().band_imm_u(v, 1);
-                                        }
-                                        v
-                                    }
 
                                     let cond = match src.mode() {
                                         M::TwoValue => {
@@ -3743,18 +3721,13 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                                         load_bit(b, src_ptr, relative_offset.into())
                                                     }
                                                     Some(size) => {
-                                                        let mut new_value = get(b, *src);
-                                                        if relative_offset > 0 {
-                                                            new_value = b.ins().ushr_imm_u(
-                                                                new_value,
-                                                                relative_offset as i64,
-                                                            );
-                                                        }
-                                                        if relative_offset < size as u32 - 1 {
-                                                            new_value =
-                                                                b.ins().band_imm_u(new_value, 1);
-                                                        }
-                                                        new_value
+                                                        let value = get(b, *src);
+                                                        extract_value_bit(
+                                                            b,
+                                                            value,
+                                                            size,
+                                                            relative_offset as u8,
+                                                        )
                                                     }
                                                 };
 
@@ -3765,40 +3738,12 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                             }
                                         }
                                         M::FourValue => {
-                                            let (old_spc, old_val) = if signal_size == SCALAR_VSIZE
-                                            {
-                                                let old_word = b.ins().load(
-                                                    I64,
-                                                    mem(),
-                                                    heap_ptr,
-                                                    (woff * 8) as i32,
-                                                );
-                                                let mut old_value = old_word;
-                                                if boff != 0 {
-                                                    old_value =
-                                                        b.ins().ushr_imm_u(old_value, boff as i64);
-                                                }
-                                                let old_spc = b.ins().band_imm_u(old_value, 1);
-                                                let mut old_val = b.ins().ushr_imm_u(old_value, 1);
-                                                if boff < 62 {
-                                                    old_val = b.ins().band_imm_u(old_val, 1);
-                                                }
-
-                                                (old_spc, old_val)
-                                            } else {
-                                                let spc_bit =
-                                                    base_offset as u64 + condition.offset as u64;
-                                                let val_bit =
-                                                    HeapAlignment::spc_offset_to_val_offset(
-                                                        signal_size,
-                                                        spc_bit,
-                                                    );
-
-                                                (
-                                                    load_bit(b, heap_ptr, spc_bit),
-                                                    load_bit(b, heap_ptr, val_bit),
-                                                )
-                                            };
+                                            let (old_spc, old_val) = load_fv_bit(
+                                                b,
+                                                signal_size,
+                                                heap_ptr,
+                                                base_offset as u64 + condition.offset as u64,
+                                            );
 
                                             let (new_spc, new_val) =
                                                 match SixBitSize::from_vector_size(src_size) {
@@ -3820,24 +3765,20 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                                         )
                                                     }
                                                     Some(size) => {
-                                                        let mut new_spc = spc_get(b, *src);
-                                                        let mut new_val = get(b, *src);
-                                                        if relative_offset > 0 {
-                                                            new_spc = b.ins().ushr_imm_u(
-                                                                new_spc,
-                                                                relative_offset as i64,
-                                                            );
-                                                            new_val = b.ins().ushr_imm_u(
-                                                                new_val,
-                                                                relative_offset as i64,
-                                                            );
-                                                        }
-                                                        if relative_offset < size as u32 - 1 {
-                                                            new_spc =
-                                                                b.ins().band_imm_u(new_spc, 1);
-                                                            new_val =
-                                                                b.ins().band_imm_u(new_val, 1);
-                                                        }
+                                                        let new_spc = spc_get(b, *src);
+                                                        let new_val = get(b, *src);
+                                                        let new_spc = extract_value_bit(
+                                                            b,
+                                                            new_spc,
+                                                            size,
+                                                            relative_offset as u8,
+                                                        );
+                                                        let new_val = extract_value_bit(
+                                                            b,
+                                                            new_val,
+                                                            size,
+                                                            relative_offset as u8,
+                                                        );
                                                         (new_spc, new_val)
                                                     }
                                                 };
@@ -4361,44 +4302,50 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             );
                         }
                     }
-                    Instruction::DriveSlice(dst, signal, src, index) => {
-                        let (_href, _rt, mode) = info.heap_ref(*signal);
-                        let ssize = gl.vars.size(*src).get();
-                        let index_size = gl.vars.size(*index).get();
-                        // A wide (>64) signal needs the multi-word drive; drive_partial
-                        // below writes a single-word (<=64) signal.
-                        if SixBitSize::from_vector_size(gl.signals[*signal].size).is_none() {
-                            let off = rv(b, *index, 0);
-                            let off_known = if is_fv(*index) {
-                                let os = rs(b, *index, 0);
-                                b.ins().icmp_imm_u(IntCC::Equal, os, mask_of(sz(*index)))
-                            } else {
-                                b.ins().iconst(types::I8, 1)
-                            };
-                            self.compiler.emit_wide_drive(
-                                b, params, *signal, *src, off, off_known, vmap, spc_map, wide_map,
-                            );
-                        } else {
-                            let off = get(b, *index);
-                            let off_known = if index.mode().is_four_value() {
-                                let os = spc_get(b, *index);
-                                b.ins().icmp_imm_u(IntCC::Equal, os, mask_of(index_size))
-                            } else {
-                                b.ins().iconst(types::I8, 1)
-                            };
-                            let sv = get(b, *src);
-                            let src_spc = if mode == LogicMode::FourValue {
-                                Some(spc_get(b, *src))
-                            } else {
-                                None
-                            };
-                            self.compiler.drive_partial(
-                                b, params, *signal, sv, src_spc, ssize, off, off_known,
-                            );
-                        }
-                        // The dst is the changed-bits mask (src-sized, two-value); it is
-                        // currently stubbed to zero. A wide dst lives in the wide storage.
-                        match SixBitSize::from_vector_size(gl.vars.size(*dst)) {
+                    Instruction::DriveSlice(dst, signal, src, offset) => {
+                        use LogicMode as M;
+
+                        let src_size = gl.vars.size(*src);
+                        let signal_size = gl.signals[*signal].size;
+
+                        let (heap_ref, rt, mode) = info.heap_ref(*signal);
+                        let base_offset = heap_ref.offset.bit_offset as u64;
+                        let lower_bound = 0u64;
+                        // Inclusive: the last bit of the signal that may be written.
+                        let upper_bound = signal_size.get() as u64 - 1;
+                        let heap_ptr = params.heap_ptr;
+
+                        let conditions = self
+                            .compiler
+                            .watch_map
+                            .map()
+                            .get(signal)
+                            .cloned()
+                            .unwrap_or_default();
+
+                        let full_oob = b.create_block();
+                        let post_oob_check = b.create_block();
+                        let post_drive = b.create_block();
+
+                        let offset_key = *offset;
+                        let offset = get(b, offset_key);
+                        let below_lower_bound = b.ins().icmp_imm_s(
+                            IntCC::SignedLessThanOrEqual,
+                            offset,
+                            lower_bound as i64 - src_size.get() as i64,
+                        );
+                        let above_upper_bound = b.ins().icmp_imm_u(
+                            IntCC::SignedGreaterThan,
+                            offset,
+                            upper_bound as i64,
+                        );
+                        let is_fully_oob = b.ins().bor(below_lower_bound, above_upper_bound);
+                        b.ins()
+                            .brif(is_fully_oob, full_oob, &[], post_oob_check, &[]);
+
+                        b.switch_to_block(full_oob);
+                        b.set_cold_block(full_oob);
+                        match SixBitSize::from_vector_size(src_size) {
                             Some(_) => {
                                 let zero = b.ins().iconst(I64, 0);
                                 b.def_var(vmap[dst], zero);
@@ -4413,6 +4360,491 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 vogls_bits::arithmetic::FvLogicValue::L0,
                             ),
                         }
+                        b.ins().jump(post_drive, &[]);
+
+                        b.switch_to_block(post_oob_check);
+
+                        // Wake all the edge listeners, group-by-group.
+                        // Since watchers is pre-sorted, the conditions are the same in contiguous
+                        // chunks.
+                        let mut condition_start = conditions.start;
+                        while condition_start < conditions.end {
+                            let watchers = self.compiler.watch_map.watchers();
+                            let condition = watchers[condition_start].0;
+
+                            // Advance past the whole contiguous run sharing this condition.
+                            let mut chunk_end = condition_start + 1;
+                            while chunk_end < conditions.end && watchers[chunk_end].0 == condition {
+                                chunk_end += 1;
+                            }
+
+                            let mut condition_index = condition_start;
+                            condition_start = chunk_end;
+
+                            let is_posedge = match condition.edge {
+                                WatchEdge::Any { .. } => continue,
+                                WatchEdge::Posedge => true,
+                                WatchEdge::Negedge => false,
+                            };
+
+                            let in_bounds_bb = b.create_block();
+                            let post_bb = b.create_block();
+
+                            // Check whether the edge is even in the active range of the drive.
+                            let condition_v = if src_size == SCALAR_VSIZE {
+                                b.ins()
+                                    .icmp_imm_u(IntCC::Equal, offset, condition.offset as i64)
+                            } else {
+                                let lb = b.ins().icmp_imm_u(
+                                    IntCC::SignedLessThanOrEqual,
+                                    offset,
+                                    condition.offset as i64 - src_size.get() as i64,
+                                );
+                                let ub = b.ins().icmp_imm_u(
+                                    IntCC::SignedGreaterThanOrEqual,
+                                    offset,
+                                    condition.offset as i64 + src_size.get() as i64,
+                                );
+                                let oob = b.ins().bor(lb, ub);
+                                b.ins().bnot(oob)
+                            };
+                            b.ins().brif(condition_v, in_bounds_bb, &[], post_bb, &[]);
+
+                            let condition_offset = b.ins().iconst(I32, condition.offset as i64);
+                            let rel_offset = b.ins().isub(condition_offset, offset);
+                            let condition = match mode {
+                                M::TwoValue => {
+                                    let before = load_bit(
+                                        b,
+                                        heap_ptr,
+                                        base_offset as u64 + condition.offset as u64,
+                                    );
+                                    let after = match SixBitSize::from_vector_size(src_size) {
+                                        None => {
+                                            let src_ptr = get(b, *src);
+                                            load_var_bit(b, src_ptr, rel_offset)
+                                        }
+                                        Some(src_size) => {
+                                            let v = get(b, *src);
+                                            extract_value_bit_dyn(b, v, src_size, rel_offset)
+                                        }
+                                    };
+
+                                    if is_posedge {
+                                        b.ins().band_not(after, before)
+                                    } else {
+                                        b.ins().band_not(before, after)
+                                    }
+                                }
+                                M::FourValue => {
+                                    let (old_spc, old_val) = load_fv_bit(
+                                        b,
+                                        signal_size,
+                                        heap_ptr,
+                                        base_offset as u64 + condition.offset as u64,
+                                    );
+                                    let (new_spc, new_val) =
+                                        match SixBitSize::from_vector_size(src_size) {
+                                            None => {
+                                                let src_ptr = get(b, *src);
+                                                let rel_val_offset = b.ins().iadd_imm_u(
+                                                    rel_offset,
+                                                    HeapAlignment::spc_offset_to_val_offset(
+                                                        src_size, 0,
+                                                    )
+                                                        as i64,
+                                                );
+                                                (
+                                                    load_var_bit(b, src_ptr, rel_offset),
+                                                    load_var_bit(b, src_ptr, rel_val_offset),
+                                                )
+                                            }
+                                            Some(src_size) => {
+                                                let val = get(b, *src);
+                                                let spc = spc_get(b, *src);
+                                                (
+                                                    extract_value_bit_dyn(
+                                                        b, spc, src_size, rel_offset,
+                                                    ),
+                                                    extract_value_bit_dyn(
+                                                        b, val, src_size, rel_offset,
+                                                    ),
+                                                )
+                                            }
+                                        };
+
+                                    if is_posedge {
+                                        clif_fv_negedge(b, new_val, new_spc, old_val, old_spc)
+                                    } else {
+                                        clif_fv_negedge(b, old_val, old_spc, new_val, new_spc)
+                                    }
+                                }
+                            };
+
+                            clif_conditional_wake_listeners(
+                                self.compiler,
+                                params,
+                                b,
+                                condition,
+                                &mut condition_index,
+                            );
+                        }
+
+                        let mask = match (src.mode(), SixBitSize::from_vector_size(src_size)) {
+                            (M::TwoValue, Some(size)) => {
+                                let new_value = get(b, *src);
+                                clif_sbs_drive(
+                                    b,
+                                    new_value,
+                                    heap_ptr,
+                                    base_offset,
+                                    offset,
+                                    lower_bound,
+                                    upper_bound,
+                                    size,
+                                )
+                            }
+                            (M::FourValue, Some(size)) => {
+                                let vsrc_val = get(b, *src);
+                                let vsrc_spc = spc_get(b, *src);
+                                let spc_mask = clif_sbs_drive(
+                                    b,
+                                    vsrc_spc,
+                                    heap_ptr,
+                                    base_offset,
+                                    offset,
+                                    lower_bound,
+                                    upper_bound,
+                                    size,
+                                );
+                                let val_base_offset = HeapAlignment::spc_offset_to_val_offset(
+                                    signal_size,
+                                    base_offset,
+                                );
+                                let val_mask = clif_sbs_drive(
+                                    b,
+                                    vsrc_val,
+                                    heap_ptr,
+                                    val_base_offset,
+                                    offset,
+                                    lower_bound,
+                                    upper_bound,
+                                    size,
+                                );
+                                b.ins().bor(spc_mask, val_mask)
+                            }
+                            (M::TwoValue | M::FourValue, None) => {
+                                let ptr = self.compiler.ptr;
+
+                                let src_nwords = src_size.get().div_ceil(64);
+                                let start_val_ptr = wide_map[src].addr(b, ptr, params.cldctx, 0);
+                                let start_mask_ptr = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+
+                                let val_base_offset = HeapAlignment::spc_offset_to_val_offset(
+                                    signal_size,
+                                    base_offset,
+                                );
+
+                                // One pass over the source's words. Each iteration
+                                // writes exactly one word of the change mask, so the
+                                // mask needs no separate zeroing pass, and both logic
+                                // planes are spliced while that word is in hand.
+                                //
+                                // Iterating the source (rather than the clipped
+                                // overlap) keeps the source loads word-aligned and puts
+                                // mask word `i` at source word `i`, which is what the
+                                // caller expects.
+                                let loop_bb = b.create_block();
+                                let overlap_bb = b.create_block();
+                                let no_overlap_bb = b.create_block();
+                                let store_bb = b.create_block();
+                                let post_bb = b.create_block();
+
+                                // (word index)
+                                b.append_block_param(loop_bb, I64);
+                                // (mask word)
+                                b.append_block_param(store_bb, I64);
+
+                                let zero = b.ins().iconst(I64, 0);
+                                let c64 = b.ins().iconst(I64, 64);
+                                let ones = b.ins().iconst(I64, -1);
+                                let lb = b.ins().iconst(I64, lower_bound as i64);
+                                let ub1 = b.ins().iconst(I64, (upper_bound + 1) as i64);
+                                let src_bits = b.ins().iconst(I64, src_size.get() as i64);
+
+                                b.ins().jump(loop_bb, &[zero.into()]);
+
+                                b.switch_to_block(loop_bb);
+                                let i = b.block_params(loop_bb)[0];
+
+                                // Source word `i` holds source bits `[i*64, i*64 + 64)`,
+                                // which land on the signal starting at `chunk_start`.
+                                let i_bits = b.ins().ishl_imm_u(i, 6);
+                                let chunk_start = b.ins().iadd(offset, i_bits);
+
+                                // The part of this word that is inside both the signal
+                                // and the source, as bit positions within the word.
+                                // Signed throughout: `offset` may be negative, which has
+                                // to clamp up to `lower_bound` rather than wrap.
+                                let lo_rel = b.ins().isub(lb, chunk_start);
+                                let lo_i = b.ins().smax(lo_rel, zero);
+                                let lo_i = b.ins().smin(lo_i, c64);
+
+                                let hi_rel = b.ins().isub(ub1, chunk_start);
+                                let src_rem = b.ins().isub(src_bits, i_bits);
+                                let hi_i = b.ins().smin(hi_rel, src_rem);
+                                let hi_i = b.ins().smin(hi_i, c64);
+                                let hi_i = b.ins().smax(hi_i, zero);
+
+                                let width = b.ins().isub(hi_i, lo_i);
+                                let has_overlap =
+                                    b.ins().icmp(IntCC::SignedGreaterThan, width, zero);
+                                b.ins()
+                                    .brif(has_overlap, overlap_bb, &[], no_overlap_bb, &[]);
+
+                                // Entirely outside the signal: nothing written, nothing
+                                // changed.
+                                b.switch_to_block(no_overlap_bb);
+                                b.ins().jump(store_bb, &[zero.into()]);
+
+                                b.switch_to_block(overlap_bb);
+                                // `1 <= width <= 64`, so `64 - width` stays in `0..=63`.
+                                let inv_width = b.ins().isub(c64, width);
+                                let width_mask = b.ins().ushr(ones, inv_width);
+
+                                let sbyte = b.ins().ishl_imm_u(i, 3);
+                                let sptr = b.ins().iadd(start_val_ptr, sbyte);
+                                let bit = b.ins().iadd(chunk_start, lo_i);
+
+                                // The special plane, then the value plane for four-value
+                                // sources; both splice the same window of the same source
+                                // word, only from a different plane base.
+                                let mut mask_word = zero;
+                                let planes: &[(u64, i32)] = if src.mode() == M::FourValue {
+                                    &[(base_offset, 0), (val_base_offset, (src_nwords * 8) as i32)]
+                                } else {
+                                    &[(base_offset, 0)]
+                                };
+
+                                for &(plane_base, plane_word_offset) in planes {
+                                    // Word-aligned, so no funnel read on the source side.
+                                    let src_word =
+                                        b.ins().load(I64, mem(), sptr, plane_word_offset);
+                                    let value = b.ins().ushr(src_word, lo_i);
+                                    let value = b.ins().band(value, width_mask);
+
+                                    // Read-modify-write the heap window at `bit`.
+                                    let d = b.ins().iadd_imm_u(bit, plane_base as i64);
+                                    let dw = b.ins().ushr_imm_u(d, 6);
+                                    let db = b.ins().band_imm_u(d, 63);
+                                    let dbyte = b.ins().ishl_imm_u(dw, 3);
+                                    let dptr = b.ins().iadd(heap_ptr, dbyte);
+                                    let old_lo = b.ins().load(I64, mem(), dptr, 0);
+
+                                    // The second word is only touched when the window
+                                    // straddles a word boundary; otherwise the pointer
+                                    // folds back onto the first, so the access stays in
+                                    // bounds and its patch is zero.
+                                    let db_nz = b.ins().icmp_imm_u(IntCC::NotEqual, db, 0);
+                                    let inv_db = b.ins().isub(c64, db);
+                                    let reach = b.ins().iadd(db, width);
+                                    let straddles =
+                                        b.ins().icmp(IntCC::SignedGreaterThan, reach, c64);
+                                    let step = b.ins().select(straddles, c64, zero);
+                                    let step = b.ins().ushr_imm_u(step, 3);
+                                    let dptr2 = b.ins().iadd(dptr, step);
+                                    let old_hi = b.ins().load(I64, mem(), dptr2, 0);
+
+                                    let olo = b.ins().ushr(old_lo, db);
+                                    let ohi = b.ins().ishl(old_hi, inv_db);
+                                    let ohi = b.ins().select(db_nz, ohi, zero);
+                                    let ohi = b.ins().select(straddles, ohi, zero);
+                                    let old_value = b.ins().bor(olo, ohi);
+
+                                    let diff = b.ins().bxor(value, old_value);
+                                    let changed = b.ins().band(diff, width_mask);
+
+                                    let patch_lo = b.ins().ishl(changed, db);
+                                    let new_lo = b.ins().bxor(old_lo, patch_lo);
+                                    b.ins().store(mem(), new_lo, dptr, 0);
+
+                                    // `dptr2` aliases `dptr` when the window does not
+                                    // straddle, so re-read rather than reusing `old_hi`,
+                                    // which predates the store above.
+                                    let patch_hi = b.ins().ushr(changed, inv_db);
+                                    let patch_hi = b.ins().select(db_nz, patch_hi, zero);
+                                    let patch_hi = b.ins().select(straddles, patch_hi, zero);
+                                    let cur_hi = b.ins().load(I64, mem(), dptr2, 0);
+                                    let new_hi = b.ins().bxor(cur_hi, patch_hi);
+                                    b.ins().store(mem(), new_hi, dptr2, 0);
+
+                                    // Back into the source word's own bit positions.
+                                    let changed = b.ins().ishl(changed, lo_i);
+                                    mask_word = b.ins().bor(mask_word, changed);
+                                }
+
+                                b.ins().jump(store_bb, &[mask_word.into()]);
+
+                                b.switch_to_block(store_bb);
+                                let mask_word = b.block_params(store_bb)[0];
+                                let mbyte = b.ins().ishl_imm_u(i, 3);
+                                let mptr = b.ins().iadd(start_mask_ptr, mbyte);
+                                b.ins().store(mem(), mask_word, mptr, 0);
+
+                                let next_i = b.ins().iadd_imm_u(i, 1);
+                                let more = b.ins().icmp_imm_u(
+                                    IntCC::SignedLessThan,
+                                    next_i,
+                                    src_nwords as i64,
+                                );
+                                b.ins().brif(more, loop_bb, &[next_i.into()], post_bb, &[]);
+
+                                b.switch_to_block(post_bb);
+                                b.seal_block(loop_bb);
+                                b.seal_block(overlap_bb);
+                                b.seal_block(no_overlap_bb);
+                                b.seal_block(store_bb);
+                                b.seal_block(post_bb);
+
+                                start_mask_ptr
+                            }
+                        };
+
+                        if src_size.get() <= 64 {
+                            b.def_var(vmap[dst], mask);
+                        }
+
+                        let num_plugins = self.compiler.num_plugins;
+                        let lupdt = self.compiler.info.lupdt_indexes.get(&rt).copied();
+
+                        if num_plugins > 0 || lupdt.is_some() {
+                            let cond = if src_size <= VSIZE_64 {
+                                mask
+                            } else {
+                                clif_wide_tv_reduce_or(b, self.compiler.ptr, mask, src_size)
+                            };
+
+                            let poke_bb = b.create_block();
+                            let post_bb = b.create_block();
+
+                            b.ins().brif(cond, poke_bb, &[], post_bb, &[]);
+                            b.switch_to_block(poke_bb);
+
+                            if num_plugins > 0 {
+                                let ptr = self.compiler.ptr;
+                                let plugins =
+                                    b.ins().load(ptr, mem(), cldctx, layout::CTX_PLUGINS as i32);
+                                let poke = b.ins().load(
+                                    ptr,
+                                    mem(),
+                                    cldctx,
+                                    layout::CTX_PLUGIN_POKE as i32,
+                                );
+                                let sig_ref =
+                                    b.import_signature(self.compiler.sigs.plugin_poke.clone());
+                                let id = b.ins().iconst(I64, rt.as_u64() as i64);
+                                for i in 0..self.compiler.num_plugins {
+                                    let pl =
+                                        b.ins().iadd_imm_u(plugins, (i * PLUGIN_STATE_SIZE) as i64);
+                                    b.ins().call_indirect(sig_ref, poke, &[pl, id]);
+                                }
+                            }
+
+                            if let Some(li) = lupdt {
+                                b.ins().store(
+                                    mem(),
+                                    params.time,
+                                    params.last_active_time,
+                                    (li * 8) as i32,
+                                );
+                            }
+
+                            b.ins().jump(post_bb, &[]);
+                            b.switch_to_block(post_bb);
+                        }
+
+                        // Wake all the slice listeners, group-by-group. Since watchers is
+                        // pre-sorted, the conditions are the same in contiguous chunks.
+                        let mut condition_index = conditions.start;
+                        // The written slice is only known at runtime, so the overlap with
+                        // each condition slice is computed with runtime arithmetic below.
+                        let write_lsb = offset;
+                        while let Some((condition, _)) =
+                            self.compiler.watch_map.watchers().get(condition_index)
+                            && condition.signal == *signal
+                        {
+                            let vcond = match condition.edge {
+                                WatchEdge::Posedge | WatchEdge::Negedge => {
+                                    condition_index += 1;
+                                    continue;
+                                }
+                                WatchEdge::Any { .. } => {
+                                    let condition_slice = condition.slice();
+
+                                    // rel   = max(c_lsb - write_lsb, 0)
+                                    // width = min(c_msb + 1 - write_lsb, src_size) - rel
+                                    // width <= 0 means no overlap, forced to zero below.
+                                    let c_lsb = b.ins().iconst(I64, condition_slice.lsb() as i64);
+                                    let c_end =
+                                        b.ins().iconst(I64, condition_slice.msb() as i64 + 1);
+                                    let zero = b.ins().iconst(I64, 0);
+                                    let src_end = b.ins().iconst(I64, src_size.get() as i64);
+
+                                    let rel_raw = b.ins().isub(c_lsb, write_lsb);
+                                    let rel_neg =
+                                        b.ins().icmp(IntCC::SignedLessThan, rel_raw, zero);
+                                    let rel = b.ins().select(rel_neg, zero, rel_raw);
+
+                                    let end_raw = b.ins().isub(c_end, write_lsb);
+                                    let end_gt =
+                                        b.ins().icmp(IntCC::SignedGreaterThan, end_raw, src_end);
+                                    let end = b.ins().select(end_gt, src_end, end_raw);
+
+                                    let width = b.ins().isub(end, rel);
+                                    let has_overlap =
+                                        b.ins().icmp(IntCC::SignedGreaterThan, width, zero);
+
+                                    let cond = if src_size <= VSIZE_64 {
+                                        let shifted = b.ins().ushr(mask, rel);
+
+                                        let ones = b.ins().iconst(I64, -1);
+                                        let c64 = b.ins().iconst(I64, 64);
+                                        let inv = b.ins().isub(c64, width);
+                                        let wmask = b.ins().ushr(ones, inv);
+                                        let is_full = b.ins().icmp(
+                                            IntCC::SignedGreaterThanOrEqual,
+                                            width,
+                                            c64,
+                                        );
+                                        let wmask = b.ins().select(is_full, ones, wmask);
+
+                                        b.ins().band(shifted, wmask)
+                                    } else {
+                                        clif_wide_tv_dyn_slice_reduce_or(
+                                            b, mask, rel, width, src_size,
+                                        )
+                                    };
+
+                                    b.ins().select(has_overlap, cond, zero)
+                                }
+                            };
+
+                            clif_conditional_wake_listeners(
+                                self.compiler,
+                                params,
+                                b,
+                                vcond,
+                                &mut condition_index,
+                            );
+                        }
+
+                        // Join the fully-out-of-bounds path, which skipped the drive
+                        // and the listener wakeups entirely.
+                        b.ins().jump(post_drive, &[]);
+                        b.switch_to_block(post_drive);
+                        b.seal_block(full_oob);
+                        b.seal_block(post_oob_check);
+                        b.seal_block(post_drive);
                     }
                 }
             }
@@ -4628,6 +5060,36 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
     }
 }
 
+fn extract_value_bit_dyn(
+    b: &mut FunctionBuilder,
+    value: Value,
+    size: SixBitSize,
+    offset: Value,
+) -> Value {
+    if size == SixBitSize::N1 {
+        return value;
+    }
+
+    let v = b.ins().ushr(value, offset);
+    b.ins().band_imm_u(v, 1)
+}
+
+fn extract_value_bit(
+    b: &mut FunctionBuilder,
+    mut value: Value,
+    size: SixBitSize,
+    offset: u8,
+) -> Value {
+    debug_assert!(offset < 64);
+    if offset > 0 {
+        value = b.ins().ushr_imm_u(value, offset as i64);
+    }
+    if offset < size as u8 - 1 {
+        value = b.ins().band_imm_u(value, 1);
+    }
+    value
+}
+
 fn clif_wide_tv_reduce_or(
     b: &mut FunctionBuilder,
     ptr: Type,
@@ -4739,6 +5201,85 @@ fn clif_wide_tv_slice_reduce_or(
     }
 
     acc
+}
+
+fn clif_wide_tv_dyn_slice_reduce_or(
+    b: &mut FunctionBuilder,
+    src_ptr: Value,
+    rel: Value,
+    width: Value,
+    size: VectorSize,
+) -> Value {
+    let nwords = size.get().div_ceil(64) as i64;
+
+    let loop_bb = b.create_block();
+    let post_bb = b.create_block();
+
+    // (word_index, acc)
+    b.append_block_param(loop_bb, I64);
+    b.append_block_param(loop_bb, I64);
+    b.append_block_param(post_bb, I64);
+
+    let zero = b.ins().iconst(I64, 0);
+    let ones = b.ins().iconst(I64, -1);
+    let c64 = b.ins().iconst(I64, 64);
+
+    // Bit range [rel, end), clamped to the mask's own width.
+    let end = b.ins().iadd(rel, width);
+
+    b.ins().jump(loop_bb, &[zero.into(), zero.into()]);
+    b.switch_to_block(loop_bb);
+
+    let widx = b.block_params(loop_bb)[0];
+    let acc = b.block_params(loop_bb)[1];
+
+    let byte = b.ins().ishl_imm_u(widx, 3);
+    let word_ptr = b.ins().iadd(src_ptr, byte);
+    let word = b.ins().load(I64, mem(), word_ptr, 0);
+
+    // This word covers bits [lo, lo + 64).
+    let lo = b.ins().ishl_imm_u(widx, 6);
+
+    // Keep bits [rel, end) within this word: drop `rel - lo` low bits and
+    // `lo + 64 - end` high bits, each clamped into 0..=64.
+    let drop_lo = b.ins().isub(rel, lo);
+    let drop_lo_neg = b.ins().icmp(IntCC::SignedLessThan, drop_lo, zero);
+    let drop_lo = b.ins().select(drop_lo_neg, zero, drop_lo);
+
+    let hi = b.ins().iadd_imm_u(lo, 64);
+    let drop_hi = b.ins().isub(hi, end);
+    let drop_hi_neg = b.ins().icmp(IntCC::SignedLessThan, drop_hi, zero);
+    let drop_hi = b.ins().select(drop_hi_neg, zero, drop_hi);
+
+    let drop = b.ins().iadd(drop_lo, drop_hi);
+    let keep = b.ins().isub(c64, drop);
+    let keep_pos = b.ins().icmp(IntCC::SignedGreaterThan, keep, zero);
+
+    // word_mask = ((~0 >> drop) << drop_lo), zero when nothing is kept.
+    let wmask = b.ins().ushr(ones, drop);
+    let wmask = b.ins().ishl(wmask, drop_lo);
+    let wmask = b.ins().select(keep_pos, wmask, zero);
+
+    let masked = b.ins().band(word, wmask);
+    let new_acc = b.ins().bor(acc, masked);
+
+    let next_widx = b.ins().iadd_imm_u(widx, 1);
+    let is_lt = b
+        .ins()
+        .icmp_imm_u(IntCC::UnsignedLessThan, next_widx, nwords);
+    b.ins().brif(
+        is_lt,
+        loop_bb,
+        &[next_widx.into(), new_acc.into()],
+        post_bb,
+        &[new_acc.into()],
+    );
+
+    b.switch_to_block(post_bb);
+    b.seal_block(loop_bb);
+    b.seal_block(post_bb);
+
+    b.block_params(post_bb)[0]
 }
 
 fn clif_conditional_wake_listeners(
@@ -4891,6 +5432,236 @@ fn clif_constant_misaligned_sbs_drive(
         .store(mem(), new_snd_word, heap_ptr, ((woff + 1) * 8) as i32);
 
     mask
+}
+
+/// Drive a [`SixBitSize`]d value into the heap at a dynamic offset.
+///
+/// The driven values only take effect if they fall between the `lower_bound..=upper_bound`, with
+/// the invariant that at least 1 bit is between the bounds.
+fn clif_sbs_drive(
+    b: &mut FunctionBuilder,
+    new_value: Value,
+    heap_ptr: Value,
+    base_offset: u64,
+    offset: Value,
+    lower_bound: u64,
+    upper_bound: u64,
+    size: SixBitSize,
+) -> Value {
+    debug_assert!(lower_bound <= upper_bound);
+
+    // Fast path: 1-bit drive.
+    //
+    // Since the function has the invariant that at least one bit falls within the bounds, we don't
+    // have to do a bounds check. Additionally, 1 bit can never span more than one word, so we can
+    // also ignore that.
+    if size == SixBitSize::N1 {
+        let abs_offset = b.ins().iadd_imm_u(offset, base_offset as i64);
+        let woff = b.ins().ushr_imm_u(abs_offset, 6);
+        let boff = b.ins().band_imm_u(abs_offset, 0x3F);
+
+        let woff_byte = b.ins().ishl_imm_u(woff, 3);
+        let wptr = b.ins().iadd(heap_ptr, woff_byte);
+        let old_word = b.ins().load(I64, mem(), wptr, 0);
+
+        let old_value = extract_value_bit_dyn(b, old_word, SixBitSize::N64, boff);
+        let update_mask = b.ins().bxor(new_value, old_value);
+
+        let one = b.ins().iconst(I64, 1);
+        let bit_mask = b.ins().ishl(one, boff);
+        let new_word = b.ins().band_not(old_word, bit_mask);
+        let new_value_shifted = b.ins().ishl(new_value, boff);
+        let new_word = b.ins().bor(new_word, new_value_shifted);
+
+        b.ins().store(mem(), new_word, wptr, 0);
+
+        return update_mask;
+    }
+
+    fn single_word(
+        b: &mut FunctionBuilder,
+        wptr: Value,
+        boff: Value,
+        mask: Value,
+        value: Value,
+    ) -> Value {
+        let old_word = b.ins().load(I64, mem(), wptr, 0);
+        let old_shifted = b.ins().ushr(old_word, boff);
+        let prev = b.ins().band(mask, old_shifted);
+
+        let mask_shifted = b.ins().ishl(mask, boff);
+        let cleared = b.ins().band_not(old_word, mask_shifted);
+        let value_shifted = b.ins().ishl(value, boff);
+        let new_word = b.ins().bor(cleared, value_shifted);
+        b.ins().store(mem(), new_word, wptr, 0);
+
+        b.ins().bxor(prev, value)
+    }
+
+    fn double_word(
+        b: &mut FunctionBuilder,
+        wptr: Value,
+        boff: Value,
+        mask: Value,
+        value: Value,
+    ) -> Value {
+        let tgt0 = b.ins().load(I64, mem(), wptr, 0);
+        let tgt1 = b.ins().load(I64, mem(), wptr, 8);
+        let c64 = b.ins().iconst(I64, 64);
+        let inv_boff = b.ins().isub(c64, boff);
+
+        let tgt0_shifted = b.ins().ushr(tgt0, boff);
+        let tgt1_shifted = b.ins().ishl(tgt1, inv_boff);
+        let combined = b.ins().bor(tgt0_shifted, tgt1_shifted);
+        let prev = b.ins().band(mask, combined);
+
+        // First word.
+        let mask_lo = b.ins().ishl(mask, boff);
+        let tgt0_cleared = b.ins().band_not(tgt0, mask_lo);
+        let value_lo = b.ins().ishl(value, boff);
+        let new_tgt0 = b.ins().bor(tgt0_cleared, value_lo);
+        b.ins().store(mem(), new_tgt0, wptr, 0);
+
+        // Second word.
+        let mask_hi = b.ins().ushr(mask, inv_boff);
+        let tgt1_cleared = b.ins().band_not(tgt1, mask_hi);
+        let value_hi = b.ins().ushr(value, inv_boff);
+        let new_tgt1 = b.ins().bor(tgt1_cleared, value_hi);
+        b.ins().store(mem(), new_tgt1, wptr, 8);
+
+        b.ins().bxor(prev, value)
+    }
+
+    let in_bounds_bb = b.create_block();
+    let single_word_bb = b.create_block();
+    let two_word_bb = b.create_block();
+    let partial_bb = b.create_block();
+    let part_single_word_bb = b.create_block();
+    let part_two_word_bb = b.create_block();
+    let post_bb = b.create_block();
+    b.append_block_param(post_bb, I64);
+
+    // Fully contained iff `lower_bound <= offset` and `offset + size - 1 <= upper_bound`.
+    // Signed, because `offset` is a signed index that may be negative.
+    let above_lower =
+        b.ins()
+            .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, offset, lower_bound as i64);
+    let below_upper = b.ins().icmp_imm_s(
+        IntCC::SignedLessThanOrEqual,
+        offset,
+        upper_bound as i64 + 1 - size as i64,
+    );
+    let is_in_bounds = b.ins().band(above_lower, below_upper);
+    b.ins()
+        .brif(is_in_bounds, in_bounds_bb, &[], partial_bb, &[]);
+
+    // Hot path: drive is fully in bounds.
+    {
+        b.switch_to_block(in_bounds_bb);
+        let abs_offset = b.ins().iadd_imm_u(offset, base_offset as i64);
+        let size_mask = b.ins().iconst(I64, size.mask(u64::MAX) as i64);
+        let end_offset = b.ins().iadd_imm_u(abs_offset, size as i64 - 1);
+
+        let word = b.ins().ushr_imm_u(abs_offset, 6);
+        let boff = b.ins().band_imm_u(abs_offset, 0x3F);
+        let endword = b.ins().ushr_imm_u(end_offset, 6);
+
+        let word_byte = b.ins().ishl_imm_u(word, 3);
+        let wptr = b.ins().iadd(heap_ptr, word_byte);
+
+        let is_single_word = b.ins().icmp(IntCC::Equal, word, endword);
+        b.ins()
+            .brif(is_single_word, single_word_bb, &[], two_word_bb, &[]);
+
+        // In bounds, single-word.
+        b.switch_to_block(single_word_bb);
+        let single_word_mask = single_word(b, wptr, boff, size_mask, new_value);
+        b.ins().jump(post_bb, &[single_word_mask.into()]);
+
+        // In-bounds, double-word.
+        b.switch_to_block(two_word_bb);
+        let two_word_mask = double_word(b, wptr, boff, size_mask, new_value);
+        b.ins().jump(post_bb, &[two_word_mask.into()]);
+    }
+
+    // Cold path: only part of the drive should be done.
+    {
+        b.switch_to_block(partial_bb);
+        b.set_cold_block(partial_bb);
+
+        // First written bit `lo` and one-past-the-last `hi`, clamped into the signal.
+        // The caller's invariant guarantees `lo < hi`.
+        let end = b.ins().iadd_imm_u(offset, size as i64);
+        let lb = b.ins().iconst(I64, lower_bound as i64);
+        let ub = b.ins().iconst(I64, (upper_bound + 1) as i64);
+        // Signed: a negative `offset` must clamp up to `lower_bound`, not wrap to a
+        // huge unsigned value.
+        let lo = b.ins().smax(offset, lb);
+        let hi = b.ins().smin(end, ub);
+
+        let shift = b.ins().isub(lo, offset);
+        let overlap = b.ins().isub(hi, lo);
+
+        // mask = (1 << overlap) - 1. Reaching this path means the write was clipped
+        // on at least one side, so `1 <= overlap < size <= 64` and the shift amount
+        // stays in `1..=63`; `overlap == 64` cannot occur.
+        let ones = b.ins().iconst(I64, -1);
+        let c64 = b.ins().iconst(I64, 64);
+        let inv_overlap = b.ins().isub(c64, overlap);
+        let part_mask = b.ins().ushr(ones, inv_overlap);
+
+        // Drop the clipped-off low bits, then the bits past the overlap, so the
+        // splices below can OR the value in directly.
+        let part_value = b.ins().ushr(new_value, shift);
+        let part_value = b.ins().band(part_value, part_mask);
+
+        // Same splice as the in-bounds path, with a runtime mask. `lo` and `hi` are
+        // already clamped into the signal, so every word touched is in range.
+        let part_bit = b.ins().iadd_imm_u(lo, base_offset as i64);
+        // Last written bit: `part_bit + overlap - 1`, which is just `hi` rebased.
+        let part_end = b.ins().iadd_imm_u(hi, base_offset as i64 - 1);
+
+        let part_word = b.ins().ushr_imm_u(part_bit, 6);
+        let part_boff = b.ins().band_imm_u(part_bit, 0x3F);
+        let part_endword = b.ins().ushr_imm_u(part_end, 6);
+
+        let part_word_byte = b.ins().ishl_imm_u(part_word, 3);
+        let part_wptr = b.ins().iadd(heap_ptr, part_word_byte);
+
+        let part_is_single_word = b.ins().icmp(IntCC::Equal, part_word, part_endword);
+        b.ins().brif(
+            part_is_single_word,
+            part_single_word_bb,
+            &[],
+            part_two_word_bb,
+            &[],
+        );
+
+        // Partial, single-word.
+        b.switch_to_block(part_single_word_bb);
+        b.set_cold_block(part_single_word_bb);
+        let part_written = single_word(b, part_wptr, part_boff, part_mask, part_value);
+        let part_written = b.ins().ishl(part_written, shift);
+        b.ins().jump(post_bb, &[part_written.into()]);
+
+        // Partial, double-word.
+        b.switch_to_block(part_two_word_bb);
+        b.set_cold_block(part_two_word_bb);
+        let part_written = double_word(b, part_wptr, part_boff, part_mask, part_value);
+        let part_written = b.ins().ishl(part_written, shift);
+        b.ins().jump(post_bb, &[part_written.into()]);
+    }
+
+    b.switch_to_block(post_bb);
+    b.seal_block(in_bounds_bb);
+    b.seal_block(single_word_bb);
+    b.seal_block(two_word_bb);
+    b.seal_block(partial_bb);
+    b.seal_block(part_single_word_bb);
+    b.seal_block(part_two_word_bb);
+    b.seal_block(post_bb);
+
+    b.block_params(post_bb)[0]
 }
 
 /// Four-value bitwise AND of two operands given as `(val, spc)` planes,
