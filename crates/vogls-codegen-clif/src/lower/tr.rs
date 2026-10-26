@@ -3909,7 +3909,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             (M::TwoValue | M::FourValue, None)
                                 if *offset % 64 == 0
                                     && (*offset + src_size.get() == signal_size.get()
-                                        || src_size.get() % 64 == 0) =>
+                                        || src_size.get().is_multiple_of(64)) =>
                             {
                                 let ptr = self.compiler.ptr;
                                 let post_bb = b.create_block();
@@ -4417,7 +4417,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     let before = load_bit(
                                         b,
                                         heap_ptr,
-                                        base_offset as u64 + condition.offset as u64,
+                                        base_offset + condition.offset as u64,
                                     );
                                     let after = match SixBitSize::from_vector_size(src_size) {
                                         None => {
@@ -4441,7 +4441,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                         b,
                                         signal_size,
                                         heap_ptr,
-                                        base_offset as u64 + condition.offset as u64,
+                                        base_offset + condition.offset as u64,
                                     );
                                     let (new_spc, new_val) =
                                         match SixBitSize::from_vector_size(src_size) {

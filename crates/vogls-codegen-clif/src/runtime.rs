@@ -781,7 +781,7 @@ impl ClifDesign {
     ) -> Result<(), ()> {
         // The active regions is assumed to be preallocated. This leads to UB if violated.
         assert!(
-            state.schedule.active_region.capacity() >= self.procs.len() + 1,
+            state.schedule.active_region.capacity() > self.procs.len(),
             "active region must be pre-sized to the process count: capacity {} < {} processes",
             state.schedule.active_region.capacity(),
             self.procs.len(),

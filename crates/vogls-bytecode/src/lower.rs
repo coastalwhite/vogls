@@ -2610,7 +2610,7 @@ fn lower_instruction(
             // own base alongside it, rather than the two added together. That is the coordinate a
             // watch is stated in, and the clamp range cannot stand in for it: the range bounds the
             // addressable extent of the write, which for an array element starts at the element.
-            let bounds = 0..=base_size.get() as u32 - 1;
+            let bounds = 0..=base_size.get() - 1;
 
             if let Some(watcher_range) = watch_map.map().get(signal) {
                 let watchers = watch_map.watchers();

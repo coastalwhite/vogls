@@ -109,7 +109,7 @@ impl IntegrationArgs {
         let mut collected = Vec::new();
 
         for test in tests.iter() {
-            let config = std::fs::read_to_string(&test)?;
+            let config = std::fs::read_to_string(test)?;
             let config = toml::from_str::<TestConfig>(&config)?;
 
             if let Some(filter) = self.filter.as_ref()
@@ -231,7 +231,7 @@ fn run_test_direct(test: &Test) -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let mut builder = DesignBuilder::new();
     let mut world = StdWorldCaptured::default();
-    world.set_current_dir(&root);
+    world.set_current_dir(root);
 
     for key in &test.defines {
         builder.define_macro(key, Macro::default());

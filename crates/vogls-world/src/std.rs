@@ -40,7 +40,7 @@ impl FileTable {
         let file = match self.cwd.as_ref() {
             None => open_options.open(path),
             Some(_) if path.is_absolute() => open_options.open(path),
-            Some(cwd) => open_options.open(&cwd.join(path)),
+            Some(cwd) => open_options.open(cwd.join(path)),
         }?;
         let file_id = match self.free_list.pop() {
             Some(id) => {
@@ -134,7 +134,7 @@ impl World for StdWorld {
         match self.file_table.cwd.as_ref() {
             None => std::fs::read_to_string(path),
             Some(_) if path.is_absolute() => std::fs::read_to_string(path),
-            Some(cwd) => std::fs::read_to_string(&cwd.join(path)),
+            Some(cwd) => std::fs::read_to_string(cwd.join(path)),
         }
         .map_err(WorldError::from)
     }
