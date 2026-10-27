@@ -12,6 +12,9 @@ pub struct WatchMap {
     watchers: Vec<(WatchCondition, usize)>,
     map: VgHashMap<SignalKey, Range<usize>>,
     bb_lookup: VgHashMap<BasicBlockKey, usize>,
+
+    /// The watch index of every distinct watch.
+    watch_lookup: VgHashMap<(TemporalRegionKey, Box<[WatchCondition]>), usize>,
     /// The temporal region each watch resumes into, by watch index.
     targets: Vec<TemporalRegionKey>,
 }
@@ -21,12 +24,20 @@ impl WatchMap {
         let mut watchers = Vec::<(WatchCondition, usize)>::new();
         let mut map = VgHashMap::default();
         let mut bb_lookup = VgHashMap::default();
+        let mut watch_lookup = VgHashMap::default();
         let mut targets = Vec::new();
         for (key, bb) in bbs.iter() {
             if let BasicBlockTerminator::Watch(tr, conditions) = &bb.terminator {
-                bb_lookup.insert(key, targets.len());
-                watchers.extend(conditions.iter().map(|c| (*c, targets.len())));
-                targets.push(*tr);
+                let key_conditions: Box<[WatchCondition]> = conditions.as_slice().into();
+                let index = *watch_lookup
+                    .entry((*tr, key_conditions))
+                    .or_insert_with(|| {
+                        let index = targets.len();
+                        watchers.extend(conditions.iter().map(|c| (*c, index)));
+                        targets.push(*tr);
+                        index
+                    });
+                bb_lookup.insert(key, index);
             }
         }
 
@@ -50,12 +61,22 @@ impl WatchMap {
             watchers,
             map,
             bb_lookup,
+            watch_lookup,
             targets,
         }
     }
 
     pub fn get_watch_index(&self, key: BasicBlockKey) -> usize {
         self.bb_lookup[&key]
+    }
+
+    pub fn find_watch_index(
+        &self,
+        tr: TemporalRegionKey,
+        conditions: &[WatchCondition],
+    ) -> Option<usize> {
+        // @Performance: Remove this allocation.
+        self.watch_lookup.get(&(tr, conditions.into())).copied()
     }
 
     /// The temporal region watch `index` resumes into when it triggers.

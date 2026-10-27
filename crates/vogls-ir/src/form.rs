@@ -7,6 +7,7 @@ use crate::token_range::TokenRange;
 use crate::{
     BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, LogicMode, Process,
     ProcessKind, ResizeOp, SelectMerge, TIME_VSIZE, TemporalRegionKey, VSIZE_32, VariableKey,
+    WatchCondition,
 };
 
 struct Fail {
@@ -31,6 +32,8 @@ enum FailReason {
     InvalidInputMode {
         given: LogicMode,
     },
+    NonCanonicalWatchConditions,
+    NonCanonicalStandingConditions,
 }
 
 impl FailReason {
@@ -48,13 +51,35 @@ impl FailReason {
     }
 }
 
+pub fn check_process_form(process: &Process, gl: &GlobalContext) {
+    check_form(&process.regions, process.standing.as_deref(), gl);
+}
+
 pub fn check_ir_form(regions: &[TemporalRegionKey], gl: &GlobalContext) {
+    check_form(regions, None, gl);
+}
+
+fn check_form(
+    regions: &[TemporalRegionKey],
+    standing: Option<&[WatchCondition]>,
+    gl: &GlobalContext,
+) {
     let mut var_region = VgHashMap::<VariableKey, TemporalRegionKey>::default();
 
     let mut stack = Vec::<BasicBlockKey>::new();
     let mut seen = VgHashSet::<BasicBlockKey>::default();
 
     let mut fails = Vec::new();
+
+    if let Some(standing) = standing
+        && !WatchCondition::is_canonical(standing)
+    {
+        fails.push(Fail {
+            bb: regions[0].entry(),
+            instr: None,
+            reason: FailReason::NonCanonicalStandingConditions,
+        });
+    }
 
     for &tr in regions {
         seen.clear();
@@ -85,13 +110,21 @@ pub fn check_ir_form(regions: &[TemporalRegionKey], gl: &GlobalContext) {
             }
 
             use BasicBlockTerminator as T;
-            match bb.terminator {
+            match &bb.terminator {
                 T::Wait(..) => {}
                 T::VariableWait(_, delay) => {
-                    assert_eq!(gl.vars.size(delay), TIME_VSIZE);
+                    assert_eq!(gl.vars.size(*delay), TIME_VSIZE);
                 }
                 T::WaitRegion(..) => {}
-                T::Watch(..) => {}
+                T::Watch(_, conditions) => {
+                    if !WatchCondition::is_canonical(conditions) {
+                        fails.push(Fail {
+                            bb: bb_key,
+                            instr: None,
+                            reason: FailReason::NonCanonicalWatchConditions,
+                        });
+                    }
+                }
                 T::Jump(..) => {}
                 T::Branch(..) => {}
                 T::Halt => {}
@@ -127,6 +160,15 @@ pub fn check_ir_form(regions: &[TemporalRegionKey], gl: &GlobalContext) {
                 }
                 FailReason::InvalidInputMode { given } => {
                     eprintln!("invalid-input-mode. {given:?}.")
+                }
+                FailReason::NonCanonicalWatchConditions => {
+                    eprintln!(
+                        "non-canonical-watch-conditions. {:?}.",
+                        gl.bbs[bb].terminator
+                    )
+                }
+                FailReason::NonCanonicalStandingConditions => {
+                    eprintln!("non-canonical-standing-conditions. {standing:?}.")
                 }
             }
         }

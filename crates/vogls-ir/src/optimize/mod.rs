@@ -135,7 +135,7 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], opts
                     &mut scratch_map,
                 );
             }
-            crate::form::check_ir_form(&gl.processes[process].regions, gl);
+            crate::form::check_process_form(&gl.processes[process], gl);
             if opts.flags.contains(OptFlags::COMMON_SUBEXPR_ELIM) {
                 common_subexpr_elim::common_subexpr_elim(
                     gl,
@@ -144,11 +144,11 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], opts
                     &mut scratch_seen,
                 );
             }
-            crate::form::check_ir_form(&gl.processes[process].regions, gl);
+            crate::form::check_process_form(&gl.processes[process], gl);
             if opts.flags.contains(OptFlags::PEEPHOLE) {
                 peephole::peephole(gl, process, &mut scratch_stack, &mut scratch_seen);
             }
-            crate::form::check_ir_form(&gl.processes[process].regions, gl);
+            crate::form::check_process_form(&gl.processes[process], gl);
             if opts.flags.contains(OptFlags::DEADCODE_ELIMINATION) {
                 deadcode_elimination::deadcode_elimination(
                     gl,
@@ -195,7 +195,7 @@ pub fn optimize_processes(gl: &mut GlobalContext, processes: &[ProcessKey], opts
                 }
             }
 
-            crate::form::check_ir_form(&gl.processes[process].regions, gl);
+            crate::form::check_process_form(&gl.processes[process], gl);
         }
     }
 }

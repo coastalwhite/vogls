@@ -269,9 +269,13 @@ impl LoweredDesign {
                 let rt_key = rt_signal_map[&key];
                 assert_eq!(initialize.size(), signal.size);
                 heap.store_bits(signal_to_heap[rt_key.as_usize()], signal.mode, initialize);
-                if let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
-                    lupdt_updated[*lupdt_idx as usize] = true;
-                }
+            }
+
+            if signal.triggers_t0_poke()
+                && let Some(rt_key) = rt_signal_map.get(&key)
+                && let Some(lupdt_idx) = lupdt_indexes.get(rt_key)
+            {
+                lupdt_updated[*lupdt_idx as usize] = true;
             }
         }
 
@@ -366,9 +370,13 @@ impl LoweredDesign {
                 let rt_key = rt_signal_map[&key];
                 assert_eq!(initialize.size(), signal.size);
                 heap.store_bits(signal_to_heap[rt_key.as_usize()], signal.mode, initialize);
-                if let Some(lupdt_idx) = lupdt_indexes.get(&rt_key) {
-                    lupdt_updated[*lupdt_idx as usize] = true;
-                }
+            }
+
+            if signal.triggers_t0_poke()
+                && let Some(rt_key) = rt_signal_map.get(&key)
+                && let Some(lupdt_idx) = lupdt_indexes.get(rt_key)
+            {
+                lupdt_updated[*lupdt_idx as usize] = true;
             }
         }
 

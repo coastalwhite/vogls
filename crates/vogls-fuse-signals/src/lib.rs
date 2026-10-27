@@ -72,7 +72,7 @@ use vogls_ir::token_range::TokenRange;
 use vogls_ir::vcd::VcdValue;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, Instruction, IntrinsicOp,
-    ProcessBuilder, Signal, SignalFlags, SignalKey, SignalSlice, VectorSize,
+    ProcessBuilder, Signal, SignalFlags, SignalKey, SignalSlice, VectorSize, WatchCondition,
 };
 use vogls_utils::{OrderedSet, Table, VgHashMap, VgHashSet};
 
@@ -537,9 +537,7 @@ impl FuseGraphOptimizer {
                     }
                     Some(FuseTarget::Constant(_)) => false,
                 });
-                // Canonicalize the signal list.
-                conditions.sort_unstable_by_key(|c| c.to_ord());
-                conditions.dedup();
+                WatchCondition::canonicalize(conditions);
 
                 if conditions.is_empty() {
                     gl.bbs[key].terminator = BasicBlockTerminator::Halt;
@@ -561,9 +559,7 @@ impl FuseGraphOptimizer {
                 }
                 Some(FuseTarget::Constant(_)) => false,
             });
-            // Canonicalize the signal list.
-            standing_vec.sort_unstable_by_key(|c| c.to_ord());
-            standing_vec.dedup();
+            WatchCondition::canonicalize(&mut standing_vec);
             *standing = standing_vec.into_boxed_slice();
         }
 

@@ -70,6 +70,17 @@ impl WatchCondition {
         (self.signal, self.offset, self.edge)
     }
 
+    /// Put conditions in the canonical order.
+    pub fn canonicalize(conditions: &mut Vec<Self>) {
+        conditions.sort_unstable_by_key(|c| c.to_ord());
+        conditions.dedup();
+    }
+
+    /// Are conditions in canonical order?
+    pub fn is_canonical(conditions: &[Self]) -> bool {
+        conditions.windows(2).all(|w| w[0].to_ord() < w[1].to_ord())
+    }
+
     pub fn entire_signal(gl: &GlobalContext, signal: SignalKey) -> Self {
         Self {
             signal,
@@ -123,6 +134,7 @@ pub enum BasicBlockTerminator {
     Wait(TemporalRegionKey, Time),
     VariableWait(TemporalRegionKey, VariableKey),
     WaitRegion(TemporalRegionKey, u8),
+    /// The conditions are canonical. See [`WatchCondition::canonicalize`].
     Watch(TemporalRegionKey, Vec<WatchCondition>),
 
     Jump(BasicBlockKey),
@@ -311,7 +323,10 @@ impl BasicBlockTerminator {
             | Self::WaitRegion(..)
             | Self::Jump(_)
             | Self::Halt => {}
-            Self::Watch(_, signals) => signals.iter_mut().for_each(|c| c.signal = f(c.signal)),
+            Self::Watch(_, conditions) => {
+                conditions.iter_mut().for_each(|c| c.signal = f(c.signal));
+                WatchCondition::canonicalize(conditions);
+            }
         }
     }
 
@@ -333,7 +348,8 @@ impl SignalFlags {
     pub const EXT_DRIVE: Self = Self(0b0001u8);
     pub const EXT_PROBE: Self = Self(0b0010u8);
 
-    /// Do not poke standing watchers at the start of the simulation.
+    /// Do not poke standing watchers at the start of the simulation, and do not count the start
+    /// of the simulation as the last update of the signal.
     pub const NO_START_POKE: Self = Self(0b0100u8);
 
     pub fn contains(self, rhs: Self) -> bool {
@@ -396,6 +412,9 @@ pub struct Signal {
 }
 impl Signal {
     /// Should the signal poke all standing watchers at `t=0`?
+    ///
+    /// This is a write at `t=0`, so a signal that triggers a poke also has `t=0` as its initial
+    /// last update time. Otherwise, it starts out as never updated.
     pub fn triggers_t0_poke(&self) -> bool {
         if self.flags.contains(SignalFlags::NO_START_POKE) {
             return false;
@@ -2200,6 +2219,15 @@ pub struct Process {
     /// logic. Theoretically, `always (*)` can be scheduled at the end of the `t=0` active region,
     /// but in reality everyone assumes it gets scheduled before everything else. This solves that
     /// problem.
+    ///
+    /// The armed watch is the one that resumes into the first temporal region of the process and
+    /// listens to exactly these conditions. The process may have any number of other temporal
+    /// regions and watches. See [`watchers::WatchMap::find_watch_index`].
+    ///
+    /// The process is only armed if none of the conditions is poked at `t=0`. Otherwise, it is
+    /// scheduled at `t=0` like any other process. See [`Signal::triggers_t0_poke`].
+    ///
+    /// The conditions are canonical. See [`WatchCondition::canonicalize`].
     pub standing: Option<Box<[WatchCondition]>>,
 
     // @Performance: Use UnitVec here.

@@ -357,6 +357,8 @@ pub struct PullGateInstance<'a> {
 #[derive(Clone, Copy)]
 pub struct NInputGateInstantiation<'a> {
     pub gatetype: AstItem<NInputGateType>,
+    pub drive_strength: Option<AstItem<DriveStrength>>,
+    pub delay2: Option<AstId<'a, Delay2<'a>>>,
     pub instances: AstIdRange<'a, NInputGateInstance<'a>>,
 }
 

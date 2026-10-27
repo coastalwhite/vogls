@@ -1,6 +1,6 @@
 use vogls_utils::VgHashSet;
 
-use crate::form::check_ir_form;
+use crate::form::{check_ir_form, check_process_form};
 use crate::token_range::TokenRange;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
@@ -80,10 +80,12 @@ impl ProcessBuilder {
     }
 
     pub fn finalize(self, gl: &mut GlobalContext) {
-        check_ir_form(&self.trs, gl);
-
-        if let Some(key) = self.key {
-            gl.processes[key].regions = self.trs;
+        match self.key {
+            None => check_ir_form(&self.trs, gl),
+            Some(key) => {
+                gl.processes[key].regions = self.trs;
+                check_process_form(&gl.processes[key], gl);
+            }
         }
     }
 
@@ -104,8 +106,10 @@ impl ProcessBuilder {
         self.trs.push(tr);
     }
 
-    pub fn set_standing(&self, gl: &mut GlobalContext, signals: Box<[WatchCondition]>) {
-        gl.processes[self.key.unwrap()].standing = Some(signals);
+    pub fn set_standing(&self, gl: &mut GlobalContext, conditions: Box<[WatchCondition]>) {
+        let mut conditions = conditions.into_vec();
+        WatchCondition::canonicalize(&mut conditions);
+        gl.processes[self.key.unwrap()].standing = Some(conditions.into_boxed_slice());
     }
 
     pub fn entry(&self) -> TemporalRegionKey {
@@ -1085,15 +1089,16 @@ impl BasicBlockBuilder {
             .into_iter()
             .map(|signal| WatchCondition::entire_signal(gl, signal))
             .collect();
-        self.temporal_term_to(gl, BasicBlockTerminator::Watch(tr, conditions))
+        self.watch_conditions_to(gl, conditions, tr)
     }
     /// Watch a set of conditions that already carry their own edges and slices.
     pub fn watch_conditions_to(
         &mut self,
         gl: &mut GlobalContext,
-        conditions: Vec<WatchCondition>,
+        mut conditions: Vec<WatchCondition>,
         tr: TemporalRegionKey,
     ) {
+        WatchCondition::canonicalize(&mut conditions);
         self.temporal_term_to(gl, BasicBlockTerminator::Watch(tr, conditions))
     }
     pub fn temporal_jump_to(&mut self, gl: &mut GlobalContext, tr: TemporalRegionKey) {

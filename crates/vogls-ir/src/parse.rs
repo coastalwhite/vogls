@@ -1037,6 +1037,7 @@ fn parse_instr<'a>(
                     error: "Can only wait to root of temporal region.".to_string(),
                 }));
             }
+            WatchCondition::canonicalize(&mut signals);
             *terminator = Some(T::Watch(tr, signals));
             return Ok(None);
         }

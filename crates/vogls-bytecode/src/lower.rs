@@ -88,13 +88,21 @@ pub fn lower_process_to_bytecode(
 
     // Standing processes are not scheduled in the active queue, instead their listeners are armed
     // right at the start.
-    let mut standing = process.standing.as_ref().filter(|conditions| {
-        conditions
-            .iter()
-            .any(|c| !gl.signals[c.signal].triggers_t0_poke())
-    });
-    if standing.is_none() {
-        schedule.push_active(InstructionPtr(bytecode.data.len() as u64));
+    match &process.standing {
+        // A standing process without conditions can never be woken up.
+        Some(conditions) if conditions.is_empty() => {}
+        Some(conditions)
+            if conditions
+                .iter()
+                .all(|c| !gl.signals[c.signal].triggers_t0_poke()) =>
+        {
+            let entry = process.regions[0];
+            let index = watch_map
+                .find_watch_index(entry, conditions.as_ref())
+                .unwrap();
+            listeners.arm(index)
+        }
+        Some(_) | None => schedule.push_active(InstructionPtr(bytecode.data.len() as u64)),
     }
 
     for tr in &process.regions {
@@ -275,15 +283,8 @@ pub fn lower_process_to_bytecode(
                     ));
                     bytecode.panic();
                 }
-                T::Watch(target, conditions) => {
+                T::Watch(target, _) => {
                     let index = watch_map.get_watch_index(bb_key);
-                    if standing
-                        .take_if(|s| s.as_ref() == conditions.as_slice())
-                        .is_some()
-                    {
-                        listeners.arm(index);
-                    }
-
                     jump_targets.push((
                         bytecode.data.len(),
                         target.entry(),
@@ -480,8 +481,6 @@ pub fn lower_process_to_bytecode(
         eprintln!("}}");
         eprintln!();
     }
-
-    assert!(standing.is_none());
 }
 
 const T0: Reg = Reg::X10;

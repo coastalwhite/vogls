@@ -37,8 +37,8 @@ use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::time::{TimeFormat, TimeResolution};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, GlobalContext, LogicMode, ShiftImmOp, SignalKey,
-    TemporalRegionKey, VariableKey, VectorSize,
+    BasicBlockKey, GlobalContext, LogicMode, ShiftImmOp, SignalKey, TemporalRegionKey, VariableKey,
+    VectorSize,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::VgHashMap;
@@ -1371,44 +1371,26 @@ pub fn compile<'a>(
         c.listeners[rt].push(listener);
     }
 
-    // A process is "standing" (armed but not run at t=0) only if at least one watcher does NOT
-    // trigger a t=0 poke -- matches the bytecode filter. Its arming Watch is the first one whose
-    // watch set equals the standing set, in the order `build_tr` discovers them, so this walk has
-    // to keep visiting blocks in that order even though the listeners no longer come from it.
+    // A standing process is armed at its standing watch instead of being run at t=0.
     for (pi, (_k, process)) in gl.processes.iter().enumerate() {
-        let Some(standing) = process.standing.as_deref().filter(|conditions| {
-            conditions
+        if let Some(conditions) = &process.standing
+            && conditions
                 .iter()
-                .any(|c| !gl.signals[c.signal].triggers_t0_poke())
-        }) else {
-            continue;
-        };
-        'process: for tr in process.regions.iter() {
-            let mut seen = vogls_utils::VgHashSet::default();
-            seen.insert(tr.entry());
-            let mut order = vec![tr.entry()];
-            let mut stack = vec![tr.entry()];
-            while let Some(k) = stack.pop() {
-                c.gl.bbs[k].terminator.for_each_non_temporal_bb(|s| {
-                    if seen.insert(s) {
-                        order.push(s);
-                        stack.push(s);
-                    }
-                });
+                .all(|c| !gl.signals[c.signal].triggers_t0_poke())
+        {
+            c.standing_procs.insert(pi);
+
+            // A standing process without conditions can never be woken up.
+            if conditions.is_empty() {
+                continue;
             }
-            for &k in &order {
-                let BasicBlockTerminator::Watch(_, conditions) = &c.gl.bbs[k].terminator else {
-                    continue;
-                };
-                if standing.len() == conditions.len()
-                    && standing.iter().zip(conditions.iter()).all(|(a, b)| a == b)
-                {
-                    c.standing_procs.insert(pi);
-                    c.standing_arm_offsets
-                        .push(c.watch_map.get_watch_index(k) as u32);
-                    break 'process;
-                }
-            }
+
+            let entry = process.regions[0];
+            let index = c
+                .watch_map
+                .find_watch_index(entry, conditions.as_ref())
+                .unwrap();
+            c.standing_arm_offsets.push(index as u32);
         }
     }
 

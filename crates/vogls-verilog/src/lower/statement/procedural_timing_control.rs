@@ -8,8 +8,8 @@ use vogls_utils::OrderedSet;
 
 use crate::ast::expr::Expr;
 use crate::ast::statement::{
-    DelayControl, DelayValue, EventControl, EventExpressionPrimary, ProceduralTimingControl,
-    ProceduralTimingControlStatement, StatementOrNull,
+    DelayControl, DelayValue, EventControl, EventExpressionPrimary, MinTypMaxExpression,
+    ProceduralTimingControl, ProceduralTimingControlStatement, StatementOrNull,
 };
 use crate::ast::{AstId, AstItem};
 use crate::elaborate::NetSymbol;
@@ -46,65 +46,14 @@ pub fn lower<'a>(
                         // """
                         builder.wait_region_to(mctx.gl(), Region::Inactive as u8, next_tr)
                     } else {
-                        let delay = match &**ast_delay_value {
-                            DelayValue::UnsignedNumber(value) => {
-                                let value = &ctx.arenas.decimals[value.at];
-                                let delay = value.as_u64().unwrap_or(0);
-                                ctx.time_scale
-                                    .unit
-                                    .truncate_or_multiply_to(delay, ctx.time_resolution)
-                            }
-                            DelayValue::RealNumber(value) => ctx
-                                .time_scale
-                                .unit
-                                .real_to_ticks(
-                                    *value,
-                                    ctx.time_scale.precision,
-                                    ctx.time_resolution,
-                                )
-                                .unwrap_or(u64::MAX),
-                            DelayValue::Identifier(ident) => {
-                                let ident = AstItem {
-                                    item: *ident,
-                                    loc: ast_delay_value.loc,
-                                };
-                                let value = try_resolve_constant(
-                                    scope,
-                                    &ctx.table,
-                                    ctx.arenas,
-                                    ident,
-                                    &mut mctx.diagnostics,
-                                )?;
-                                let delay = value.as_integer().unwrap() as u64;
-                                ctx.time_scale
-                                    .unit
-                                    .truncate_or_multiply_to(delay, ctx.time_resolution)
-                            }
-                        };
+                        let delay =
+                            evaluate_delay_value_as_ticks(ctx, mctx, scope, *ast_delay_value)?;
                         builder.wait_to(mctx.gl(), Time(delay), next_tr);
                     }
                 }
                 DelayControl::MinTypMax(min_typ_max) => {
-                    let (value, value_ty) = lower_expr(
-                        ctx,
-                        mctx,
-                        scope,
-                        &mut builder,
-                        min_typ_max.typical,
-                        Some(TIME_VSIZE),
-                    )?;
                     let delay =
-                        truncate_or_extend(mctx.gl(), &mut builder, value, value_ty, TIME_VSIZE);
-                    let delay = builder.multiply_constant(
-                        mctx.gl(),
-                        delay,
-                        Bits::from_u64(
-                            TIME_VSIZE,
-                            ctx.time_scale
-                                .unit
-                                .truncate_or_multiply_to(1, ctx.time_resolution),
-                        ),
-                    );
+                        lower_min_typ_max_delay(ctx, mctx, scope, &mut builder, *min_typ_max)?;
                     builder.variable_wait_to(mctx.gl(), delay, next_tr);
                 }
             }
@@ -264,4 +213,67 @@ pub fn lower<'a>(
     )?;
 
     Ok(builder)
+}
+
+pub fn evaluate_delay_value_as_ticks<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    ast_delay_value: AstId<'a, DelayValue>,
+) -> Result<u64, ()> {
+    Ok(match &*ast_delay_value {
+        DelayValue::UnsignedNumber(value) => {
+            let value = &ctx.arenas.decimals[value.at];
+            let delay = value.as_u64().unwrap_or(0);
+            ctx.time_scale
+                .unit
+                .truncate_or_multiply_to(delay, ctx.time_resolution)
+        }
+        DelayValue::RealNumber(value) => ctx
+            .time_scale
+            .unit
+            .real_to_ticks(*value, ctx.time_scale.precision, ctx.time_resolution)
+            .unwrap_or(u64::MAX),
+        DelayValue::Identifier(ident) => {
+            let ident = AstItem {
+                item: *ident,
+                loc: ast_delay_value.loc,
+            };
+            let value =
+                try_resolve_constant(scope, &ctx.table, ctx.arenas, ident, &mut mctx.diagnostics)?;
+            let delay = value.as_integer().unwrap() as u64;
+            ctx.time_scale
+                .unit
+                .truncate_or_multiply_to(delay, ctx.time_resolution)
+        }
+    })
+}
+
+pub fn lower_min_typ_max_delay<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    builder: &mut BasicBlockBuilder,
+    min_typ_max: AstId<'a, MinTypMaxExpression<'a>>,
+) -> Result<VariableKey, ()> {
+    let (value, value_ty) = lower_expr(
+        ctx,
+        mctx,
+        scope,
+        builder,
+        min_typ_max.typical,
+        Some(TIME_VSIZE),
+    )?;
+    let delay = truncate_or_extend(mctx.gl(), builder, value, value_ty, TIME_VSIZE);
+    let delay = builder.convert_mode(mctx.gl(), delay, LogicMode::TwoValue);
+    Ok(builder.multiply_constant(
+        mctx.gl(),
+        delay,
+        Bits::from_u64(
+            TIME_VSIZE,
+            ctx.time_scale
+                .unit
+                .truncate_or_multiply_to(1, ctx.time_resolution),
+        ),
+    ))
 }

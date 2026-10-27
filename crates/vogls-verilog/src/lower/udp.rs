@@ -124,13 +124,14 @@ pub fn lower_udp<'a>(
                 debug_assert_eq!(mctx.gl.bbs[current_entry_bb].region, entry_tr);
                 mctx.gl.bbs[start_bb].terminator =
                     BasicBlockTerminator::Branch(acc, drive_bb, builder.key());
-                mctx.gl.bbs[current_entry_bb].terminator = BasicBlockTerminator::Watch(
-                    entry_tr,
-                    ins.items
-                        .iter()
-                        .map(|&signal| WatchCondition::entire_signal(&mctx.gl, signal))
-                        .collect(),
-                );
+                let mut conditions = ins
+                    .items
+                    .iter()
+                    .map(|&signal| WatchCondition::entire_signal(&mctx.gl, signal))
+                    .collect();
+                WatchCondition::canonicalize(&mut conditions);
+                mctx.gl.bbs[current_entry_bb].terminator =
+                    BasicBlockTerminator::Watch(entry_tr, conditions);
             }
 
             let output_value = builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE));
