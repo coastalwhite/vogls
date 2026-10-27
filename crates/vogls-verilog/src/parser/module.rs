@@ -367,7 +367,16 @@ impl<'a> Consumable<'a> for InoutDeclaration<'a> {
             net_type = Some(val);
         }
         let signed = tkw.next_if_equals(T::KeywordSigned);
-        // @Incomplete: [ range ]
+        let mut range = None;
+        if tkw.get(tkw.offset).is_some_and(|t| *t.kind == T::LeftBrace) {
+            range = Some(parse::<Range>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
         let port_identifiers =
             parse_one_or_more_while::<Identifier>(tkw, sc, arenas, ast, diagnostics, |tkw| {
                 tkw.get(tkw.offset + 1).is_some_and(|t| *t.kind == T::Ident)
@@ -377,7 +386,7 @@ impl<'a> Consumable<'a> for InoutDeclaration<'a> {
         Ok(Self {
             net_type,
             signed,
-            range: None,
+            range,
             port_identifiers,
         })
     }
