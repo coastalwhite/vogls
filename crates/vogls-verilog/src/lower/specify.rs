@@ -7,7 +7,7 @@ use vogls_ir::{
 };
 use vogls_utils::VgHashMap;
 
-use crate::ast::constant_expr::ConstantMinTypMaxExpression;
+use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::Expr;
 use crate::ast::specify::{
     EdgeIdentifier, PathDeclaration, PathDeclarationVariant, SpecifyBlockItem,
@@ -18,7 +18,7 @@ use crate::elaborate::VSymbol;
 use crate::lower::expression::lower_expr;
 use crate::lower::{eval_constant_expr, try_resolve_hident, unwrap_get_net_mut};
 
-use super::{LowerContext, MutLowerContext};
+use super::{LowerContext, MutLowerContext, VValue};
 
 pub enum Condition<'a> {
     None,
@@ -398,6 +398,50 @@ pub struct Delay {
     pub max: u64,
 }
 
+fn eval_delay_to_ticks<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    id: AstId<'a, ConstantExpr<'a>>,
+) -> Result<u64, ()> {
+    let value = eval_constant_expr(
+        &mctx.gl,
+        ctx.arenas,
+        &ctx.table,
+        scope,
+        &mut mctx.diagnostics,
+        id,
+        None,
+    )?;
+
+    // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 222
+    // "If the path delay expression results in a negative value, it shall be treated as zero."
+    if let VValue::Real(value) = value {
+        return Ok(ctx
+            .time_scale
+            .unit
+            .real_to_ticks(
+                value.as_f64(),
+                ctx.time_scale.precision,
+                ctx.time_resolution,
+            )
+            .unwrap_or(u64::MAX));
+    }
+
+    let Some(delay) = value.as_integer() else {
+        mctx.diagnostics.not_yet_implemented(
+            ctx.arenas.get_span(id),
+            "path delay that is not an integer or a real",
+        );
+        return Err(());
+    };
+    let delay = delay.max(0) as u64;
+    Ok(ctx
+        .time_scale
+        .unit
+        .truncate_or_multiply_to(delay, ctx.time_resolution))
+}
+
 impl Delay {
     fn eval<'a>(
         ctx: &LowerContext<'a, '_>,
@@ -407,88 +451,18 @@ impl Delay {
     ) -> Result<Self, ()> {
         match &*id {
             ConstantMinTypMaxExpression::Single(delay) => {
-                let delay = eval_constant_expr(
-                    &mctx.gl,
-                    ctx.arenas,
-                    &ctx.table,
-                    scope,
-                    &mut mctx.diagnostics,
-                    *delay,
-                    None,
-                )?
-                .as_integer()
-                .unwrap();
-
-                // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 222
-                // "If the path delay expression results in a negative value, it shall be treated as zero."
-                let delay = delay.max(0) as u64;
-                let delay = ctx
-                    .time_scale
-                    .unit
-                    .truncate_or_multiply_to(delay, ctx.time_resolution);
-
+                let delay = eval_delay_to_ticks(ctx, mctx, scope, *delay)?;
                 Ok(Self {
                     min: delay,
                     typ: delay,
                     max: delay,
                 })
             }
-            ConstantMinTypMaxExpression::MinTypMax { min, typ, max } => {
-                let min = eval_constant_expr(
-                    &mctx.gl,
-                    ctx.arenas,
-                    &ctx.table,
-                    scope,
-                    &mut mctx.diagnostics,
-                    *min,
-                    None,
-                )?
-                .as_integer()
-                .unwrap();
-                let typ = eval_constant_expr(
-                    &mctx.gl,
-                    ctx.arenas,
-                    &ctx.table,
-                    scope,
-                    &mut mctx.diagnostics,
-                    *typ,
-                    None,
-                )?
-                .as_integer()
-                .unwrap();
-                let max = eval_constant_expr(
-                    &mctx.gl,
-                    ctx.arenas,
-                    &ctx.table,
-                    scope,
-                    &mut mctx.diagnostics,
-                    *max,
-                    None,
-                )?
-                .as_integer()
-                .unwrap();
-
-                // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 222
-                // "If the path delay expression results in a negative value, it shall be treated as zero."
-                let min = min.max(0) as u64;
-                let typ = typ.max(0) as u64;
-                let max = max.max(0) as u64;
-
-                let min = ctx
-                    .time_scale
-                    .unit
-                    .truncate_or_multiply_to(min, ctx.time_resolution);
-                let typ = ctx
-                    .time_scale
-                    .unit
-                    .truncate_or_multiply_to(typ, ctx.time_resolution);
-                let max = ctx
-                    .time_scale
-                    .unit
-                    .truncate_or_multiply_to(max, ctx.time_resolution);
-
-                Ok(Self { min, typ, max })
-            }
+            ConstantMinTypMaxExpression::MinTypMax { min, typ, max } => Ok(Self {
+                min: eval_delay_to_ticks(ctx, mctx, scope, *min)?,
+                typ: eval_delay_to_ticks(ctx, mctx, scope, *typ)?,
+                max: eval_delay_to_ticks(ctx, mctx, scope, *max)?,
+            }),
         }
     }
 
