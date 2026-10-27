@@ -606,14 +606,20 @@ fn run_test(
                     }
                 };
                 if let Some(sdf) = sdf.as_deref() {
-                    if elab.annotate_sdf(sdf).is_err() {
+                    if let Err(err) = elab.annotate_sdf(sdf) {
+                        if let Some(d) = gotten_diagnostics.as_mut() {
+                            d.push_str(&err.to_string());
+                        }
                         return Err(FailureInfo::CompileFailure(
                             TestPhase::LOWERING,
                             "failed to annotate SDF".into(),
                         ));
                     }
                 }
-                if elab.annotate_specify().is_err() {
+                if let Err(err) = elab.annotate_specify() {
+                    if let Some(d) = gotten_diagnostics.as_mut() {
+                        d.push_str(&err.to_string());
+                    }
                     return Err(FailureInfo::CompileFailure(
                         TestPhase::LOWERING,
                         "failed to annotate specify".into(),

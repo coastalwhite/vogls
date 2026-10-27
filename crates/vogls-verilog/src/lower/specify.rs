@@ -41,6 +41,19 @@ pub struct SpecifyOutput<'a> {
 pub struct SpecifyPath<'a> {
     pub condition: Condition<'a>,
     pub delays: Delays,
+    pub span: TokenRange,
+}
+
+/// Scratch buffers for [`lower_iopath`], kept between calls to avoid reallocating them.
+#[derive(Default)]
+pub struct LowerIoPathScratches {
+    /// The index into `inputs_before` of each input with an edge-sensitive path.
+    input_before_lut: VgHashMap<SignalKey, usize>,
+    /// Each input with an edge-sensitive path, its value before the last change and the signal
+    /// that holds that value.
+    inputs_before: Vec<(SignalKey, VariableKey, SignalKey)>,
+    /// The condition under which each path of an input applies, where `None` means always.
+    conditions: Vec<Option<VariableKey>>,
 }
 
 // @Performance.
@@ -672,9 +685,11 @@ pub fn lower_specify<'a>(
                     out.paths.push((input, Vec::new()));
                     idx
                 });
-                out.paths[paths_idx]
-                    .1
-                    .push(SpecifyPath { condition, delays });
+                out.paths[paths_idx].1.push(SpecifyPath {
+                    condition,
+                    delays,
+                    span: ctx.arenas.get_span(item),
+                });
             }
             SpecifyBlockItem::SystemTimingCheck(_) => {
                 // @TODO: Don't ignore these.
@@ -682,22 +697,12 @@ pub fn lower_specify<'a>(
         }
     }
 
-    // @Performance: Scratchpad these.
-    let mut input_before_lut = VgHashMap::<SignalKey, usize>::default();
-    let mut input_before = Vec::<(SignalKey, VariableKey, SignalKey)>::new();
+    let mut scratches = LowerIoPathScratches::default();
     // let mut condition_orsum = VgHashMap::<SignalKey, VariableKey>::default();
 
     outs_lut.clear();
     for (output, specify) in outs.drain(..) {
-        lower_iopath(
-            ctx,
-            mctx,
-            scope,
-            output,
-            specify,
-            &mut input_before_lut,
-            &mut input_before,
-        )?;
+        lower_iopath(ctx, mctx, scope, output, specify, &mut scratches)?;
     }
 
     Ok(())
@@ -709,9 +714,14 @@ pub fn lower_iopath<'a>(
     scope: SymbolId,
     output: SignalKey,
     specify: SpecifyOutput,
-    input_before_lut: &mut VgHashMap<SignalKey, usize>,
-    input_before: &mut Vec<(SignalKey, VariableKey, SignalKey)>,
+    scratches: &mut LowerIoPathScratches,
 ) -> Result<(), ()> {
+    let LowerIoPathScratches {
+        input_before_lut,
+        inputs_before,
+        conditions,
+    } = scratches;
+
     let mut proxy = mctx.gl.signals.get(output).unwrap().clone();
     proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
     let proxy = mctx.gl.signals.insert(proxy);
@@ -721,7 +731,7 @@ pub fn lower_iopath<'a>(
 
     for output_bitidx in 0..mctx.gl.signals[output].size.get() {
         input_before_lut.clear();
-        input_before.clear();
+        inputs_before.clear();
 
         let (mut proc_builder, mut builder) =
             ProcessBuilder::new(mctx.gl(), ProcessKind::Specify, TokenRange::default());
@@ -749,9 +759,9 @@ pub fn lower_iopath<'a>(
                     });
                     let before = builder.probe(mctx.gl(), *input);
                     builder.drive(mctx.gl(), signal, before);
-                    let idx = input_before.len();
+                    let idx = inputs_before.len();
                     input_before_lut.insert(*input, idx);
-                    input_before.push((*input, before, signal));
+                    inputs_before.push((*input, before, signal));
                     break;
                 }
             }
@@ -761,7 +771,7 @@ pub fn lower_iopath<'a>(
         builder.temporal_jump_to(mctx.gl(), wait_loop_tr);
         builder.finished_switch_to(mctx.gl(), wait_loop_tr.entry());
 
-        for (_, variable, signal) in input_before.iter_mut() {
+        for (_, variable, signal) in inputs_before.iter_mut() {
             *variable = builder.probe(mctx.gl(), *signal);
         }
 
@@ -785,13 +795,16 @@ pub fn lower_iopath<'a>(
             let mut new_endwait_time_set = Some(endwait_time_set);
             let mut new_wait_time = endwait_time;
 
+            // The condition under which each path applies, where `None` means always. The
+            // condition of an `ifnone` path depends on the other paths, so it is filled in after.
+            conditions.clear();
             for path in paths {
                 let mut condition = None;
                 if matches!(
                     path.condition,
                     Condition::InputPosedge | Condition::InputPosedgeExpr(_)
                 ) {
-                    let before = input_before[input_before_lut[input]].1;
+                    let before = inputs_before[input_before_lut[input]].1;
                     let after = builder.probe(mctx.gl(), *input);
                     condition = Some(builder.posedge(mctx.gl(), before, after));
                 }
@@ -799,7 +812,7 @@ pub fn lower_iopath<'a>(
                     path.condition,
                     Condition::InputNegedge | Condition::InputNegedgeExpr(_)
                 ) {
-                    let before = input_before[input_before_lut[input]].1;
+                    let before = inputs_before[input_before_lut[input]].1;
                     let after = builder.probe(mctx.gl(), *input);
                     condition = Some(builder.negedge(mctx.gl(), before, after));
                 }
@@ -816,11 +829,55 @@ pub fn lower_iopath<'a>(
                     });
                 }
 
-                if matches!(path.condition, Condition::NoOtherCondition) {
-                    todo!();
+                conditions.push(condition.map(|c| builder.select_bit_constant(mctx.gl(), c, 0)));
+            }
+
+            // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 218
+            //
+            // """
+            // The ifnone keyword is used to specify a default state-dependent path delay when all
+            // other conditions for the path are false.
+            // [..]
+            // If there are no corresponding state-dependent module paths to the ifnone module
+            // path, then the ifnone module path shall be treated the same as an unconditional
+            // simple module path.
+            //
+            // It is illegal to specify both an ifnone condition for a module path and an
+            // unconditional simple module path for the same module path.
+            // """
+            //
+            // A condition that is `x` or `z` does not apply its path, so it counts as false here.
+            if paths
+                .iter()
+                .any(|path| matches!(path.condition, Condition::NoOtherCondition))
+            {
+                let mut any_other_condition = None;
+                for (path, condition) in paths.iter().zip(conditions.iter()) {
+                    if matches!(path.condition, Condition::NoOtherCondition) {
+                        continue;
+                    }
+                    let Some(condition) = *condition else {
+                        mctx.diagnostics.ifnone_with_unconditional_path(path.span);
+                        return Err(());
+                    };
+                    let is_true =
+                        builder.case_equals_constant(mctx.gl(), condition, Bits::from(true));
+                    any_other_condition = Some(match any_other_condition {
+                        None => is_true,
+                        Some(any) => builder.or(mctx.gl(), any, is_true),
+                    });
                 }
 
-                let condition = condition.map(|c| builder.select_bit_constant(mctx.gl(), c, 0));
+                let ifnone_condition =
+                    any_other_condition.map(|any| builder.binary_not(mctx.gl(), any));
+                for (path, condition) in paths.iter().zip(conditions.iter_mut()) {
+                    if matches!(path.condition, Condition::NoOtherCondition) {
+                        *condition = ifnone_condition;
+                    }
+                }
+            }
+
+            for (path, &condition) in paths.iter().zip(conditions.iter()) {
                 match (condition, &mut new_endwait_time_set) {
                     (None, _) | (_, None) => new_endwait_time_set = None,
                     (Some(condition), Some(new_wait_time_set)) => {
@@ -871,7 +928,7 @@ pub fn lower_iopath<'a>(
             mode: old_proxy_value.mode(),
         });
         builder.drive(mctx.gl(), old_proxy_signal, old_proxy_value);
-        for (input, _, signal) in input_before.iter_mut() {
+        for (input, _, signal) in inputs_before.iter_mut() {
             let new_value = builder.probe(mctx.gl(), *input);
             builder.drive(mctx.gl(), *signal, new_value);
         }

@@ -11,7 +11,9 @@ use vogls_sdf::{
     SignedRealNumberOrRTriple, Timescale, TimescaleNumber, TimescaleUnit, TimingSpec, TokenWalker,
 };
 use vogls_utils::{IterSliceContinguous, VgHashMap};
-use vogls_verilog::lower::specify::{Condition, SpecifyOutput, SpecifyPath, lower_iopath};
+use vogls_verilog::lower::specify::{
+    Condition, LowerIoPathScratches, SpecifyOutput, SpecifyPath, lower_iopath,
+};
 use vogls_verilog::lower::{Diagnostics, LowerContext, LowerErrorReason, MutLowerContext};
 
 use self::delay_pointer::{DelayPtr, DelayPtrVariant};
@@ -447,8 +449,7 @@ pub fn lower_sdf<'a>(
     drop(property_to_content);
     properties.sort_unstable_by_key(|(p, _)| (p.to, p.from));
 
-    let mut input_before_lut = VgHashMap::default();
-    let mut input_before = Vec::new();
+    let mut scratches = LowerIoPathScratches::default();
     let outputs = IterSliceContinguous::new(&properties, |(p, _)| &p.to);
     for paths_to_output in outputs {
         let output = paths_to_output[0].0.to;
@@ -464,21 +465,14 @@ pub fn lower_sdf<'a>(
                 vec![SpecifyPath {
                     condition: Condition::None,
                     delays,
+                    span: TokenRange::default(),
                 }],
             ));
         }
 
         let specify = SpecifyOutput { sid, inputs, paths };
 
-        lower_iopath(
-            ctx,
-            mctx,
-            sid,
-            output,
-            specify,
-            &mut input_before_lut,
-            &mut input_before,
-        )?;
+        lower_iopath(ctx, mctx, sid, output, specify, &mut scratches)?;
     }
 
     Ok(())

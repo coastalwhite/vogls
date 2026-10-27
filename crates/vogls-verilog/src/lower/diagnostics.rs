@@ -23,6 +23,7 @@ pub enum LowerErrorReason {
     UdpNotFound(IdentId),
     NetWidthOverflow,
     ZeroWidthNet,
+    IfnoneWithUnconditionalPath,
 }
 
 #[derive(Debug, Default)]
@@ -128,6 +129,13 @@ impl Diagnostics {
         self.errors
             .push((at, LowerErrorReason::ZeroWidthNet, Vec::new()));
     }
+    pub fn ifnone_with_unconditional_path(&mut self, at: TokenRange) {
+        self.errors.push((
+            at,
+            LowerErrorReason::IfnoneWithUnconditionalPath,
+            Vec::new(),
+        ));
+    }
 
     pub fn report<'a>(
         &'a self,
@@ -213,6 +221,10 @@ impl<'a> fmt::Display for LowerErrorDisplay<'a> {
             }
             LowerErrorReason::NetWidthOverflow => write!(f, "bit length overflow"),
             LowerErrorReason::ZeroWidthNet => write!(f, "zero bit length"),
+            LowerErrorReason::IfnoneWithUnconditionalPath => write!(
+                f,
+                "`ifnone` path combined with an unconditional path for the same module path"
+            ),
         }
     }
 }
