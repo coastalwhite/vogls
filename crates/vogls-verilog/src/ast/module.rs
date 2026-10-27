@@ -442,6 +442,8 @@ pub enum NInputGateType {
 #[derive(Clone, Copy)]
 pub struct NOutputGateInstantiation<'a> {
     pub gatetype: AstItem<NOutputGateType>,
+    pub drive_strength: Option<AstItem<DriveStrength>>,
+    pub delay2: Option<AstId<'a, Delay2<'a>>>,
     pub instances: AstIdRange<'a, NOutputGateInstance<'a>>,
 }
 

@@ -1,16 +1,18 @@
 use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    Bits, ProcessBuilder, ProcessKind, SCALAR_VSIZE, Signal, SignalFlags, VectorSize,
-    WatchCondition,
+    BasicBlockBuilder, Bits, ProcessBuilder, ProcessKind, SCALAR_VSIZE, Signal, SignalFlags,
+    VariableKey, VectorSize, WatchCondition,
 };
 use vogls_utils::OrderedSet;
 
 use crate::ast::AstId;
 use crate::ast::module::{
     CmosSwitchType, EnableGateType, GateInstantiation, MosSwitchType, NInputGateInstance,
-    NInputGateInstantiation, NInputGateType, NOutputGateInstance, NOutputGateType,
+    NInputGateInstantiation, NInputGateType, NOutputGateInstance, NOutputGateInstantiation,
+    NOutputGateType,
 };
-use crate::ast::statement::Delay2;
+use crate::ast::statement::{Delay2, NetLValue};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_bit_length};
 use crate::lower::expression::{get_used_signals, lower_expr, truncate_or_extend};
 use crate::lower::statement::procedural_timing_control::{
@@ -379,140 +381,17 @@ pub fn lower<'a>(
                     value = bb_builder.binary_not(mctx.gl(), value);
                 }
 
-                match delay2 {
-                    None => {
-                        assign_net_lvalue(
-                            ctx,
-                            mctx,
-                            scope,
-                            &mut bb_builder,
-                            *output_terminal,
-                            value,
-                            VType::UnsignedNet(output_bit_length),
-                        )?;
-                    }
-                    Some(delay2) => {
-                        let span = ctx.arenas.get_span(instance);
-
-                        let proxy = mctx.gl.signals.insert(Signal {
-                            name: format!("GATE_DELAY_PROXY/{}", mctx.gl.signals.len()),
-                            size: output_bit_length,
-                            initialize: None,
-                            flags: SignalFlags::EMPTY,
-                            origin: span,
-                            mode: value.mode(),
-                        });
-                        bb_builder.drive(mctx.gl(), proxy, value);
-
-                        let (mut delay_proc_builder, mut delay_bb_builder) =
-                            ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, span);
-                        let delay_entry_tr = delay_proc_builder.entry();
-
-                        let new_value = delay_bb_builder.probe(mctx.gl(), proxy);
-
-                        let delay = match &**delay2 {
-                            Delay2::Value(delay) => {
-                                let delay =
-                                    evaluate_delay_value_as_ticks(ctx, mctx, scope, *delay)?;
-                                delay_bb_builder.constant_u64(mctx.gl(), delay)
-                            }
-                            Delay2::Tuple(delay, None) => lower_min_typ_max_delay(
-                                ctx,
-                                mctx,
-                                scope,
-                                &mut delay_bb_builder,
-                                *delay,
-                            )?,
-                            Delay2::Tuple(rise, Some(fall)) => {
-                                if output_bit_length != SCALAR_VSIZE {
-                                    mctx.diagnostics.not_yet_implemented(
-                                        ctx.arenas.get_span(*delay2),
-                                        "rise and fall delays on non-scalar gate outputs",
-                                    );
-                                    return Err(());
-                                }
-
-                                let rise = lower_min_typ_max_delay(
-                                    ctx,
-                                    mctx,
-                                    scope,
-                                    &mut delay_bb_builder,
-                                    *rise,
-                                )?;
-                                let fall = lower_min_typ_max_delay(
-                                    ctx,
-                                    mctx,
-                                    scope,
-                                    &mut delay_bb_builder,
-                                    *fall,
-                                )?;
-
-                                // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 101
-                                //
-                                // Transitions to 1 take the rise delay, transitions to 0 take the
-                                // fall delay and transitions to x/z take the smaller of the two.
-                                let to_x = delay_bb_builder.min(mctx.gl(), rise, fall);
-                                let is_one = delay_bb_builder.case_equals_constant(
-                                    mctx.gl(),
-                                    new_value,
-                                    Bits::from(true),
-                                );
-                                let is_zero = delay_bb_builder.case_equals_constant(
-                                    mctx.gl(),
-                                    new_value,
-                                    Bits::from(false),
-                                );
-                                let delay = delay_bb_builder.select(mctx.gl(), is_zero, fall, to_x);
-                                delay_bb_builder.select(mctx.gl(), is_one, rise, delay)
-                            }
-                        };
-
-                        // Only wait for the time that that is remaining.
-                        let time = delay_bb_builder.time(mctx.gl());
-                        let last_update = delay_bb_builder.lupdt(mctx.gl(), proxy);
-                        let elapsed = delay_bb_builder.minus(mctx.gl(), time, last_update);
-                        let elapsed = delay_bb_builder.min(mctx.gl(), elapsed, delay);
-                        let wait_time = delay_bb_builder.minus(mctx.gl(), delay, elapsed);
-
-                        let scheduled = mctx.gl.signals.insert(Signal {
-                            name: format!("GATE_DELAY_SCHEDULED/{}", mctx.gl.signals.len()),
-                            size: output_bit_length,
-                            initialize: None,
-                            flags: SignalFlags::EMPTY,
-                            origin: span,
-                            mode: new_value.mode(),
-                        });
-                        delay_bb_builder.drive(mctx.gl(), scheduled, new_value);
-
-                        let after_tr = delay_proc_builder.next_temporal_region(mctx.gl());
-                        delay_bb_builder.variable_wait_to(mctx.gl(), wait_time, after_tr);
-                        delay_bb_builder.finished_switch_to(mctx.gl(), after_tr.entry());
-
-                        // If the proxy changed, go back to waiting.
-                        let scheduled = delay_bb_builder.probe(mctx.gl(), scheduled);
-                        let value = delay_bb_builder.probe(mctx.gl(), proxy);
-                        let unchanged = delay_bb_builder.case_equals(mctx.gl(), scheduled, value);
-                        let mut reschedule_builder;
-                        (delay_bb_builder, reschedule_builder) =
-                            delay_bb_builder.double_branch(mctx.gl(), unchanged);
-                        reschedule_builder.temporal_jump_to(mctx.gl(), delay_entry_tr);
-
-                        assign_net_lvalue(
-                            ctx,
-                            mctx,
-                            scope,
-                            &mut delay_bb_builder,
-                            *output_terminal,
-                            value,
-                            VType::UnsignedNet(output_bit_length),
-                        )?;
-
-                        delay_bb_builder.watch_to(mctx.gl(), vec![proxy], delay_entry_tr);
-                        let standing = [WatchCondition::entire_signal(&mctx.gl, proxy)].into();
-                        delay_proc_builder.set_standing(mctx.gl(), standing);
-                        delay_proc_builder.finalize(mctx.gl());
-                    }
-                }
+                lower_gate_drive(
+                    ctx,
+                    mctx,
+                    scope,
+                    &mut bb_builder,
+                    ctx.arenas.get_span(instance),
+                    *delay2,
+                    *output_terminal,
+                    value,
+                    output_bit_length,
+                )?;
 
                 let sensitivity_list = sensitivity_list.items;
                 bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_tr);
@@ -520,8 +399,22 @@ pub fn lower<'a>(
             }
         }
         G::NOutput(id) => {
+            let NOutputGateInstantiation {
+                gatetype,
+                drive_strength,
+                delay2,
+                instances,
+            } = &**id;
+
+            if let Some(drive_strength) = drive_strength {
+                mctx.diagnostics.warn_not_yet_implemented(
+                    ctx.arenas.get_item_span(*drive_strength),
+                    "Drive strength is ignored.",
+                );
+            }
+
             use NOutputGateType as G;
-            for instance in id.instances.iter() {
+            for instance in instances.iter() {
                 let NOutputGateInstance {
                     name: _,
                     output_terminals,
@@ -554,19 +447,21 @@ pub fn lower<'a>(
                         value_ty,
                         output_bit_length,
                     );
-                    match id.gatetype.item {
+                    match gatetype.item {
                         G::Buf => value = bb_builder.z_to_x(mctx.gl(), value),
                         G::Not => value = bb_builder.binary_not(mctx.gl(), value),
                     }
 
-                    assign_net_lvalue(
+                    lower_gate_drive(
                         ctx,
                         mctx,
                         scope,
                         &mut bb_builder,
+                        ctx.arenas.get_span(instance),
+                        *delay2,
                         output_terminal,
                         value,
-                        VType::UnsignedNet(output_bit_length),
+                        output_bit_length,
                     )?;
                 }
 
@@ -575,6 +470,127 @@ pub fn lower<'a>(
             }
         }
     }
+
+    Ok(())
+}
+
+fn lower_gate_drive<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    bb_builder: &mut BasicBlockBuilder,
+    span: TokenRange,
+    delay2: Option<AstId<'a, Delay2<'a>>>,
+    output_terminal: AstId<'a, NetLValue<'a>>,
+    value: VariableKey,
+    output_bit_length: VectorSize,
+) -> Result<(), ()> {
+    let Some(delay2) = delay2 else {
+        // Fast path: no delay on the gate-output.
+        return assign_net_lvalue(
+            ctx,
+            mctx,
+            scope,
+            bb_builder,
+            output_terminal,
+            value,
+            VType::UnsignedNet(output_bit_length),
+        );
+    };
+
+    let proxy = mctx.gl.signals.insert(Signal {
+        name: format!("GATE_DELAY_PROXY/{}", mctx.gl.signals.len()),
+        size: output_bit_length,
+        initialize: None,
+        flags: SignalFlags::EMPTY,
+        origin: span,
+        mode: value.mode(),
+    });
+    bb_builder.drive(mctx.gl(), proxy, value);
+
+    let (mut delay_proc_builder, mut delay_bb_builder) =
+        ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, span);
+    let delay_entry_tr = delay_proc_builder.entry();
+
+    let new_value = delay_bb_builder.probe(mctx.gl(), proxy);
+
+    let delay = match &*delay2 {
+        Delay2::Value(delay) => {
+            let delay = evaluate_delay_value_as_ticks(ctx, mctx, scope, *delay)?;
+            delay_bb_builder.constant_u64(mctx.gl(), delay)
+        }
+        Delay2::Tuple(delay, None) => {
+            lower_min_typ_max_delay(ctx, mctx, scope, &mut delay_bb_builder, *delay)?
+        }
+        Delay2::Tuple(rise, Some(fall)) => {
+            if output_bit_length != SCALAR_VSIZE {
+                mctx.diagnostics.not_yet_implemented(
+                    ctx.arenas.get_span(delay2),
+                    "rise and fall delays on non-scalar gate outputs",
+                );
+                return Err(());
+            }
+
+            let rise = lower_min_typ_max_delay(ctx, mctx, scope, &mut delay_bb_builder, *rise)?;
+            let fall = lower_min_typ_max_delay(ctx, mctx, scope, &mut delay_bb_builder, *fall)?;
+
+            // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 101
+            //
+            // Transitions to 1 take the rise delay, transitions to 0 take the fall delay and
+            // transitions to x/z take the smaller of the two.
+            let to_x = delay_bb_builder.min(mctx.gl(), rise, fall);
+            let is_one =
+                delay_bb_builder.case_equals_constant(mctx.gl(), new_value, Bits::from(true));
+            let is_zero =
+                delay_bb_builder.case_equals_constant(mctx.gl(), new_value, Bits::from(false));
+            let delay = delay_bb_builder.select(mctx.gl(), is_zero, fall, to_x);
+            delay_bb_builder.select(mctx.gl(), is_one, rise, delay)
+        }
+    };
+
+    // Only wait for the time that that is remaining.
+    let time = delay_bb_builder.time(mctx.gl());
+    let last_update = delay_bb_builder.lupdt(mctx.gl(), proxy);
+    let elapsed = delay_bb_builder.minus(mctx.gl(), time, last_update);
+    let elapsed = delay_bb_builder.min(mctx.gl(), elapsed, delay);
+    let wait_time = delay_bb_builder.minus(mctx.gl(), delay, elapsed);
+
+    let scheduled = mctx.gl.signals.insert(Signal {
+        name: format!("GATE_DELAY_SCHEDULED/{}", mctx.gl.signals.len()),
+        size: output_bit_length,
+        initialize: None,
+        flags: SignalFlags::EMPTY,
+        origin: span,
+        mode: new_value.mode(),
+    });
+    delay_bb_builder.drive(mctx.gl(), scheduled, new_value);
+
+    let after_tr = delay_proc_builder.next_temporal_region(mctx.gl());
+    delay_bb_builder.variable_wait_to(mctx.gl(), wait_time, after_tr);
+    delay_bb_builder.finished_switch_to(mctx.gl(), after_tr.entry());
+
+    // If the proxy changed, go back to waiting.
+    let scheduled = delay_bb_builder.probe(mctx.gl(), scheduled);
+    let value = delay_bb_builder.probe(mctx.gl(), proxy);
+    let unchanged = delay_bb_builder.case_equals(mctx.gl(), scheduled, value);
+    let mut reschedule_builder;
+    (delay_bb_builder, reschedule_builder) = delay_bb_builder.double_branch(mctx.gl(), unchanged);
+    reschedule_builder.temporal_jump_to(mctx.gl(), delay_entry_tr);
+
+    assign_net_lvalue(
+        ctx,
+        mctx,
+        scope,
+        &mut delay_bb_builder,
+        output_terminal,
+        value,
+        VType::UnsignedNet(output_bit_length),
+    )?;
+
+    delay_bb_builder.watch_to(mctx.gl(), vec![proxy], delay_entry_tr);
+    let standing = [WatchCondition::entire_signal(&mctx.gl, proxy)].into();
+    delay_proc_builder.set_standing(mctx.gl(), standing);
+    delay_proc_builder.finalize(mctx.gl());
 
     Ok(())
 }

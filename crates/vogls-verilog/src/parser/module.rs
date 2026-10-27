@@ -2438,8 +2438,30 @@ impl<'a> Consumable<'a> for NOutputGateInstantiation<'a> {
 
         let gatetype =
             item_parse::<NOutputGateType>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-        // @Incomplete: drive_strength
-        // @Incomplete: delay2
+        let mut drive_strength = None;
+        if tkw.is_next_equal_to(T::LeftParen)
+            && tkw
+                .get(tkw.offset + 1)
+                .is_some_and(|t| is_drive_strength_kw(*t.kind))
+        {
+            drive_strength = Some(item_parse::<DriveStrength>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
+        let mut delay2 = None;
+        if tkw.is_next_equal_to(T::Hash) {
+            delay2 = Some(parse::<Delay2>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
         let instances = parse_one_or_more_delimited::<NOutputGateInstance>(
             tkw,
             sc,
@@ -2452,6 +2474,8 @@ impl<'a> Consumable<'a> for NOutputGateInstantiation<'a> {
 
         Ok(Self {
             gatetype,
+            drive_strength,
+            delay2,
             instances,
         })
     }
