@@ -84,7 +84,8 @@ pub fn lower<'a>(
                 let delay = enable_switch.delay.map(|delay3| {
                     move |mctx: &mut MutLowerContext,
                           builder: &mut BasicBlockBuilder,
-                          new_value: VariableKey| {
+                          new_value: VariableKey,
+                          _driven_value: VariableKey| {
                         lower_delay3(ctx, mctx, scope, builder, delay3, new_value, SCALAR_VSIZE)
                     }
                 });
@@ -158,7 +159,8 @@ pub fn lower<'a>(
                 let delay = mos_switch.delay.map(|delay3| {
                     move |mctx: &mut MutLowerContext,
                           builder: &mut BasicBlockBuilder,
-                          new_value: VariableKey| {
+                          new_value: VariableKey,
+                          _driven_value: VariableKey| {
                         lower_delay3(ctx, mctx, scope, builder, delay3, new_value, SCALAR_VSIZE)
                     }
                 });
@@ -242,7 +244,8 @@ pub fn lower<'a>(
                 let delay = cmos_switch.delay.map(|delay3| {
                     move |mctx: &mut MutLowerContext,
                           builder: &mut BasicBlockBuilder,
-                          new_value: VariableKey| {
+                          new_value: VariableKey,
+                          _driven_value: VariableKey| {
                         lower_delay3(ctx, mctx, scope, builder, delay3, new_value, SCALAR_VSIZE)
                     }
                 });
@@ -387,7 +390,8 @@ pub fn lower<'a>(
                 let delay = delay2.map(|delay2| {
                     move |mctx: &mut MutLowerContext,
                           builder: &mut BasicBlockBuilder,
-                          new_value: VariableKey| {
+                          new_value: VariableKey,
+                          _driven_value: VariableKey| {
                         lower_delay2(
                             ctx,
                             mctx,
@@ -473,7 +477,8 @@ pub fn lower<'a>(
                     let delay = delay2.map(|delay2| {
                         move |mctx: &mut MutLowerContext,
                               builder: &mut BasicBlockBuilder,
-                              new_value: VariableKey| {
+                              new_value: VariableKey,
+                              _driven_value: VariableKey| {
                             lower_delay2(
                                 ctx,
                                 mctx,
@@ -507,7 +512,13 @@ pub fn lower<'a>(
     Ok(())
 }
 
-type GateDelayFn<'f> = dyn Fn(&mut MutLowerContext, &mut BasicBlockBuilder, VariableKey) -> Result<VariableKey, ()>
+/// Called with the new output value and the output value that is currently driven.
+pub(crate) type GateDelayFn<'f> = dyn Fn(
+        &mut MutLowerContext,
+        &mut BasicBlockBuilder,
+        VariableKey,
+        VariableKey,
+    ) -> Result<VariableKey, ()>
     + 'f;
 
 fn lower_delay2<'a>(
@@ -542,7 +553,7 @@ fn lower_delay2<'a>(
     }
 }
 
-fn lower_delay3<'a>(
+pub(crate) fn lower_delay3<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
@@ -576,7 +587,7 @@ fn lower_delay3<'a>(
     )
 }
 
-fn lower_delay_value<'a>(
+pub(crate) fn lower_delay_value<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
@@ -642,7 +653,7 @@ impl<'a> TransitionDelays<'a> {
     }
 }
 
-fn lower_gate_drive<'a>(
+pub(crate) fn lower_gate_drive<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
@@ -653,17 +664,45 @@ fn lower_gate_drive<'a>(
     value: VariableKey,
     output_bit_length: VectorSize,
 ) -> Result<(), ()> {
-    let Some(delay) = delay else {
-        // Fast path: no delay on the gate-output.
-        return assign_net_lvalue(
+    let assign = |mctx: &mut MutLowerContext, builder: &mut BasicBlockBuilder, value| {
+        assign_net_lvalue(
             ctx,
             mctx,
             scope,
-            bb_builder,
+            builder,
             output_terminal,
             value,
             VType::UnsignedNet(output_bit_length),
-        );
+        )
+    };
+    lower_delayed_drive(
+        mctx,
+        bb_builder,
+        span,
+        delay,
+        &assign,
+        value,
+        output_bit_length,
+    )
+}
+
+/// Assigns a value to the output of a [`lower_delayed_drive`].
+pub(crate) type AssignOutputFn<'f> =
+    dyn Fn(&mut MutLowerContext, &mut BasicBlockBuilder, VariableKey) -> Result<(), ()> + 'f;
+
+/// Assign `value` to an output with `assign`, after the delay that `delay` gives.
+pub(crate) fn lower_delayed_drive(
+    mctx: &mut MutLowerContext,
+    bb_builder: &mut BasicBlockBuilder,
+    span: TokenRange,
+    delay: Option<&GateDelayFn<'_>>,
+    assign: &AssignOutputFn<'_>,
+    value: VariableKey,
+    output_bit_length: VectorSize,
+) -> Result<(), ()> {
+    let Some(delay) = delay else {
+        // Fast path: no delay on the output.
+        return assign(mctx, bb_builder, value);
     };
 
     let proxy = mctx.gl.signals.insert(Signal {
@@ -682,7 +721,18 @@ fn lower_gate_drive<'a>(
 
     let new_value = delay_bb_builder.probe(mctx.gl(), proxy);
 
-    let delay = delay(mctx, &mut delay_bb_builder, new_value)?;
+    // The value this process last drove onto the output.
+    let driven = mctx.gl.signals.insert(Signal {
+        name: format!("GATE_DELAY_DRIVEN/{}", mctx.gl.signals.len()),
+        size: output_bit_length,
+        initialize: None,
+        flags: SignalFlags::EMPTY,
+        origin: span,
+        mode: new_value.mode(),
+    });
+    let driven_value = delay_bb_builder.probe(mctx.gl(), driven);
+
+    let delay = delay(mctx, &mut delay_bb_builder, new_value, driven_value)?;
 
     // Only wait for the time that that is remaining.
     let time = delay_bb_builder.time(mctx.gl());
@@ -713,15 +763,8 @@ fn lower_gate_drive<'a>(
     (delay_bb_builder, reschedule_builder) = delay_bb_builder.double_branch(mctx.gl(), unchanged);
     reschedule_builder.temporal_jump_to(mctx.gl(), delay_entry_tr);
 
-    assign_net_lvalue(
-        ctx,
-        mctx,
-        scope,
-        &mut delay_bb_builder,
-        output_terminal,
-        value,
-        VType::UnsignedNet(output_bit_length),
-    )?;
+    assign(mctx, &mut delay_bb_builder, value)?;
+    delay_bb_builder.drive(mctx.gl(), driven, value);
 
     delay_bb_builder.watch_to(mctx.gl(), vec![proxy], delay_entry_tr);
     let standing = [WatchCondition::entire_signal(&mctx.gl, proxy)].into();

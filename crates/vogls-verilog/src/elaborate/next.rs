@@ -951,8 +951,10 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
             ModuleOrGenerateItemDeclaration::Net(id) => {
                 let NetDeclaration {
                     net_type,
+                    drive_strength: _,
                     signed: _,
                     range: _,
+                    delay3: _,
                     nets,
                 } = &**id;
 
@@ -1848,8 +1850,10 @@ impl<'a> InLevelSymbol<'a> {
             }) => {
                 let NetDeclaration {
                     net_type: _,
+                    drive_strength: _,
                     signed: _,
                     range,
+                    delay3: _,
                     nets: _,
                 } = &**decl;
                 if let Some(range) = range {
@@ -2316,6 +2320,8 @@ pub fn finalize_symbol<'a>(
                 signed,
                 range,
                 net_type: _,
+                drive_strength: _,
+                delay3: _,
                 nets: _,
             } = &**decl;
 

@@ -1,0 +1,7 @@
+error: not yet implemented or no specialized error: net delays
+  --> {path}:6
+ 4 | // vogls: fail=lower
+ 5 | module tb();
+ 6 >     wire #5 w;
+              ^^
+ 7 | endmodule

@@ -1272,6 +1272,30 @@ impl<'a> Consumable<'a> for ContinousAssign<'a> {
         // list_of_net_assignments ::= net_assignment { , net_assignment }
 
         tkw.next_expect(T::KeywordAssign, diagnostics.as_deref_mut())?;
+        let mut drive_strength = None;
+        if tkw.is_next_equal_to(T::LeftParen)
+            && tkw
+                .get(tkw.offset + 1)
+                .is_some_and(|t| is_drive_strength_kw(*t.kind))
+        {
+            drive_strength = Some(item_parse::<DriveStrength>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
+        let mut delay3 = None;
+        if tkw.is_next_equal_to(T::Hash) {
+            delay3 = Some(parse::<Delay3>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
         let list_of_net_assignments = parse_one_or_more_delimited::<NetAssignment>(
             tkw,
             sc,
@@ -1283,6 +1307,8 @@ impl<'a> Consumable<'a> for ContinousAssign<'a> {
         tkw.next_expect(T::Semicolon, diagnostics)?;
 
         Ok(Self {
+            drive_strength,
+            delay3,
             list_of_net_assignments,
         })
     }
@@ -2697,6 +2723,20 @@ impl<'a> Consumable<'a> for NetDeclaration<'a> {
 
         // @Incomplete
         let net_type = item_parse::<NetType>(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+        let mut drive_strength = None;
+        if tkw.is_next_equal_to(T::LeftParen)
+            && tkw
+                .get(tkw.offset + 1)
+                .is_some_and(|t| is_drive_strength_kw(*t.kind))
+        {
+            drive_strength = Some(item_parse::<DriveStrength>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
         let signed = tkw.next_if_equals(T::KeywordSigned);
         let mut range = None;
         if tkw.is_next_equal_to(T::LeftBrace) {
@@ -2708,10 +2748,28 @@ impl<'a> Consumable<'a> for NetDeclaration<'a> {
                 diagnostics.as_deref_mut(),
             )?);
         }
+        let mut delay3 = None;
+        if tkw.is_next_equal_to(T::Hash) {
+            delay3 = Some(parse::<Delay3>(
+                tkw,
+                sc,
+                arenas,
+                ast,
+                diagnostics.as_deref_mut(),
+            )?);
+        }
 
         tkw.next_expect(T::Ident, diagnostics.as_deref_mut())?;
         let is_assignments = tkw.is_next_equal_to(T::Equals);
         tkw.offset -= 1;
+
+        if drive_strength.is_some() && !is_assignments {
+            // Only a declaration with assignments can have a drive strength.
+            if let Some(d) = diagnostics {
+                d.unexpected_token(tkw.offset, T::Ident);
+            }
+            return Err(());
+        }
 
         let nets = if is_assignments {
             //   net_type [ drive_strength ] [ signed ] [ delay3 ] list_of_net_decl_assignments ;
@@ -2741,8 +2799,10 @@ impl<'a> Consumable<'a> for NetDeclaration<'a> {
 
         Ok(Self {
             net_type,
+            drive_strength,
             signed,
             range,
+            delay3,
             nets,
         })
     }

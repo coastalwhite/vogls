@@ -469,6 +469,8 @@ pub enum NOutputGateType {
 // list_of_net_assignments ::= net_assignment { , net_assignment }
 #[derive(Clone, Copy)]
 pub struct ContinousAssign<'a> {
+    pub drive_strength: Option<AstItem<DriveStrength>>,
+    pub delay3: Option<AstId<'a, Delay3<'a>>>,
     pub list_of_net_assignments: AstIdRange<'a, NetAssignment<'a>>,
 }
 
@@ -677,8 +679,10 @@ pub enum ModuleOrGenerateItemDeclaration<'a> {
 pub struct NetDeclaration<'a> {
     // @Incomplete
     pub net_type: AstItem<NetType>,
+    pub drive_strength: Option<AstItem<DriveStrength>>,
     pub signed: bool,
     pub range: Option<AstId<'a, Range<'a>>>,
+    pub delay3: Option<AstId<'a, Delay3<'a>>>,
     pub nets: NetDeclarationNets<'a>,
 }
 
