@@ -1,5 +1,6 @@
 mod addressing;
 mod assign;
+mod delay;
 mod diagnostics;
 pub mod expression;
 mod fuse;

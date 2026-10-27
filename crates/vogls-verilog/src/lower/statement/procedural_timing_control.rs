@@ -13,7 +13,8 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstId, AstItem};
 use crate::elaborate::NetSymbol;
-use crate::lower::expression::{lower_expr, truncate_or_extend};
+use crate::lower::delay::{f64_delay_to_ticks, typed_var_delay_to_ticks, u64_delay_to_ticks};
+use crate::lower::expression::lower_expr;
 use crate::lower::{LowerContext, MutLowerContext, try_resolve_net};
 use crate::lower::{WatchCondition, try_resolve_constant};
 
@@ -221,19 +222,13 @@ pub fn evaluate_delay_value_as_ticks<'a>(
     scope: SymbolId,
     ast_delay_value: AstId<'a, DelayValue>,
 ) -> Result<u64, ()> {
+    let (time_scale, time_resolution) = (ctx.time_scale, ctx.time_resolution);
     Ok(match &*ast_delay_value {
         DelayValue::UnsignedNumber(value) => {
             let value = &ctx.arenas.decimals[value.at];
-            let delay = value.as_u64().unwrap_or(0);
-            ctx.time_scale
-                .unit
-                .truncate_or_multiply_to(delay, ctx.time_resolution)
+            u64_delay_to_ticks(value.as_u64().unwrap_or(0), time_scale, time_resolution)
         }
-        DelayValue::RealNumber(value) => ctx
-            .time_scale
-            .unit
-            .real_to_ticks(*value, ctx.time_scale.precision, ctx.time_resolution)
-            .unwrap_or(u64::MAX),
+        DelayValue::RealNumber(value) => f64_delay_to_ticks(*value, time_scale, time_resolution),
         DelayValue::Identifier(ident) => {
             let ident = AstItem {
                 item: *ident,
@@ -241,10 +236,7 @@ pub fn evaluate_delay_value_as_ticks<'a>(
             };
             let value =
                 try_resolve_constant(scope, &ctx.table, ctx.arenas, ident, &mut mctx.diagnostics)?;
-            let delay = value.as_integer().unwrap() as u64;
-            ctx.time_scale
-                .unit
-                .truncate_or_multiply_to(delay, ctx.time_resolution)
+            value.delay_to_ticks(time_scale, time_resolution)
         }
     })
 }
@@ -264,16 +256,13 @@ pub fn lower_min_typ_max_delay<'a>(
         min_typ_max.typical,
         Some(TIME_VSIZE),
     )?;
-    let delay = truncate_or_extend(mctx.gl(), builder, value, value_ty, TIME_VSIZE);
-    let delay = builder.convert_mode(mctx.gl(), delay, LogicMode::TwoValue);
-    Ok(builder.multiply_constant(
-        mctx.gl(),
-        delay,
-        Bits::from_u64(
-            TIME_VSIZE,
-            ctx.time_scale
-                .unit
-                .truncate_or_multiply_to(1, ctx.time_resolution),
-        ),
+
+    Ok(typed_var_delay_to_ticks(
+        mctx,
+        builder,
+        value,
+        value_ty,
+        ctx.time_scale,
+        ctx.time_resolution,
     ))
 }

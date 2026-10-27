@@ -1323,8 +1323,9 @@ impl Bits {
         }
         match self.as_data_ref() {
             BitsDataRef::InlineTv(v) => Some(v),
+            BitsDataRef::InlineFv(_spc, val) => Some(val),
+            BitsDataRef::SeparateTv(v) => Some(v[0]),
             BitsDataRef::SeparateFv(v) => Some(v[1]),
-            _ => None,
         }
     }
 
@@ -1347,6 +1348,19 @@ impl Bits {
     pub fn extract_exact_f64(&self) -> Option<f64> {
         assert_eq!(self.size().get(), 64);
         self.extract_exact_u64().map(f64::from_bits)
+    }
+
+    pub fn extract_least_significant_u64(&self) -> Option<u64> {
+        if self.contains_special() {
+            return None;
+        }
+
+        Some(match self.as_data_ref() {
+            BitsDataRef::InlineTv(v) => v,
+            BitsDataRef::InlineFv(_spc, val) => val,
+            BitsDataRef::SeparateTv(v) => v[0],
+            BitsDataRef::SeparateFv(v) => v[v.len() / 2],
+        })
     }
 
     pub fn contains_special(&self) -> bool {

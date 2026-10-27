@@ -416,30 +416,16 @@ fn eval_delay_to_ticks<'a>(
 
     // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 222
     // "If the path delay expression results in a negative value, it shall be treated as zero."
-    if let VValue::Real(value) = value {
-        return Ok(ctx
-            .time_scale
-            .unit
-            .real_to_ticks(
-                value.as_f64(),
-                ctx.time_scale.precision,
-                ctx.time_resolution,
-            )
-            .unwrap_or(u64::MAX));
+    //
+    // Negative reals already become zero in `delay_to_ticks`.
+    if let VValue::SignedNet(bits) = &value
+        && !bits.contains_special()
+        && bits.select_bit(bits.size().get() - 1)
+    {
+        return Ok(0);
     }
 
-    let Some(delay) = value.as_integer() else {
-        mctx.diagnostics.not_yet_implemented(
-            ctx.arenas.get_span(id),
-            "path delay that is not an integer or a real",
-        );
-        return Err(());
-    };
-    let delay = delay.max(0) as u64;
-    Ok(ctx
-        .time_scale
-        .unit
-        .truncate_or_multiply_to(delay, ctx.time_resolution))
+    Ok(value.delay_to_ticks(ctx.time_scale, ctx.time_resolution))
 }
 
 impl Delay {

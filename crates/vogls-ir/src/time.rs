@@ -133,12 +133,12 @@ impl TimeResolution {
         }
     }
 
-    pub fn real_to_ticks(
+    /// The factors to convert a real number of these units to ticks of `resolution`.
+    pub fn real_to_ticks_factors(
         self,
-        value: f64,
         precision: TimeResolution,
         resolution: TimeResolution,
-    ) -> Option<u64> {
+    ) -> (f64, u64) {
         let unit_p10 = self.pow10_over_fs();
         let prec_p10 = precision.pow10_over_fs();
         let reso_p10 = resolution.pow10_over_fs();
@@ -147,6 +147,16 @@ impl TimeResolution {
         // @Performance: Use lookup table instead of pow.
         let unit_to_prec_f = 10f64.powi(unit_p10.saturating_sub(prec_p10) as i32);
         let prec_to_reso_f = 10u64.pow(prec_p10.saturating_sub(reso_p10));
+        (unit_to_prec_f, prec_to_reso_f)
+    }
+
+    pub fn real_to_ticks(
+        self,
+        value: f64,
+        precision: TimeResolution,
+        resolution: TimeResolution,
+    ) -> Option<u64> {
+        let (unit_to_prec_f, prec_to_reso_f) = self.real_to_ticks_factors(precision, resolution);
 
         if value.is_nan() {
             return Some(0);

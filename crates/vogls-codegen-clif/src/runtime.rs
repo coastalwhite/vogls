@@ -852,7 +852,10 @@ impl ClifDesign {
                     return ReturnValue::CONTINUE;
                 }
 
-                if schedule.next_time.wrapping_add(1) < state.runtime.time {
+                // Future events are scheduled at `time + delay` with a wrapping add, so an
+                // overflowing delay shows up as an event before the current time. An event at
+                // exactly `u64::MAX` is valid.
+                if schedule.next_time < state.runtime.time {
                     eprintln!("Time overflow!");
                     return ReturnValue::STOP;
                 }
