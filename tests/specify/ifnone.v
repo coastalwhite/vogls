@@ -8,7 +8,7 @@ module gate(
     assign o_cond = i, o_alone = i, o_order = i, o_edge = i;
 
     specify
-        // Applies when `c` is not 1, including when it is x.
+        // Applies when `c` is 0. A condition that is x or z counts as true.
         if (c)  (i => o_cond)  = 1;
         ifnone  (i => o_cond)  = 5;
 

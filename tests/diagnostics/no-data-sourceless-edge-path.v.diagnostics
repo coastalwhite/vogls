@@ -1,0 +1,7 @@
+[{path}:8]: an edge-sensitive path without a data source is not standard Verilog
+| 
+|     specify
+>         (posedge a => s) = 1;
+                         
+|     endspecify
+| endmodule

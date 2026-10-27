@@ -42,6 +42,18 @@ impl Diagnostics {
     pub fn leftover_tokens(&mut self, tr: TokenRange) {
         self.errors.push((tr, ParseErrorReason::LeftoverTokens));
     }
+
+    pub fn ifnone_edge_sensitive_path(&mut self, tr: usize) {
+        self.errors.push((
+            TokenRange::at(tr),
+            ParseErrorReason::IfnoneEdgeSensitivePath,
+        ));
+    }
+
+    pub fn data_sourceless_edge_path(&mut self, tr: usize) {
+        self.errors
+            .push((TokenRange::at(tr), ParseErrorReason::DataSourcelessEdgePath));
+    }
 }
 
 pub struct SpanError<'a, T> {

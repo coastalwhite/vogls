@@ -704,7 +704,9 @@ impl<'a> Consumable<'a> for PathDeclaration<'a> {
         let mut polarity_operator = None;
         let mut data_source_expression = None;
 
-        let allow_edge_sensitive = !tkw.is_next_equal_to(T::KeywordIfnone);
+        // `ifnone` only allows a simple path, unless the Cadence extension is enabled.
+        let allow_edge_sensitive =
+            !tkw.is_next_equal_to(T::KeywordIfnone) || sc.options.cadence_ifnone_edge;
 
         if tkw.is_next(|t| matches!(t, T::KeywordIf | T::KeywordIfnone)) {
             state_dependent_condition = Some(parse::<StateDependentCondition>(
@@ -718,9 +720,13 @@ impl<'a> Consumable<'a> for PathDeclaration<'a> {
 
         tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
 
-        if allow_edge_sensitive
-            && tkw.is_next(|t| matches!(t, T::KeywordPosedge | T::KeywordNegedge))
-        {
+        if tkw.is_next(|t| matches!(t, T::KeywordPosedge | T::KeywordNegedge)) {
+            if !allow_edge_sensitive {
+                if let Some(d) = diagnostics {
+                    d.ifnone_edge_sensitive_path(tkw.offset);
+                }
+                return Err(());
+            }
             edge_identifier = Some(item_parse::<EdgeIdentifier>(
                 tkw,
                 sc,
@@ -767,7 +773,17 @@ impl<'a> Consumable<'a> for PathDeclaration<'a> {
 
         let mut is_edge_sensitive_path = edge_identifier.is_some();
         if is_edge_sensitive_path {
-            tkw.next_expect(T::LeftParen, diagnostics.as_deref_mut())?;
+            if !tkw.next_if_equals(T::LeftParen) {
+                // Edge sensitive paths without data source is not part of the language reference,
+                // but instead an extension that several Verilog simulators provide.
+                if !sc.options.data_sourceless_edge_path {
+                    if let Some(d) = diagnostics {
+                        d.data_sourceless_edge_path(tkw.offset);
+                    }
+                    return Err(());
+                }
+                is_edge_sensitive_path = false;
+            }
         } else if allow_edge_sensitive && polarity_operator.is_none() {
             is_edge_sensitive_path = tkw.next_if_equals(T::LeftParen);
         }

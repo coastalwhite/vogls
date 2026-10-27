@@ -27,9 +27,38 @@ pub enum Condition<'a> {
     InputNegedge,
     NoOtherCondition,
 
+    InputPosedgeNoOtherCondition,
+    InputNegedgeNoOtherCondition,
+
     Expr(AstId<'a, Expr<'a>>),
     InputPosedgeExpr(AstId<'a, Expr<'a>>),
     InputNegedgeExpr(AstId<'a, Expr<'a>>),
+}
+
+impl Condition<'_> {
+    fn is_posedge(&self) -> bool {
+        matches!(
+            self,
+            Self::InputPosedge | Self::InputPosedgeNoOtherCondition | Self::InputPosedgeExpr(_)
+        )
+    }
+
+    fn is_negedge(&self) -> bool {
+        matches!(
+            self,
+            Self::InputNegedge | Self::InputNegedgeNoOtherCondition | Self::InputNegedgeExpr(_)
+        )
+    }
+
+    /// Does this path only apply when no other path for the same input and output applies?
+    fn is_ifnone(&self) -> bool {
+        matches!(
+            self,
+            Self::NoOtherCondition
+                | Self::InputPosedgeNoOtherCondition
+                | Self::InputNegedgeNoOtherCondition
+        )
+    }
 }
 
 pub struct SpecifyOutput<'a> {
@@ -526,9 +555,12 @@ pub fn lower_specify<'a>(
                         (StateDependentCondition::If(id), EdgeIdentifier::Negedge) => {
                             Condition::InputNegedgeExpr(id.into_expr())
                         }
-
-                        // @NOTE: Should actually not be reachable from normal Verilog.
-                        (StateDependentCondition::Ifnone, _) => todo!(),
+                        (StateDependentCondition::Ifnone, EdgeIdentifier::Posedge) => {
+                            Condition::InputPosedgeNoOtherCondition
+                        }
+                        (StateDependentCondition::Ifnone, EdgeIdentifier::Negedge) => {
+                            Condition::InputNegedgeNoOtherCondition
+                        }
                     },
                 };
 
@@ -740,13 +772,7 @@ pub fn lower_iopath<'a>(
         // this is incorrect if the event does not get triggered first.
         for (input, paths) in &specify.paths {
             for path in paths {
-                if matches!(
-                    path.condition,
-                    Condition::InputPosedge
-                        | Condition::InputNegedge
-                        | Condition::InputPosedgeExpr(_)
-                        | Condition::InputNegedgeExpr(_)
-                ) {
+                if path.condition.is_posedge() || path.condition.is_negedge() {
                     let Signal { size, mode, .. } = &mctx.gl.signals[*input];
                     let (size, mode) = (*size, *mode);
                     let signal = mctx.gl.signals.insert(Signal {
@@ -800,18 +826,12 @@ pub fn lower_iopath<'a>(
             conditions.clear();
             for path in paths {
                 let mut condition = None;
-                if matches!(
-                    path.condition,
-                    Condition::InputPosedge | Condition::InputPosedgeExpr(_)
-                ) {
+                if path.condition.is_posedge() {
                     let before = inputs_before[input_before_lut[input]].1;
                     let after = builder.probe(mctx.gl(), *input);
                     condition = Some(builder.posedge(mctx.gl(), before, after));
                 }
-                if matches!(
-                    path.condition,
-                    Condition::InputNegedge | Condition::InputNegedgeExpr(_)
-                ) {
+                if path.condition.is_negedge() {
                     let before = inputs_before[input_before_lut[input]].1;
                     let after = builder.probe(mctx.gl(), *input);
                     condition = Some(builder.negedge(mctx.gl(), before, after));
@@ -822,7 +842,16 @@ pub fn lower_iopath<'a>(
                 | Condition::InputNegedgeExpr(expr) = path.condition
                 {
                     let (expr, _) = lower_expr(ctx, mctx, scope, &mut builder, expr, None)?;
-                    let expr = builder.reduce_or(mctx.gl(), expr);
+
+                    // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 215
+                    //
+                    // """
+                    // If the conditional expression evaluates to x or z, it shall be treated as
+                    // true. If the conditional expression evaluates to multiple bits, the least
+                    // significant bit shall represent the result.
+                    // """
+                    let expr = builder.select_bit_constant(mctx.gl(), expr, 0);
+                    let expr = builder.not_case_equals_constant(mctx.gl(), expr, Bits::from(false));
                     condition = Some(match condition {
                         None => expr,
                         Some(condition) => builder.and(mctx.gl(), condition, expr),
@@ -845,15 +874,10 @@ pub fn lower_iopath<'a>(
             // It is illegal to specify both an ifnone condition for a module path and an
             // unconditional simple module path for the same module path.
             // """
-            //
-            // A condition that is `x` or `z` does not apply its path, so it counts as false here.
-            if paths
-                .iter()
-                .any(|path| matches!(path.condition, Condition::NoOtherCondition))
-            {
+            if paths.iter().any(|path| path.condition.is_ifnone()) {
                 let mut any_other_condition = None;
                 for (path, condition) in paths.iter().zip(conditions.iter()) {
-                    if matches!(path.condition, Condition::NoOtherCondition) {
+                    if path.condition.is_ifnone() {
                         continue;
                     }
                     let Some(condition) = *condition else {
@@ -868,11 +892,16 @@ pub fn lower_iopath<'a>(
                     });
                 }
 
-                let ifnone_condition =
+                let no_other_condition =
                     any_other_condition.map(|any| builder.binary_not(mctx.gl(), any));
                 for (path, condition) in paths.iter().zip(conditions.iter_mut()) {
-                    if matches!(path.condition, Condition::NoOtherCondition) {
-                        *condition = ifnone_condition;
+                    if path.condition.is_ifnone() {
+                        *condition = match (*condition, no_other_condition) {
+                            (None, c) | (c, None) => c,
+                            (Some(edge), Some(no_other)) => {
+                                Some(builder.and(mctx.gl(), edge, no_other))
+                            }
+                        };
                     }
                 }
             }

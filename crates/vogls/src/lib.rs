@@ -3,6 +3,7 @@ pub use vogls_ir::optimize::{OptFlags, Optimizations};
 pub use vogls_ir::{Bits, LogicMode, SignalKey, VectorSize};
 pub use vogls_runtime::RtSignalKey;
 pub use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
+pub use vogls_verilog::parser::ParserOptions;
 pub use vogls_world::{NeverWorld, World};
 #[cfg(feature = "stdworld")]
 pub use vogls_world::{std::StdWorld, std::StdWorldCaptured};

@@ -4,7 +4,7 @@ use std::{fmt, io};
 
 use vogls_verilog::arena::Arena;
 use vogls_verilog::parser::{
-    AstArenas, Diagnostics, ParseContext, ParserScratches, TokenWalker, parse_file,
+    AstArenas, Diagnostics, ParseContext, ParserOptions, ParserScratches, TokenWalker, parse_file,
 };
 use vogls_verilog::tokenizer::{Macro, Macros, TokenizeError, Tokenized};
 #[cfg(feature = "stdworld")]
@@ -18,6 +18,7 @@ pub struct DesignBuilder {
     pub(crate) token_buffer: Tokenized,
     pub(crate) macros: Macros,
     pub(crate) include_dirs: Vec<PathBuf>,
+    pub(crate) parser_options: ParserOptions,
 }
 
 #[derive(Debug)]
@@ -137,6 +138,11 @@ impl DesignBuilder {
         self
     }
 
+    pub fn parser_options(&mut self, parser_options: ParserOptions) -> &mut Self {
+        self.parser_options = parser_options;
+        self
+    }
+
     pub fn parse<'a>(self, arena: &'a Arena) -> Result<ParsedDesign<'a>, Box<ParseError>> {
         let mut tkw = TokenWalker::new(&self.token_buffer);
         let mut arenas = AstArenas::default();
@@ -145,7 +151,7 @@ impl DesignBuilder {
         let mut ctx = ParseContext::new();
         let ast = parse_file(
             &mut tkw,
-            &mut ParserScratches::default(),
+            &mut ParserScratches::new(self.parser_options),
             Some(&mut diagnostics),
             &mut arenas,
             arena,

@@ -454,6 +454,7 @@ fn run_test(
             for include_dir in &test_information.include_dirs {
                 builder.push_include_dir(include_dir.clone());
             }
+            builder.parser_options(test_information.parser_options);
             builder
                 .define_macro("__VOGLS_VERIFY_IR", Macro::default())
                 .add_source(path)
@@ -581,6 +582,7 @@ fn run_test(
                 for include_dir in &test_information.include_dirs {
                     builder.push_include_dir(include_dir.clone());
                 }
+                builder.parser_options(test_information.parser_options);
                 builder.add_source(path).map_err(|_| {
                     FailureInfo::CompileFailure(TestPhase::LEXING, "failed to tokenize".into())
                 })?;

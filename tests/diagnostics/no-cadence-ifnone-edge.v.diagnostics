@@ -1,0 +1,7 @@
+[{path}:8]: `ifnone` with an edge-sensitive path is not standard Verilog
+| 
+|     specify
+>         ifnone (posedge a => (s : a)) = 1;
+                   
+|     endspecify
+| endmodule

@@ -1,5 +1,4 @@
 use vogls_ir::token_range::TokenRange;
-use vogls_utils::VgHashSet;
 
 use crate::arena::Arena;
 use crate::ast::constant_expr::ConstantExpr;
@@ -129,10 +128,7 @@ impl<'a> Consumable<'a> for Expr<'a> {
                         let ident = HIdent::consume(
                             tkw,
                             // We cannot reuse the exprs_sp
-                            &mut ParserScratches {
-                                udps: VgHashSet::default(),
-                                exprs_sp: Vec::new(),
-                            },
+                            &mut ParserScratches::new(sc.options),
                             arenas,
                             ast,
                             diagnostics.as_deref_mut(),

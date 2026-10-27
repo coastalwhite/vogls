@@ -8,7 +8,10 @@ use vogls::design::{Arena, Macro};
 use vogls::ir::LogicMode;
 use vogls::ir::optimize::OptFlags;
 use vogls::utils::TimerStack;
-use vogls::{DesignBuilder, DesignBuilderError, Optimizations, StdWorld, VirDesignBuilder};
+use vogls::{
+    DesignBuilder, DesignBuilderError, Optimizations, ParseErrorReason, ParserOptions, StdWorld,
+    VirDesignBuilder,
+};
 
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -88,6 +91,11 @@ struct Args {
     include_dirs: Vec<PathBuf>,
 
     #[arg(long)]
+    no_cadence_ifnone_edge: bool,
+    #[arg(long)]
+    no_data_sourceless_edge_path: bool,
+
+    #[arg(long)]
     print_vm_map: bool,
 
     #[arg(long = "profile")]
@@ -97,6 +105,20 @@ struct Args {
     emit_unoptimized_fuse_graph: bool,
     #[arg(long)]
     emit_optimized_fuse_graph: bool,
+}
+
+/// The flag that rejects the syntax a parse error is about, if any.
+fn parse_error_flag(reason: &ParseErrorReason) -> Option<&'static str> {
+    match reason {
+        ParseErrorReason::IfnoneEdgeSensitivePath => Some("--no-cadence-ifnone-edge"),
+        ParseErrorReason::DataSourcelessEdgePath => Some("--no-data-sourceless-edge-path"),
+        ParseErrorReason::MissingToken => None,
+        ParseErrorReason::UnexpectedToken(_) => None,
+        ParseErrorReason::Incomplete(_) => None,
+        ParseErrorReason::NoCorresponding(_) => None,
+        ParseErrorReason::NotFound(_) => None,
+        ParseErrorReason::LeftoverTokens => None,
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -132,6 +154,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         no_remove_empty_temporal_regions,
         print_vm_map,
         include_dirs,
+        no_cadence_ifnone_edge,
+        no_data_sourceless_edge_path,
         profile,
         emit_unoptimized_fuse_graph,
         emit_optimized_fuse_graph,
@@ -165,6 +189,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for include_dir in include_dirs {
             builder.push_include_dir(include_dir);
         }
+        builder.parser_options(ParserOptions {
+            cadence_ifnone_edge: !no_cadence_ifnone_edge,
+            data_sourceless_edge_path: !no_data_sourceless_edge_path,
+        });
         timers.timed("tokenization", |_| {
             for path in &path {
                 builder.add_source_in_world(&mut world, path)?;
@@ -177,6 +205,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(design) => design,
             Err(err) => {
                 eprintln!("{err}");
+                let mut flags: Vec<_> = err
+                    .diagnostics
+                    .errors
+                    .iter()
+                    .filter_map(|(_, reason)| parse_error_flag(reason))
+                    .collect();
+                flags.sort_unstable();
+                flags.dedup();
+                for flag in flags {
+                    eprintln!("note: remove `{flag}` to accept this");
+                }
                 return Err("failed to parse".into());
             }
         };

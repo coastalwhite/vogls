@@ -3,7 +3,7 @@ use std::ops::BitOrAssign;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use vogls::{LogicMode, OptFlags};
+use vogls::{LogicMode, OptFlags, ParserOptions};
 use vogls_ir::time::TimeUnit;
 
 use crate::Backend;
@@ -139,6 +139,7 @@ pub struct TestInfo {
     pub backend: SelectBackend,
     pub opt_flags: OptFlags,
     pub include_dirs: Vec<PathBuf>,
+    pub parser_options: ParserOptions,
 }
 
 fn parse_opts(s: &str) -> Option<OptFlags> {
@@ -171,6 +172,7 @@ impl TestInfo {
             backend: SelectBackend::All,
             opt_flags: OptFlags::ALL,
             include_dirs: Vec::new(),
+            parser_options: ParserOptions::default(),
         };
 
         for line in content.lines() {
@@ -189,6 +191,10 @@ impl TestInfo {
                 "verify-diagnostics" => info.verify_diagnostics = true,
                 "annotate-sdf" => info.annotate_sdf = true,
                 "panic" => info.expect_panic = true,
+                "no-cadence-ifnone-edge" => info.parser_options.cadence_ifnone_edge = false,
+                "no-data-sourceless-edge-path" => {
+                    info.parser_options.data_sourceless_edge_path = false;
+                }
                 _ if line.starts_with("fail") => {
                     if line == "fail" {
                         info.fail = Some(ExpectedFail {

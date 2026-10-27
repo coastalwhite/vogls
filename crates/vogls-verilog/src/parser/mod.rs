@@ -36,11 +36,39 @@ mod token_walker;
 mod udp;
 mod utils;
 
+#[derive(Debug, Clone, Copy)]
+pub struct ParserOptions {
+    /// Accept an `ifnone` with an edge-sensitive path.
+    pub cadence_ifnone_edge: bool,
+
+    /// Accept an edge-sensitive path without a data source.
+    pub data_sourceless_edge_path: bool,
+}
+
+impl Default for ParserOptions {
+    fn default() -> Self {
+        Self {
+            cadence_ifnone_edge: true,
+            data_sourceless_edge_path: true,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct ParserScratches<'a> {
     /// A `scratchpad` to parse expressions
     exprs_sp: Vec<(expr::StackItem<'a>, expr::BindingPower, TokenRange)>,
     udps: VgHashSet<IdentId>,
+    options: ParserOptions,
+}
+
+impl ParserScratches<'_> {
+    pub fn new(options: ParserOptions) -> Self {
+        Self {
+            options,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -112,6 +140,8 @@ pub enum ParseErrorReason {
     NoCorresponding(Token),
     NotFound(Token),
     LeftoverTokens,
+    IfnoneEdgeSensitivePath,
+    DataSourcelessEdgePath,
 }
 
 impl fmt::Display for ParseErrorReason {
@@ -123,6 +153,12 @@ impl fmt::Display for ParseErrorReason {
             Self::NoCorresponding(token) => write!(f, "no corresponding: {token:?}"),
             Self::NotFound(token) => write!(f, "not found: {token:?}"),
             Self::LeftoverTokens => f.write_str("leftover tokens"),
+            Self::IfnoneEdgeSensitivePath => {
+                f.write_str("`ifnone` with an edge-sensitive path is not standard Verilog")
+            }
+            Self::DataSourcelessEdgePath => {
+                f.write_str("an edge-sensitive path without a data source is not standard Verilog")
+            }
         }
     }
 }
