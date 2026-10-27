@@ -12,7 +12,7 @@ use crate::ast::module::{
     NInputGateInstantiation, NInputGateType, NOutputGateInstance, NOutputGateInstantiation,
     NOutputGateType,
 };
-use crate::ast::statement::{Delay2, NetLValue};
+use crate::ast::statement::{Delay2, Delay3, DelayValue, MinTypMaxExpression, NetLValue};
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_bit_length};
 use crate::lower::expression::{get_used_signals, lower_expr, truncate_or_extend};
 use crate::lower::statement::procedural_timing_control::{
@@ -36,14 +36,6 @@ pub fn lower<'a>(
                 );
                 return Err(());
             }
-            if enable_switch.delay.is_some() {
-                mctx.diagnostics.not_yet_implemented(
-                    ctx.arenas.get_span(*enable_switch),
-                    "enable gates with delay are not yet supported",
-                );
-                return Err(());
-            }
-
             for i in enable_switch.instances.iter() {
                 if i.name.is_some_and(|n| n.range.is_some()) {
                     mctx.diagnostics.not_yet_implemented(
@@ -89,14 +81,23 @@ pub fn lower<'a>(
                     }
                 };
 
-                assign_net_lvalue(
+                let delay = enable_switch.delay.map(|delay3| {
+                    move |mctx: &mut MutLowerContext,
+                          builder: &mut BasicBlockBuilder,
+                          new_value: VariableKey| {
+                        lower_delay3(ctx, mctx, scope, builder, delay3, new_value, SCALAR_VSIZE)
+                    }
+                });
+                lower_gate_drive(
                     ctx,
                     mctx,
                     scope,
                     &mut bb_builder,
+                    ctx.arenas.get_span(i),
+                    delay.as_ref().map(|delay| delay as &GateDelayFn),
                     i.output_terminal,
                     out,
-                    VType::SCALAR_NET,
+                    SCALAR_VSIZE,
                 )?;
 
                 bb_builder.watch_to(mctx.gl(), sensitivity_list.items, entry_tr);
@@ -104,14 +105,6 @@ pub fn lower<'a>(
             }
         }
         G::Mos(mos_switch) => {
-            if mos_switch.delay.is_some() {
-                mctx.diagnostics.not_yet_implemented(
-                    ctx.arenas.get_span(*mos_switch),
-                    "mos switches with delay are not yet supported",
-                );
-                return Err(());
-            }
-
             const CONTEXT_WIDTH: Option<VectorSize> = Some(SCALAR_VSIZE);
             for i in mos_switch.instances.iter() {
                 let mut sensitivity_list = OrderedSet::new();
@@ -162,14 +155,23 @@ pub fn lower<'a>(
                 );
                 let out = bb_builder.select(mctx.gl(), data_is_z, z, out);
 
-                assign_net_lvalue(
+                let delay = mos_switch.delay.map(|delay3| {
+                    move |mctx: &mut MutLowerContext,
+                          builder: &mut BasicBlockBuilder,
+                          new_value: VariableKey| {
+                        lower_delay3(ctx, mctx, scope, builder, delay3, new_value, SCALAR_VSIZE)
+                    }
+                });
+                lower_gate_drive(
                     ctx,
                     mctx,
                     scope,
                     &mut bb_builder,
+                    ctx.arenas.get_span(i),
+                    delay.as_ref().map(|delay| delay as &GateDelayFn),
                     i.output_terminal,
                     out,
-                    VType::SCALAR_NET,
+                    SCALAR_VSIZE,
                 )?;
 
                 bb_builder.watch_to(mctx.gl(), sensitivity_list.items, entry_tr);
@@ -177,14 +179,6 @@ pub fn lower<'a>(
             }
         }
         G::Cmos(cmos_switch) => {
-            if cmos_switch.delay.is_some() {
-                mctx.diagnostics.not_yet_implemented(
-                    ctx.arenas.get_span(*cmos_switch),
-                    "cmos switches with delay are not yet supported",
-                );
-                return Err(());
-            }
-
             const CONTEXT_WIDTH: Option<VectorSize> = Some(SCALAR_VSIZE);
             for i in cmos_switch.instances.iter() {
                 let mut sensitivity_list = OrderedSet::new();
@@ -245,14 +239,23 @@ pub fn lower<'a>(
                 );
                 let out = bb_builder.select(mctx.gl(), data_is_z, z, out);
 
-                assign_net_lvalue(
+                let delay = cmos_switch.delay.map(|delay3| {
+                    move |mctx: &mut MutLowerContext,
+                          builder: &mut BasicBlockBuilder,
+                          new_value: VariableKey| {
+                        lower_delay3(ctx, mctx, scope, builder, delay3, new_value, SCALAR_VSIZE)
+                    }
+                });
+                lower_gate_drive(
                     ctx,
                     mctx,
                     scope,
                     &mut bb_builder,
+                    ctx.arenas.get_span(i),
+                    delay.as_ref().map(|delay| delay as &GateDelayFn),
                     i.output_terminal,
                     out,
-                    VType::SCALAR_NET,
+                    SCALAR_VSIZE,
                 )?;
 
                 bb_builder.watch_to(mctx.gl(), sensitivity_list.items, entry_tr);
@@ -381,13 +384,28 @@ pub fn lower<'a>(
                     value = bb_builder.binary_not(mctx.gl(), value);
                 }
 
+                let delay = delay2.map(|delay2| {
+                    move |mctx: &mut MutLowerContext,
+                          builder: &mut BasicBlockBuilder,
+                          new_value: VariableKey| {
+                        lower_delay2(
+                            ctx,
+                            mctx,
+                            scope,
+                            builder,
+                            delay2,
+                            new_value,
+                            output_bit_length,
+                        )
+                    }
+                });
                 lower_gate_drive(
                     ctx,
                     mctx,
                     scope,
                     &mut bb_builder,
                     ctx.arenas.get_span(instance),
-                    *delay2,
+                    delay.as_ref().map(|delay| delay as &GateDelayFn),
                     *output_terminal,
                     value,
                     output_bit_length,
@@ -452,13 +470,28 @@ pub fn lower<'a>(
                         G::Not => value = bb_builder.binary_not(mctx.gl(), value),
                     }
 
+                    let delay = delay2.map(|delay2| {
+                        move |mctx: &mut MutLowerContext,
+                              builder: &mut BasicBlockBuilder,
+                              new_value: VariableKey| {
+                            lower_delay2(
+                                ctx,
+                                mctx,
+                                scope,
+                                builder,
+                                delay2,
+                                new_value,
+                                output_bit_length,
+                            )
+                        }
+                    });
                     lower_gate_drive(
                         ctx,
                         mctx,
                         scope,
                         &mut bb_builder,
                         ctx.arenas.get_span(instance),
-                        *delay2,
+                        delay.as_ref().map(|delay| delay as &GateDelayFn),
                         output_terminal,
                         value,
                         output_bit_length,
@@ -474,18 +507,153 @@ pub fn lower<'a>(
     Ok(())
 }
 
+type GateDelayFn<'f> = dyn Fn(&mut MutLowerContext, &mut BasicBlockBuilder, VariableKey) -> Result<VariableKey, ()>
+    + 'f;
+
+fn lower_delay2<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    builder: &mut BasicBlockBuilder,
+    delay2: AstId<'a, Delay2<'a>>,
+    new_value: VariableKey,
+    output_bit_length: VectorSize,
+) -> Result<VariableKey, ()> {
+    match &*delay2 {
+        Delay2::Value(value) => lower_delay_value(ctx, mctx, scope, builder, *value),
+        Delay2::Tuple(delay, None) => lower_min_typ_max_delay(ctx, mctx, scope, builder, *delay),
+        Delay2::Tuple(rise, Some(fall)) => {
+            let span = ctx.arenas.get_span(delay2);
+            let transitions = TransitionDelays {
+                rise: *rise,
+                fall: *fall,
+                turn_off: None,
+            };
+            transitions.lower(
+                ctx,
+                mctx,
+                scope,
+                builder,
+                span,
+                new_value,
+                output_bit_length,
+            )
+        }
+    }
+}
+
+fn lower_delay3<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    builder: &mut BasicBlockBuilder,
+    delay3: AstId<'a, Delay3<'a>>,
+    new_value: VariableKey,
+    output_bit_length: VectorSize,
+) -> Result<VariableKey, ()> {
+    let (rise, fall, turn_off) = match &*delay3 {
+        Delay3::Value(value) => return lower_delay_value(ctx, mctx, scope, builder, *value),
+        Delay3::Single(delay) => {
+            return lower_min_typ_max_delay(ctx, mctx, scope, builder, *delay);
+        }
+        Delay3::Double(rise, fall) => (*rise, *fall, None),
+        Delay3::Triple(rise, fall, turn_off) => (*rise, *fall, Some(*turn_off)),
+    };
+    let span = ctx.arenas.get_span(delay3);
+    let transitions = TransitionDelays {
+        rise,
+        fall,
+        turn_off,
+    };
+    transitions.lower(
+        ctx,
+        mctx,
+        scope,
+        builder,
+        span,
+        new_value,
+        output_bit_length,
+    )
+}
+
+fn lower_delay_value<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    builder: &mut BasicBlockBuilder,
+    value: AstId<'a, DelayValue>,
+) -> Result<VariableKey, ()> {
+    let delay = evaluate_delay_value_as_ticks(ctx, mctx, scope, value)?;
+    Ok(builder.constant_u64(mctx.gl(), delay))
+}
+
+/// Separate delays for transitions to 1, 0 and `z`.
+struct TransitionDelays<'a> {
+    rise: AstId<'a, MinTypMaxExpression<'a>>,
+    fall: AstId<'a, MinTypMaxExpression<'a>>,
+    turn_off: Option<AstId<'a, MinTypMaxExpression<'a>>>,
+}
+
+impl<'a> TransitionDelays<'a> {
+    fn lower(
+        self,
+        ctx: &LowerContext<'a, '_>,
+        mctx: &mut MutLowerContext,
+        scope: SymbolId,
+        builder: &mut BasicBlockBuilder,
+        span: TokenRange,
+        new_value: VariableKey,
+        output_bit_length: VectorSize,
+    ) -> Result<VariableKey, ()> {
+        if output_bit_length != SCALAR_VSIZE {
+            mctx.diagnostics
+                .not_yet_implemented(span, "rise and fall delays on non-scalar gate outputs");
+            return Err(());
+        }
+
+        let rise = lower_min_typ_max_delay(ctx, mctx, scope, builder, self.rise)?;
+        let fall = lower_min_typ_max_delay(ctx, mctx, scope, builder, self.fall)?;
+        let turn_off = self
+            .turn_off
+            .map(|t| lower_min_typ_max_delay(ctx, mctx, scope, builder, t))
+            .transpose()?;
+
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 101 (Table 7-9)
+        //
+        // Transitions to 1 take the rise delay and transitions to 0 take the fall delay.
+        // Transitions to z take the turn-off delay, or the smaller of the rise and fall delay when
+        // there is none. Transitions to x take the smallest of all delays.
+        let min_rise_fall = builder.min(mctx.gl(), rise, fall);
+        let (to_z, to_x) = match turn_off {
+            None => (min_rise_fall, min_rise_fall),
+            Some(turn_off) => (turn_off, builder.min(mctx.gl(), min_rise_fall, turn_off)),
+        };
+
+        let is_one = builder.case_equals_constant(mctx.gl(), new_value, Bits::from(true));
+        let is_zero = builder.case_equals_constant(mctx.gl(), new_value, Bits::from(false));
+        let is_z = builder.case_equals_constant(
+            mctx.gl(),
+            new_value,
+            Bits::new_high_impedance(SCALAR_VSIZE),
+        );
+        let delay = builder.select(mctx.gl(), is_z, to_z, to_x);
+        let delay = builder.select(mctx.gl(), is_zero, fall, delay);
+        Ok(builder.select(mctx.gl(), is_one, rise, delay))
+    }
+}
+
 fn lower_gate_drive<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     bb_builder: &mut BasicBlockBuilder,
     span: TokenRange,
-    delay2: Option<AstId<'a, Delay2<'a>>>,
+    delay: Option<&GateDelayFn<'_>>,
     output_terminal: AstId<'a, NetLValue<'a>>,
     value: VariableKey,
     output_bit_length: VectorSize,
 ) -> Result<(), ()> {
-    let Some(delay2) = delay2 else {
+    let Some(delay) = delay else {
         // Fast path: no delay on the gate-output.
         return assign_net_lvalue(
             ctx,
@@ -514,39 +682,7 @@ fn lower_gate_drive<'a>(
 
     let new_value = delay_bb_builder.probe(mctx.gl(), proxy);
 
-    let delay = match &*delay2 {
-        Delay2::Value(delay) => {
-            let delay = evaluate_delay_value_as_ticks(ctx, mctx, scope, *delay)?;
-            delay_bb_builder.constant_u64(mctx.gl(), delay)
-        }
-        Delay2::Tuple(delay, None) => {
-            lower_min_typ_max_delay(ctx, mctx, scope, &mut delay_bb_builder, *delay)?
-        }
-        Delay2::Tuple(rise, Some(fall)) => {
-            if output_bit_length != SCALAR_VSIZE {
-                mctx.diagnostics.not_yet_implemented(
-                    ctx.arenas.get_span(delay2),
-                    "rise and fall delays on non-scalar gate outputs",
-                );
-                return Err(());
-            }
-
-            let rise = lower_min_typ_max_delay(ctx, mctx, scope, &mut delay_bb_builder, *rise)?;
-            let fall = lower_min_typ_max_delay(ctx, mctx, scope, &mut delay_bb_builder, *fall)?;
-
-            // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 101
-            //
-            // Transitions to 1 take the rise delay, transitions to 0 take the fall delay and
-            // transitions to x/z take the smaller of the two.
-            let to_x = delay_bb_builder.min(mctx.gl(), rise, fall);
-            let is_one =
-                delay_bb_builder.case_equals_constant(mctx.gl(), new_value, Bits::from(true));
-            let is_zero =
-                delay_bb_builder.case_equals_constant(mctx.gl(), new_value, Bits::from(false));
-            let delay = delay_bb_builder.select(mctx.gl(), is_zero, fall, to_x);
-            delay_bb_builder.select(mctx.gl(), is_one, rise, delay)
-        }
-    };
+    let delay = delay(mctx, &mut delay_bb_builder, new_value)?;
 
     // Only wait for the time that that is remaining.
     let time = delay_bb_builder.time(mctx.gl());
