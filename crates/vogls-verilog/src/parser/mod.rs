@@ -749,7 +749,8 @@ impl<'a> Consumable<'a> for DriveStrength {
         let drive_strength = match tkw.try_get(tkw.offset, diagnostics.as_deref_mut())?.kind {
             T::KeywordStrong0 | T::KeywordSupply0 | T::KeywordWeak0 | T::KeywordPull0 => {
                 let lhs = Strength0::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
-                if tkw.next_if_equals(T::KeywordHighz0) {
+                tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
+                if tkw.next_if_equals(T::KeywordHighz1) {
                     DriveStrength::Strength0Highz1(lhs)
                 } else {
                     let rhs = Strength1::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
@@ -758,6 +759,7 @@ impl<'a> Consumable<'a> for DriveStrength {
             }
             T::KeywordStrong1 | T::KeywordSupply1 | T::KeywordWeak1 | T::KeywordPull1 => {
                 let lhs = Strength1::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
+                tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
                 if tkw.next_if_equals(T::KeywordHighz0) {
                     DriveStrength::Strength1Highz0(lhs)
                 } else {
@@ -767,12 +769,14 @@ impl<'a> Consumable<'a> for DriveStrength {
             }
             T::KeywordHighz0 => {
                 tkw.offset += 1;
+                tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
                 let strength1 =
                     Strength1::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
                 DriveStrength::Highz0Strength1(strength1)
             }
             T::KeywordHighz1 => {
                 tkw.offset += 1;
+                tkw.next_expect(T::Comma, diagnostics.as_deref_mut())?;
                 let strength0 =
                     Strength0::consume(tkw, sc, arenas, ast, diagnostics.as_deref_mut())?;
                 DriveStrength::Highz1Strength0(strength0)
