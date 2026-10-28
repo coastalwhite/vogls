@@ -191,8 +191,8 @@ pub fn lower_sdf<'a>(
         Err(err) => {
             mctx.diagnostics.errors.push((
                 TokenRange::default(),
-                LowerErrorReason::NotYetImplemented("failed to parse SDF file"),
-                vec![err.to_string()],
+                LowerErrorReason::SdfParse(path.display().to_string(), err.to_string()),
+                Vec::new(),
             ));
             return Err(());
         }
