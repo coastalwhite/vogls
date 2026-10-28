@@ -1,0 +1,13 @@
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (TIMESCALE 1ns)
+  (CELL
+    (CELLTYPE "wrap")
+    (INSTANCE w.u)
+    (DELAY
+      (ABSOLUTE
+        (IOPATH a b (3))
+      )
+    )
+  )
+)

@@ -1,0 +1,2 @@
+error: SDF hierarchical path uses divider `.`, but the header DIVIDER is `/`
+  --> {path}:6

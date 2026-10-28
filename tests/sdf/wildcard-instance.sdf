@@ -1,0 +1,13 @@
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (TIMESCALE 1ns)
+  (CELL
+    (CELLTYPE "buffer")
+    (INSTANCE *)
+    (DELAY
+      (ABSOLUTE
+        (IOPATH a b (2))
+      )
+    )
+  )
+)

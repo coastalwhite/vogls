@@ -1,0 +1,2 @@
+error: SDF instance `w.u` has CELLTYPE `wrap`, but is an instance of module `buffer`
+  --> {path}:6

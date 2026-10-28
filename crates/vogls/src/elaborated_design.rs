@@ -6,13 +6,16 @@ use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId, SymbolTable};
 use vogls_fuse_signals::{FuseGraph, FuseGraphOptimizer, FuseTarget};
 use vogls_ir::time::TimeResolution;
+use vogls_ir::token_range::TokenRange;
 use vogls_ir::{GlobalContext, LogicMode, ProcessKey, SignalFlags, SignalKey};
 use vogls_utils::{IndexMap, NonMaxU32, VgHashMap};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, NonPortModuleItem, TimeScale};
 use vogls_verilog::ast::udp::UdpDeclaration;
 use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable, determine_module_context};
-use vogls_verilog::lower::{Diagnostics, LowerContext, MutLowerContext, lower_module_to_ir};
+use vogls_verilog::lower::{
+    Diagnostics, LowerContext, LowerErrorReason, MutLowerContext, lower_module_to_ir,
+};
 use vogls_verilog::parser::{Ast, AstArenas, ReportKind, SpanError};
 use vogls_verilog::tokenizer::Tokenized;
 
@@ -256,12 +259,38 @@ impl<'a> ElaboratedDesign<'a> {
         &'b mut self,
         path: impl AsRef<Path>,
     ) -> Result<&'b mut Self, AnnotationError<'a, 'b>> {
-        match self.with_context(|ctx, mctx, _| {
-            match crate::timing::lower_sdf(ctx, mctx, path.as_ref()) {
+        let path = path.as_ref();
+        let mut diagnostics = Diagnostics::default();
+        let Ok(content) = std::fs::read_to_string(path) else {
+            diagnostics.not_yet_implemented(Default::default(), "SDF file cannot be opened");
+            return Err(AnnotationError {
+                design: self,
+                diagnostics,
+            });
+        };
+
+        let mut tkw = vogls_sdf::TokenWalker::new(&content, &mut self.arenas.ident_table);
+        let Ok(sdf) =
+            <vogls_sdf::DelayFile as vogls_sdf::Consume>::consume(&mut tkw).map_err(|err| {
+                diagnostics.errors.push((
+                    TokenRange::default(),
+                    LowerErrorReason::SdfParse(path.display().to_string(), err.to_string()),
+                    Vec::new(),
+                ));
+            })
+        else {
+            return Err(AnnotationError {
+                design: self,
+                diagnostics,
+            });
+        };
+
+        match self.with_context(
+            |ctx, mctx, _| match crate::timing::lower_sdf(ctx, mctx, &sdf) {
                 Ok(_) => Ok(()),
                 Err(_) => Err(std::mem::take(&mut mctx.diagnostics)),
-            }
-        }) {
+            },
+        ) {
             Ok(_) => Ok(self),
             Err(diagnostics) => Err(AnnotationError {
                 design: self,
