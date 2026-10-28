@@ -321,6 +321,7 @@ impl BinaryOp {
             (b'%', _, _) => Self::Modulus,
             (b'=', b'=', b'=') => Self::CaseEquality,
             (b'=', b'=', _) => Self::LogicalEquality,
+            (b'!', b'=', b'=') => Self::CaseInequality,
             (b'!', b'=', _) => Self::LogicalInequality,
 
             (b'&', b'&', _) => Self::LogicalAnd,
@@ -344,8 +345,23 @@ impl BinaryOp {
     }
 
     fn binding_power(self) -> (u8, u8) {
-        // @TODO: fill
-        (1, 1)
+        let precedence = match self {
+            Self::LogicalOr => 0,
+            Self::LogicalAnd => 1,
+            Self::BitwiseOr => 2,
+            Self::BitwiseXor | Self::BitwiseEquiv => 3,
+            Self::BitwiseAnd => 4,
+            Self::LogicalEquality
+            | Self::LogicalInequality
+            | Self::CaseEquality
+            | Self::CaseInequality => 5,
+            Self::LessThan | Self::LessThanEqual | Self::GreaterThan | Self::GreaterThanEqual => 6,
+            Self::LeftShift | Self::RightShift => 7,
+            Self::ArithmeticSum | Self::ArithmeticDifference => 8,
+            Self::ArithmeticProduct | Self::ArithmeticQuotient | Self::Modulus => 9,
+        };
+        let l_bp = 3 + 2 * precedence;
+        (l_bp, l_bp + 1)
     }
 
     fn num_bytes(self) -> usize {
@@ -491,7 +507,6 @@ impl<'a> Consume<'a> for Expression<'a> {
                     let Some(op) = BinaryOp::from_3_bytes(tkw.peek_bytes::<3>()) else {
                         break;
                     };
-                    tkw.offset += op.num_bytes();
 
                     let (l_bp, r_bp) = op.binding_power();
 
@@ -499,7 +514,7 @@ impl<'a> Consume<'a> for Expression<'a> {
                         break;
                     }
 
-                    tkw.offset += 1;
+                    tkw.offset += op.num_bytes();
                     let lhs = Box::new(current);
                     deepen!(StackItem::Binary(op, lhs), r_bp);
                 }
@@ -839,6 +854,7 @@ impl<'a> TokenWalker<'a> {
             }));
         };
         if f(b) {
+            self.offset += 1;
             Ok(b)
         } else {
             Err(Box::new(SdfError {
@@ -1267,11 +1283,12 @@ fn parse_param_with<'a, T>(
 }
 fn peek_param<'a>(tkw: &mut TokenWalker<'a>) -> Option<&'a str> {
     let checkpoint = tkw.checkpoint();
-    if tkw.next_char() != Some(b'(') {
-        return None;
-    }
-    tkw.skip_whitespace();
-    let ident = tkw.next_ident();
+    let ident = if tkw.next_char() == Some(b'(') {
+        tkw.skip_whitespace();
+        tkw.next_ident()
+    } else {
+        None
+    };
     tkw.restore_checkpoint(checkpoint);
     ident
 }

@@ -78,24 +78,24 @@ pub struct CCond<'a> {
 pub struct SetupTimingCheck<'a> {
     pub fst: PortTimingCheck<'a>,
     pub snd: PortTimingCheck<'a>,
-    pub value: Value<'a>,
+    pub value: RValue<'a>,
 }
 pub struct HoldTimingCheck<'a> {
     pub fst: PortTimingCheck<'a>,
     pub snd: PortTimingCheck<'a>,
-    pub value: Value<'a>,
+    pub value: RValue<'a>,
 }
 pub struct SetupHoldTimingCheck<'a>(pub SetupHoldRecremArgs<'a>);
 
 pub struct RecoveryTimingCheck<'a> {
     pub fst: PortTimingCheck<'a>,
     pub snd: PortTimingCheck<'a>,
-    pub value: Value<'a>,
+    pub value: RValue<'a>,
 }
 pub struct RemovalTimingCheck<'a> {
     pub fst: PortTimingCheck<'a>,
     pub snd: PortTimingCheck<'a>,
-    pub value: Value<'a>,
+    pub value: RValue<'a>,
 }
 pub struct RecremTimingCheck<'a>(pub SetupHoldRecremArgs<'a>);
 pub struct SkewTimingCheck<'a> {
@@ -295,7 +295,7 @@ impl<'a> Consume<'a> for SetupTimingCheck<'a> {
             tkw.skip_whitespace();
             let snd = PortTimingCheck::consume(tkw)?;
             tkw.skip_whitespace();
-            let value = Value::consume(tkw)?;
+            let value = RValue::consume(tkw)?;
             Ok(Self { fst, snd, value })
         })
     }
@@ -310,7 +310,7 @@ impl<'a> Consume<'a> for HoldTimingCheck<'a> {
             tkw.skip_whitespace();
             let snd = PortTimingCheck::consume(tkw)?;
             tkw.skip_whitespace();
-            let value = Value::consume(tkw)?;
+            let value = RValue::consume(tkw)?;
             Ok(Self { fst, snd, value })
         })
     }
@@ -335,7 +335,7 @@ impl<'a> Consume<'a> for RecoveryTimingCheck<'a> {
             tkw.skip_whitespace();
             let snd = PortTimingCheck::consume(tkw)?;
             tkw.skip_whitespace();
-            let value = Value::consume(tkw)?;
+            let value = RValue::consume(tkw)?;
             Ok(Self { fst, snd, value })
         })
     }
@@ -349,7 +349,7 @@ impl<'a> Consume<'a> for RemovalTimingCheck<'a> {
             tkw.skip_whitespace();
             let snd = PortTimingCheck::consume(tkw)?;
             tkw.skip_whitespace();
-            let value = Value::consume(tkw)?;
+            let value = RValue::consume(tkw)?;
             Ok(Self { fst, snd, value })
         })
     }

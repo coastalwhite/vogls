@@ -24,6 +24,7 @@ pub enum LowerErrorReason {
     NetWidthOverflow,
     ZeroWidthNet,
     IfnoneWithUnconditionalPath,
+    SdfParse(String, String),
 }
 
 #[derive(Debug, Default)]
@@ -225,6 +226,9 @@ impl<'a> fmt::Display for LowerErrorDisplay<'a> {
                 f,
                 "`ifnone` path combined with an unconditional path for the same module path"
             ),
+            LowerErrorReason::SdfParse(path, error) => {
+                write!(f, "failed to parse SDF file `{path}`: {error}")
+            }
         }
     }
 }
