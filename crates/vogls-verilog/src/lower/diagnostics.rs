@@ -25,6 +25,9 @@ pub enum LowerErrorReason {
     ZeroWidthNet,
     IfnoneWithUnconditionalPath,
     SdfParse(String, String),
+    SdfNotAnInstance(String),
+    SdfCelltypeMismatch(String, IdentId, IdentId),
+    SdfDividerMismatch(char, char),
 }
 
 #[derive(Debug, Default)]
@@ -229,6 +232,18 @@ impl<'a> fmt::Display for LowerErrorDisplay<'a> {
             LowerErrorReason::SdfParse(path, error) => {
                 write!(f, "failed to parse SDF file `{path}`: {error}")
             }
+            LowerErrorReason::SdfNotAnInstance(path) => {
+                write!(f, "SDF instance `{path}` is not a module instance")
+            }
+            LowerErrorReason::SdfCelltypeMismatch(path, celltype, module) => write!(
+                f,
+                "SDF instance `{path}` has CELLTYPE `{}`, but is an instance of module `{}`",
+                &ident_table[*celltype], &ident_table[*module]
+            ),
+            LowerErrorReason::SdfDividerMismatch(expected, found) => write!(
+                f,
+                "SDF hierarchical path uses divider `{found}`, but the header DIVIDER is `{expected}`"
+            ),
         }
     }
 }

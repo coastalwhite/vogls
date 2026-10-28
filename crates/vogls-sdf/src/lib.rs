@@ -60,8 +60,6 @@
 //         - [ ] LabelDef
 //         - [ ] Absolute
 //         - [ ] Increment
-use std::borrow::Cow;
-
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 
 mod error;
@@ -71,7 +69,7 @@ pub use error::*;
 pub use timing_check::*;
 
 pub trait Consume<'a>: Sized {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self>;
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self>;
 }
 
 pub struct DelayFile<'a> {
@@ -80,7 +78,7 @@ pub struct DelayFile<'a> {
 }
 
 pub struct Cell<'a> {
-    pub celltype: QString<'a>,
+    pub celltype: IdentId,
     pub instance: Instance,
     pub timing_specs: Vec<TimingSpec<'a>>,
 }
@@ -150,7 +148,7 @@ pub struct IoPathDef<'a> {
     pub delval_list: DelValList<'a>,
 }
 pub struct CondDef<'a> {
-    pub qstring: Option<QString<'a>>,
+    pub qstring: Option<QString>,
     pub conditional_port_expr: Expression<'a>,
     pub io_path: IoPathDef<'a>,
 }
@@ -393,7 +391,7 @@ impl BinaryOp {
 }
 
 impl<'a> Consume<'a> for Expression<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         enum StackItem<'a> {
             Paren,
             BracketS1,
@@ -604,7 +602,7 @@ impl<'a> Consume<'a> for Expression<'a> {
 }
 
 impl<'a> Consume<'a> for ScalarConstant {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         tkw.skip_whitespace();
         match tkw.next_expect()? {
             b'0' => return Ok(Self::L0),
@@ -637,21 +635,31 @@ pub enum Version {
     V3_0,
     V4_0,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HierarchyDivider {
     Dot,
     Slash,
 }
 
+impl HierarchyDivider {
+    pub fn as_char(self) -> char {
+        match self {
+            Self::Dot => '.',
+            Self::Slash => '/',
+        }
+    }
+}
+
 pub struct SdfHeader<'a> {
     pub version: Version,
-    pub design: Option<QString<'a>>,
-    pub date: Option<QString<'a>>,
-    pub vendor: Option<QString<'a>>,
-    pub program_name: Option<QString<'a>>,
-    pub program_version: Option<QString<'a>>,
+    pub design: Option<QString>,
+    pub date: Option<QString>,
+    pub vendor: Option<QString>,
+    pub program_name: Option<QString>,
+    pub program_version: Option<QString>,
     pub hierarchy_divider: Option<HierarchyDivider>,
     pub voltage: Option<SignedRealNumberOrRTriple<'a>>,
-    pub process: Option<QString<'a>>,
+    pub process: Option<QString>,
     pub temperature: Option<SignedRealNumberOrRTriple<'a>>,
     pub timescale: Option<Timescale>,
 }
@@ -678,12 +686,13 @@ pub enum TimescaleUnit {
     Femtoseconds,
 }
 
-pub struct TokenWalker<'a> {
+pub struct TokenWalker<'a, 't> {
     offset: usize,
     content: &'a str,
     line: u64,
 
-    ident_table: IdentTable,
+    /// Table that all identifiers and quoted strings are interned into.
+    ident_table: &'t mut IdentTable,
     ident_scratch: String,
 }
 
@@ -766,19 +775,15 @@ pub struct Checkpoint {
     line: u64,
 }
 
-impl<'a> TokenWalker<'a> {
-    pub fn new(content: &'a str) -> Self {
+impl<'a, 't> TokenWalker<'a, 't> {
+    pub fn new(content: &'a str, ident_table: &'t mut IdentTable) -> Self {
         Self {
             offset: 0,
             content,
             line: 1,
-            ident_table: IdentTable::default(),
+            ident_table,
             ident_scratch: String::new(),
         }
-    }
-
-    pub fn ident_table(&self) -> &IdentTable {
-        &self.ident_table
     }
 
     pub fn checkpoint(&self) -> Checkpoint {
@@ -920,8 +925,12 @@ impl<'a> TokenWalker<'a> {
 
     pub fn next_ident_id(&mut self) -> Option<IdentId> {
         let ident = self.next_ident()?;
+        Some(self.intern_unescaped(ident))
+    }
+
+    pub fn intern_unescaped(&mut self, ident: &str) -> IdentId {
         if !ident.contains('\\') {
-            return Some(self.ident_table.get_or_insert(ident));
+            return self.ident_table.get_or_insert(ident);
         }
 
         self.ident_scratch.clear();
@@ -938,7 +947,7 @@ impl<'a> TokenWalker<'a> {
             i += 1;
         }
         self.ident_scratch.push_str(&ident[prev..]);
-        Some(self.ident_table.get_or_insert(&self.ident_scratch))
+        self.ident_table.get_or_insert(&self.ident_scratch)
     }
 
     pub fn skip_while(&mut self, mut f: impl FnMut(u8) -> bool) {
@@ -977,7 +986,8 @@ impl<'a> TokenWalker<'a> {
     }
 }
 
-pub struct QString<'a>(pub Cow<'a, str>);
+/// A quoted string, interned without its quotes and backslash escapes.
+pub struct QString(pub IdentId);
 pub struct RealNumber<'a>(pub &'a str);
 pub struct SignedRealNumber<'a>(pub &'a str);
 pub struct RTriple<'a>(
@@ -991,15 +1001,24 @@ pub struct Triple<'a>(
     pub Option<RealNumber<'a>>,
 );
 
-impl<'a> Consume<'a> for QString<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+impl<'a> Consume<'a> for QString {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
+        // IEEE Std 1497-2001 (p. 4)
+        //
+        // """
+        // Except for the double-quote itself, special characters lose their special meaning in a
+        // quoted string. The double-quote character may be included in a quoted string by escaping
+        // it [preceding it with the backslash ('\') character].
+        // """
         tkw.expect_char(b'"')?;
-        let mut is_escaped = false;
+        let mut prev_is_backslash = false;
+        let mut has_escaped_quote = false;
         let offset = tkw.offset;
         tkw.skip_while(|b| {
-            let skip = is_escaped || b != b'"';
-            is_escaped = !is_escaped & (b == b'\\');
-            skip
+            let is_escaped_quote = prev_is_backslash && b == b'"';
+            has_escaped_quote |= is_escaped_quote;
+            prev_is_backslash = b == b'\\';
+            is_escaped_quote || b != b'"'
         });
         let s = &tkw.content[offset..tkw.offset];
         if tkw.next_char().is_none() {
@@ -1009,19 +1028,29 @@ impl<'a> Consume<'a> for QString<'a> {
             }));
         }
 
-        // @TODO: Replace escaped "
-        Ok(Self(Cow::Borrowed(s)))
+        if !has_escaped_quote {
+            return Ok(Self(tkw.ident_table.get_or_insert(s)));
+        }
+
+        tkw.ident_scratch.clear();
+        let mut prev = 0;
+        for (i, _) in s.match_indices("\\\"") {
+            tkw.ident_scratch.push_str(&s[prev..i]);
+            prev = i + 1;
+        }
+        tkw.ident_scratch.push_str(&s[prev..]);
+        Ok(Self(tkw.ident_table.get_or_insert(&tkw.ident_scratch)))
     }
 }
 
 impl<'a> Consume<'a> for RealNumber<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // integer
         let start = tkw.offset;
         tkw.expect_char_matches(|b| b.is_ascii_digit())?;
         tkw.skip_while(|b| b.is_ascii_digit());
 
-        fn skip_exponent<'a>(tkw: &mut TokenWalker<'a>) {
+        fn skip_exponent<'a>(tkw: &mut TokenWalker<'a, '_>) {
             // e [ sign ] integer
             let checkpoint = tkw.checkpoint();
             let has_e = tkw.next_if_equals(b'e');
@@ -1051,7 +1080,7 @@ impl<'a> Consume<'a> for RealNumber<'a> {
 }
 
 impl<'a> Consume<'a> for SignedRealNumber<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let start = tkw.offset;
         tkw.next_if_matches(|b| matches!(b, b'+' | b'-'));
         RealNumber::consume(tkw)?;
@@ -1060,7 +1089,7 @@ impl<'a> Consume<'a> for SignedRealNumber<'a> {
 }
 
 impl<'a> Consume<'a> for Triple<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let fst = if tkw.next_if_equals(b':') {
             None
         } else {
@@ -1098,7 +1127,7 @@ impl<'a> Consume<'a> for Triple<'a> {
     }
 }
 impl<'a> Consume<'a> for RTriple<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let fst = if tkw.next_if_equals(b':') {
             None
         } else {
@@ -1137,7 +1166,7 @@ impl<'a> Consume<'a> for RTriple<'a> {
 }
 
 impl<'a> Consume<'a> for SignedRealNumberOrRTriple<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let checkpoint = tkw.checkpoint();
         Ok(if let Ok(n) = SignedRealNumber::consume(tkw) {
             tkw.skip_whitespace();
@@ -1154,7 +1183,7 @@ impl<'a> Consume<'a> for SignedRealNumberOrRTriple<'a> {
     }
 }
 impl<'a> Consume<'a> for RealNumberOrTriple<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let checkpoint = tkw.checkpoint();
         Ok(if let Ok(n) = RealNumber::consume(tkw) {
             tkw.skip_whitespace();
@@ -1172,11 +1201,11 @@ impl<'a> Consume<'a> for RealNumberOrTriple<'a> {
 }
 
 impl<'a> Consume<'a> for SdfHeader<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let version = parse_param_with(tkw, "SDFVERSION", |tkw| {
             // @NOTE: Best code ever.
             let version = QString::consume(tkw)?;
-            let version = version.0.as_ref();
+            let version = &tkw.ident_table[version.0];
             match () {
                 _ if version.contains("1.0") => Ok(Version::V1_0),
                 _ if version.contains("2.0") => Ok(Version::V2_0),
@@ -1306,13 +1335,16 @@ impl<'a> Consume<'a> for SdfHeader<'a> {
     }
 }
 
-fn parse_param<'a, T: Consume<'a>>(tkw: &mut TokenWalker<'a>, name: &'static str) -> SdfResult<T> {
+fn parse_param<'a, T: Consume<'a>>(
+    tkw: &mut TokenWalker<'a, '_>,
+    name: &'static str,
+) -> SdfResult<T> {
     parse_param_with(tkw, name, T::consume)
 }
 fn parse_param_with<'a, T>(
-    tkw: &mut TokenWalker<'a>,
+    tkw: &mut TokenWalker<'a, '_>,
     name: &'static str,
-    mut f: impl FnMut(&mut TokenWalker<'a>) -> SdfResult<T>,
+    mut f: impl FnMut(&mut TokenWalker<'a, '_>) -> SdfResult<T>,
 ) -> SdfResult<T> {
     tkw.skip_whitespace();
     tkw.expect_char(b'(')?;
@@ -1324,7 +1356,7 @@ fn parse_param_with<'a, T>(
     tkw.expect_char(b')')?;
     Ok(value)
 }
-fn peek_param<'a>(tkw: &mut TokenWalker<'a>) -> Option<&'a str> {
+fn peek_param<'a>(tkw: &mut TokenWalker<'a, '_>) -> Option<&'a str> {
     let checkpoint = tkw.checkpoint();
     let ident = if tkw.next_char() == Some(b'(') {
         tkw.skip_whitespace();
@@ -1335,7 +1367,7 @@ fn peek_param<'a>(tkw: &mut TokenWalker<'a>) -> Option<&'a str> {
     tkw.restore_checkpoint(checkpoint);
     ident
 }
-fn expect_peek_param<'a>(tkw: &mut TokenWalker<'a>) -> SdfResult<&'a str> {
+fn expect_peek_param<'a>(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<&'a str> {
     let checkpoint = tkw.checkpoint();
     tkw.expect_char(b'(')?;
 
@@ -1351,14 +1383,14 @@ fn expect_peek_param<'a>(tkw: &mut TokenWalker<'a>) -> SdfResult<&'a str> {
 }
 
 impl<'a> Consume<'a> for Cell<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         tkw.skip_whitespace();
         tkw.expect_char(b'(')?;
 
         tkw.skip_whitespace();
         tkw.expect_ident("CELL")?;
 
-        let celltype = parse_param::<QString<'a>>(tkw, "CELLTYPE")?;
+        let celltype = parse_param::<QString>(tkw, "CELLTYPE")?.0;
         let instance = parse_param::<Instance>(tkw, "INSTANCE")?;
         let mut timing_specs = Vec::new();
 
@@ -1384,7 +1416,7 @@ impl<'a> Consume<'a> for Cell<'a> {
 }
 
 impl<'a> Consume<'a> for TimingSpec<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let checkpoint = tkw.checkpoint();
         tkw.skip_whitespace();
         tkw.expect_char(b'(')?;
@@ -1418,7 +1450,7 @@ impl<'a> Consume<'a> for TimingSpec<'a> {
 }
 
 impl<'a> Consume<'a> for Instance {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         if tkw.is_next_equal_to(b')') {
             Ok(Self::Empty)
         } else if tkw.next_if_equals(b'*') {
@@ -1430,7 +1462,7 @@ impl<'a> Consume<'a> for Instance {
 }
 
 impl<'a> Consume<'a> for HierarchicalIdent {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let fst = tkw.next_ident_id().ok_or_else(|| {
             Box::new(SdfError {
                 line: tkw.line,
@@ -1461,7 +1493,7 @@ impl<'a> Consume<'a> for HierarchicalIdent {
 }
 
 impl<'a> Consume<'a> for DelayFile<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let result = parse_param_with(tkw, "DELAYFILE", |tkw| {
             let header = SdfHeader::consume(tkw)?;
             let mut cells = Vec::new();
@@ -1492,7 +1524,7 @@ impl<'a> Consume<'a> for DelayFile<'a> {
 }
 
 impl<'a> Consume<'a> for RValue<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         tkw.expect_char(b'(')?;
         tkw.skip_whitespace();
         if tkw.next_if_equals(b')') {
@@ -1507,7 +1539,7 @@ impl<'a> Consume<'a> for RValue<'a> {
 }
 
 impl<'a> Consume<'a> for Value<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         tkw.expect_char(b'(')?;
         tkw.skip_whitespace();
         if tkw.next_if_equals(b')') {
@@ -1522,7 +1554,7 @@ impl<'a> Consume<'a> for Value<'a> {
 }
 
 impl<'a> Consume<'a> for DelVal<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let checkpoint = tkw.checkpoint();
         tkw.expect_char(b'(')?;
 
@@ -1553,7 +1585,7 @@ impl<'a> Consume<'a> for DelVal<'a> {
 }
 
 impl<'a> Consume<'a> for DelValList<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let fst = DelVal::consume(tkw)?;
 
         tkw.skip_whitespace();
@@ -1600,7 +1632,7 @@ impl<'a> Consume<'a> for DelValList<'a> {
     }
 }
 impl<'a> Consume<'a> for RetValList<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let fst = DelVal::consume(tkw)?;
         if !tkw.next_if_equals(b'(') {
             return Ok(Self::One(fst));
@@ -1615,12 +1647,12 @@ impl<'a> Consume<'a> for RetValList<'a> {
 }
 
 impl<'a> Consume<'a> for RetainDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param::<RetValList>(tkw, "RETAIN").map(Self)
     }
 }
 impl<'a> Consume<'a> for IoPathDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param_with(tkw, "IOPATH", |tkw| {
             tkw.skip_whitespace();
             let port_spec = PortSpec::consume(tkw)?;
@@ -1659,7 +1691,7 @@ impl<'a> Consume<'a> for IoPathDef<'a> {
     }
 }
 impl<'a> Consume<'a> for CondDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param_with(tkw, "COND", |tkw| {
             let qstring = if tkw.is_next_equal_to(b'"') {
                 Some(QString::consume(tkw)?)
@@ -1680,12 +1712,12 @@ impl<'a> Consume<'a> for CondDef<'a> {
     }
 }
 impl<'a> Consume<'a> for CondElseDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param::<IoPathDef<'a>>(tkw, "CONDELSE").map(Self)
     }
 }
 impl<'a> Consume<'a> for PortDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param_with(tkw, "PORT", |tkw| {
             let port_instance = PortInstance::consume(tkw)?;
             tkw.skip_whitespace();
@@ -1698,7 +1730,7 @@ impl<'a> Consume<'a> for PortDef<'a> {
     }
 }
 impl<'a> Consume<'a> for InterconnectDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param_with(tkw, "INTERCONNECT", |tkw| {
             tkw.skip_whitespace();
             let from = PortInstance::consume(tkw)?;
@@ -1715,7 +1747,7 @@ impl<'a> Consume<'a> for InterconnectDef<'a> {
     }
 }
 impl<'a> Consume<'a> for NetDelayDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param_with(tkw, "NETDELAY", |tkw| {
             let net_spec = PortInstance::consume(tkw)?;
             tkw.skip_whitespace();
@@ -1728,7 +1760,7 @@ impl<'a> Consume<'a> for NetDelayDef<'a> {
     }
 }
 impl<'a> Consume<'a> for DeviceDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param_with(tkw, "DEVICE", |tkw| {
             let port_instance = if tkw.is_next_equal_to(b'(') {
                 None
@@ -1746,7 +1778,7 @@ impl<'a> Consume<'a> for DeviceDef<'a> {
 }
 
 impl<'a> Consume<'a> for Integer<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         tkw.expect_char_matches(|b| b.is_ascii_digit())?;
         let start = tkw.offset - 1;
         tkw.skip_while(|b| b.is_ascii_digit());
@@ -1755,7 +1787,7 @@ impl<'a> Consume<'a> for Integer<'a> {
 }
 
 impl<'a> Consume<'a> for Port<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let hident = HierarchicalIdent::consume(tkw)?;
         let mut b1 = None;
         let mut b2 = None;
@@ -1775,7 +1807,7 @@ impl<'a> Consume<'a> for Port<'a> {
 }
 
 impl<'a> Consume<'a> for PortInstance<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         let mut hident = HierarchicalIdent::consume(tkw)?;
         let mut b1 = None;
         let mut b2 = None;
@@ -1810,7 +1842,7 @@ impl<'a> Consume<'a> for PortInstance<'a> {
     }
 }
 impl<'a> Consume<'a> for PortSpec<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         if tkw.is_next_equal_to(b'(') {
             PortEdge::consume(tkw).map(Self::Edge)
         } else {
@@ -1819,7 +1851,7 @@ impl<'a> Consume<'a> for PortSpec<'a> {
     }
 }
 impl<'a> Consume<'a> for PortEdge<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         tkw.expect_char(b'(')?;
         tkw.skip_whitespace();
         let edge = match tkw.next_ident() {
@@ -1850,7 +1882,7 @@ impl<'a> Consume<'a> for PortEdge<'a> {
 }
 
 impl<'a> Consume<'a> for DelaySpec<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param_with(tkw, "DELAY", |tkw| {
             let mut items = Vec::new();
             let value = DelayType::consume(tkw)?;
@@ -1871,7 +1903,7 @@ impl<'a> Consume<'a> for DelaySpec<'a> {
 }
 
 impl<'a> Consume<'a> for DelayDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         tkw.skip_whitespace();
         let checkpoint = tkw.checkpoint();
         tkw.expect_char(b'(')?;
@@ -1899,7 +1931,7 @@ impl<'a> Consume<'a> for DelayDef<'a> {
 }
 
 impl<'a> Consume<'a> for DelayType<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         tkw.skip_whitespace();
         let checkpoint = tkw.checkpoint();
         tkw.expect_char(b'(')?;
@@ -1923,7 +1955,7 @@ impl<'a> Consume<'a> for DelayType<'a> {
 }
 
 impl<'a> Consume<'a> for AbsoluteDelayType<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param_with(tkw, "ABSOLUTE", |tkw| {
             let mut defs = Vec::new();
             let def = DelayDef::consume(tkw)?;
@@ -1943,7 +1975,7 @@ impl<'a> Consume<'a> for AbsoluteDelayType<'a> {
     }
 }
 impl<'a> Consume<'a> for IncrementDelayType<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param_with(tkw, "INCREMENT", |tkw| {
             let mut defs = Vec::new();
             let def = DelayDef::consume(tkw)?;
@@ -1963,7 +1995,7 @@ impl<'a> Consume<'a> for IncrementDelayType<'a> {
     }
 }
 impl<'a> Consume<'a> for PathPulseType<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param_with(tkw, "PATHPULSE", |tkw| {
             let input_output_path = if tkw.is_next_equal_to(b'(') {
                 None
@@ -1995,7 +2027,7 @@ impl<'a> Consume<'a> for PathPulseType<'a> {
     }
 }
 impl<'a> Consume<'a> for PathPulsePercentType<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         parse_param_with(tkw, "PATHPULSEPERCENT", |tkw| {
             let input_output_path = if tkw.is_next_equal_to(b'(') {
                 None

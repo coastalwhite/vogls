@@ -1,17 +1,18 @@
-use std::path::Path;
+use std::ops::Range;
 
 use hashbrown::hash_map::Entry;
-use vogls_frontend::ident_table::IdentTable;
+use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::time::{TimeResolution, TimeSize, TimeUnit};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{SignalKey, Time};
 use vogls_sdf::{
-    AbsoluteDelayType, Consume, DelVal, DelValList, DelaySpec, HierarchicalIdent, Instance,
-    InterconnectDef, IoPathDef, Port, PortInstance, PortSpec, RTriple, RValue,
-    SignedRealNumberOrRTriple, Timescale, TimescaleNumber, TimescaleUnit, TimingSpec, TokenWalker,
+    AbsoluteDelayType, DelVal, DelValList, DelayFile, DelaySpec, HierarchicalIdent,
+    HierarchyDivider, Instance, InterconnectDef, IoPathDef, Port, PortInstance, PortSpec, RTriple,
+    RValue, SignedRealNumberOrRTriple, Timescale, TimescaleNumber, TimescaleUnit, TimingSpec,
 };
 use vogls_utils::{IterSliceContinguous, VgHashMap};
+use vogls_verilog::elaborate::VSymbol;
 use vogls_verilog::lower::specify::{
     Condition, LowerIoPathScratches, SpecifyOutput, SpecifyPath, lower_iopath,
 };
@@ -31,42 +32,69 @@ struct TimingContent {
     delays: DelayPtr,
 }
 
+/// Format an SDF hierarchical identifier for diagnostics.
+fn display_ident(ident_table: &IdentTable, ident: &HierarchicalIdent) -> String {
+    let mut s = ident_table[ident.fst].to_string();
+    for (divider, n) in &ident.next {
+        s.push(divider.as_char());
+        s.push_str(&ident_table[*n]);
+    }
+    s
+}
+
+/// Resolve an SDF hierarchical identifier.
+///
+/// With a `scope`, the identifier is resolved relative to that scope. Without a `scope`, it is an
+/// `INSTANCE` path, which is resolved relative to the top-level module.
 fn resolve_ident<'a>(
     ctx: &LowerContext<'a, '_>,
-    sdf_idents: &IdentTable,
-    root: Option<SymbolId>,
+    divider: HierarchyDivider,
+    scope: Option<SymbolId>,
     ident: &HierarchicalIdent,
     diagnostics: &mut Diagnostics,
 ) -> Result<SymbolId, ()> {
     macro_rules! unknown_ident {
-        ($s:expr) => {
+        ($iid:expr) => {
             diagnostics.errors.push((
                 TokenRange::default(),
                 LowerErrorReason::NotYetImplemented("unknown sdf module"),
-                vec![format!("unknown sdf module: {}", $s).into()],
+                vec![format!("unknown sdf module: {}", &ctx.arenas.ident_table[$iid]).into()],
             ));
             return Err(());
         };
     }
 
-    let fst = &sdf_idents[ident.fst];
-    let Some(fst_iid) = ctx.arenas.ident_table.get(fst) else {
-        unknown_ident!(fst);
-    };
-    let cell_sid = match root {
-        None => ctx.table.resolve_root(fst_iid),
-        Some(scope) => ctx.table.resolve(scope, fst_iid),
+    if let Some((found, _)) = ident.next.iter().find(|(d, _)| *d != divider) {
+        diagnostics.errors.push((
+            TokenRange::default(),
+            LowerErrorReason::SdfDividerMismatch(divider.as_char(), found.as_char()),
+            Vec::new(),
+        ));
+        return Err(());
+    }
+
+    let fst = ident.fst;
+    let cell_sid = match scope {
+        // IEEE Std 1497-2001 (p. 19)
+        //
+        // """
+        // The hierarchical path shall start at the level in the design at which the annotator
+        // shall be instructed to apply the SDF file. Frequently, this is the topmost level.
+        // """
+        None => match ctx.table.roots() {
+            &[root] => ctx
+                .table
+                .resolve(root, fst)
+                .or_else(|| ctx.table.resolve_root(fst)),
+            _ => ctx.table.resolve_root(fst),
+        },
+        Some(scope) => ctx.table.resolve(scope, fst),
     };
     let Some(mut cell_sid) = cell_sid else {
         unknown_ident!(fst);
     };
-    // @TODO: Check divider
-    for (_, n) in &ident.next {
-        let n = &sdf_idents[*n];
-        let Some(n_iid) = ctx.arenas.ident_table.get(n) else {
-            unknown_ident!(n);
-        };
-        let Some(new_cell_sid) = ctx.table.resolve(cell_sid, n_iid) else {
+    for &(_, n) in &ident.next {
+        let Some(new_cell_sid) = ctx.table.resolve(cell_sid, n) else {
             unknown_ident!(n);
         };
         cell_sid = new_cell_sid;
@@ -74,9 +102,44 @@ fn resolve_ident<'a>(
     Ok(cell_sid)
 }
 
+/// Check that the cell at `cell_sid` is an instance of the module named by the SDF `CELLTYPE`.
+fn check_celltype<'a>(
+    ctx: &LowerContext<'a, '_>,
+    cell_sid: SymbolId,
+    celltype: IdentId,
+    path: impl FnOnce() -> String,
+    diagnostics: &mut Diagnostics,
+) -> Result<(), ()> {
+    // IEEE Std 1497-2001 (p. 19)
+    //
+    // """
+    // If the annotator locates the region and finds that its name does not match the CELLTYPE, it
+    // shall indicate an error.
+    // """
+    let VSymbol::Module(module) = &ctx.table[cell_sid].content else {
+        diagnostics.errors.push((
+            TokenRange::default(),
+            LowerErrorReason::SdfNotAnInstance(path()),
+            Vec::new(),
+        ));
+        return Err(());
+    };
+
+    if celltype != module.module {
+        diagnostics.errors.push((
+            TokenRange::default(),
+            LowerErrorReason::SdfCelltypeMismatch(path(), celltype, module.module),
+            Vec::new(),
+        ));
+        return Err(());
+    }
+
+    Ok(())
+}
+
 fn resolve_port_instance<'a>(
     ctx: &LowerContext<'a, '_>,
-    sdf_idents: &IdentTable,
+    divider: HierarchyDivider,
     scope: SymbolId,
     ident: &PortInstance,
     diagnostics: &mut Diagnostics,
@@ -84,13 +147,13 @@ fn resolve_port_instance<'a>(
     let PortInstance { hident, port } = ident;
     let scope = match hident {
         None => scope,
-        Some(hident) => resolve_ident(ctx, sdf_idents, Some(scope), hident, diagnostics)?,
+        Some(hident) => resolve_ident(ctx, divider, Some(scope), hident, diagnostics)?,
     };
     let Port { hident, b1, b2 } = port;
     if b1.is_some() || b2.is_some() {
         todo!();
     }
-    resolve_ident(ctx, sdf_idents, Some(scope), hident, diagnostics)
+    resolve_ident(ctx, divider, Some(scope), hident, diagnostics)
 }
 
 fn parse_signed_real_number(s: &str) -> Result<f64, ()> {
@@ -182,29 +245,9 @@ fn parse_delvallist(
 pub fn lower_sdf<'a>(
     ctx: &mut LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
-    path: &Path,
+    sdf: &DelayFile<'_>,
 ) -> Result<(), ()> {
-    let Ok(sdf) = std::fs::read_to_string(path) else {
-        mctx.diagnostics
-            .not_yet_implemented(TokenRange::default(), "SDF file cannot be opened");
-        return Err(());
-    };
-
-    let mut tkw = TokenWalker::new(&sdf);
-    let sdf = match vogls_sdf::DelayFile::consume(&mut tkw) {
-        Ok(sdf) => sdf,
-        Err(err) => {
-            mctx.diagnostics.errors.push((
-                TokenRange::default(),
-                LowerErrorReason::SdfParse(path.display().to_string(), err.to_string()),
-                Vec::new(),
-            ));
-            return Err(());
-        }
-    };
-    let sdf_idents = tkw.ident_table();
-
-    let timescale = match sdf.header.timescale {
+    let timescale = match &sdf.header.timescale {
         // IEEE Std 1497-2001 (p. 17)
         // """
         // If the SDF file does not contain a timescale then all time values in the file shall be
@@ -242,16 +285,30 @@ pub fn lower_sdf<'a>(
     let mut property_to_content = VgHashMap::<TimingProperty, usize>::default();
     let mut delays = Vec::<Time>::new();
 
+    // IEEE Std 1497-2001 (p. 16)
+    //
+    // """
+    // If the SDF file does not contain a hierarchy divider then the default hierarchy divider
+    // shall be the period (‘.’).
+    // """
+    let divider = sdf
+        .header
+        .hierarchy_divider
+        .unwrap_or(HierarchyDivider::Dot);
+
+    let mut instances = Vec::<SymbolId>::new();
+    let mut instance_ranges = VgHashMap::<IdentId, Range<usize>>::default();
+
     let mut error = false;
-    for cell in sdf.cells {
+    for cell in &sdf.cells {
         let vogls_sdf::Cell {
-            celltype: _,
+            celltype,
             instance,
             timing_specs,
-        } = &cell;
+        } = cell;
 
-        let root = None;
-        let cell_sid = match instance {
+        let cell_sid;
+        let cell_sids: &[SymbolId] = match instance {
             Instance::Empty => {
                 let roots = ctx.table.roots();
                 if roots.len() != 1 {
@@ -260,195 +317,240 @@ pub fn lower_sdf<'a>(
                     error = true;
                     continue;
                 }
-                roots[0]
+                cell_sid = roots[0];
+                let path = || ctx.arenas.ident_table[ctx.table[cell_sid].name()].to_string();
+                if check_celltype(ctx, cell_sid, *celltype, path, &mut mctx.diagnostics).is_err() {
+                    error = true;
+                    continue;
+                }
+                std::slice::from_ref(&cell_sid)
             }
-            Instance::Star => todo!(),
+            // IEEE Std 1497-2001 (p. 20)
+            //
+            // """
+            // The second form of the cell instance can be used to associate timing data with all
+            // occurrences of the specified cell type.
+            // """
+            Instance::Star => {
+                let module_of = |sid: SymbolId| match &ctx.table[sid].content {
+                    VSymbol::Module(module) => module.module,
+                    _ => unreachable!(),
+                };
+
+                if instances.is_empty() {
+                    instances.extend(
+                        ctx.table
+                            .symbol_id_iter()
+                            .filter(|&sid| matches!(ctx.table[sid].content, VSymbol::Module(_))),
+                    );
+                    instances.sort_unstable_by_key(|&sid| module_of(sid));
+
+                    let mut offset = 0;
+                    for group in instances.chunk_by(|&a, &b| module_of(a) == module_of(b)) {
+                        instance_ranges.insert(module_of(group[0]), offset..offset + group.len());
+                        offset += group.len();
+                    }
+                }
+
+                instance_ranges
+                    .get(celltype)
+                    .map_or(&[], |range| &instances[range.clone()])
+            }
             Instance::HierarchicalIdent(hident) => {
-                let Ok(cell_sid) =
-                    resolve_ident(ctx, sdf_idents, root, hident, &mut mctx.diagnostics)
+                let Ok(sid) = resolve_ident(ctx, divider, None, hident, &mut mctx.diagnostics)
                 else {
                     error = true;
                     continue;
                 };
-                cell_sid
+                cell_sid = sid;
+                let path = || display_ident(&ctx.arenas.ident_table, hident);
+                if check_celltype(ctx, cell_sid, *celltype, path, &mut mctx.diagnostics).is_err() {
+                    error = true;
+                    continue;
+                }
+                std::slice::from_ref(&cell_sid)
             }
         };
 
-        // @TODO: Check celltype
+        for &cell_sid in cell_sids {
+            for timing_spec in timing_specs.iter() {
+                match timing_spec {
+                    TimingSpec::Delay(d) => {
+                        let DelaySpec { items } = d;
+                        for item in items {
+                            match item {
+                                vogls_sdf::DelayType::Absolute(abs) => {
+                                    let AbsoluteDelayType { defs } = abs;
+                                    for def in defs {
+                                        match def {
+                                            vogls_sdf::DelayDef::IoPath(iopath) => {
+                                                let IoPathDef {
+                                                    port_spec,
+                                                    port_instance: to,
+                                                    retain_defs,
+                                                    delval_list,
+                                                } = iopath;
 
-        for timing_spec in timing_specs.iter() {
-            match timing_spec {
-                TimingSpec::Delay(d) => {
-                    let DelaySpec { items } = d;
-                    for item in items {
-                        match item {
-                            vogls_sdf::DelayType::Absolute(abs) => {
-                                let AbsoluteDelayType { defs } = abs;
-                                for def in defs {
-                                    match def {
-                                        vogls_sdf::DelayDef::IoPath(iopath) => {
-                                            let IoPathDef {
-                                                port_spec,
-                                                port_instance: to,
-                                                retain_defs,
-                                                delval_list,
-                                            } = iopath;
+                                                if !retain_defs.is_empty() {
+                                                    todo!();
+                                                }
 
-                                            if !retain_defs.is_empty() {
-                                                todo!();
+                                                let PortSpec::Instance(from) = port_spec else {
+                                                    todo!();
+                                                };
+
+                                                let (Ok(from_sid), Ok(to_sid)) = (
+                                                    resolve_port_instance(
+                                                        ctx,
+                                                        divider,
+                                                        cell_sid,
+                                                        from,
+                                                        &mut mctx.diagnostics,
+                                                    ),
+                                                    resolve_port_instance(
+                                                        ctx,
+                                                        divider,
+                                                        cell_sid,
+                                                        to,
+                                                        &mut mctx.diagnostics,
+                                                    ),
+                                                ) else {
+                                                    error = true;
+                                                    continue;
+                                                };
+
+                                                let (
+                                                    vogls_verilog::elaborate::VSymbol::Net(
+                                                        from_net,
+                                                    ),
+                                                    vogls_verilog::elaborate::VSymbol::Net(to_net),
+                                                ) = (
+                                                    &ctx.table[from_sid].content,
+                                                    &ctx.table[to_sid].content,
+                                                )
+                                                else {
+                                                    mctx.diagnostics.not_yet_implemented(
+                                                        TokenRange::default(),
+                                                        "Not a net",
+                                                    );
+                                                    error = true;
+                                                    continue;
+                                                };
+
+                                                let from = from_net.net.probe_signal();
+                                                let to = to_net.net.blocking_drive_signal();
+                                                let property = TimingProperty { from, to };
+                                                let delays = parse_delvallist(
+                                                    delval_list,
+                                                    &mut delays,
+                                                    timescale,
+                                                    ctx.time_resolution,
+                                                )?;
+                                                let content = TimingContent { delays };
+
+                                                output_paths.insert(to, to_sid);
+                                                match property_to_content.entry(property) {
+                                                    Entry::Occupied(entry) => {
+                                                        properties[*entry.get()].1 = content;
+                                                    }
+                                                    Entry::Vacant(entry) => {
+                                                        let idx = properties.len();
+                                                        properties.push((property, content));
+                                                        entry.insert(idx);
+                                                    }
+                                                }
                                             }
 
-                                            let PortSpec::Instance(from) = port_spec else {
-                                                todo!();
-                                            };
-
-                                            let (Ok(from_sid), Ok(to_sid)) = (
-                                                resolve_port_instance(
-                                                    ctx,
-                                                    sdf_idents,
-                                                    cell_sid,
+                                            // @TODO: These should all be implemented in time.
+                                            vogls_sdf::DelayDef::Retain(_) => todo!(),
+                                            vogls_sdf::DelayDef::Cond(_) => todo!(),
+                                            vogls_sdf::DelayDef::CondElse(_) => todo!(),
+                                            vogls_sdf::DelayDef::Port(_) => todo!(),
+                                            vogls_sdf::DelayDef::Interconnect(interconnect) => {
+                                                let InterconnectDef {
                                                     from,
-                                                    &mut mctx.diagnostics,
-                                                ),
-                                                resolve_port_instance(
-                                                    ctx,
-                                                    sdf_idents,
-                                                    cell_sid,
                                                     to,
-                                                    &mut mctx.diagnostics,
-                                                ),
-                                            ) else {
-                                                error = true;
-                                                continue;
-                                            };
+                                                    delval_list,
+                                                } = interconnect;
 
-                                            let (
-                                                vogls_verilog::elaborate::VSymbol::Net(from_net),
-                                                vogls_verilog::elaborate::VSymbol::Net(to_net),
-                                            ) = (
-                                                &ctx.table[from_sid].content,
-                                                &ctx.table[to_sid].content,
-                                            )
-                                            else {
-                                                mctx.diagnostics.not_yet_implemented(
-                                                    TokenRange::default(),
-                                                    "Not a net",
-                                                );
-                                                error = true;
-                                                continue;
-                                            };
+                                                let (Ok(from_sid), Ok(to_sid)) = (
+                                                    resolve_port_instance(
+                                                        ctx,
+                                                        divider,
+                                                        cell_sid,
+                                                        from,
+                                                        &mut mctx.diagnostics,
+                                                    ),
+                                                    resolve_port_instance(
+                                                        ctx,
+                                                        divider,
+                                                        cell_sid,
+                                                        to,
+                                                        &mut mctx.diagnostics,
+                                                    ),
+                                                ) else {
+                                                    error = true;
+                                                    continue;
+                                                };
 
-                                            let from = from_net.net.probe_signal();
-                                            let to = to_net.net.blocking_drive_signal();
-                                            let property = TimingProperty { from, to };
-                                            let delays = parse_delvallist(
-                                                delval_list,
-                                                &mut delays,
-                                                timescale,
-                                                ctx.time_resolution,
-                                            )?;
-                                            let content = TimingContent { delays };
+                                                let (
+                                                    vogls_verilog::elaborate::VSymbol::Net(
+                                                        from_net,
+                                                    ),
+                                                    vogls_verilog::elaborate::VSymbol::Net(to_net),
+                                                ) = (
+                                                    &ctx.table[from_sid].content,
+                                                    &ctx.table[to_sid].content,
+                                                )
+                                                else {
+                                                    mctx.diagnostics.not_yet_implemented(
+                                                        TokenRange::default(),
+                                                        "Not a net",
+                                                    );
+                                                    error = true;
+                                                    continue;
+                                                };
 
-                                            output_paths.insert(to, to_sid);
-                                            match property_to_content.entry(property) {
-                                                Entry::Occupied(entry) => {
-                                                    properties[*entry.get()].1 = content;
-                                                }
-                                                Entry::Vacant(entry) => {
-                                                    let idx = properties.len();
-                                                    properties.push((property, content));
-                                                    entry.insert(idx);
+                                                let from = from_net.net.probe_signal();
+                                                let to = to_net.net.blocking_drive_signal();
+                                                let property = TimingProperty { from, to };
+                                                let delays = parse_delvallist(
+                                                    delval_list,
+                                                    &mut delays,
+                                                    timescale,
+                                                    ctx.time_resolution,
+                                                )?;
+                                                let content = TimingContent { delays };
+
+                                                output_paths.insert(to, to_sid);
+                                                match property_to_content.entry(property) {
+                                                    Entry::Occupied(entry) => {
+                                                        properties[*entry.get()].1 = content;
+                                                    }
+                                                    Entry::Vacant(entry) => {
+                                                        let idx = properties.len();
+                                                        properties.push((property, content));
+                                                        entry.insert(idx);
+                                                    }
                                                 }
                                             }
+                                            vogls_sdf::DelayDef::NetDelay(_) => todo!(),
+                                            vogls_sdf::DelayDef::Device(_) => todo!(),
                                         }
-
-                                        // @TODO: These should all be implemented in time.
-                                        vogls_sdf::DelayDef::Retain(_) => todo!(),
-                                        vogls_sdf::DelayDef::Cond(_) => todo!(),
-                                        vogls_sdf::DelayDef::CondElse(_) => todo!(),
-                                        vogls_sdf::DelayDef::Port(_) => todo!(),
-                                        vogls_sdf::DelayDef::Interconnect(interconnect) => {
-                                            let InterconnectDef {
-                                                from,
-                                                to,
-                                                delval_list,
-                                            } = interconnect;
-
-                                            let (Ok(from_sid), Ok(to_sid)) = (
-                                                resolve_port_instance(
-                                                    ctx,
-                                                    sdf_idents,
-                                                    cell_sid,
-                                                    from,
-                                                    &mut mctx.diagnostics,
-                                                ),
-                                                resolve_port_instance(
-                                                    ctx,
-                                                    sdf_idents,
-                                                    cell_sid,
-                                                    to,
-                                                    &mut mctx.diagnostics,
-                                                ),
-                                            ) else {
-                                                error = true;
-                                                continue;
-                                            };
-
-                                            let (
-                                                vogls_verilog::elaborate::VSymbol::Net(from_net),
-                                                vogls_verilog::elaborate::VSymbol::Net(to_net),
-                                            ) = (
-                                                &ctx.table[from_sid].content,
-                                                &ctx.table[to_sid].content,
-                                            )
-                                            else {
-                                                mctx.diagnostics.not_yet_implemented(
-                                                    TokenRange::default(),
-                                                    "Not a net",
-                                                );
-                                                error = true;
-                                                continue;
-                                            };
-
-                                            let from = from_net.net.probe_signal();
-                                            let to = to_net.net.blocking_drive_signal();
-                                            let property = TimingProperty { from, to };
-                                            let delays = parse_delvallist(
-                                                delval_list,
-                                                &mut delays,
-                                                timescale,
-                                                ctx.time_resolution,
-                                            )?;
-                                            let content = TimingContent { delays };
-
-                                            output_paths.insert(to, to_sid);
-                                            match property_to_content.entry(property) {
-                                                Entry::Occupied(entry) => {
-                                                    properties[*entry.get()].1 = content;
-                                                }
-                                                Entry::Vacant(entry) => {
-                                                    let idx = properties.len();
-                                                    properties.push((property, content));
-                                                    entry.insert(idx);
-                                                }
-                                            }
-                                        }
-                                        vogls_sdf::DelayDef::NetDelay(_) => todo!(),
-                                        vogls_sdf::DelayDef::Device(_) => todo!(),
                                     }
                                 }
+                                vogls_sdf::DelayType::Increment(_) => todo!(),
+                                vogls_sdf::DelayType::PathPulse(_) => todo!(),
+                                vogls_sdf::DelayType::PathPulseProcent(_) => todo!(),
                             }
-                            vogls_sdf::DelayType::Increment(_) => todo!(),
-                            vogls_sdf::DelayType::PathPulse(_) => todo!(),
-                            vogls_sdf::DelayType::PathPulseProcent(_) => todo!(),
                         }
                     }
-                }
 
-                // @TODO: These should all be implemented in time.
-                TimingSpec::TimingCheck(_) => {}
-                TimingSpec::TimingEnv(_) => {}
-                TimingSpec::Label(_) => {}
+                    // @TODO: These should all be implemented in time.
+                    TimingSpec::TimingCheck(_) => {}
+                    TimingSpec::TimingEnv(_) => {}
+                    TimingSpec::Label(_) => {}
+                }
             }
         }
     }

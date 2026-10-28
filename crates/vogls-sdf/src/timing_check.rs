@@ -23,7 +23,7 @@ pub enum TimingCheckDef<'a> {
 
 pub enum PortTimingCheck<'a> {
     PortSpec(PortSpec<'a>),
-    Cond(Option<QString<'a>>, TimingCheckCondition<'a>, PortSpec<'a>),
+    Cond(Option<QString>, TimingCheckCondition<'a>, PortSpec<'a>),
 }
 
 pub struct TimingCheckCondition<'a> {
@@ -67,11 +67,11 @@ pub enum SetupHoldRecremArgs<'a> {
 }
 
 pub struct SCond<'a> {
-    pub qstring: Option<QString<'a>>,
+    pub qstring: Option<QString>,
     pub timing_check_condition: TimingCheckCondition<'a>,
 }
 pub struct CCond<'a> {
-    pub qstring: Option<QString<'a>>,
+    pub qstring: Option<QString>,
     pub timing_check_condition: TimingCheckCondition<'a>,
 }
 
@@ -125,7 +125,7 @@ pub struct NoChangeTimingCheck<'a> {
 }
 
 impl<'a> Consume<'a> for TimingCheckSpec<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 68)
         // tc_spec ::= ( TIMINGCHECK tchk_def { tchk_def } )
 
@@ -149,7 +149,7 @@ impl<'a> Consume<'a> for TimingCheckSpec<'a> {
 }
 
 impl<'a> Consume<'a> for PortTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 70)
         // port_tchk ::=
         //   port_spec
@@ -176,7 +176,7 @@ impl<'a> Consume<'a> for PortTimingCheck<'a> {
 }
 
 impl<'a> Consume<'a> for TimingCheckCondition<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 73)
         // timing_check_condition ::=
         //   scalar_node
@@ -230,7 +230,7 @@ impl<'a> Consume<'a> for TimingCheckCondition<'a> {
 }
 
 impl<'a> Consume<'a> for ScalarNode<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 73)
         // scalar_node ::= scalar_port | scalar_net
 
@@ -246,7 +246,7 @@ impl<'a> Consume<'a> for ScalarNode<'a> {
 }
 
 impl<'a> Consume<'a> for TimingCheckDef<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 69)
         // tchk_def ::=
         //   setup_timing_check
@@ -286,7 +286,7 @@ impl<'a> Consume<'a> for TimingCheckDef<'a> {
 }
 
 impl<'a> Consume<'a> for SetupTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 69)
         // setup_timing_check ::= ( SETUP port_tchk port_tchk value )
 
@@ -301,7 +301,7 @@ impl<'a> Consume<'a> for SetupTimingCheck<'a> {
     }
 }
 impl<'a> Consume<'a> for HoldTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 69)
         // hold_timing_check ::= ( HOLD port_tchk port_tchk value )
 
@@ -316,7 +316,7 @@ impl<'a> Consume<'a> for HoldTimingCheck<'a> {
     }
 }
 impl<'a> Consume<'a> for SetupHoldTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 69)
         // setuphold_timing_check ::=
         //   ( SETUPHOLD port_tchk port_tchk rvalue rvalue )
@@ -327,7 +327,7 @@ impl<'a> Consume<'a> for SetupHoldTimingCheck<'a> {
     }
 }
 impl<'a> Consume<'a> for RecoveryTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 69)
         // recovery_timing_check ::= ( RECOVERY port_tchk port_tchk value )
         parse_param_with(tkw, "RECOVERY", |tkw| {
@@ -341,7 +341,7 @@ impl<'a> Consume<'a> for RecoveryTimingCheck<'a> {
     }
 }
 impl<'a> Consume<'a> for RemovalTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 69)
         // removal_timing_check ::= ( REMOVAL port_tchk port_tchk value )
         parse_param_with(tkw, "REMOVAL", |tkw| {
@@ -355,7 +355,7 @@ impl<'a> Consume<'a> for RemovalTimingCheck<'a> {
     }
 }
 impl<'a> Consume<'a> for RecremTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 70)
         // recrem_timing_check ::=
         //   ( RECREM port_tchk port_tchk rvalue rvalue )
@@ -366,7 +366,7 @@ impl<'a> Consume<'a> for RecremTimingCheck<'a> {
     }
 }
 impl<'a> Consume<'a> for SkewTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 70)
         // skew_timing_check ::= ( SKEW port_tchk port_tchk rvalue )
         parse_param_with(tkw, "SKEW", |tkw| {
@@ -380,7 +380,7 @@ impl<'a> Consume<'a> for SkewTimingCheck<'a> {
     }
 }
 impl<'a> Consume<'a> for BidirectSkewTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 70)
         // bidirectskew_timing_check ::= ( BIDIRECTSKEW port_tchk port_tchk value value )
         parse_param_with(tkw, "BIDIRECTSKEW", |tkw| {
@@ -401,7 +401,7 @@ impl<'a> Consume<'a> for BidirectSkewTimingCheck<'a> {
     }
 }
 impl<'a> Consume<'a> for WidthTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 70)
         // width_timing_check ::= ( WIDTH port_tchk value )
         parse_param_with(tkw, "WIDTH", |tkw| {
@@ -413,7 +413,7 @@ impl<'a> Consume<'a> for WidthTimingCheck<'a> {
     }
 }
 impl<'a> Consume<'a> for PeriodTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 70)
         // period_timing_check ::= ( PERIOD port_tchk value )
         parse_param_with(tkw, "PERIOD", |tkw| {
@@ -425,7 +425,7 @@ impl<'a> Consume<'a> for PeriodTimingCheck<'a> {
     }
 }
 impl<'a> Consume<'a> for NoChangeTimingCheck<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 70)
         // nochange_timing_check ::= ( NOCHANGE port_tchk port_tchk rvalue rvalue )
         parse_param_with(tkw, "NOCHANGE", |tkw| {
@@ -447,7 +447,7 @@ impl<'a> Consume<'a> for NoChangeTimingCheck<'a> {
 }
 
 impl<'a> Consume<'a> for SCond<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 70)
         // scond ::= ( SCOND [ qstring ] timing_check_condition )
         parse_param_with(tkw, "SCOND", |tkw| {
@@ -466,7 +466,7 @@ impl<'a> Consume<'a> for SCond<'a> {
     }
 }
 impl<'a> Consume<'a> for CCond<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 70)
         // ccond ::= ( CCOND [ qstring ] timing_check_condition )
         parse_param_with(tkw, "CCOND", |tkw| {
@@ -486,7 +486,7 @@ impl<'a> Consume<'a> for CCond<'a> {
 }
 
 impl<'a> Consume<'a> for SetupHoldRecremArgs<'a> {
-    fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
+    fn consume(tkw: &mut TokenWalker<'a, '_>) -> SdfResult<Self> {
         // IEEE Std 1497-2001 (p. 70)
         //   ( RECREM|SETUPHOLD port_tchk port_tchk rvalue rvalue )
         // | ( RECREM|SETUPHOLD port_spec port_spec rvalue rvalue [ scond ] [ ccond ] )
