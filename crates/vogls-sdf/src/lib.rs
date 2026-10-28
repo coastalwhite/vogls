@@ -62,6 +62,8 @@
 //         - [ ] Increment
 use std::borrow::Cow;
 
+use vogls_frontend::ident_table::{IdentId, IdentTable};
+
 mod error;
 mod timing_check;
 
@@ -79,19 +81,19 @@ pub struct DelayFile<'a> {
 
 pub struct Cell<'a> {
     pub celltype: QString<'a>,
-    pub instance: Instance<'a>,
+    pub instance: Instance,
     pub timing_specs: Vec<TimingSpec<'a>>,
 }
 
-pub enum Instance<'a> {
+pub enum Instance {
     Empty,
     Star,
-    HierarchicalIdent(HierarchicalIdent<'a>),
+    HierarchicalIdent(HierarchicalIdent),
 }
 
-pub struct HierarchicalIdent<'a> {
-    pub fst: &'a str,
-    pub next: Vec<(HierarchyDivider, &'a str)>,
+pub struct HierarchicalIdent {
+    pub fst: IdentId,
+    pub next: Vec<(HierarchyDivider, IdentId)>,
 }
 
 pub enum TimingSpec<'a> {
@@ -680,6 +682,9 @@ pub struct TokenWalker<'a> {
     offset: usize,
     content: &'a str,
     line: u64,
+
+    ident_table: IdentTable,
+    ident_scratch: String,
 }
 
 pub struct Value<'a>(pub Option<RealNumberOrTriple<'a>>);
@@ -721,11 +726,11 @@ pub enum PortSpec<'a> {
     Edge(PortEdge<'a>),
 }
 pub struct PortInstance<'a> {
-    pub hident: Option<HierarchicalIdent<'a>>,
+    pub hident: Option<HierarchicalIdent>,
     pub port: Port<'a>,
 }
 pub struct Port<'a> {
-    pub hident: HierarchicalIdent<'a>,
+    pub hident: HierarchicalIdent,
     pub b1: Option<Integer<'a>>,
     pub b2: Option<Integer<'a>>,
 }
@@ -767,7 +772,13 @@ impl<'a> TokenWalker<'a> {
             offset: 0,
             content,
             line: 1,
+            ident_table: IdentTable::default(),
+            ident_scratch: String::new(),
         }
+    }
+
+    pub fn ident_table(&self) -> &IdentTable {
+        &self.ident_table
     }
 
     pub fn checkpoint(&self) -> Checkpoint {
@@ -882,20 +893,52 @@ impl<'a> TokenWalker<'a> {
     }
 
     pub fn next_ident(&mut self) -> Option<&'a str> {
-        if !matches!(
-            self.content.as_bytes().get(self.offset),
-            Some(b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_')
-        ) {
-            return None;
+        let start = self.offset;
+        let bytes = self.content.as_bytes();
+
+        // Any non-whitespace character escaped with a backslash is part of the identifier. The
+        // returned slice still contains the escapes; use [`unescape_ident`] to remove them.
+        loop {
+            match bytes.get(self.offset) {
+                Some(b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_') => self.offset += 1,
+                Some(b'\\') => {
+                    // Escapes can contain any (UTF-8) character.
+                    let Some(c) = self.content[self.offset + 1..].chars().next() else {
+                        break;
+                    };
+                    if c.is_whitespace() {
+                        break;
+                    }
+                    self.offset += 1 + c.len_utf8();
+                }
+                _ => break,
+            }
         }
 
-        let start = self.offset;
+        (self.offset != start).then(|| &self.content[start..self.offset])
+    }
 
-        self.offset += 1;
-        // @TODO: Escaped characters
-        self.skip_while(|b| matches!(b, b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z' | b'_'));
+    pub fn next_ident_id(&mut self) -> Option<IdentId> {
+        let ident = self.next_ident()?;
+        if !ident.contains('\\') {
+            return Some(self.ident_table.get_or_insert(ident));
+        }
 
-        Some(&self.content[start..self.offset])
+        self.ident_scratch.clear();
+        let bytes = ident.as_bytes();
+        let mut prev = 0;
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'\\' {
+                self.ident_scratch.push_str(&ident[prev..i]);
+                // Skip over the escaped character.
+                prev = i + 1;
+                i += 1;
+            }
+            i += 1;
+        }
+        self.ident_scratch.push_str(&ident[prev..]);
+        Some(self.ident_table.get_or_insert(&self.ident_scratch))
     }
 
     pub fn skip_while(&mut self, mut f: impl FnMut(u8) -> bool) {
@@ -1316,7 +1359,7 @@ impl<'a> Consume<'a> for Cell<'a> {
         tkw.expect_ident("CELL")?;
 
         let celltype = parse_param::<QString<'a>>(tkw, "CELLTYPE")?;
-        let instance = parse_param::<Instance<'a>>(tkw, "INSTANCE")?;
+        let instance = parse_param::<Instance>(tkw, "INSTANCE")?;
         let mut timing_specs = Vec::new();
 
         loop {
@@ -1374,7 +1417,7 @@ impl<'a> Consume<'a> for TimingSpec<'a> {
     }
 }
 
-impl<'a> Consume<'a> for Instance<'a> {
+impl<'a> Consume<'a> for Instance {
     fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
         if tkw.is_next_equal_to(b')') {
             Ok(Self::Empty)
@@ -1386,9 +1429,9 @@ impl<'a> Consume<'a> for Instance<'a> {
     }
 }
 
-impl<'a> Consume<'a> for HierarchicalIdent<'a> {
+impl<'a> Consume<'a> for HierarchicalIdent {
     fn consume(tkw: &mut TokenWalker<'a>) -> SdfResult<Self> {
-        let fst = tkw.next_ident().ok_or_else(|| {
+        let fst = tkw.next_ident_id().ok_or_else(|| {
             Box::new(SdfError {
                 line: tkw.line,
                 msg: "expected ident".to_string(),
@@ -1400,7 +1443,7 @@ impl<'a> Consume<'a> for HierarchicalIdent<'a> {
             let checkpoint = tkw.checkpoint();
             if tkw.next_if_matches(|b| matches!(b, b'.' | b'/'))
                 && let _ = tkw.skip_whitespace()
-                && let Some(ident) = tkw.next_ident()
+                && let Some(ident) = tkw.next_ident_id()
             {
                 let hchar = if tkw.content.as_bytes()[checkpoint.offset] == b'.' {
                     HierarchyDivider::Dot

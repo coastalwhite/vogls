@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use hashbrown::hash_map::Entry;
+use vogls_frontend::ident_table::IdentTable;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::time::{TimeResolution, TimeSize, TimeUnit};
 use vogls_ir::token_range::TokenRange;
@@ -32,6 +33,7 @@ struct TimingContent {
 
 fn resolve_ident<'a>(
     ctx: &LowerContext<'a, '_>,
+    sdf_idents: &IdentTable,
     root: Option<SymbolId>,
     ident: &HierarchicalIdent,
     diagnostics: &mut Diagnostics,
@@ -47,18 +49,20 @@ fn resolve_ident<'a>(
         };
     }
 
-    let Some(fst) = ctx.arenas.ident_table.get(ident.fst) else {
-        unknown_ident!(ident.fst);
+    let fst = &sdf_idents[ident.fst];
+    let Some(fst_iid) = ctx.arenas.ident_table.get(fst) else {
+        unknown_ident!(fst);
     };
     let cell_sid = match root {
-        None => ctx.table.resolve_root(fst),
-        Some(scope) => ctx.table.resolve(scope, fst),
+        None => ctx.table.resolve_root(fst_iid),
+        Some(scope) => ctx.table.resolve(scope, fst_iid),
     };
     let Some(mut cell_sid) = cell_sid else {
-        unknown_ident!(ident.fst);
+        unknown_ident!(fst);
     };
     // @TODO: Check divider
     for (_, n) in &ident.next {
+        let n = &sdf_idents[*n];
         let Some(n_iid) = ctx.arenas.ident_table.get(n) else {
             unknown_ident!(n);
         };
@@ -72,6 +76,7 @@ fn resolve_ident<'a>(
 
 fn resolve_port_instance<'a>(
     ctx: &LowerContext<'a, '_>,
+    sdf_idents: &IdentTable,
     scope: SymbolId,
     ident: &PortInstance,
     diagnostics: &mut Diagnostics,
@@ -79,13 +84,13 @@ fn resolve_port_instance<'a>(
     let PortInstance { hident, port } = ident;
     let scope = match hident {
         None => scope,
-        Some(hident) => resolve_ident(ctx, Some(scope), hident, diagnostics)?,
+        Some(hident) => resolve_ident(ctx, sdf_idents, Some(scope), hident, diagnostics)?,
     };
     let Port { hident, b1, b2 } = port;
     if b1.is_some() || b2.is_some() {
         todo!();
     }
-    resolve_ident(ctx, Some(scope), hident, diagnostics)
+    resolve_ident(ctx, sdf_idents, Some(scope), hident, diagnostics)
 }
 
 fn parse_signed_real_number(s: &str) -> Result<f64, ()> {
@@ -197,6 +202,7 @@ pub fn lower_sdf<'a>(
             return Err(());
         }
     };
+    let sdf_idents = tkw.ident_table();
 
     let timescale = match sdf.header.timescale {
         // IEEE Std 1497-2001 (p. 17)
@@ -258,7 +264,9 @@ pub fn lower_sdf<'a>(
             }
             Instance::Star => todo!(),
             Instance::HierarchicalIdent(hident) => {
-                let Ok(cell_sid) = resolve_ident(ctx, root, hident, &mut mctx.diagnostics) else {
+                let Ok(cell_sid) =
+                    resolve_ident(ctx, sdf_idents, root, hident, &mut mctx.diagnostics)
+                else {
                     error = true;
                     continue;
                 };
@@ -297,12 +305,14 @@ pub fn lower_sdf<'a>(
                                             let (Ok(from_sid), Ok(to_sid)) = (
                                                 resolve_port_instance(
                                                     ctx,
+                                                    sdf_idents,
                                                     cell_sid,
                                                     from,
                                                     &mut mctx.diagnostics,
                                                 ),
                                                 resolve_port_instance(
                                                     ctx,
+                                                    sdf_idents,
                                                     cell_sid,
                                                     to,
                                                     &mut mctx.diagnostics,
@@ -367,12 +377,14 @@ pub fn lower_sdf<'a>(
                                             let (Ok(from_sid), Ok(to_sid)) = (
                                                 resolve_port_instance(
                                                     ctx,
+                                                    sdf_idents,
                                                     cell_sid,
                                                     from,
                                                     &mut mctx.diagnostics,
                                                 ),
                                                 resolve_port_instance(
                                                     ctx,
+                                                    sdf_idents,
                                                     cell_sid,
                                                     to,
                                                     &mut mctx.diagnostics,
