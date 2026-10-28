@@ -45,7 +45,7 @@ pub enum EqualityOperator {
 }
 
 pub struct ScalarNode<'a> {
-    pub hident: HierarchicalIdent<'a>,
+    pub hident: HierarchicalIdent,
     pub offset: Option<Integer<'a>>,
 }
 

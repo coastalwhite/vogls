@@ -1309,6 +1309,7 @@ version = "0.0.1"
 dependencies = [
  "vogls-bits",
  "vogls-codegen",
+ "vogls-frontend",
  "vogls-ir",
  "vogls-runtime",
  "vogls-utils",
