@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-addsub"
+top_module = "test_addsub_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/addsub/rtl/addsub.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/addsub/testbench/test_addsub_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

@@ -1,0 +1,11 @@
+name       = "logikbench-memory-ramasync"
+top_module = "test_ramasync_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/ramasync/rtl/ramasync.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/ramasync/testbench/test_ramasync_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

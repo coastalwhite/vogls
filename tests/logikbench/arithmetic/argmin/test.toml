@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-argmin"
+top_module = "test_argmin_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/argmin/rtl/argmin.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/argmin/testbench/test_argmin_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

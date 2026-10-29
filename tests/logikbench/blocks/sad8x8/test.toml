@@ -1,0 +1,17 @@
+name       = "logikbench-blocks-sad8x8"
+top_module = "test_sad8x8_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sad8x8/rtl/sad8x8.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sad8x8/testbench/test_sad8x8_smoke.v",
+]
+defines    = []
+output = """
+PASS [ident] sad=0
+PASS [offset5] sad=320
+PASS [max] sad=16320
+PASS [rand] sad=4131
+
+==== errors=0 ====
+ PASSED
+[FINISH]
+"""

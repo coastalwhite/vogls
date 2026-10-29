@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-muladdc"
+top_module = "test_muladdc_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/muladdc/rtl/muladdc.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/muladdc/testbench/test_muladdc_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

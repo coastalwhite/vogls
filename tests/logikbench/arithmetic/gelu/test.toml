@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-gelu"
+top_module = "test_gelu_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/gelu/rtl/gelu.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/gelu/testbench/test_gelu_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

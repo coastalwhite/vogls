@@ -1,0 +1,11 @@
+name       = "logikbench-basic-tmr"
+top_module = "test_tmr_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/tmr/rtl/tmr.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/tmr/testbench/test_tmr_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

@@ -1,0 +1,12 @@
+name       = "logikbench-arithmetic-fmadd16"
+top_module = "test_fmadd16_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/fmadd32/rtl/fmadd32.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/fmadd16/rtl/fmadd16.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/fmadd16/testbench/test_fmadd16_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

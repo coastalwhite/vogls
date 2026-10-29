@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-dec"
+top_module = "test_dec_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/dec/rtl/dec.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/dec/testbench/test_dec_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

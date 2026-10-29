@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-mulreg"
+top_module = "test_mulreg_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/mulreg/rtl/mulreg.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/mulreg/testbench/test_mulreg_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

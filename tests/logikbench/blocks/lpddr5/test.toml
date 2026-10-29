@@ -1,0 +1,15 @@
+name       = "logikbench-blocks-lpddr5"
+top_module = "test_lpddr5_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/lpddr5/rtl/lpddr5_bank.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/lpddr5/rtl/lpddr5_ecc.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/lpddr5/rtl/lpddr5.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/lpddr5/rtl/lpddr5_umi.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/lpddr5/testbench/test_lpddr5_smoke.v",
+]
+defines    = []
+output = """
+coverage: power-down=4 self-refresh=4
+PASSED
+[FINISH]
+"""

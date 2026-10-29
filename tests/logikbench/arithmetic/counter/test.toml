@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-counter"
+top_module = "test_counter_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/counter/rtl/counter.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/counter/testbench/test_counter_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

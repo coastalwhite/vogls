@@ -1,0 +1,11 @@
+name       = "logikbench-blocks-ialu"
+top_module = "test_ialu_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/ialu/rtl/ialu.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/ialu/testbench/test_ialu_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

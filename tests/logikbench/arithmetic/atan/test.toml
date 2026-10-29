@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-atan"
+top_module = "test_atan_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/atan/rtl/atan.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/atan/testbench/test_atan_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

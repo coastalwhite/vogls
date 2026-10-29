@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-requant"
+top_module = "test_requant_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/requant/rtl/requant.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/requant/testbench/test_requant_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

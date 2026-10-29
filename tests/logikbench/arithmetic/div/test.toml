@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-div"
+top_module = "test_div_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/div/rtl/div.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/div/testbench/test_div_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

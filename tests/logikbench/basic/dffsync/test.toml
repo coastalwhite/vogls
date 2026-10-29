@@ -1,0 +1,11 @@
+name       = "logikbench-basic-dffsync"
+top_module = "test_dffsync_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/dffsync/rtl/dffsync.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/dffsync/testbench/test_dffsync_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

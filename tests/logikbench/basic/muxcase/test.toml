@@ -1,0 +1,11 @@
+name       = "logikbench-basic-muxcase"
+top_module = "test_muxcase_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/muxcase/rtl/muxcase.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/muxcase/testbench/test_muxcase_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

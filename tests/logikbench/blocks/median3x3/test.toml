@@ -1,0 +1,16 @@
+name       = "logikbench-blocks-median3x3"
+top_module = "test_median3x3_smoke"
+sources    = [
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_spram/rtl/la_spram_impl.v",
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_spram/rtl/la_spram.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/median3x3/rtl/median3x3.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/median3x3/testbench/test_median3x3_smoke.v",
+]
+defines    = []
+output = """
+PASS [median] 8x8 matches reference
+
+==== errors=0 ====
+ PASSED
+[FINISH]
+"""

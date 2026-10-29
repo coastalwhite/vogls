@@ -1,0 +1,17 @@
+name       = "logikbench-blocks-conv2d"
+top_module = "test_conv2d_smoke"
+sources    = [
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_spram/rtl/la_spram_impl.v",
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_spram/rtl/la_spram.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/conv2d/rtl/conv2d.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/conv2d/testbench/test_conv2d_smoke.v",
+]
+defines    = []
+output = """
+PASS [identity] matches reference
+PASS [blur] matches reference
+
+==== errors=0 ====
+ PASSED
+[FINISH]
+"""

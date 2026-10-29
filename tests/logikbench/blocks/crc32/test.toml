@@ -1,0 +1,27 @@
+name       = "logikbench-blocks-crc32"
+top_module = "test_crc32_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/crc32/rtl/crc32.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/crc32/testbench/test_crc32_smoke.v",
+]
+defines    = []
+output = """
+PASS [ref KAT] CRC32("123456789")=cbf43926
+PASS [9B 123456789] crc=cbf43926 (9 bytes)
+PASS [1B] crc=d202ef8d (1 bytes)
+PASS [7B] crc=ad5809f9 (7 bytes)
+PASS [8B (full)] crc=88aa689f (8 bytes)
+PASS [13B] crc=e6fe46b8 (13 bytes)
+PASS [16B (2 full)] crc=cecee288 (16 bytes)
+PASS [60B eth-min] crc=b0ec7fee (60 bytes)
+PASS [63B] crc=dbdea683 (63 bytes)
+PASS [64B (8 full)] crc=100ece8c (64 bytes)
+PASS [15B zeros] crc=d7d303e7 (15 bytes)
+PASS [17B ones] crc=025d4abc (17 bytes)
+
+============================================
+ errors = 0 (after 12 tests)
+ PASSED
+============================================
+[FINISH]
+"""

@@ -1,0 +1,15 @@
+name       = "logikbench-blocks-chiplink"
+top_module = "test_chiplink_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/chiplink/rtl/chiplink_cdc_fifo.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/chiplink/rtl/chiplink_train.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/chiplink/rtl/chiplink_tx.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/chiplink/rtl/chiplink_rx.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/chiplink/rtl/chiplink.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/chiplink/testbench/test_chiplink_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

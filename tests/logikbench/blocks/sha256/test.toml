@@ -1,0 +1,14 @@
+name       = "logikbench-blocks-sha256"
+top_module = "test_sha256_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sha256/rtl/sha256_k_constants.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sha256/rtl/sha256_w_mem.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sha256/rtl/sha256_core.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sha256/rtl/sha256.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sha256/testbench/test_sha256_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

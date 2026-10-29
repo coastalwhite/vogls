@@ -1,0 +1,13 @@
+name       = "logikbench-blocks-colorconv"
+top_module = "test_colorconv_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/colorconv/rtl/colorconv_matrix.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/colorconv/rtl/colorconv_clamp.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/colorconv/rtl/colorconv.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/colorconv/testbench/test_colorconv_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

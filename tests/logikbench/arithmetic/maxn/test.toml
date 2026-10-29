@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-maxn"
+top_module = "test_maxn_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/maxn/rtl/maxn.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/maxn/testbench/test_maxn_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

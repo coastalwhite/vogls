@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-round"
+top_module = "test_round_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/round/rtl/round.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/round/testbench/test_round_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

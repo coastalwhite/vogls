@@ -1,0 +1,11 @@
+name       = "logikbench-basic-bxnor"
+top_module = "test_bxnor_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/bxnor/rtl/bxnor.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/bxnor/testbench/test_bxnor_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

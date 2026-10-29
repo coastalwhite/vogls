@@ -1,0 +1,11 @@
+name       = "logikbench-basic-bxor"
+top_module = "test_bxor_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/bxor/rtl/bxor.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/bxor/testbench/test_bxor_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

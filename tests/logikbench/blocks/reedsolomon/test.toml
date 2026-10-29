@@ -1,0 +1,24 @@
+name       = "logikbench-blocks-reedsolomon"
+top_module = "test_reedsolomon_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/reedsolomon/rtl/rs_gfmul.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/reedsolomon/rtl/rs_gfinv.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/reedsolomon/rtl/rs_syndrome.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/reedsolomon/rtl/rs_kes.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/reedsolomon/rtl/rs_enc.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/reedsolomon/rtl/rs_dec.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/reedsolomon/rtl/reedsolomon.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/reedsolomon/testbench/test_reedsolomon_smoke.v",
+]
+defines    = []
+skip       = "does not terminate within 15 minutes"
+output = """
+PASS [noerr] recovered (e=0)
+PASS [e10] recovered (e=10)
+PASS [e15] recovered (e=15)
+PASS [e16] uncorrectable flagged
+
+==== errors=0 ====
+ PASSED
+[FINISH]
+"""

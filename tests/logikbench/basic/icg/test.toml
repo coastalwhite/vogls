@@ -1,0 +1,12 @@
+name       = "logikbench-basic-icg"
+top_module = "test_icg_smoke"
+sources    = [
+    "../../../../submodules/lambdalib/lambdalib/auxlib/la_clkicgand/rtl/la_clkicgand.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/icg/rtl/icg.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/icg/testbench/test_icg_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

@@ -1,0 +1,11 @@
+name       = "logikbench-blocks-wordalign"
+top_module = "test_wordalign_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/wordalign/rtl/wordalign.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/wordalign/testbench/test_wordalign_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

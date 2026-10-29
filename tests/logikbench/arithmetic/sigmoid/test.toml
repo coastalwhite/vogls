@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-sigmoid"
+top_module = "test_sigmoid_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/sigmoid/rtl/sigmoid.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/sigmoid/testbench/test_sigmoid_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

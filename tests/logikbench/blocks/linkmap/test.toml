@@ -1,0 +1,11 @@
+name       = "logikbench-blocks-linkmap"
+top_module = "test_linkmap_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/linkmap/rtl/linkmap.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/linkmap/testbench/test_linkmap_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

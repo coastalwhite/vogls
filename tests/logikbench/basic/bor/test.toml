@@ -1,0 +1,11 @@
+name       = "logikbench-basic-bor"
+top_module = "test_bor_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/bor/rtl/bor.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/bor/testbench/test_bor_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

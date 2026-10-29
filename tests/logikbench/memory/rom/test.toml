@@ -1,0 +1,11 @@
+name       = "logikbench-memory-rom"
+top_module = "test_rom_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/rom/rtl/rom.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/rom/testbench/test_rom_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

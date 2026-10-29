@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-argmax"
+top_module = "test_argmax_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/argmax/rtl/argmax.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/argmax/testbench/test_argmax_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

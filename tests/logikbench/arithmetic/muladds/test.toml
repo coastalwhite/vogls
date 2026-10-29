@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-muladds"
+top_module = "test_muladds_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/muladds/rtl/muladds.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/muladds/testbench/test_muladds_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-tanh"
+top_module = "test_tanh_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/tanh/rtl/tanh.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/tanh/testbench/test_tanh_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

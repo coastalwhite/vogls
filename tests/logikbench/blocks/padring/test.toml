@@ -1,0 +1,33 @@
+name       = "logikbench-blocks-padring"
+top_module = "test_padring_smoke"
+sources    = [
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_iobidir/rtl/la_iobidir.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_ioinput/rtl/la_ioinput.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_ioanalog/rtl/la_ioanalog.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_ioxtal/rtl/la_ioxtal.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_iorxdiff/rtl/la_iorxdiff.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_iotxdiff/rtl/la_iotxdiff.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_iopoc/rtl/la_iopoc.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_iocut/rtl/la_iocut.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_iovddio/rtl/la_iovddio.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_iovssio/rtl/la_iovssio.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_iovdd/rtl/la_iovdd.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_iovss/rtl/la_iovss.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_iovdda/rtl/la_iovdda.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_iovssa/rtl/la_iovssa.v",
+    "../../../../submodules/lambdalib/lambdalib/iolib/la_ioclamp/rtl/la_ioclamp.v",
+    "../../../../submodules/lambdalib/lambdalib/padring/la_padring/rtl/la_padring.v",
+    "../../../../submodules/lambdalib/lambdalib/padring/la_padring/rtl/la_padside.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/padring/rtl/padring.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/padring/testbench/test_padring_smoke.v",
+]
+include_dirs = [
+    "../../../../submodules/lambdalib/lambdalib/padring/la_padring/rtl",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/padring/include",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/padring/rtl",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

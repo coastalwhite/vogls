@@ -1,0 +1,11 @@
+name       = "logikbench-basic-tff"
+top_module = "test_tff_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/tff/rtl/tff.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/tff/testbench/test_tff_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

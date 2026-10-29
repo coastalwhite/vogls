@@ -1,0 +1,11 @@
+name       = "logikbench-basic-bin2prio"
+top_module = "test_bin2prio_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/bin2prio/rtl/bin2prio.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/bin2prio/testbench/test_bin2prio_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

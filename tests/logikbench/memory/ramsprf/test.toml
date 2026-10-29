@@ -1,0 +1,11 @@
+name       = "logikbench-memory-ramsprf"
+top_module = "test_ramsprf_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/ramsprf/rtl/ramsprf.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/ramsprf/testbench/test_ramsprf_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

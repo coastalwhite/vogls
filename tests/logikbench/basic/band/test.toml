@@ -1,0 +1,11 @@
+name       = "logikbench-basic-band"
+top_module = "test_band_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/band/rtl/band.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/band/testbench/test_band_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

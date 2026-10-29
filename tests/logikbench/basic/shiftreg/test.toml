@@ -1,0 +1,11 @@
+name       = "logikbench-basic-shiftreg"
+top_module = "test_shiftreg_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/shiftreg/rtl/shiftreg.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/shiftreg/testbench/test_shiftreg_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

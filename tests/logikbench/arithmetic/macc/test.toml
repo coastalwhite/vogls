@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-macc"
+top_module = "test_macc_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/macc/rtl/macc.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/macc/testbench/test_macc_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

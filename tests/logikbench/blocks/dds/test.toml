@@ -1,0 +1,13 @@
+name       = "logikbench-blocks-dds"
+top_module = "test_dds_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/dds/rtl/dds_phase_acc.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/dds/rtl/dds_lut.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/dds/rtl/dds.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/dds/testbench/test_dds_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

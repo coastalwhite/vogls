@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-clamp"
+top_module = "test_clamp_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/clamp/rtl/clamp.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/clamp/testbench/test_clamp_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

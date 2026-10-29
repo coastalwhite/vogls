@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-relu"
+top_module = "test_relu_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/relu/rtl/relu.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/relu/testbench/test_relu_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

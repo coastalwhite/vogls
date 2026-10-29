@@ -1,0 +1,13 @@
+name       = "logikbench-memory-ramtdp"
+top_module = "test_ramtdp_smoke"
+sources    = [
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_tdpram/rtl/la_tdpram_impl.v",
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_tdpram/rtl/la_tdpram.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/ramtdp/rtl/ramtdp.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/ramtdp/testbench/test_ramtdp_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

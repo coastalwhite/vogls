@@ -1,0 +1,15 @@
+name       = "logikbench-large-qr"
+top_module = "test_qr_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/qr/rtl/qr_cordic.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/qr/rtl/qr_boundary.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/qr/rtl/qr_internal.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/qr/rtl/qr_array.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/qr/rtl/qr.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/qr/testbench/test_qr_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""
