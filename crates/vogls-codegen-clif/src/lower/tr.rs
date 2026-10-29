@@ -3450,6 +3450,17 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             } else {
                                 b.ins().ushr_imm_u(loaded, shift as i64)
                             };
+                            // The slice may straddle a 64-bit word boundary (e.g. a
+                            // 64-bit probe at offset 2 of a 66-bit signal): pull the
+                            // high bits from the next word. shift > 0 here, so the
+                            // left shift (64 - shift) is in 1..=63.
+                            let shifted = if shift + dst_size.get() as usize > 64 {
+                                let next = b.ins().load(I64, mem(), heap, ((word + 1) * 8) as i32);
+                                let hi = b.ins().ishl_imm_u(next, (64 - shift) as i64);
+                                b.ins().bor(shifted, hi)
+                            } else {
+                                shifted
+                            };
                             let r = maskv(b, shifted, dst_size.get());
                             b.def_var(vmap[dst], r);
                         } else if *offset == 0 && dst_size == signal_size {
