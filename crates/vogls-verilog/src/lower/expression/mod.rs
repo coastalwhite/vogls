@@ -2,8 +2,8 @@ use std::cmp;
 
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalKey, VSIZE_8,
-    VSIZE_64, VariableKey, VectorSize,
+    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SignalKey, VSIZE_64, VariableKey,
+    VectorSize,
 };
 use vogls_utils::OrderedSet;
 
@@ -1072,30 +1072,14 @@ pub fn lower_expr<'a>(
             }
             Expr::String(string_ref) => {
                 let s = ctx.arenas.get_ident(string_ref.0);
-                let Ok(num_chars) = u32::try_from(s.len()) else {
+                let Some(value) = Bits::load_from_str(s) else {
                     error = true;
                     mctx.diagnostics
                         .not_yet_implemented(ctx.arenas.get_span(expr), "string size overflow");
                     result_stack.push(None);
                     continue;
                 };
-                let Some(size) = VectorSize::new(num_chars)
-                    .unwrap_or(SCALAR_VSIZE)
-                    .checked_mul(VSIZE_8)
-                else {
-                    error = true;
-                    mctx.diagnostics
-                        .not_yet_implemented(ctx.arenas.get_span(expr), "string size overflow");
-                    result_stack.push(None);
-                    continue;
-                };
-
-                let value = if num_chars == 0 {
-                    Bits::new_zeroed(VSIZE_8)
-                } else {
-                    let s = s.bytes().rev().collect::<Box<[u8]>>();
-                    Bits::load_from_slice(&s, size)
-                };
+                let size = value.size();
                 let var = builder.constant(&mut mctx.gl, value);
                 result_stack.push(Some((var, VType::UnsignedNet(size))));
             }
