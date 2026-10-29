@@ -1391,6 +1391,15 @@ impl Bits {
         })
     }
 
+    pub fn extract_least_u64_planes(&self) -> (u64, Option<u64>) {
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(v) => (v, None),
+            BitsDataRef::InlineFv(spc, val) => (val, Some(spc)),
+            BitsDataRef::SeparateTv(v) => (v[0], None),
+            BitsDataRef::SeparateFv(v) => (v[v.len() / 2], Some(v[0])),
+        }
+    }
+
     pub fn contains_special(&self) -> bool {
         match self.as_data_ref() {
             BitsDataRef::InlineTv(_) | BitsDataRef::SeparateTv(_) => false,
@@ -1922,6 +1931,21 @@ impl Bits {
             self.slicez(size - (i + 1) * 8, VectorSize::new(8).unwrap())
                 .as_u64()
                 .map(|v| v as u8)
+        })
+    }
+
+    pub fn be_byte_planes_iter(&self) -> impl ExactSizeIterator<Item = (u8, Option<u8>)> {
+        let size = self.size().get();
+        let data = self.as_data_ref();
+        (0..size.div_ceil(8)).rev().map(move |byte| {
+            let (val, spc) = data.to_u64_slices();
+            // A byte never straddles a word, as 64 is a multiple of 8.
+            let word = (byte / 8) as usize;
+            let shift = (byte % 8) * 8;
+            let mask = 0xFFu8 >> (8 - (size - byte * 8).min(8));
+            let val = (val[word] >> shift) as u8 & mask;
+            let spc = spc.map(|spc| (spc[word] >> shift) as u8 | !mask);
+            (val, spc)
         })
     }
 }

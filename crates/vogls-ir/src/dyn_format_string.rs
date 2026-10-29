@@ -28,7 +28,10 @@ pub enum Base {
     Octal,
     Hexadecimal,
     Decimal,
+    /// `%s` the value as a string of bytes.
     Ascii,
+    /// `%c` the lowest byte of the value as a single character.
+    Char,
     Exponential,
     Float,
     FloatAdaptive,
@@ -236,6 +239,26 @@ impl fmt::Display for FormatReal {
     }
 }
 
+fn planes_to_byte(mut val: u8, spc: Option<u8>) -> u8 {
+    // `x`/`z` bits are converted to `0`.
+    if let Some(spc) = spc {
+        val &= spc;
+    }
+    val
+}
+
+/// Writes a byte escaping non-ASCII bytes as `\xHH` and null bytes as spaces.
+fn write_ascii_byte(f: &mut impl io::Write, b: u8) -> io::Result<()> {
+    static HEX: [u8; 16] = *b"0123456789ABCDEF";
+    if b == 0 {
+        f.write_all(b" ")
+    } else if b.is_ascii() {
+        f.write_all(&[b])
+    } else {
+        f.write_all(&[b'\\', b'x', HEX[(b >> 4) as usize], HEX[(b & 0xF) as usize]])
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn format_bits(
     f: &mut impl io::Write,
@@ -307,28 +330,58 @@ pub fn format_bits(
             );
         }
         Base::Ascii => {
-            #[inline(always)]
-            fn to_hex(b: u8) -> u8 {
-                static TABLE: [u8; 16] = *b"0123456789ABCDEF";
-                TABLE[b as usize]
-            }
-            for b in bits.be_bytes_iter() {
-                match b {
-                    None => f.write_all(b" ")?,
-                    Some(b) => {
-                        if b == 0 {
-                            break;
-                        }
+            // Semantics:
+            // - If a byte contains a `x`/`z` bits, it is read as 0.
+            // - Values are zero-extended to the next multiple of 8.
+            // - Every byte is written individually, NULL bytes are written as spaces.
+            // - `%Ns` right-justifies to `N`.
+            let mut bytes = bits.be_byte_planes_iter();
+            let num_chars = bits.size().get().div_ceil(8) as usize;
+            let min_width = match padding {
+                Padding::ZeroPaddedToSize => None,
+                Padding::NoPadding => Some(0),
+                Padding::ZeroPaddedTo(n) => Some(n as usize),
+            };
 
-                        if b.is_ascii() {
-                            write!(f, "{}", char::from(b))?;
-                        } else {
-                            f.write_all(&[b'\\', b'x', to_hex(b >> 4), to_hex(b & 0xF)])?;
+            if let Some(min_width) = min_width {
+                // `%0s` and `%Ns` strip leading NULL bytes.
+                let mut leading = 0;
+                for (val, spc) in bytes.by_ref() {
+                    let byte = planes_to_byte(val, spc);
+                    if byte != 0 {
+                        for _ in num_chars - leading..min_width {
+                            f.write_all(b" ")?;
                         }
+                        write_ascii_byte(f, byte)?;
+                        break;
+                    }
+                    leading += 1;
+                }
+
+                // Every byte was a stripped NULL byte.
+                if leading == num_chars {
+                    for _ in 0..min_width {
+                        f.write_all(b" ")?;
                     }
                 }
             }
+
+            for (val, spc) in bytes {
+                let byte = planes_to_byte(val, spc);
+                write_ascii_byte(f, byte)?;
+            }
             return Ok(());
+        }
+        Base::Char => {
+            let (mut val, spc) = bits.extract_least_u64_planes();
+
+            // `x`/`z` bits are converted to `0`.
+            if let Some(spc) = spc {
+                val &= spc;
+            }
+
+            let byte = (val & 0xFF) as u8;
+            return write_ascii_byte(f, byte);
         }
         Base::Time | Base::TimeReal => {
             const POW10_U128: [u128; 39] = {
