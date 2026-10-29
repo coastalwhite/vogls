@@ -29,7 +29,7 @@ pub fn lower_loop_statement<'a>(
             let signal = mctx.gl.signals.insert(Signal {
                 name: String::from("__REPEAT_VAR"),
                 size: INTEGER_VSIZE,
-                initialize: Some(Bits::new_u32(0)),
+                initialize: None,
                 mode: LogicMode::TwoValue,
                 flags: SignalFlags::EMPTY,
                 origin: TokenRange::default(),
@@ -50,6 +50,11 @@ pub fn lower_loop_statement<'a>(
                 origin: TokenRange::default(),
             });
             builder.drive(mctx.gl(), size_signal, size);
+
+            // Every loop needs to restart at 0 again.
+            let v = builder.constant_u32(mctx.gl(), 0);
+            builder.drive(mctx.gl(), signal, v);
+
             repeat = Some((signal, size_signal));
         }
         V::For(initialization, _, _) => {
