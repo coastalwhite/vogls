@@ -1064,18 +1064,18 @@ impl Bits {
                 let mut dst = vec![0u64; nwords * 2];
                 for i in 0..nwords - 1 {
                     (dst[i], dst[nwords + i]) = fv_op(
-                        lhs_val[nwords - 1],
-                        lhs_spc.map_or(u64::MAX, |s| s[nwords - 1]),
-                        rhs_val[nwords - 1],
-                        rhs_spc.map_or(u64::MAX, |s| s[nwords - 1]),
+                        lhs_spc.map_or(u64::MAX, |s| s[i]),
+                        lhs_val[i],
+                        rhs_spc.map_or(u64::MAX, |s| s[i]),
+                        rhs_val[i],
                     );
                 }
                 let mask = mask_size_1to64(saturating_rem(size.get(), 64));
                 (dst[nwords - 1], dst[2 * nwords - 1]) = fv_op(
-                    lhs_val[nwords - 1],
                     lhs_spc.map_or(mask, |s| s[nwords - 1]),
-                    rhs_val[nwords - 1],
+                    lhs_val[nwords - 1],
                     rhs_spc.map_or(mask, |s| s[nwords - 1]),
+                    rhs_val[nwords - 1],
                 );
                 Self::from_boxed_slice(Mode::FourValue, size, dst.into())
             }
