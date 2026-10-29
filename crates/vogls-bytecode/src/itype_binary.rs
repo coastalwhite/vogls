@@ -1,9 +1,11 @@
 use std::fmt;
 
 use vogls_bits::arithmetic::{fv_bitwise_and_elem, fv_bitwise_or_elem, fv_bitwise_xor_elem};
-use vogls_bits::shift::{fv_logical_shift_left, fv_logical_shift_right, fv_shift_arith_right};
+use vogls_bits::shift::{
+    fv_logical_shift_left, fv_logical_shift_right, fv_shift_arith_right, tv_shift_arith_right,
+};
 use vogls_codegen::SixBitSize;
-use vogls_ir::{LogicMode, VectorSize};
+use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
 
 use super::reg::{Reg, RegInfo, Regs};
@@ -538,11 +540,11 @@ impl BytecodeInstruction for TvSari {
             imm10,
             size,
         } = self.0;
-        let unused_bits = 64 - VectorSize::from(size).get();
-        let out = regs[rs] << unused_bits;
-        let out = out as i64;
-        let out = out.unbounded_shr(unused_bits + imm10.get_unsigned());
-        regs[rd] = out as u64;
+
+        let src = regs[rs];
+        let shmt = imm10.get_unsigned();
+        let out = tv_shift_arith_right(src, shmt, size.to_vector_size());
+        regs[rd] = out;
     }
 }
 impl BytecodeInstruction for FvAndi {
