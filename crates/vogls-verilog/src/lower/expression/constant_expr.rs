@@ -626,14 +626,12 @@ pub fn eval_constant_expr<'a>(
             }
             Expr::String(string_ref) => {
                 let s = arenas.get_ident(string_ref.0);
-                let s = s
-                    .as_bytes()
-                    .iter()
-                    .copied()
-                    .chain(std::iter::once(b'\0'))
-                    .collect::<Box<[u8]>>();
-                let size = VectorSize::new((s.len() * 8) as u32).unwrap();
-                let value = Bits::load_from_slice(&s, size);
+                let Some(value) = Bits::load_from_str(s) else {
+                    error = true;
+                    diagnostics.not_yet_implemented(arenas.get_span(expr), "string size overflow");
+                    result_stack.push(None);
+                    continue;
+                };
                 result_stack.push(Some(VValue::UnsignedNet(value)));
             }
             Expr::Replication(id) => {

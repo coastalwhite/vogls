@@ -464,6 +464,34 @@ impl Bits {
         }
     }
 
+    pub fn load_from_str(s: &str) -> Option<Self> {
+        const VSIZE_8: VectorSize = VectorSize::new(8).unwrap();
+
+        let num_bytes = u32::try_from(s.len()).ok()?;
+        let Some(size) = VectorSize::new(num_bytes) else {
+            return Some(Bits::new_zeroed(VSIZE_8));
+        };
+
+        let size = size.checked_mul(VSIZE_8)?;
+        let result = if s.len() > 8 {
+            let data = s
+                .as_bytes()
+                .rchunks(8)
+                .map(|c| {
+                    let mut word = [0u8; 8];
+                    word[8 - c.len()..].copy_from_slice(c);
+                    u64::from_be_bytes(word)
+                })
+                .collect();
+            Self::from_boxed_slice(Mode::TwoValue, size, data)
+        } else {
+            let value = s.bytes().fold(0, |acc, b| (acc << 8) | u64::from(b));
+            Self::from_u64(size, value)
+        };
+
+        Some(result)
+    }
+
     pub fn new_constant(size: VectorSize, value: bool) -> Self {
         if value {
             Self::new_ones(size)
