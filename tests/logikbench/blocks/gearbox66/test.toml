@@ -1,0 +1,11 @@
+name       = "logikbench-blocks-gearbox66"
+top_module = "test_gearbox66_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/gearbox66/rtl/gearbox66.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/gearbox66/testbench/test_gearbox66_smoke.v",
+]
+defines    = []
+output = """
+PASSED (407 payloads)
+[FINISH]
+"""

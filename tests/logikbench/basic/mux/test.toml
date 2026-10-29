@@ -1,0 +1,11 @@
+name       = "logikbench-basic-mux"
+top_module = "test_mux_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/mux/rtl/mux.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/mux/testbench/test_mux_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

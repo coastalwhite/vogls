@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-simdmul"
+top_module = "test_simdmul_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/simdmul/rtl/simdmul.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/simdmul/testbench/test_simdmul_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

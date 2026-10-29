@@ -1,0 +1,11 @@
+name       = "logikbench-memory-ramspnc"
+top_module = "test_ramspnc_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/ramspnc/rtl/ramspnc.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/ramspnc/testbench/test_ramspnc_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

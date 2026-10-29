@@ -1,0 +1,18 @@
+name       = "logikbench-blocks-huffman"
+top_module = "test_huffman_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/huffman/rtl/huffman_enc.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/huffman/rtl/huffman_dec.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/huffman/rtl/huffman.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/huffman/testbench/test_huffman_smoke.v",
+]
+defines    = []
+output = """
+PASS [n8] 8 syms
+PASS [n64] 64 syms
+PASS [n200] 200 syms
+
+==== errors=0 after 3 tests ====
+ PASSED
+[FINISH]
+"""

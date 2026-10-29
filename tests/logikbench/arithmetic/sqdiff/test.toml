@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-sqdiff"
+top_module = "test_sqdiff_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/sqdiff/rtl/sqdiff.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/sqdiff/testbench/test_sqdiff_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

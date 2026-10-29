@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-msub"
+top_module = "test_msub_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/msub/rtl/msub.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/msub/testbench/test_msub_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

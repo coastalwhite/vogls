@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-log2"
+top_module = "test_log2_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/log2/rtl/log2.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/log2/testbench/test_log2_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

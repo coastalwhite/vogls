@@ -1,0 +1,23 @@
+name       = "logikbench-blocks-hamming"
+top_module = "test_hamming_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hamming/rtl/hamming_enc.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hamming/rtl/hamming_dec.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hamming/rtl/hamming.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hamming/testbench/test_hamming_smoke.v",
+]
+defines    = []
+output = """
+PASS [zeros] noerr
+PASS [ones] noerr
+PASS [a5/5a] noerr
+PASS [a5 single] single-error corrected (all 72 pos)
+PASS [rnd single] single-error corrected (all 72 pos)
+PASS [a5 double] double-error detected (all 41 pairs)
+
+============================================
+ errors = 0 (after 6 tests)
+ PASSED
+============================================
+[FINISH]
+"""

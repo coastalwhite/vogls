@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-addmod"
+top_module = "test_addmod_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/addmod/rtl/addmod.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/addmod/testbench/test_addmod_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

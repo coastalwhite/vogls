@@ -1,0 +1,11 @@
+name       = "logikbench-basic-bnand"
+top_module = "test_bnand_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/bnand/rtl/bnand.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/bnand/testbench/test_bnand_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

@@ -1,0 +1,11 @@
+name       = "logikbench-memory-raminit"
+top_module = "test_raminit_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/raminit/rtl/raminit.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/raminit/testbench/test_raminit_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

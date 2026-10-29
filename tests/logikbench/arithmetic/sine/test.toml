@@ -1,0 +1,14 @@
+name       = "logikbench-arithmetic-sine"
+top_module = "test_sine_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/sine/rtl/sine.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/sine/testbench/test_sine_smoke.v",
+]
+include_dirs = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/sine/rtl",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

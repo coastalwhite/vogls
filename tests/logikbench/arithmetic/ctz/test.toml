@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-ctz"
+top_module = "test_ctz_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/ctz/rtl/ctz.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/ctz/testbench/test_ctz_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-min"
+top_module = "test_min_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/min/rtl/min.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/min/testbench/test_min_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

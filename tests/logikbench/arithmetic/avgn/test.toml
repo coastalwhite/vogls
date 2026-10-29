@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-avgn"
+top_module = "test_avgn_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/avgn/rtl/avgn.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/avgn/testbench/test_avgn_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

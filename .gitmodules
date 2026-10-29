@@ -13,3 +13,9 @@
 [submodule "submodules/hazard3"]
 	path = submodules/hazard3
 	url = https://github.com/wren6991/hazard3
+[submodule "submodules/logikbench"]
+	path = submodules/logikbench
+	url = https://github.com/zeroasiccorp/logikbench
+[submodule "submodules/lambdalib"]
+	path = submodules/lambdalib
+	url = https://github.com/siliconcompiler/lambdalib

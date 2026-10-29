@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-popcount"
+top_module = "test_popcount_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/popcount/rtl/popcount.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/popcount/testbench/test_popcount_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

@@ -1,0 +1,11 @@
+name       = "logikbench-basic-muxpri"
+top_module = "test_muxpri_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/muxpri/rtl/muxpri.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/muxpri/testbench/test_muxpri_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

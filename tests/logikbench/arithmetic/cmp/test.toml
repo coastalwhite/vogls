@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-cmp"
+top_module = "test_cmp_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/cmp/rtl/cmp.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/cmp/testbench/test_cmp_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

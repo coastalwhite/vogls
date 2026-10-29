@@ -1,0 +1,16 @@
+name       = "logikbench-blocks-sobel3x3"
+top_module = "test_sobel3x3_smoke"
+sources    = [
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_spram/rtl/la_spram_impl.v",
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_spram/rtl/la_spram.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sobel3x3/rtl/sobel3x3.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sobel3x3/testbench/test_sobel3x3_smoke.v",
+]
+defines    = []
+output = """
+PASS [sobel] 8x8 matches reference
+
+==== errors=0 ====
+ PASSED
+[FINISH]
+"""

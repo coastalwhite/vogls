@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-addtree"
+top_module = "test_addtree_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/addtree/rtl/addtree.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/addtree/testbench/test_addtree_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

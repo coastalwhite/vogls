@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-absdiff"
+top_module = "test_absdiff_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/absdiff/rtl/absdiff.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/absdiff/testbench/test_absdiff_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-exp"
+top_module = "test_exp_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/exp/rtl/exp.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/exp/testbench/test_exp_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

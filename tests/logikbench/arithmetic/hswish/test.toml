@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-hswish"
+top_module = "test_hswish_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/hswish/rtl/hswish.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/hswish/testbench/test_hswish_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

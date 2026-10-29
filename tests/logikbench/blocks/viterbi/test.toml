@@ -1,0 +1,21 @@
+name       = "logikbench-blocks-viterbi"
+top_module = "test_viterbi_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/viterbi/rtl/viterbi.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/viterbi/testbench/test_viterbi_smoke.v",
+]
+defines    = []
+output = """
+PASS [32 clean] ndata=32 nerr=0
+PASS [64 clean] ndata=64 nerr=0
+PASS [100 clean] ndata=100 nerr=0
+PASS [64 +3err] ndata=64 nerr=3
+PASS [100 +5err] ndata=100 nerr=5
+PASS [150 +8err] ndata=150 nerr=8
+
+============================================
+ errors = 0 (after 6 tests)
+ PASSED
+============================================
+[FINISH]
+"""

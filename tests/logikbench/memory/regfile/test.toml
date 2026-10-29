@@ -1,0 +1,11 @@
+name       = "logikbench-memory-regfile"
+top_module = "test_regfile_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/regfile/rtl/regfile.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/regfile/testbench/test_regfile_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-sum"
+top_module = "test_sum_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/sum/rtl/sum.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/sum/testbench/test_sum_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

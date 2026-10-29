@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-sqrt"
+top_module = "test_sqrt_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/sqrt/rtl/sqrt.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/sqrt/testbench/test_sqrt_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

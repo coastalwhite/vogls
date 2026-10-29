@@ -1,0 +1,13 @@
+name       = "logikbench-memory-ramsp"
+top_module = "test_ramsp_smoke"
+sources    = [
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_spram/rtl/la_spram_impl.v",
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_spram/rtl/la_spram.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/ramsp/rtl/ramsp.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/ramsp/testbench/test_ramsp_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

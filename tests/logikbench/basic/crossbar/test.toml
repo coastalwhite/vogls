@@ -1,0 +1,12 @@
+name       = "logikbench-basic-crossbar"
+top_module = "test_crossbar_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/crossbar/rtl/crossbar.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/crossbar/testbench/test_crossbar_smoke.v",
+]
+defines    = []
+skip       = "does not terminate within 15 minutes"
+output = """
+PASSED
+[FINISH]
+"""

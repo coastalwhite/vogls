@@ -1,0 +1,13 @@
+name       = "logikbench-memory-rambyte"
+top_module = "test_rambyte_smoke"
+sources    = [
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_spram/rtl/la_spram_impl.v",
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_spram/rtl/la_spram.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/rambyte/rtl/rambyte.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/rambyte/testbench/test_rambyte_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

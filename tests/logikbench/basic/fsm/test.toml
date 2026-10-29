@@ -1,0 +1,11 @@
+name       = "logikbench-basic-fsm"
+top_module = "test_fsm_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/fsm/rtl/fsm.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/fsm/testbench/test_fsm_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

@@ -1,0 +1,17 @@
+name       = "logikbench-blocks-hft"
+top_module = "test_hft_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hft/rtl/hft_parser.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hft/rtl/hft_book.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hft/rtl/hft_feature.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hft/rtl/hft_strategy.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hft/rtl/hft_risk.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hft/rtl/hft_encoder.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hft/rtl/hft.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hft/testbench/test_hft_smoke.v",
+]
+defines    = []
+output = """
+PASSED (400 orders checked)
+[FINISH]
+"""

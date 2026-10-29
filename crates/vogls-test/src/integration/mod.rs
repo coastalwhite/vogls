@@ -40,11 +40,15 @@ pub struct TestConfig {
     top_module: String,
     sources: Vec<String>,
     defines: Vec<String>,
+    #[serde(default)]
+    include_dirs: Vec<String>,
     #[serde(default, deserialize_with = "opt_logic_mode")]
     mode: Option<LogicMode>,
     output: Option<String>,
     #[serde(default)]
     opt_rounds: Vec<u8>,
+    /// Skip this test, with the reason why (e.g. it does not terminate yet).
+    skip: Option<String>,
 }
 
 struct Test {
@@ -53,6 +57,7 @@ struct Test {
     top_module: String,
     sources: Vec<String>,
     defines: Vec<String>,
+    include_dirs: Vec<String>,
     output: Option<String>,
     optimizations: Optimizations,
     mode: LogicMode,
@@ -107,6 +112,7 @@ impl IntegrationArgs {
     pub fn run(&self) -> Result<std::process::ExitCode, Box<dyn Error + Send + Sync>> {
         let tests = collect_tests()?;
         let mut collected = Vec::new();
+        let mut skipped = Vec::new();
 
         for test in tests.iter() {
             let config = std::fs::read_to_string(test)?;
@@ -115,6 +121,11 @@ impl IntegrationArgs {
             if let Some(filter) = self.filter.as_ref()
                 && !config.name.contains(filter)
             {
+                continue;
+            }
+
+            if let Some(reason) = config.skip {
+                skipped.push((config.name, reason));
                 continue;
             }
 
@@ -138,6 +149,7 @@ impl IntegrationArgs {
                             test_toml: test.clone(),
                             sources: config.sources.clone(),
                             defines: config.defines.clone(),
+                            include_dirs: config.include_dirs.clone(),
                             output: config.output.clone(),
                             top_module: config.top_module.clone(),
                             optimizations: Optimizations {
@@ -163,6 +175,9 @@ impl IntegrationArgs {
         println!(
             "Running {num_configurations} configurations across {num_tests} integration tests..."
         );
+        for (name, reason) in &skipped {
+            println!("  skipping {name}: {reason}");
+        }
 
         let fails = if self.num_threads == 1 {
             let mut fails = Vec::new();
@@ -175,7 +190,7 @@ impl IntegrationArgs {
                     Ok(_) => println!(" {ANSI_GREEN}P{ANSI_END}"),
                     Err(err) => {
                         println!(" {ANSI_RED}F{ANSI_END}");
-                        fails.push((test.name.clone(), err));
+                        fails.push((display_name, err));
                     }
                 }
             }
@@ -199,7 +214,7 @@ impl IntegrationArgs {
                             let s = format!("{ANSI_RED}F{ANSI_END}");
                             io::stdout().write_all(s.as_bytes()).unwrap();
                             io::stdout().flush().unwrap();
-                            Some((t.name.clone(), info))
+                            Some((t.display_name(), info))
                         }
                     })
                     .collect()
@@ -235,6 +250,10 @@ fn run_test_direct(test: &Test) -> Result<(), Box<dyn Error + Send + Sync>> {
 
     for key in &test.defines {
         builder.define_macro(key, Macro::default());
+    }
+
+    for include_dir in &test.include_dirs {
+        builder.push_include_dir(root.join(include_dir));
     }
 
     for source in &test.sources {

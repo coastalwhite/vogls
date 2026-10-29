@@ -1,0 +1,11 @@
+name       = "logikbench-memory-fifosync"
+top_module = "test_fifosync_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/fifosync/rtl/fifosync.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/fifosync/testbench/test_fifosync_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

@@ -1,0 +1,18 @@
+name       = "logikbench-large-bitcoin"
+top_module = "test_bitcoin_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sha256/rtl/sha256_k_constants.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sha256/rtl/sha256_w_mem.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sha256/rtl/sha256_core.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/sha256/rtl/sha256.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/bitcoin/rtl/bitcoin_compare.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/bitcoin/rtl/bitcoin_sha256d.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/bitcoin/rtl/bitcoin_engine.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/bitcoin/rtl/bitcoin.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/bitcoin/testbench/test_bitcoin_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

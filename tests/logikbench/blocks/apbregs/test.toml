@@ -1,0 +1,11 @@
+name       = "logikbench-blocks-apbregs"
+top_module = "test_apbregs_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/apbregs/rtl/apbregs.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/apbregs/testbench/test_apbregs_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

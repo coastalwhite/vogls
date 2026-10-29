@@ -1,0 +1,22 @@
+name       = "logikbench-blocks-ddc"
+top_module = "test_ddc_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/ddc/rtl/ddc_nco.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/ddc/rtl/ddc_mixer.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/ddc/rtl/ddc_cic.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/ddc/rtl/ddc_fir.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/ddc/rtl/ddc.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/ddc/testbench/test_ddc_smoke.v",
+]
+defines    = []
+output = """
+PASS [in-band]  |IQ|=0.249977 want=0.250000 err=0.000023 ncap=256
+PASS [decim]    out_valid count=256 (~256, one per R=8)
+PASS [offtune]  |IQ|=0.000074 suppressed
+
+============================================
+ errors = 0 (after 3 tests)
+ PASSED
+============================================
+[FINISH]
+"""

@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-ln"
+top_module = "test_ln_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/ln/rtl/ln.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/ln/testbench/test_ln_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

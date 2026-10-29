@@ -1,0 +1,11 @@
+name       = "logikbench-basic-muxhot"
+top_module = "test_muxhot_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/muxhot/rtl/muxhot.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/muxhot/testbench/test_muxhot_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

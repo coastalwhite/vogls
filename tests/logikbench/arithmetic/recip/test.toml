@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-recip"
+top_module = "test_recip_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/recip/rtl/recip.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/recip/testbench/test_recip_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

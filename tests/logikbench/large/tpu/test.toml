@@ -1,0 +1,13 @@
+name       = "logikbench-large-tpu"
+top_module = "test_tpu_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/tpu/rtl/tpu_pe.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/tpu/rtl/tpu_array.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/tpu/rtl/tpu.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/large/tpu/testbench/test_tpu_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

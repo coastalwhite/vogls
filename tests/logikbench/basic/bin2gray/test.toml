@@ -1,0 +1,11 @@
+name       = "logikbench-basic-bin2gray"
+top_module = "test_bin2gray_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/bin2gray/rtl/bin2gray.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/bin2gray/testbench/test_bin2gray_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

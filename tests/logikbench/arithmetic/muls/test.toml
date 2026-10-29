@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-muls"
+top_module = "test_muls_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/muls/rtl/muls.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/muls/testbench/test_muls_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

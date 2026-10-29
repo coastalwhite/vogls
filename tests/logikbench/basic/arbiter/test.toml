@@ -1,0 +1,11 @@
+name       = "logikbench-basic-arbiter"
+top_module = "test_arbiter_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/arbiter/rtl/arbiter.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/arbiter/testbench/test_arbiter_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

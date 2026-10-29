@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-premul"
+top_module = "test_premul_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/premul/rtl/premul.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/premul/testbench/test_premul_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

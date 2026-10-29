@@ -1,0 +1,11 @@
+name       = "logikbench-blocks-codec8b10b"
+top_module = "test_codec8b10b_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/codec8b10b/rtl/codec8b10b.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/codec8b10b/testbench/test_codec8b10b_smoke.v",
+]
+defines    = []
+output = """
+PASSED (1056 cycles checked)
+[FINISH]
+"""

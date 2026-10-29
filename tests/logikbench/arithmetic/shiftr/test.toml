@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-shiftr"
+top_module = "test_shiftr_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/shiftr/rtl/shiftr.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/shiftr/testbench/test_shiftr_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

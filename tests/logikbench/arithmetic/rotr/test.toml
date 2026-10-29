@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-rotr"
+top_module = "test_rotr_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/rotr/rtl/rotr.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/rotr/testbench/test_rotr_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

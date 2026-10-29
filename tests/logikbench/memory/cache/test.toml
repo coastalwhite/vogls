@@ -1,0 +1,11 @@
+name       = "logikbench-memory-cache"
+top_module = "test_cache_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/cache/rtl/cache.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/cache/testbench/test_cache_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

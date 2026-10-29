@@ -1,0 +1,12 @@
+name       = "logikbench-basic-latch"
+top_module = "test_latch_smoke"
+sources    = [
+    "../../../../submodules/lambdalib/lambdalib/veclib/la_vlatq/rtl/la_vlatq.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/latch/rtl/latch.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/basic/latch/testbench/test_latch_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

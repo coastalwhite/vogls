@@ -1,0 +1,15 @@
+name       = "logikbench-blocks-dma"
+top_module = "test_dma_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/dma/rtl/dma_fifo.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/dma/rtl/dma_read.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/dma/rtl/dma_write.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/dma/rtl/dma_sg.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/dma/rtl/dma.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/dma/testbench/test_dma_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

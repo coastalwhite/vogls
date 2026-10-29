@@ -1,0 +1,11 @@
+name       = "logikbench-memory-cam"
+top_module = "test_cam_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/cam/rtl/cam.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/memory/cam/testbench/test_cam_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

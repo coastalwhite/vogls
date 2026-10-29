@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-multconst"
+top_module = "test_multconst_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/multconst/rtl/multconst.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/multconst/testbench/test_multconst_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

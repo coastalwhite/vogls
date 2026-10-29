@@ -1,0 +1,11 @@
+name       = "logikbench-blocks-firprog"
+top_module = "test_firprog_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/firprog/rtl/firprog.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/firprog/testbench/test_firprog_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-dotprod"
+top_module = "test_dotprod_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/dotprod/rtl/dotprod.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/dotprod/testbench/test_dotprod_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

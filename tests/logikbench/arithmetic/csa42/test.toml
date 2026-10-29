@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-csa42"
+top_module = "test_csa42_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/csa42/rtl/csa42.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/csa42/testbench/test_csa42_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

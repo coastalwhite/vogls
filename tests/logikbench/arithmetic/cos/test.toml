@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-cos"
+top_module = "test_cos_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/cos/rtl/cos.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/cos/testbench/test_cos_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

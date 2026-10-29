@@ -1,0 +1,15 @@
+name       = "logikbench-blocks-beamformer"
+top_module = "test_beamformer_smoke"
+sources    = [
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_dpram/rtl/la_dpram_impl.v",
+    "../../../../submodules/lambdalib/lambdalib/ramlib/la_dpram/rtl/la_dpram.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/beamformer/rtl/beamformer_channel.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/beamformer/rtl/beamformer_sum.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/beamformer/rtl/beamformer.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/blocks/beamformer/testbench/test_beamformer_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""

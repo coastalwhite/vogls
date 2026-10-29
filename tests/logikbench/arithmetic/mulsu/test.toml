@@ -1,0 +1,11 @@
+name       = "logikbench-arithmetic-mulsu"
+top_module = "test_mulsu_smoke"
+sources    = [
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/mulsu/rtl/mulsu.v",
+    "../../../../submodules/logikbench/logikbench/benchmarks/arithmetic/mulsu/testbench/test_mulsu_smoke.v",
+]
+defines    = []
+output = """
+PASSED
+[FINISH]
+"""
