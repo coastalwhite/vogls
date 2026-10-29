@@ -682,7 +682,9 @@ pub fn lower_write_arguments<'a>(
             continue;
         };
 
-        if let Some(str_literal) = expr.into_str_literal() {
+        if let Some(str_literal) = expr.into_str_literal()
+            && required_arguments_left == 0
+        {
             let str_literal = &ctx.arenas.text[str_literal.0.start..str_literal.0.end];
 
             let mut at = 0;
@@ -772,7 +774,7 @@ pub fn lower_write_arguments<'a>(
                     b'd' | b'D' => Base::Decimal,
                     b'o' | b'O' => Base::Octal,
                     b'b' | b'B' => Base::Binary,
-                    b'c' | b'C' => Base::Ascii,
+                    b'c' | b'C' => Base::Char,
                     b's' | b'S' => Base::Ascii,
                     b't' | b'T' => Base::Time,
                     b'l' | b'L' | b'v' | b'V' | b'u' | b'U' | b'z' | b'Z' => {
