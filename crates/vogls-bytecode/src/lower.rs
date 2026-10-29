@@ -1875,7 +1875,9 @@ fn lower_instruction(
                     bce.heap_tv_sll(rd, rs, T4, size);
                 }
                 (O::LogicalShiftLeft, None, M::FourValue) => {
-                    bce.load_u64(T4, *imm as u64);
+                    let (spc, val) = T4.to_spc_and_val();
+                    bce.load_u64(spc, u32::MAX as u64);
+                    bce.load_u64(val, *imm as u64);
                     bce.heap_fv_sll(rd, rs, T4, size);
                 }
 
@@ -1892,7 +1894,9 @@ fn lower_instruction(
                     bce.heap_tv_slr(rd, rs, T4, size);
                 }
                 (O::LogicalShiftRight, None, M::FourValue) => {
-                    bce.load_u64(T4, *imm as u64);
+                    let (spc, val) = T4.to_spc_and_val();
+                    bce.load_u64(spc, u32::MAX as u64);
+                    bce.load_u64(val, *imm as u64);
                     bce.heap_fv_slr(rd, rs, T4, size);
                 }
 
@@ -1909,7 +1913,9 @@ fn lower_instruction(
                     bce.heap_tv_sar(rd, rs, T4, size);
                 }
                 (O::ArithmeticShiftRight, None, M::FourValue) => {
-                    bce.load_u64(T4, *imm as u64);
+                    let (spc, val) = T4.to_spc_and_val();
+                    bce.load_u64(spc, u32::MAX as u64);
+                    bce.load_u64(val, *imm as u64);
                     bce.heap_fv_sar(rd, rs, T4, size);
                 }
             }
