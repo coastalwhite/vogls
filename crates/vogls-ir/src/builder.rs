@@ -405,6 +405,8 @@ impl BasicBlockBuilder {
         (multiply, Multiply)
         (divide, DivideX)
         (modulus, ModulusX)
+        (divide0, Divide0)
+        (modulus0, Modulus0)
         (power, Power)
         (concat, Concat)
         (negedge, Negedge)

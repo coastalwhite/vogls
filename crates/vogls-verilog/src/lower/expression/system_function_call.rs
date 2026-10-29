@@ -263,6 +263,28 @@ pub fn lower_system_function_call<'a, 'b>(
             let e = builder.max(mctx.gl(), l, r);
             Ok((e, ty))
         }
+        "vogls_div0" => {
+            ensure_num_args_equal!(2);
+            let (l, l_ty) = arguments[1].ok_or(())?;
+            let (r, r_ty) = arguments[0].ok_or(())?;
+
+            let ty = coerce_to_max_size_ty(l_ty, r_ty);
+            let l = sign_or_zero_extend(mctx.gl(), builder, l, l_ty, ty.bit_length());
+            let r = sign_or_zero_extend(mctx.gl(), builder, r, r_ty, ty.bit_length());
+            let e = builder.divide0(mctx.gl(), l, r);
+            Ok((e, ty))
+        }
+        "vogls_mod0" => {
+            ensure_num_args_equal!(2);
+            let (l, l_ty) = arguments[1].ok_or(())?;
+            let (r, r_ty) = arguments[0].ok_or(())?;
+
+            let ty = coerce_to_max_size_ty(l_ty, r_ty);
+            let l = sign_or_zero_extend(mctx.gl(), builder, l, l_ty, ty.bit_length());
+            let r = sign_or_zero_extend(mctx.gl(), builder, r, r_ty, ty.bit_length());
+            let e = builder.modulus0(mctx.gl(), l, r);
+            Ok((e, ty))
+        }
         "vogls_posedge" => {
             ensure_num_args_equal!(2);
             let (l, l_ty) = arguments[1].ok_or(())?;
@@ -402,7 +424,7 @@ pub fn get_system_function_call_output_ty(
             ensure_num_args_equal!(2);
             Ok(VType::UnsignedNet(SCALAR_VSIZE))
         }
-        "vogls_copyx" | "vogls_copyz" | "vogls_min" | "vogls_max" => {
+        "vogls_copyx" | "vogls_copyz" | "vogls_min" | "vogls_max" | "vogls_div0" | "vogls_mod0" => {
             ensure_num_args_equal!(2);
             let l_ty = arguments[1].ok_or(())?;
             let r_ty = arguments[0].ok_or(())?;

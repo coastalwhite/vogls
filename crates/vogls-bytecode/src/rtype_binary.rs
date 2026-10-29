@@ -686,7 +686,7 @@ impl BytecodeInstruction for TvMod0 {
             rs2,
             size: _,
         } = self.0;
-        regs[rd] = regs[rs1].checked_div(regs[rs2]).unwrap_or_default();
+        regs[rd] = regs[rs1].checked_rem(regs[rs2]).unwrap_or_default();
     }
 }
 impl BytecodeInstruction for TvPow {
