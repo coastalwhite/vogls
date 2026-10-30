@@ -237,7 +237,8 @@ impl<'a> ElaboratedDesign<'a> {
             nbas: std::mem::take(&mut self.nbas),
             diagnostics: Diagnostics::default(),
             connections: Vec::new(),
-            fuse_scratch: Vec::new(),
+            fuse_dsts_scratch: Vec::new(),
+            fuse_srcs_scratch: Vec::new(),
             has_vcd: false,
             monitor: None,
         };
@@ -361,7 +362,8 @@ impl<'a> ElaboratedDesign<'a> {
             nbas,
             diagnostics: Diagnostics::default(),
             connections: Vec::new(),
-            fuse_scratch: Vec::new(),
+            fuse_dsts_scratch: Vec::new(),
+            fuse_srcs_scratch: Vec::new(),
             has_vcd: false,
             monitor: None,
         };

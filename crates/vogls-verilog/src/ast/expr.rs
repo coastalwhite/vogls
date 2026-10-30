@@ -310,6 +310,19 @@ impl<'a> AstId<'a, Expr<'a>> {
         }
     }
 }
+impl<'a> AstIdRange<'a, Expr<'a>> {
+    pub fn into_constant(self) -> AstIdRange<'a, ConstantExpr<'a>> {
+        AstIdRange {
+            node: unsafe {
+                std::slice::from_raw_parts(
+                    self.node.as_ptr().cast::<ConstantExpr<'a>>(),
+                    self.node.len(),
+                )
+            },
+            loc: self.loc,
+        }
+    }
+}
 impl<'a> AstId<'a, ConstantExpr<'a>> {
     pub fn into_expr(self) -> AstId<'a, Expr<'a>> {
         AstId {
