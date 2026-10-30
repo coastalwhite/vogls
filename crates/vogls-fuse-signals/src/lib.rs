@@ -99,6 +99,8 @@ impl NodeFlags {
 
     /// Drive that is fully external, which we have no control over.
     const EXT_DRIVE: Self = Self(0b0001_0000u8);
+    /// The signal has an initial value.
+    const INIT: Self = Self(0b0010_0000u8);
 
     #[inline(always)]
     fn contains(self, flags: NodeFlags) -> bool {
@@ -122,6 +124,16 @@ impl BitOrAssign for NodeFlags {
     #[inline(always)]
     fn bitor_assign(&mut self, rhs: Self) {
         self.0 |= rhs.0;
+    }
+}
+
+impl NodeFlags {
+    fn from_signal(signal: &Signal) -> Self {
+        let mut flags = NodeFlags::from(signal.flags);
+        if signal.initialize.is_some() {
+            flags |= NodeFlags::INIT;
+        }
+        flags
     }
 }
 
@@ -186,7 +198,7 @@ impl FuseGraph {
                         let driver = &gl.signals[*driver_signal];
                         g.nodes.insert(Node {
                             content: NodeContent::Signal(*driver_signal),
-                            flags: NodeFlags::from(driver.flags),
+                            flags: NodeFlags::from_signal(driver),
                             size: driver.size,
                             fanin: Vec::new(),
                             fanout: Vec::new(),
@@ -212,7 +224,7 @@ impl FuseGraph {
                 let drivee = &gl.signals[edge.drivee];
                 g.nodes.insert(Node {
                     content: NodeContent::Signal(edge.drivee),
-                    flags: NodeFlags::from(drivee.flags),
+                    flags: NodeFlags::from_signal(drivee),
                     size: drivee.size,
                     fanin: Vec::new(),
                     fanout: Vec::new(),
@@ -993,6 +1005,12 @@ impl FuseGraph {
                         }
 
                         if nodes[edge.driver].fanout.len() != 1 {
+                            continue;
+                        }
+
+                        // The driver would live on as a slice of the drivee, which starts at the
+                        // drivee's initial value. That would lose the initial value of the driver.
+                        if nodes[edge.driver].flags.contains(NodeFlags::INIT) {
                             continue;
                         }
 
