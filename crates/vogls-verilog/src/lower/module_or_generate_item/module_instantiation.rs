@@ -1,6 +1,7 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_fuse_signals::{Driver, InputEdge};
-use vogls_ir::{ConnectionDirection, ProcessBuilder, ProcessKind, SignalSlice, VariableKey};
+use vogls_ir::{
+    ConnectionDirection, ProcessBuilder, ProcessKind, SignalSlice, VariableKey, VectorSize,
+};
 use vogls_utils::OrderedSet;
 
 use crate::ast::AstId;
@@ -8,15 +9,15 @@ use crate::ast::expr::Expr;
 use crate::ast::module::{
     ListOfPortConnections, ModuleInstance, ModuleInstantiation, NamedPortConnection,
 };
-use crate::elaborate::VSymbol;
-use crate::lower::addressing::{
-    Address, ConstantAddressingContext, LValueAddressingContext, lower_addressing,
-};
+use crate::elaborate::{NetSymbol, VSymbol};
+use crate::lower::addressing::{Address, LValueAddressingContext, lower_addressing};
 use crate::lower::expression::{self, get_expr_type};
-use crate::lower::fuse::try_lower_fuse_driver_expr;
+use crate::lower::fuse::{
+    FuseDestination, FuseResult, FuseSource, FuseSourceContent, FuseType, SignalSide,
+    convert_fuse_srcs_to_dsts, try_expr_to_fuse, try_expr_to_fuse_sources, try_fuse_srcs_to_dsts,
+};
 use crate::lower::{
-    Diagnostics, LowerContext, MutLowerContext, VType, resolve_symbol_id, try_resolve_hident,
-    try_resolve_net, unwrap_get_net,
+    LowerContext, MutLowerContext, VType, resolve_symbol_id, try_resolve_hident, unwrap_get_net,
 };
 
 /// Lower a Verilog module instantiation to Vogls IR.
@@ -209,56 +210,8 @@ fn assign_input_port<'a>(
 ) -> Result<(), ()> {
     let port = unwrap_get_net(&ctx.table, port);
 
-    let start_connections_length = mctx.connections.len();
-
-    mctx.fuse_scratch.clear();
-    'try_fuse: {
-        // Fusing does not deal with sign-extension or conversion to/from reals. Therefore, we stop
-        // fusing them here.
-        if get_expr_type(
-            &mctx.gl,
-            ctx.arenas,
-            &ctx.table,
-            scope,
-            &mut Diagnostics::default(),
-            expr,
-        )
-        .map_or(true, |v| {
-            v.bit_length() != port.ty.bit_length()
-                && (!v.is_unsigned_net() || !port.ty.is_unsigned_net())
-        }) {
-            break 'try_fuse;
-        }
-
-        // @TODO: Implement expr_slice.is_some()
-        if expr_slice.is_none() && try_lower_fuse_driver_expr(ctx, mctx, scope, expr)? {
-            let drivee = port.net.blocking_drive_signal();
-
-            let mut offset = 0;
-            let drivee_width = port.ty.bit_length();
-            for driver in &mctx.fuse_scratch {
-                let driver_width = driver.size(&mctx.gl.signals);
-
-                if driver_width.get() > drivee_width.get() - offset {
-                    mctx.connections.truncate(start_connections_length);
-                    break 'try_fuse;
-                }
-
-                mctx.connections.push(InputEdge {
-                    driver: driver.clone(),
-                    drivee,
-                    drivee_slice: Some(SignalSlice::from_width(offset, driver_width).unwrap()),
-                });
-                offset += driver_width.get();
-            }
-
-            if offset != drivee_width.get() {
-                mctx.connections.truncate(start_connections_length);
-                break 'try_fuse;
-            }
-
-            return Ok(());
-        }
+    if try_fuse_input_port(ctx, mctx, scope, expr, port, expr_slice) == FuseResult::Success {
+        return Ok(());
     }
 
     let mut sensitivity_list = OrderedSet::new();
@@ -289,6 +242,45 @@ fn assign_input_port<'a>(
     Ok(())
 }
 
+fn try_fuse_input_port<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    expr: AstId<'a, Expr<'a>>,
+    port: &NetSymbol,
+    expr_slice: Option<SignalSlice>,
+) -> FuseResult {
+    mctx.fuse_srcs_scratch.clear();
+    mctx.fuse_dsts_scratch.clear();
+
+    // Destinations
+    mctx.fuse_dsts_scratch.push(FuseDestination {
+        signal: port.net.blocking_drive_signal(),
+        slice: SignalSlice::with_end(port.ty.bit_length()),
+        ty: port.ty.into(),
+    });
+
+    // Sources
+    if try_expr_to_fuse_sources(ctx, &mctx.gl, &mut mctx.fuse_srcs_scratch, scope, expr)
+        == FuseResult::Failed
+    {
+        return FuseResult::Failed;
+    }
+    if let Some(expr_slice) = expr_slice {
+        // If we only include a part of the expression, we slice fuse sources afterwards.
+        if slice_fuse_sources(&mut mctx.fuse_srcs_scratch, expr_slice) == FuseResult::Failed {
+            return FuseResult::Failed;
+        }
+    }
+
+    try_fuse_srcs_to_dsts(
+        &mctx.gl,
+        &mut mctx.connections,
+        &mctx.fuse_srcs_scratch,
+        &mctx.fuse_dsts_scratch,
+    )
+}
+
 fn assign_port_output<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
@@ -299,48 +291,8 @@ fn assign_port_output<'a>(
 ) -> Result<(), ()> {
     let output = unwrap_get_net(&ctx.table, output_net);
 
-    if let Expr::Ident(ident, exprs, range) = &*expr {
-        let to_signal =
-            try_resolve_net(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
-        let driver = output.net.probe_signal();
-        let drivee = to_signal.net.blocking_drive_signal();
-
-        let mut actx = ConstantAddressingContext {
-            gl: &mctx.gl,
-            arenas: ctx.arenas,
-            table: &ctx.table,
-            scope,
-            diagnostics: &mut Diagnostics::default(),
-            loc: expr.loc,
-            _pd: std::marker::PhantomData,
-        };
-
-        let range = range.map(|r| r.into());
-
-        if let Ok(address) = lower_addressing(
-                &mut actx,
-                to_signal.ty.bit_length(),
-                &to_signal.dims,
-                to_signal.transform,
-                exprs.iter().map(|e| e.into_constant()),
-                range,
-            ) && let Some(offset) = address.signal_offset_as_u32()
-            // Don't fuse if the widths don't match.
-            && expr_slice.map_or(address.output_width, |s| s.width()) == output.ty.bit_length()
-        {
-            mctx.connections.push(InputEdge {
-                driver: Driver::Signal(driver, None),
-                drivee,
-                drivee_slice: Some(
-                    SignalSlice::from_width(
-                        expr_slice.map_or(0, |v| v.lsb()) + offset,
-                        expr_slice.map_or(address.output_width, |v| v.width()),
-                    )
-                    .unwrap(),
-                ),
-            });
-            return Ok(());
-        }
+    if try_fuse_output_port(ctx, mctx, scope, expr, output, expr_slice) == FuseResult::Success {
+        return Ok(());
     }
 
     if expr_slice.is_some() {
@@ -472,4 +424,108 @@ fn assign_port_output<'a>(
     }
 
     Ok(())
+}
+
+fn try_fuse_output_port<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    expr: AstId<'a, Expr<'a>>,
+    port: &NetSymbol,
+    expr_slice: Option<SignalSlice>,
+) -> FuseResult {
+    mctx.fuse_srcs_scratch.clear();
+    mctx.fuse_dsts_scratch.clear();
+
+    // Destinations
+    if try_expr_to_fuse(
+        ctx,
+        &mctx.gl,
+        &mut mctx.fuse_srcs_scratch,
+        scope,
+        expr,
+        SignalSide::BlockingDrive,
+    ) == FuseResult::Failed
+    {
+        return FuseResult::Failed;
+    }
+    if let Some(expr_slice) = expr_slice {
+        // If we only include a part of the expression, we slice fuse destinations afterwards.
+        if slice_fuse_sources(&mut mctx.fuse_srcs_scratch, expr_slice) == FuseResult::Failed {
+            return FuseResult::Failed;
+        }
+    }
+    if convert_fuse_srcs_to_dsts(0, &mut mctx.fuse_dsts_scratch, &mut mctx.fuse_srcs_scratch)
+        == FuseResult::Failed
+    {
+        return FuseResult::Failed;
+    }
+
+    // Sources
+    mctx.fuse_srcs_scratch.push(FuseSource {
+        content: FuseSourceContent::Signal {
+            signal: port.net.probe_signal(),
+            slice: SignalSlice::with_end(port.ty.bit_length()),
+        },
+        ty: FuseType::from(port.ty),
+    });
+
+    try_fuse_srcs_to_dsts(
+        &mctx.gl,
+        &mut mctx.connections,
+        &mctx.fuse_srcs_scratch,
+        &mctx.fuse_dsts_scratch,
+    )
+}
+
+fn slice_fuse_sources(srcs: &mut Vec<FuseSource>, slice: SignalSlice) -> FuseResult {
+    // Expression slice is [lo, hi)
+    let (lo, hi) = (slice.lsb(), slice.msb() + 1);
+
+    let mut failed = false;
+    let mut bit_offset = 0u32;
+
+    srcs.retain_mut(|src| {
+        let src_offset = bit_offset;
+        bit_offset += src.bit_length().get();
+
+        // Entire source is included.
+        if lo <= src_offset && hi >= bit_offset {
+            return true;
+        }
+
+        // Source slice is [src_lo, src_hi)
+        let src_lo = lo.max(src_offset);
+        let src_hi = hi.min(bit_offset);
+
+        // Entire source is excluded.
+        if src_lo >= src_hi {
+            return false;
+        }
+
+        // We cannot partially slice a real.
+        failed |= src.ty == FuseType::Real;
+
+        let sub = SignalSlice::from_width(
+            src_lo - src_offset,
+            VectorSize::new(src_hi - src_lo).unwrap(),
+        )
+        .unwrap();
+        src.content = match &src.content {
+            FuseSourceContent::Constant(bits) => {
+                FuseSourceContent::Constant(bits.slicez(sub.lsb(), sub.width()))
+            }
+            FuseSourceContent::Signal { signal, slice } => FuseSourceContent::Signal {
+                signal: *signal,
+                slice: slice.subslice(sub).unwrap(),
+            },
+        };
+        true
+    });
+
+    if failed {
+        return FuseResult::Failed;
+    }
+
+    FuseResult::Success
 }

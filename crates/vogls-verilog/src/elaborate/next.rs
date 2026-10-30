@@ -2522,7 +2522,8 @@ pub fn finalize_symbol<'a>(
                 nbas: IndexMap::default(),
                 diagnostics: std::mem::take(diagnostics),
                 connections: Vec::new(),
-                fuse_scratch: Vec::new(),
+                fuse_srcs_scratch: Vec::new(),
+                fuse_dsts_scratch: Vec::new(),
                 has_vcd: false,
                 monitor: None,
             };

@@ -36,7 +36,10 @@ pub struct MutLowerContext {
     pub nbas: IndexMap<SignalKey, (ProcessKey, SignalKey, Option<SignalKey>)>,
     pub diagnostics: Diagnostics,
     pub connections: Vec<vogls_fuse_signals::InputEdge>,
-    pub fuse_scratch: Vec<vogls_fuse_signals::Driver>,
+
+    pub fuse_srcs_scratch: Vec<FuseSource>,
+    pub fuse_dsts_scratch: Vec<FuseDestination>,
+
     pub has_vcd: bool,
     pub monitor: Option<MonitorSignals>,
 }
@@ -459,6 +462,7 @@ use crate::tokenizer::Tokenized;
 use self::addressing::{Address, LValueAddressingContext, lower_addressing};
 pub use self::expression::eval_constant_expr;
 use self::expression::lower_expr;
+use self::fuse::{FuseDestination, FuseSource};
 pub use self::vtype::VType;
 pub use self::vvalue::VValue;
 pub use diagnostics::{Diagnostics, LowerErrorReason};

@@ -1,17 +1,20 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, ProcessBuilder, ProcessKind, VariableKey};
+use vogls_ir::{BasicBlockBuilder, ProcessBuilder, ProcessKind, SignalSlice, VariableKey};
 use vogls_utils::OrderedSet;
 
+use crate::ast::AstId;
 use crate::ast::expr::Expr;
 use crate::ast::module::{ModuleOrGenerateItemDeclaration, NetDeclAssignment, NetDeclarationNets};
 use crate::ast::statement::Delay3;
-use crate::ast::{AstId, AstIdRange};
-use crate::elaborate::VSymbol;
+use crate::elaborate::{NetSymbol, VSymbol};
 use crate::lower::expression::{self, get_used_signals, lower_expr};
+use crate::lower::fuse::{
+    FuseDestination, FuseResult, try_expr_to_fuse_sources, try_fuse_srcs_to_dsts,
+};
 use crate::lower::resolve_hident;
 use crate::lower::{LowerContext, MutLowerContext};
 
-use super::continuous_assign::{lower_assign_delay3, try_fuse_flat_assign};
+use super::continuous_assign::lower_assign_delay3;
 use super::gate_instantiation::{AssignOutputFn, GateDelayFn, lower_delayed_drive};
 
 /// Lower a Verilog net assignment construct to Vogls IR.
@@ -96,18 +99,8 @@ fn assign_net<'a>(
 
     // Optimization: Try to alias LValue and RValue. This allows a future pass to eliminate the
     // marshalling process. An alias cannot be delayed.
-    mctx.fuse_scratch.clear();
     if delay3.is_none()
-        && try_fuse_flat_assign(
-            ctx,
-            mctx,
-            scope,
-            net,
-            rvalue,
-            rvalue.loc,
-            AstIdRange::empty(),
-            None,
-        )?
+        && try_fuse_net_assignment(ctx, mctx, scope, net_symbol, rvalue) == FuseResult::Success
     {
         return Ok(());
     }
@@ -177,4 +170,36 @@ fn assign_net<'a>(
     proc_builder.finalize(mctx.gl());
 
     Ok(())
+}
+
+pub fn try_fuse_net_assignment<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    net_symbol: &NetSymbol,
+    rvalue: AstId<'a, Expr<'a>>,
+) -> FuseResult {
+    mctx.fuse_srcs_scratch.clear();
+    mctx.fuse_dsts_scratch.clear();
+
+    // Destinations
+    mctx.fuse_dsts_scratch.push(FuseDestination {
+        signal: net_symbol.net.blocking_drive_signal(),
+        slice: SignalSlice::with_end(net_symbol.ty.bit_length()),
+        ty: net_symbol.ty.into(),
+    });
+
+    // Sources
+    if try_expr_to_fuse_sources(ctx, &mctx.gl, &mut mctx.fuse_srcs_scratch, scope, rvalue)
+        == FuseResult::Failed
+    {
+        return FuseResult::Failed;
+    }
+
+    try_fuse_srcs_to_dsts(
+        &mctx.gl,
+        &mut mctx.connections,
+        &mctx.fuse_srcs_scratch,
+        &mctx.fuse_dsts_scratch,
+    )
 }
