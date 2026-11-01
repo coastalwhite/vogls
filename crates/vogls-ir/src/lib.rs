@@ -895,6 +895,7 @@ pub enum SignalBounds {
     },
 }
 impl SignalBounds {
+    #[must_use]
     fn map_var(self, mut f: impl FnMut(VariableKey) -> VariableKey) -> Self {
         match self {
             Self::Constant(s) => Self::Constant(s),
@@ -1085,7 +1086,7 @@ impl Instruction {
             Self::ProbeSlice(dst, _, src, bounds) => {
                 *dst = f(*dst);
                 *src = f(*src);
-                bounds.map_var(&mut f);
+                *bounds = bounds.map_var(&mut f);
             }
             Self::Binary(dst, _, src1, src2) | Self::Slice(dst, src1, src2) => {
                 *dst = f(*dst);
@@ -1108,7 +1109,7 @@ impl Instruction {
                 *dst = f(*dst);
                 *src = f(*src);
                 *partial = f(*partial);
-                bounds.map_var(&mut f);
+                *bounds = bounds.map_var(&mut f);
             }
             Self::Drive(dst, _, src, _) => {
                 *dst = f(*dst);
