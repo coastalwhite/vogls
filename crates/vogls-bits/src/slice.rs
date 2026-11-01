@@ -1,6 +1,6 @@
 use crate::VectorSize;
 use crate::arithmetic::fv_set_no_special;
-use crate::util::last_word_mask;
+use crate::util::{last_word_mask, mask_size_0to63};
 
 pub fn tv_s_slice(src: u64, offset: u32, dst_size: VectorSize, src_size: VectorSize) -> (u64, u64) {
     assert!(dst_size <= src_size);
@@ -240,4 +240,46 @@ pub fn fv_ll_slice(
         src_size,
         false,
     );
+}
+
+/// Copy bits `start..end` from `src` to `dst` starting at bit offset `dst_start`.
+pub fn copy_shifted_bits(dst: &mut [u64], shift: u64, src: &[u64], start: u64, end: u64) {
+    if shift.is_multiple_of(64) && start.is_multiple_of(64) {
+        let start_dst_word = (shift / 64) as usize;
+        let start_src_word = (start / 64) as usize;
+        let nwords = ((end - start) / 64) as usize;
+        dst[start_dst_word..start_dst_word + nwords]
+            .copy_from_slice(&src[start_src_word..start_src_word + nwords]);
+        if !end.is_multiple_of(64) {
+            dst[start_dst_word + nwords] =
+                src[start_src_word + nwords] & mask_size_0to63((end % 64) as u32);
+        }
+
+        return;
+    }
+
+    let mut pos = start;
+    while pos < end {
+        let nbits = (end - pos).min(64);
+        let mask = u64::MAX >> (64 - nbits);
+
+        let woff = (pos / 64) as usize;
+        let boff = pos % 64;
+        let mut w = src[woff] >> boff;
+        if boff + nbits > 64 {
+            w |= src[woff + 1] << (64 - boff);
+        }
+        w &= mask;
+
+        let dst_pos = shift + (pos - start);
+        let woff = (dst_pos / 64) as usize;
+        let boff = dst_pos % 64;
+        dst[woff] = (dst[woff] & !(mask << boff)) | (w << boff);
+        if boff + nbits > 64 {
+            let hi_mask = mask >> (64 - boff);
+            dst[woff + 1] = (dst[woff + 1] & !hi_mask) | (w >> (64 - boff));
+        }
+
+        pos += nbits;
+    }
 }

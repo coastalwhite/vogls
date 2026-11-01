@@ -1,4 +1,5 @@
 use std::fmt;
+use std::ops::RangeInclusive;
 
 use vogls_bits::arithmetic::{
     FvLogicValue, fv_addition, fv_bin_u64_cell_bitwise_op, fv_bin_u64_cell_bitwise_op_output_tv,
@@ -21,7 +22,7 @@ use vogls_bits::shift::{
     fv_l_arithmetic_shift_right, fv_l_logical_shift_left, fv_l_logical_shift_right,
     tv_l_arithmetic_shift_right, tv_l_logical_shift_left, tv_l_logical_shift_right,
 };
-use vogls_bits::slice::{fv_ll_slice, tv_ll_slice};
+use vogls_bits::slice::copy_shifted_bits;
 use vogls_bits::util::CellSlice;
 use vogls_codegen::HeapOffset;
 use vogls_ir::{LogicMode, SCALAR_VSIZE, VSIZE_64, VectorSize};
@@ -69,8 +70,22 @@ pub struct HeapSlice {
     roff: Reg,
     fv: bool,
     fill_with_x: bool,
-    offset_is_fv: bool,
-    dst_size: InlineNBitSize<9>,
+    dst_size: InlineNBitSize<10>,
+}
+pub struct HeapSliceBounds {
+    rd: Reg,
+    rs: Reg,
+    roff: Reg,
+    fv: bool,
+    dst_size: InlineNBitSize<11>,
+}
+pub struct HeapSliceVarBounds {
+    rd: Reg,
+    rs: Reg,
+    roff: Reg,
+    rlb: Reg,
+    fv: bool,
+    dst_size: InlineNBitSize<7>,
 }
 pub struct HeapBinaryArithmetic {
     rd: Reg,
@@ -1276,13 +1291,13 @@ impl BytecodeInstruction for HeapSlice {
         } else {
             LogicMode::TwoValue
         };
-        let offset_mode = if self.offset_is_fv {
-            LogicMode::FourValue
-        } else {
-            LogicMode::TwoValue
-        };
         operands.push(RegInfo::heap("rs", self.rs, src_mode, src_size));
-        operands.push(RegInfo::register("roff", self.roff, offset_mode, None));
+        operands.push(RegInfo::register(
+            "roff",
+            self.roff,
+            LogicMode::TwoValue,
+            None,
+        ));
     }
     fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
         let mut pc = pc + 2;
@@ -1304,8 +1319,7 @@ impl BytecodeInstruction for HeapSlice {
             roff: Reg::new_masked(v >> 16),
             fv: (v >> 20) & 1 != 0,
             fill_with_x: (v >> 21) & 1 != 0,
-            offset_is_fv: (v >> 22) & 1 != 0,
-            dst_size: InlineNBitSize::new_masked(v >> 23),
+            dst_size: InlineNBitSize::new_masked(v >> 22),
         }
     }
     #[inline(always)]
@@ -1317,8 +1331,7 @@ impl BytecodeInstruction for HeapSlice {
                 | ((self.roff as u32) << 16)
                 | ((self.fv as u32) << 20)
                 | ((self.fill_with_x as u32) << 21)
-                | ((self.offset_is_fv as u32) << 22)
-                | (self.dst_size.encode() << 23),
+                | (self.dst_size.encode() << 22),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -1328,7 +1341,6 @@ impl BytecodeInstruction for HeapSlice {
             roff,
             fv,
             fill_with_x,
-            offset_is_fv: _,
             dst_size,
         } = self;
         let mnemonic = match (*fv, *fill_with_x) {
@@ -1362,71 +1374,349 @@ impl BytecodeInstruction for HeapSlice {
             roff,
             fv,
             fill_with_x,
-            offset_is_fv,
             dst_size,
         } = self;
         let src_size = VectorSize::new(code[*pc as usize].0).expect("Expected non-zero size");
         *pc += 1;
         let dst_size = dst_size.get(pc, code);
 
-        assert!(dst_size > VSIZE_64);
-        let mut src_num_words = src_size.get().div_ceil(64) as usize;
-        let mut dst_num_words = dst_size.get().div_ceil(64) as usize;
-        if fv {
-            src_num_words *= 2;
-        }
-        if fv | fill_with_x {
-            dst_num_words *= 2;
-        }
+        let offset = regs[roff] as u32;
+        execute_heap_slice(
+            rd,
+            rs,
+            offset,
+            fv,
+            fill_with_x,
+            dst_size,
+            src_size,
+            None,
+            regs,
+            state,
+            cldctx,
+        );
+    }
+}
 
-        let offset = if offset_is_fv {
-            let (spc, val) = roff.to_spc_and_val();
-            // Offset is always a 32-bit value. So this checks whether it contains any X or Z bits.
-            // If so, the result should be all X.
-            if regs[spc] != u32::MAX as u64 {
-                state
-                    .heap
-                    .get_mut_u64_slice(regs.get_as_addr(rd), dst_num_words)
-                    .fill(0u64);
-                return;
-            }
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn execute_heap_slice(
+    rd: Reg,
+    rs: Reg,
+    offset: u32,
+    fv: bool,
+    fill_with_x: bool,
+    dst_size: VectorSize,
+    src_size: VectorSize,
+    bounds: Option<(u32, u32)>,
+    regs: &Regs,
+    state: &mut RuntimeState,
+    cldctx: &mut ColdContext,
+) {
+    assert!(dst_size > VSIZE_64);
+    let src_plane_words = src_size.get().div_ceil(64) as usize;
+    let dst_plane_words = dst_size.get().div_ceil(64) as usize;
+    let src_num_words = if fv {
+        2 * src_plane_words
+    } else {
+        src_plane_words
+    };
+    let has_spc = fv | fill_with_x;
+    let dst_num_words = if has_spc {
+        2 * dst_plane_words
+    } else {
+        dst_plane_words
+    };
 
-            regs[val] as u32
+    // The bits of the source which can be read, as the range `start..end`. They land at bit
+    // `shift` of the slice.
+    let slice_end = offset.saturating_add(dst_size.get());
+    let (start, end) = match bounds {
+        Some((lower, upper)) => (
+            u32::max(offset, lower),
+            slice_end.min(upper.saturating_add(1)).min(src_size.get()),
+        ),
+        None => (offset, slice_end.min(src_size.get())),
+    };
+    let end = end.max(start);
+    let shift = start - offset;
+
+    let src = state
+        .heap
+        .get_u64_slice(regs.get_as_addr(rs), src_num_words);
+
+    // @Performance. Remove the need for the scratch here.
+    cldctx.heap_scratch.clear();
+    cldctx.heap_scratch.resize(dst_num_words, 0u64);
+    let (dst_spc, dst_val) = if has_spc {
+        cldctx.heap_scratch.split_at_mut(dst_plane_words)
+    } else {
+        (&mut [][..], &mut cldctx.heap_scratch[..])
+    };
+
+    if fv {
+        let (src_spc, src_val) = src.split_at(src_plane_words);
+        if !fill_with_x {
+            // A SPC bit without a VAL bit is a 0.
+            set_bit_range(dst_spc, 0, dst_size.get());
+        }
+        copy_shifted_bits(dst_spc, shift as u64, src_spc, start as u64, end as u64);
+        copy_shifted_bits(dst_val, shift as u64, src_val, start as u64, end as u64);
+    } else {
+        if fill_with_x {
+            set_bit_range(dst_spc, shift, shift + (end - start));
+        }
+        copy_shifted_bits(dst_val, shift as u64, src, start as u64, end as u64);
+    }
+
+    state
+        .heap
+        .get_mut_u64_slice(regs.get_as_addr(rd), dst_num_words)
+        .copy_from_slice(&cldctx.heap_scratch);
+}
+
+/// Set all bits of `words` in the range `start..end`.
+#[inline(always)]
+fn set_bit_range(words: &mut [u64], start: u32, end: u32) {
+    for (i, word) in words.iter_mut().enumerate() {
+        let base = i as u32 * 64;
+        let lo = start.saturating_sub(base).min(64);
+        let hi = end.saturating_sub(base).min(64);
+        if lo < hi {
+            *word |= (u64::MAX >> (64 - (hi - lo))) << lo;
+        }
+    }
+}
+
+impl BytecodeInstruction for HeapSliceBounds {
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let src_size = code[(pc + 1) as usize].unwrap_size();
+        let src_mode = if self.fv {
+            LogicMode::FourValue
         } else {
-            regs[roff] as u32
+            LogicMode::TwoValue
         };
-
-        let src = state
-            .heap
-            .get_u64_slice(regs.get_as_addr(rs), src_num_words);
-
-        // @Performance. Remove the need for the scratch here.
-        cldctx.heap_scratch.clear();
-        cldctx.heap_scratch.resize(dst_num_words, 0u64);
-
-        if fv {
-            fv_ll_slice(
-                &mut cldctx.heap_scratch,
-                src,
-                offset,
-                dst_size,
-                src_size,
-                fill_with_x,
-            );
-        } else {
-            tv_ll_slice(
-                &mut cldctx.heap_scratch,
-                src,
-                offset,
-                dst_size,
-                src_size,
-                fill_with_x,
-            );
+        operands.push(RegInfo::heap("rs", self.rs, src_mode, src_size));
+        operands.push(RegInfo::register(
+            "roff",
+            self.roff,
+            LogicMode::TwoValue,
+            None,
+        ));
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc + 4;
+        let dst_size = self.dst_size.get(&mut pc, code);
+        operands.push(RegInfo::heap("rd", self.rd, LogicMode::FourValue, dst_size));
+    }
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapSliceBounds as u8);
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs: Reg::new_masked(v >> 12),
+            roff: Reg::new_masked(v >> 16),
+            fv: (v >> 20) & 1 != 0,
+            dst_size: InlineNBitSize::new_masked(v >> 21),
         }
-        state
-            .heap
-            .get_mut_u64_slice(regs.get_as_addr(rd), dst_num_words)
-            .copy_from_slice(&cldctx.heap_scratch);
+    }
+    #[inline(always)]
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::HeapSliceBounds as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs as u32) << 12)
+                | ((self.roff as u32) << 16)
+                | ((self.fv as u32) << 20)
+                | (self.dst_size.encode() << 21),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rs,
+            roff,
+            fv,
+            dst_size,
+        } = self;
+        let mnemonic = if *fv {
+            "fv.heap_slicex_bounds"
+        } else {
+            "tv.heap_slicex_bounds"
+        };
+        write_padded_mnemonic(f, mnemonic)?;
+        write!(f, "{rd}, {rs}, {roff}, {dst_size}")
+    }
+
+    fn num_additional_slots(&self) -> u8 {
+        let mut slots = 0;
+        slots += 1; // Source size.
+        slots += 1; // Lower bound.
+        slots += 1; // Upper bound.
+        slots += u8::from(self.dst_size.0.is_none());
+        slots
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        code: &[Bytecode],
+        regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        cldctx: &mut ColdContext,
+    ) {
+        let Self {
+            rd,
+            rs,
+            roff,
+            fv,
+            dst_size,
+        } = self;
+        let src_size = code[*pc as usize].unwrap_size();
+        let lower_bound = code[*pc as usize + 1].0;
+        let upper_bound = code[*pc as usize + 2].0;
+        *pc += 3;
+        let dst_size = dst_size.get(pc, code);
+
+        let offset = regs[roff] as u32;
+        execute_heap_slice(
+            rd,
+            rs,
+            offset,
+            fv,
+            true,
+            dst_size,
+            src_size,
+            Some((lower_bound, upper_bound)),
+            regs,
+            state,
+            cldctx,
+        );
+    }
+}
+
+impl BytecodeInstruction for HeapSliceVarBounds {
+    fn source_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let src_size = code[(pc + 1) as usize].unwrap_size();
+        let src_mode = if self.fv {
+            LogicMode::FourValue
+        } else {
+            LogicMode::TwoValue
+        };
+        operands.push(RegInfo::heap("rs", self.rs, src_mode, src_size));
+        operands.push(RegInfo::register(
+            "roff",
+            self.roff,
+            LogicMode::TwoValue,
+            None,
+        ));
+        operands.push(RegInfo::register(
+            "rlb",
+            self.rlb,
+            LogicMode::TwoValue,
+            None,
+        ));
+    }
+    fn dest_operands(&self, code: &[Bytecode], pc: u64, operands: &mut Vec<RegInfo>) {
+        let mut pc = pc + 3;
+        let dst_size = self.dst_size.get(&mut pc, code);
+        operands.push(RegInfo::heap("rd", self.rd, LogicMode::FourValue, dst_size));
+    }
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::HeapSliceVarBounds as u8);
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs: Reg::new_masked(v >> 12),
+            roff: Reg::new_masked(v >> 16),
+            rlb: Reg::new_masked(v >> 20),
+            fv: (v >> 24) & 1 != 0,
+            dst_size: InlineNBitSize::new_masked(v >> 25),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            BytecodeOpcode::HeapSliceVarBounds as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs as u32) << 12)
+                | ((self.roff as u32) << 16)
+                | ((self.rlb as u32) << 20)
+                | ((self.fv as u32) << 24)
+                | (self.dst_size.encode() << 25),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rs,
+            roff,
+            rlb,
+            fv,
+            dst_size,
+        } = self;
+        let mnemonic = if *fv {
+            "fv.heap_slicex_varbounds"
+        } else {
+            "tv.heap_slicex_varbounds"
+        };
+        write_padded_mnemonic(f, mnemonic)?;
+        write!(f, "{rd}, {rs}, {roff}, {rlb}, {dst_size}")
+    }
+
+    fn num_additional_slots(&self) -> u8 {
+        let mut slots = 0;
+        slots += 1; // Source size.
+        slots += 1; // Bound width.
+        slots += u8::from(self.dst_size.0.is_none());
+        slots
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        code: &[Bytecode],
+        regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        cldctx: &mut ColdContext,
+    ) {
+        let Self {
+            rd,
+            rs,
+            roff,
+            rlb,
+            fv,
+            dst_size,
+        } = self;
+        let src_size = code[*pc as usize].unwrap_size();
+        let bound_width = code[*pc as usize + 1].0;
+        *pc += 2;
+        let dst_size = dst_size.get(pc, code);
+
+        let lower_bound = regs[rlb] as u32;
+        let upper_bound = lower_bound.saturating_add(bound_width - 1);
+
+        let offset = regs[roff] as u32;
+        execute_heap_slice(
+            rd,
+            rs,
+            offset,
+            fv,
+            true,
+            dst_size,
+            src_size,
+            Some((lower_bound, upper_bound)),
+            regs,
+            state,
+            cldctx,
+        );
     }
 }
 
@@ -2371,7 +2661,6 @@ impl BytecodeEncoder {
         src_size: VectorSize,
         fv: bool,
         fill_with_x: bool,
-        offset_is_fv: bool,
     ) {
         let inline_dst_size = InlineNBitSize::new(dst_size);
         self.data.push(
@@ -2381,12 +2670,72 @@ impl BytecodeEncoder {
                 roff,
                 fv,
                 fill_with_x,
-                offset_is_fv,
                 dst_size: inline_dst_size,
             }
             .encode(),
         );
         self.data.push(Bytecode(src_size.get()));
+        if inline_dst_size.0.is_none() {
+            self.data.push(Bytecode(dst_size.get()));
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn heap_slice_bounds(
+        &mut self,
+        rd: Reg,
+        rs: Reg,
+        roff: Reg,
+        dst_size: VectorSize,
+        src_size: VectorSize,
+        fv: bool,
+        bounds: RangeInclusive<u32>,
+    ) {
+        let inline_dst_size = InlineNBitSize::new(dst_size);
+        self.data.push(
+            HeapSliceBounds {
+                rd,
+                rs,
+                roff,
+                fv,
+                dst_size: inline_dst_size,
+            }
+            .encode(),
+        );
+        self.data.push(Bytecode(src_size.get()));
+        self.data.push(Bytecode(*bounds.start()));
+        self.data.push(Bytecode(*bounds.end()));
+        if inline_dst_size.0.is_none() {
+            self.data.push(Bytecode(dst_size.get()));
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn heap_slice_varbounds(
+        &mut self,
+        rd: Reg,
+        rs: Reg,
+        roff: Reg,
+        rlb: Reg,
+        dst_size: VectorSize,
+        src_size: VectorSize,
+        fv: bool,
+        bound_width: VectorSize,
+    ) {
+        let inline_dst_size = InlineNBitSize::new(dst_size);
+        self.data.push(
+            HeapSliceVarBounds {
+                rd,
+                rs,
+                roff,
+                rlb,
+                fv,
+                dst_size: inline_dst_size,
+            }
+            .encode(),
+        );
+        self.data.push(Bytecode(src_size.get()));
+        self.data.push(Bytecode(bound_width.get()));
         if inline_dst_size.0.is_none() {
             self.data.push(Bytecode(dst_size.get()));
         }

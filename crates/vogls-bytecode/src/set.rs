@@ -43,6 +43,14 @@ struct SetRegRelative {
     size: SixBitSize,
     // 6 bits unused
 }
+struct SetRegRelativeVarBounds {
+    rd: Reg,
+    rs: Reg,
+    roff: Reg,
+    size: SixBitSize,
+    rlb: Reg,
+    // 2 bits unused
+}
 /// A set at a constant address which reads its value from, and writes its update mask to, the
 /// heap.
 ///
@@ -60,7 +68,8 @@ struct SetHeapRelative {
     rd: Reg,
     rs: Reg,
     roff: Reg,
-    offset: InlineAddrOffset<12>,
+    rlb: Reg,
+    offset: InlineAddrOffset<8>,
 }
 
 /// Set 1 two-valued logic heap bit and trigger all corresponding signal updates.
@@ -99,6 +108,9 @@ pub struct TvSetRelative(SetRegRelative);
 ///
 /// The special plane and value plane are separated by a spread.
 pub struct FvSetRelative(SetRegRelative);
+
+pub struct TvSetRelativeVarBounds(SetRegRelativeVarBounds);
+pub struct FvSetRelativeVarBounds(SetRegRelativeVarBounds);
 
 /// Set two-valued logic heap bits wider than a register and trigger all corresponding signal
 /// updates.
@@ -254,6 +266,42 @@ impl SetRegRelative {
     }
 }
 
+impl SetRegRelativeVarBounds {
+    #[inline(always)]
+    fn extract(c: Bytecode, opcode: BytecodeOpcode) -> Self {
+        debug_assert_eq!(c.opcode(), opcode as u8);
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rs: Reg::new_masked(v >> 12),
+            roff: Reg::new_masked(v >> 16),
+            size: SixBitSize::new_masked(v >> 20),
+            rlb: Reg::new_masked(v >> 26),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self, opcode: BytecodeOpcode) -> Bytecode {
+        Bytecode(
+            opcode as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rs as u32) << 12)
+                | ((self.roff as u32) << 16)
+                | (self.size.encode() << 20)
+                | ((self.rlb as u32) << 26),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rs,
+            roff,
+            size,
+            rlb,
+        } = self;
+        write!(f, "{rd}, {rs}, {roff}, |{size}|, {rlb}")
+    }
+}
+
 impl SetHeap {
     #[inline(always)]
     fn extract(c: Bytecode, opcode: BytecodeOpcode) -> Self {
@@ -289,7 +337,8 @@ impl SetHeapRelative {
             rd: Reg::new_masked(v >> 8),
             rs: Reg::new_masked(v >> 12),
             roff: Reg::new_masked(v >> 16),
-            offset: InlineAddrOffset::new_shifted(v, 20),
+            rlb: Reg::new_masked(v >> 20),
+            offset: InlineAddrOffset::new_shifted(v, 24),
         }
     }
     #[inline(always)]
@@ -299,7 +348,8 @@ impl SetHeapRelative {
                 | ((self.rd as u32) << 8)
                 | ((self.rs as u32) << 12)
                 | ((self.roff as u32) << 16)
-                | (self.offset.encode() << 20),
+                | ((self.rlb as u32) << 20)
+                | (self.offset.encode() << 24),
         )
     }
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -307,9 +357,10 @@ impl SetHeapRelative {
             rd,
             rs,
             roff,
+            rlb,
             offset,
         } = self;
-        write!(f, "{rd}, {rs}, {roff}, {offset}")
+        write!(f, "{rd}, {rs}, {roff}, {rlb}, {offset}")
     }
 }
 
@@ -1352,6 +1403,228 @@ impl BytecodeInstruction for FvSetRelative {
     }
 }
 
+impl BytecodeInstruction for TvSetRelativeVarBounds {
+    fn num_additional_slots(&self) -> u8 {
+        let mut slots = 0;
+        slots += 2; // Base.
+        slots += 1; // Bound width.
+        slots
+    }
+
+    fn extract(v: Bytecode) -> Self {
+        Self(SetRegRelativeVarBounds::extract(
+            v,
+            BytecodeOpcode::TvSetRelativeVarBounds,
+        ))
+    }
+
+    fn encode(&self) -> Bytecode {
+        self.0.encode(BytecodeOpcode::TvSetRelativeVarBounds)
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_padded_mnemonic(f, "tv.setrel_varbounds")?;
+        self.0.fmt(f)
+    }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.extend([
+            RegInfo::register("rs", self.0.rs, LogicMode::TwoValue, None),
+            RegInfo::register("roff", self.0.roff, LogicMode::TwoValue, Some(VSIZE_32)),
+            RegInfo::register("rlb", self.0.rlb, LogicMode::TwoValue, Some(VSIZE_32)),
+        ]);
+    }
+
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register(
+            "rd",
+            self.0.rd,
+            LogicMode::TwoValue,
+            None,
+        ));
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        code: &[Bytecode],
+        regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self(SetRegRelativeVarBounds {
+            rd,
+            rs,
+            roff,
+            size,
+            rlb,
+        }) = self;
+
+        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
+        let additional_slots: &[Bytecode; 16] = code
+            .get(*pc as usize..)
+            .and_then(<[_]>::first_chunk)
+            .expect("Should be padded");
+        *pc += self.num_additional_slots() as u64;
+
+        let base = decode_bytecode_u64(&additional_slots[..]);
+        let bound_width = additional_slots[2].0;
+        let lower_bound = regs[rlb] as u32;
+        let bit_offset = regs[roff] as u32;
+
+        let upper_bound = lower_bound.saturating_add(bound_width - 1);
+
+        let offset = base + bit_offset as u64;
+        let heap = state.heap.0.as_mut();
+        // @NOTE: `set_unaligned_inbounds` expects the value to be premasked to `size`.
+        let value = size.mask(regs[rs]);
+
+        let update_mask = if is_offset_in_bounds(bit_offset, size, lower_bound, upper_bound) {
+            set_unaligned_inbounds(heap, offset, value, size)
+        } else {
+            // @NOTE: A relative write is expected to land in bounds. A partially or fully
+            // out-of-range index is rare, so keep it off the hot path. The in-range part of the
+            // write is still performed.
+            std::hint::cold_path();
+            set_unaligned_oob(
+                heap,
+                offset,
+                value,
+                size,
+                base + lower_bound as u64,
+                base + upper_bound as u64,
+            )
+        };
+
+        regs[rd] = update_mask;
+    }
+}
+
+impl BytecodeInstruction for FvSetRelativeVarBounds {
+    fn num_additional_slots(&self) -> u8 {
+        let mut slots = 0;
+        slots += 2; // Base.
+        slots += 1; // Bounds width.
+        slots += 1; // Spread.
+        slots
+    }
+
+    fn extract(v: Bytecode) -> Self {
+        Self(SetRegRelativeVarBounds::extract(
+            v,
+            BytecodeOpcode::FvSetRelativeVarBounds,
+        ))
+    }
+
+    fn encode(&self) -> Bytecode {
+        self.0.encode(BytecodeOpcode::FvSetRelativeVarBounds)
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_padded_mnemonic(f, "fv.setrel_varbounds")?;
+        self.0.fmt(f)
+    }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.extend([
+            RegInfo::register("rs", self.0.rs, LogicMode::FourValue, None),
+            RegInfo::register("roff", self.0.roff, LogicMode::TwoValue, Some(VSIZE_32)),
+            RegInfo::register("rlb", self.0.rlb, LogicMode::TwoValue, Some(VSIZE_32)),
+        ]);
+    }
+
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::register(
+            "rd",
+            self.0.rd,
+            LogicMode::TwoValue,
+            None,
+        ));
+    }
+
+    #[inline(always)]
+    fn execute(
+        self,
+        code: &[Bytecode],
+        regs: &mut Regs,
+        pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let Self(SetRegRelativeVarBounds {
+            rd,
+            rs,
+            roff,
+            size,
+            rlb,
+        }) = self;
+
+        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
+        let additional_slots: &[Bytecode; 16] = code
+            .get(*pc as usize..)
+            .and_then(<[_]>::first_chunk)
+            .expect("Should be padded");
+
+        *pc += self.num_additional_slots() as u64;
+
+        let base = decode_bytecode_u64(&additional_slots[..]);
+        let bounds_width = additional_slots[2].0;
+        let spread = additional_slots[3].unwrap_size();
+
+        let lower_bound = regs[rlb] as u32;
+        let bit_offset = regs[roff] as u32;
+
+        let upper_bound = lower_bound.saturating_add(bounds_width - 1);
+
+        let base_val = HeapAlignment::spc_offset_to_val_offset(spread, base);
+        let (rsspc, rsval) = rs.to_spc_and_val();
+        let (spc, val) = (regs[rsspc], regs[rsval]);
+        let heap = state.heap.0.as_mut();
+
+        // @NOTE: `set_unaligned_inbounds` expects the value to be premasked to `size`.
+        let (spc, val) = (size.mask(spc), size.mask(val));
+        let offset = base + bit_offset as u64;
+        let val_offset = base_val + bit_offset as u64;
+
+        // @NOTE: Both planes sit at the same relative position within their own plane, so one
+        // check covers both.
+        let (spc_update, val_update) =
+            if is_offset_in_bounds(bit_offset, size, lower_bound, upper_bound) {
+                (
+                    set_unaligned_inbounds(heap, offset, spc, size),
+                    set_unaligned_inbounds(heap, val_offset, val, size),
+                )
+            } else {
+                // @NOTE: A relative write is expected to land in bounds. A partially or fully
+                // out-of-range index is rare, so keep it off the hot path. The in-range part of the
+                // write is still performed.
+                std::hint::cold_path();
+                let val_lower =
+                    HeapAlignment::spc_offset_to_val_offset(spread, base + lower_bound as u64);
+                let val_upper =
+                    HeapAlignment::spc_offset_to_val_offset(spread, base + upper_bound as u64);
+                (
+                    set_unaligned_oob(
+                        heap,
+                        offset,
+                        spc,
+                        size,
+                        base + lower_bound as u64,
+                        base + upper_bound as u64,
+                    ),
+                    set_unaligned_oob(heap, val_offset, val, size, val_lower, val_upper),
+                )
+            };
+        let update_mask = spc_update | val_update;
+        regs[rd] = update_mask;
+    }
+}
+
 /// Perform a heap-to-heap set of `size` bits and write the update mask back onto the heap.
 ///
 /// The source lives at the address in `rs` and the update mask is written to the address in `rd`
@@ -1541,8 +1814,7 @@ macro_rules! impl_set_heap_relative {
             fn num_additional_slots(&self) -> u8 {
                 let mut slots = 0;
                 slots += 2; // Base.
-                slots += 1; // Lower bound.
-                slots += 1; // Upper bound.
+                slots += 1; // Bound width.
                 slots += 1; // Source Size.
                 slots += 1; // Base Size.
                 slots
@@ -1601,6 +1873,7 @@ macro_rules! impl_set_heap_relative {
                     rd,
                     rs,
                     roff,
+                    rlb,
                     offset,
                 }) = self;
 
@@ -1613,11 +1886,13 @@ macro_rules! impl_set_heap_relative {
                 *pc += self.num_additional_slots() as u64;
 
                 let base = decode_bytecode_u64(&additional_slots[..]);
-                let lower_bound = additional_slots[2].0;
-                let upper_bound = additional_slots[3].0;
-                let src_size = additional_slots[4].unwrap_size();
-                let base_size = additional_slots[5].unwrap_size();
+                let bound_width = additional_slots[2].0;
+                let src_size = additional_slots[3].unwrap_size();
+                let base_size = additional_slots[4].unwrap_size();
                 let offset = offset.get(regs[roff]) as u32;
+
+                let lower_bound = regs[rlb] as u32;
+                let upper_bound = lower_bound.saturating_add(bound_width - 1);
 
                 // @NOTE: Clipping the write to the bounds is the bounds check. A partially or
                 // fully out-of-range write only performs its in-range part.
@@ -1920,7 +2195,6 @@ impl BytecodeEncoder {
 
     #[allow(clippy::too_many_arguments)]
     /// Encode a two-value register-relative set.
-    ///
     pub fn tv_setrel(
         &mut self,
         rd: Option<Reg>,
@@ -1946,8 +2220,6 @@ impl BytecodeEncoder {
 
     #[allow(clippy::too_many_arguments)]
     /// Encode a four-value register-relative set.
-    ///
-    #[allow(clippy::too_many_arguments)]
     pub fn fv_setrel(
         &mut self,
         rd: Option<Reg>,
@@ -1970,6 +2242,58 @@ impl BytecodeEncoder {
         encode_bytecode_u64(self, base);
         self.data.push(Bytecode(*range.start()));
         self.data.push(Bytecode(*range.end()));
+        self.data.push(Bytecode(spread.get()));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn tv_setrel_varbounds(
+        &mut self,
+        rd: Option<Reg>,
+        rs: Reg,
+        roff: Reg,
+        base: u64,
+        rlb: Reg,
+        bound_width: VectorSize,
+        size: SixBitSize,
+    ) {
+        self.data.push(
+            TvSetRelativeVarBounds(SetRegRelativeVarBounds {
+                rd: rd.unwrap_or(rs),
+                rs,
+                roff,
+                size,
+                rlb,
+            })
+            .encode(),
+        );
+        encode_bytecode_u64(self, base);
+        self.data.push(Bytecode(bound_width.get()));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn fv_setrel_varbounds(
+        &mut self,
+        rd: Option<Reg>,
+        rs: Reg,
+        roff: Reg,
+        base: u64,
+        rlb: Reg,
+        bound_width: VectorSize,
+        size: SixBitSize,
+        spread: VectorSize,
+    ) {
+        self.data.push(
+            FvSetRelativeVarBounds(SetRegRelativeVarBounds {
+                rd: rd.unwrap_or(rs),
+                rs,
+                roff,
+                size,
+                rlb,
+            })
+            .encode(),
+        );
+        encode_bytecode_u64(self, base);
+        self.data.push(Bytecode(bound_width.get()));
         self.data.push(Bytecode(spread.get()));
     }
 
@@ -2077,8 +2401,9 @@ impl BytecodeEncoder {
         rd: Option<Reg>,
         rs: Reg,
         roff: Reg,
-        offset: InlineAddrOffset<12>,
-        range: RangeInclusive<u32>,
+        offset: InlineAddrOffset<8>,
+        rlb: Reg,
+        bound_width: VectorSize,
         base: u64,
         size: VectorSize,
         base_size: VectorSize,
@@ -2088,13 +2413,13 @@ impl BytecodeEncoder {
                 rd: rd.unwrap_or(rs),
                 rs,
                 roff,
+                rlb,
                 offset,
             })
             .encode(),
         );
         encode_bytecode_u64(self, base);
-        self.data.push(Bytecode(*range.start()));
-        self.data.push(Bytecode(*range.end()));
+        self.data.push(Bytecode(bound_width.get()));
         self.data.push(Bytecode(size.get()));
         self.data.push(Bytecode(base_size.get()));
     }
@@ -2106,8 +2431,9 @@ impl BytecodeEncoder {
         rd: Option<Reg>,
         rs: Reg,
         roff: Reg,
-        offset: InlineAddrOffset<12>,
-        range: RangeInclusive<u32>,
+        offset: InlineAddrOffset<8>,
+        rlb: Reg,
+        bound_width: VectorSize,
         base: u64,
         size: VectorSize,
         base_size: VectorSize,
@@ -2117,13 +2443,13 @@ impl BytecodeEncoder {
                 rd: rd.unwrap_or(rs),
                 rs,
                 roff,
+                rlb,
                 offset,
             })
             .encode(),
         );
         encode_bytecode_u64(self, base);
-        self.data.push(Bytecode(*range.start()));
-        self.data.push(Bytecode(*range.end()));
+        self.data.push(Bytecode(bound_width.get()));
         self.data.push(Bytecode(size.get()));
         self.data.push(Bytecode(base_size.get()));
     }

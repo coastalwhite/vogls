@@ -8,8 +8,8 @@ use crate::orders::post_order_keys;
 use crate::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, BinaryOp,
     GlobalContext, Instruction, LogicMode, ProcessKey, ResizeOp, SCALAR_VSIZE, SelectMerge,
-    ShiftImmOp, ShiftImmOpSimplification, Signal, SignalKey, Time, UnaryOp, VariableKey,
-    VariableMap,
+    ShiftImmOp, ShiftImmOpSimplification, Signal, SignalBounds, SignalKey, SignalSlice, Time,
+    UnaryOp, VariableKey, VariableMap,
 };
 
 pub fn constant_propagation(
@@ -616,8 +616,39 @@ fn constant_propagate_instruction(
         I::Intrinsic(dst, ..) | I::LastUpdateTime(dst, ..) => not_constant!(*dst),
         I::Probe(dst, _, _) => not_constant!(*dst),
 
-        I::ProbeSlice(dst, signal, offset) => {
-            let (dst, signal) = (*dst, *signal);
+        I::ProbeSlice(dst, signal, offset, bounds) => {
+            let (dst, signal, bounds) = (*dst, *signal, *bounds);
+
+            if let SignalBounds::Variable {
+                elem_offset,
+                stride,
+            } = bounds
+                && let Some(Some(elem_offset_bits)) = scratch_map.get(&elem_offset)
+            {
+                let Some(bounds) = elem_offset_bits
+                    .extract_exact_u32()
+                    .and_then(|elem_offset| elem_offset.checked_mul(stride.get()))
+                    .and_then(|lsb| SignalSlice::from_width(lsb, stride))
+                    .filter(|bounds| bounds.overlaps(SignalSlice::with_end(signals[signal].size)))
+                else {
+                    let dst_size = vars.size(dst);
+                    let oob_value = match dst.mode() {
+                        LogicMode::TwoValue => Bits::new_zeroed(dst_size),
+                        LogicMode::FourValue => Bits::new_unknown(dst_size),
+                    };
+                    additional.push(I::Constant(dst, oob_value));
+                    return PropagateResult { replace: true };
+                };
+
+                additional.push(I::ProbeSlice(
+                    dst,
+                    signal,
+                    *offset,
+                    SignalBounds::Constant(bounds),
+                ));
+                return PropagateResult { replace: true };
+            }
+
             let offset_bits = get!(offset);
             match offset_bits.as_ref() {
                 None => {}
@@ -643,8 +674,35 @@ fn constant_propagate_instruction(
             not_constant!(dst);
         }
         I::Drive(..) => PropagateResult { replace: false },
-        I::DriveSlice(dst, signal, src, offset) => {
-            let (signal, src) = (*signal, *src);
+        I::DriveSlice(dst, signal, src, offset, bounds) => {
+            let (dst, signal, src, bounds) = (*dst, *signal, *src, *bounds);
+
+            if let SignalBounds::Variable {
+                elem_offset,
+                stride,
+            } = bounds
+                && let Some(Some(elem_offset_bits)) = scratch_map.get(&elem_offset)
+            {
+                let Some(bounds) = elem_offset_bits
+                    .extract_exact_u32()
+                    .and_then(|elem_offset| elem_offset.checked_mul(stride.get()))
+                    .and_then(|lsb| SignalSlice::from_width(lsb, stride))
+                    .filter(|bounds| bounds.overlaps(SignalSlice::with_end(signals[signal].size)))
+                else {
+                    additional.push(I::Constant(dst, Bits::new_zeroed(vars.size(dst))));
+                    return PropagateResult { replace: true };
+                };
+
+                additional.push(I::DriveSlice(
+                    dst,
+                    signal,
+                    src,
+                    *offset,
+                    SignalBounds::Constant(bounds),
+                ));
+                return PropagateResult { replace: true };
+            }
+
             let offset_bits = get!(offset);
             match offset_bits.as_ref() {
                 None => {}
@@ -661,7 +719,7 @@ fn constant_propagate_instruction(
                             .checked_add(offset)
                             .is_some_and(|v| v <= dst_size.get())
                         {
-                            additional.push(I::Drive(*dst, signal, src, offset));
+                            additional.push(I::Drive(dst, signal, src, offset));
                             return PropagateResult { replace: true };
                         }
                     }

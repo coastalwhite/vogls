@@ -6,7 +6,8 @@ use crate::time::TimeFormat;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
     Instruction, IntrinsicOp, LogicMode, Process, RandomKind, ResizeOp, SCALAR_VSIZE, SelectMerge,
-    ShiftImmOp, Signal, Time, UnaryOp, VariableKey, WatchCondition, WatchEdge,
+    ShiftImmOp, Signal, SignalBounds, SignalKey, Time, UnaryOp, VariableKey, WatchCondition,
+    WatchEdge,
 };
 
 const INDENT: &str = "  ";
@@ -583,10 +584,12 @@ impl ContextFormat for Instruction {
                     ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
                 }
             }
-            Self::ProbeSlice(var, sig, offset) => {
+            Self::ProbeSlice(var, sig, offset, bounds) => {
                 let dst_size = ctx.gl.vars.size(*var);
                 var.ctx_fmt(f, ctx)?;
-                write!(f, " = prb[{dst_size}] ")?;
+                write!(f, " = prb[{dst_size}]")?;
+                fmt_signal_bounds(f, ctx, *sig, *bounds)?;
+                f.write_str(" ")?;
                 ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
                 offset.ctx_fmt(f, ctx)?;
@@ -595,7 +598,7 @@ impl ContextFormat for Instruction {
                 dst.ctx_fmt(f, ctx)?;
                 f.write_str(" = drv")?;
                 f.write_str(" ")?;
-                ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
+                ctx.gl.signals[*sig].ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
                 var.ctx_fmt(f, ctx)?;
                 if *offset != 0 {
@@ -603,11 +606,12 @@ impl ContextFormat for Instruction {
                     offset.fmt(f)?;
                 }
             }
-            Self::DriveSlice(dst, sig, var, offset) => {
+            Self::DriveSlice(dst, sig, var, offset, bounds) => {
                 dst.ctx_fmt(f, ctx)?;
                 f.write_str(" = drv")?;
+                fmt_signal_bounds(f, ctx, *sig, *bounds)?;
                 f.write_str(" ")?;
-                ctx.gl.signals.get(*sig).unwrap().ctx_fmt(f, ctx)?;
+                ctx.gl.signals[*sig].ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
                 var.ctx_fmt(f, ctx)?;
                 f.write_str(", ")?;
@@ -630,6 +634,30 @@ impl ContextFormat for Instruction {
         }
 
         Ok(())
+    }
+}
+
+fn fmt_signal_bounds(
+    f: &mut fmt::Formatter<'_>,
+    ctx: &DisplayContext<'_>,
+    signal: SignalKey,
+    bounds: SignalBounds,
+) -> fmt::Result {
+    match bounds {
+        SignalBounds::Constant(slice)
+            if slice.lsb() == 0 && slice.width() == ctx.gl.signals[signal].size =>
+        {
+            Ok(())
+        }
+        SignalBounds::Constant(slice) => {
+            write!(f, "[{}..{}]", slice.lsb(), slice.msb())
+        }
+        SignalBounds::Variable {
+            elem_offset,
+            stride,
+        } => {
+            write!(f, "[{}, {stride}]", elem_offset.display(ctx))
+        }
     }
 }
 

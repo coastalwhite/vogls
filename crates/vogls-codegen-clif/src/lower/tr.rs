@@ -3510,7 +3510,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }
                         }
                     }
-                    Instruction::ProbeSlice(dst, signal, offset) => {
+                    Instruction::ProbeSlice(dst, signal, offset, bounds) => {
                         let dst_size = gl.vars.size(*dst);
                         let signal_size = gl.signals[*signal].size;
                         let offset_size = gl.vars.size(*offset);
@@ -4302,7 +4302,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             );
                         }
                     }
-                    Instruction::DriveSlice(dst, signal, src, offset) => {
+                    Instruction::DriveSlice(dst, signal, src, offset, bounds) => {
                         use LogicMode as M;
 
                         let src_size = gl.vars.size(*src);

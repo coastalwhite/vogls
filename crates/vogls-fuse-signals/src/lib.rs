@@ -254,13 +254,13 @@ impl FuseGraph {
                             .get(s)
                             .map(|n| g.nodes[*n].flags |= NodeFlags::LUPDT)
                     }
-                    I::Probe(_, s, _) | I::ProbeSlice(_, s, _) => {
+                    I::Probe(_, s, _) | I::ProbeSlice(_, s, _, _) => {
                         _ = g
                             .signal_to_node
                             .get(s)
                             .map(|n| g.nodes[*n].flags |= NodeFlags::PROBE)
                     }
-                    I::Drive(_, s, _, _) | I::DriveSlice(_, s, _, _) => {
+                    I::Drive(_, s, _, _) | I::DriveSlice(_, s, _, _, _) => {
                         _ = g
                             .signal_to_node
                             .get(s)
@@ -390,19 +390,27 @@ impl FuseGraphOptimizer {
                             continue;
                         }
                     }
-                    I::ProbeSlice(dst, signal, offset) => {
+                    I::ProbeSlice(dst, signal, offset, bounds) => {
                         if let Some(tgt) = self.fused_signals.get(signal) {
                             match tgt {
                                 FuseTarget::Signal(to, slice) => match slice {
-                                    None => builder
-                                        .push_raw_instruction(I::ProbeSlice(*dst, *to, *offset)),
+                                    None => builder.push_raw_instruction(I::ProbeSlice(
+                                        *dst, *to, *offset, *bounds,
+                                    )),
                                     Some(slice) => {
                                         let offset = builder.plus_constant(
                                             gl,
                                             *offset,
                                             Bits::new_u32(slice.lsb()),
                                         );
-                                        builder.probe_slice(gl, *to, offset, slice.width());
+                                        // @TODO: Fix bounds
+                                        builder.probe_slice(
+                                            gl,
+                                            *to,
+                                            offset,
+                                            slice.width(),
+                                            *bounds,
+                                        );
                                         if let Some(d) = builder
                                             .instrs
                                             .last_mut()
@@ -443,14 +451,17 @@ impl FuseGraphOptimizer {
                             continue;
                         }
                     }
-                    I::DriveSlice(dst, signal, src, partial) => {
+                    I::DriveSlice(dst, signal, src, partial, bounds) => {
                         if let Some((to, slice)) = self.drive_map.get(signal) {
                             let mut offset = *partial;
                             if let Some(slice) = slice {
                                 offset =
                                     builder.plus_constant(gl, offset, Bits::new_u32(slice.lsb()));
                             }
-                            builder.push_raw_instruction(I::DriveSlice(*dst, *to, *src, offset));
+                            // @TODO: Fix bounds
+                            builder.push_raw_instruction(I::DriveSlice(
+                                *dst, *to, *src, offset, *bounds,
+                            ));
                             continue;
                         }
                     }

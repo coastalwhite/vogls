@@ -6,8 +6,9 @@ use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification,
     BinaryOp, Bits, GlobalContext, INTEGER_VSIZE, Instruction, IntrinsicOp, LogicMode, Process,
     ProcessKey, ProcessKind, RandomKind, ResizeOp, ResizeOpSimplification, SCALAR_VSIZE,
-    SelectMerge, ShiftImmOp, SignalKey, TIME_VSIZE, TemporalRegionKey, Time, UnaryOp,
-    UnaryOpSimplification, VSIZE_32, VSIZE_64, VariableKey, VectorSize, WatchCondition,
+    SelectMerge, ShiftImmOp, SignalBounds, SignalKey, SignalSlice, TIME_VSIZE, TemporalRegionKey,
+    Time, UnaryOp, UnaryOpSimplification, VSIZE_32, VSIZE_64, VariableKey, VectorSize,
+    WatchCondition,
 };
 
 #[must_use]
@@ -883,14 +884,21 @@ impl BasicBlockBuilder {
         partial: Option<VariableKey>,
     ) -> VariableKey {
         let src_size = gl.vars.size(src);
+        let s = &gl.signals[signal];
+        let signal_size = s.size;
         let dst = gl.vars.insert(LogicMode::TwoValue, src_size);
-        let src = self.convert_mode(gl, src, gl.signals[signal].mode);
+        let src = self.convert_mode(gl, src, s.mode);
         match partial {
             None => self.instrs.push(Instruction::Drive(dst, signal, src, 0)),
             Some(offset) => {
                 assert_eq!(gl.vars.size(offset), INTEGER_VSIZE);
-                self.instrs
-                    .push(Instruction::DriveSlice(dst, signal, src, offset))
+                self.instrs.push(Instruction::DriveSlice(
+                    dst,
+                    signal,
+                    src,
+                    offset,
+                    SignalBounds::Constant(SignalSlice::with_end(signal_size)),
+                ))
             }
         }
         dst
@@ -910,10 +918,11 @@ impl BasicBlockBuilder {
         signal: SignalKey,
         offset: VariableKey,
         width: VectorSize,
+        bounds: SignalBounds,
     ) -> VariableKey {
         let dst = gl.vars.insert(LogicMode::FourValue, width);
         self.instrs
-            .push(Instruction::ProbeSlice(dst, signal, offset));
+            .push(Instruction::ProbeSlice(dst, signal, offset, bounds));
         dst
     }
 

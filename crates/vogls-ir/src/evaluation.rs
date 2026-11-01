@@ -92,7 +92,7 @@ fn evaluate_impl(
                 let bits = bits.slicez(*offset, gl.vars.size(*dst));
                 _ = variables.insert(*dst, bits);
             }
-            I::ProbeSlice(dst, src_signal, offset) => {
+            I::ProbeSlice(dst, src_signal, offset, bounds) => {
                 let bits = &signals[src_signal];
                 let offset = &variables[offset];
 
