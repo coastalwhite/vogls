@@ -172,12 +172,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         scope,
     };
 
-    let Address {
-        elem_offset,
-        output_width,
-        array,
-        is_unsigned: _,
-    } = lower_addressing(
+    let address = lower_addressing(
         &mut actx,
         s.ty.bit_length(),
         s.dims.as_slice(),
@@ -185,16 +180,11 @@ pub fn assign_variable_lvalue_flat<'a>(
         exprs.iter(),
         range_expr,
     )?;
+    let address = address.into_signal();
+    let output_width = address.output_width;
 
-    // @TODO: Use array overflow.
-    let partial = match (elem_offset, array) {
-        (Some(elem_offset), Some((array_offset, _array_overflow))) => {
-            Some(builder.plus(mctx.gl(), elem_offset, array_offset))
-        }
-        (Some(elem_offset), None) => Some(elem_offset),
-        (None, Some((array_offset, _array_overflow))) => Some(array_offset),
-        (None, None) => None,
-    };
+    let signal_size = mctx.gl.signals[s.terminals.probe_signal()].size;
+    let partial = address.partial(mctx.gl(), builder, signal_size);
     let variable = expression::coerce_to(
         mctx.gl(),
         builder,
@@ -258,6 +248,7 @@ pub fn net_lvalue_flat_ty<'a>(
         elem_offset: _,
         output_width,
         array: _,
+        bounds: _,
         is_unsigned,
     } = lower_addressing(
         &mut actx,
