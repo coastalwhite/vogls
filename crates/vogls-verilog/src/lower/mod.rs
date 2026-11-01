@@ -459,7 +459,7 @@ use crate::elaborate::{
 use crate::parser::AstArenas;
 use crate::tokenizer::Tokenized;
 
-use self::addressing::{Address, LValueAddressingContext, lower_addressing};
+use self::addressing::{LValueAddressingContext, lower_addressing};
 pub use self::expression::eval_constant_expr;
 use self::expression::lower_expr;
 use self::fuse::{FuseDestination, FuseSource};
@@ -575,12 +575,7 @@ fn assign_task_output<'a>(
                     scope,
                 };
 
-                let Address {
-                    elem_offset,
-                    output_width,
-                    array,
-                    is_unsigned: _,
-                } = lower_addressing(
+                let address = lower_addressing(
                     &mut actx,
                     s.ty.bit_length(),
                     &s.dims,
@@ -588,15 +583,11 @@ fn assign_task_output<'a>(
                     exprs.iter(),
                     range_expression.map(|r| r.into()),
                 )?;
+                let address = address.into_signal();
+                let output_width = address.output_width;
 
-                let partial = match (elem_offset, array) {
-                    (Some(elem_offset), Some((array_offset, _array_overflow))) => {
-                        Some(builder.plus(mctx.gl(), elem_offset, array_offset))
-                    }
-                    (Some(elem_offset), None) => Some(elem_offset),
-                    (None, Some((array_offset, _array_overflow))) => Some(array_offset),
-                    (None, None) => None,
-                };
+                let signal_size = mctx.gl.signals[s.net.probe_signal()].size;
+                let partial = address.partial(mctx.gl(), builder, signal_size);
 
                 let src = expression::coerce_to(
                     mctx.gl(),

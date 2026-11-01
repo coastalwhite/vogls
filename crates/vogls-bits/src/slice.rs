@@ -283,3 +283,68 @@ pub fn copy_shifted_bits(dst: &mut [u64], shift: u64, src: &[u64], start: u64, e
         pos += nbits;
     }
 }
+
+/// Set all bits of `words` in the range `start..end`.
+pub fn set_bit_range(words: &mut [u64], start: u32, end: u32) {
+    for (i, word) in words.iter_mut().enumerate() {
+        let base = i as u32 * 64;
+        let lo = start.saturating_sub(base).min(64);
+        let hi = end.saturating_sub(base).min(64);
+        if lo < hi {
+            *word |= (u64::MAX >> (64 - (hi - lo))) << lo;
+        }
+    }
+}
+
+/// Slice `dst_size` bits starting at bit `offset` out of `src` into `dst`.
+///
+/// Only the source bits inside the inclusive range `lower..=upper` and inside the source are
+/// read. All other bits of the slice are X when `fill_with_x`, and 0 otherwise. A four-value
+/// source or `fill_with_x` gives a SPC and VAL plane in `dst`, each `dst_size` bits.
+#[allow(clippy::too_many_arguments)]
+pub fn ll_slice_bounded(
+    dst: &mut [u64],
+    src: &[u64],
+    offset: u32,
+    dst_size: VectorSize,
+    src_size: VectorSize,
+    src_is_fv: bool,
+    fill_with_x: bool,
+    lower: u32,
+    upper: u32,
+) {
+    let src_plane_words = src_size.get().div_ceil(64) as usize;
+    let dst_plane_words = dst_size.get().div_ceil(64) as usize;
+
+    // The bits of the source which can be read, as the range `start..end`. They land at bit
+    // `shift` of the slice.
+    let start = u32::max(offset, lower);
+    let end = offset
+        .saturating_add(dst_size.get())
+        .min(upper.saturating_add(1))
+        .min(src_size.get())
+        .max(start);
+    let shift = start - offset;
+
+    dst.fill(0);
+    let (dst_spc, dst_val) = if src_is_fv | fill_with_x {
+        dst.split_at_mut(dst_plane_words)
+    } else {
+        (&mut [][..], dst)
+    };
+
+    if src_is_fv {
+        let (src_spc, src_val) = src.split_at(src_plane_words);
+        if !fill_with_x {
+            // A SPC bit without a VAL bit is a 0.
+            set_bit_range(dst_spc, 0, dst_size.get());
+        }
+        copy_shifted_bits(dst_spc, shift.into(), src_spc, start.into(), end.into());
+        copy_shifted_bits(dst_val, shift.into(), src_val, start.into(), end.into());
+    } else {
+        if fill_with_x {
+            set_bit_range(dst_spc, shift, shift + (end - start));
+        }
+        copy_shifted_bits(dst_val, shift.into(), src, start.into(), end.into());
+    }
+}

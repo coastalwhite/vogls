@@ -10,7 +10,7 @@ use crate::ast::module::{
     ListOfPortConnections, ModuleInstance, ModuleInstantiation, NamedPortConnection,
 };
 use crate::elaborate::{NetSymbol, VSymbol};
-use crate::lower::addressing::{Address, LValueAddressingContext, lower_addressing};
+use crate::lower::addressing::{LValueAddressingContext, lower_addressing};
 use crate::lower::expression::{self, get_expr_type};
 use crate::lower::fuse::{
     FuseDestination, FuseResult, FuseSource, FuseSourceContent, FuseType, SignalSide,
@@ -359,12 +359,7 @@ fn assign_port_output<'a>(
                     scope,
                 };
 
-                let Address {
-                    elem_offset,
-                    output_width,
-                    array,
-                    is_unsigned: _,
-                } = lower_addressing(
+                let address = lower_addressing(
                     &mut actx,
                     s.ty.bit_length(),
                     &s.dims,
@@ -372,16 +367,11 @@ fn assign_port_output<'a>(
                     exprs.iter(),
                     range_expression.map(|r| r.into()),
                 )?;
+                let address = address.into_signal();
+                let output_width = address.output_width;
 
-                // @TODO: Use array overflow.
-                let partial = match (elem_offset, array) {
-                    (Some(elem_offset), Some((array_offset, _array_overflow))) => {
-                        Some(bb_builder.plus(mctx.gl(), elem_offset, array_offset))
-                    }
-                    (Some(elem_offset), None) => Some(elem_offset),
-                    (None, Some((array_offset, _array_overflow))) => Some(array_offset),
-                    (None, None) => None,
-                };
+                let signal_size = mctx.gl.signals[s.net.probe_signal()].size;
+                let partial = address.partial(mctx.gl(), &mut bb_builder, signal_size);
                 let variable = expression::coerce_to(
                     mctx.gl(),
                     &mut bb_builder,

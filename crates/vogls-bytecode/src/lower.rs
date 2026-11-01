@@ -2260,8 +2260,15 @@ fn lower_instruction(
             const LOWER_BOUND_SCRATCH: Reg = T5;
             // @NOTE: The element offset may live in T4, so compute the lower bound before the
             // signal address is loaded into it.
+            // TempReg: T1 is only written by the slice itself, so it is free as a scratch here.
             if let SignalBounds::Variable { stride, .. } = bounds {
-                load_lower_bound_from_elem_offset(bce, LOWER_BOUND_SCRATCH, relem_offset, *stride);
+                load_lower_bound_from_elem_offset(
+                    bce,
+                    LOWER_BOUND_SCRATCH,
+                    relem_offset,
+                    *stride,
+                    T1,
+                );
             }
 
             let rsignal = T4;
@@ -2751,18 +2758,20 @@ fn lower_instruction(
                 branch_offset = Some((T4, bce.data.len()));
 
                 // Make space for the RD.
-                if relem_offsetval == T5 {
+                relem_offset = if relem_offsetval == T5 {
                     match partial.mode() {
                         M::TwoValue => {
                             bce.copy(T3, relem_offsetval);
-                            relem_offset = T3;
+                            T3
                         }
                         M::FourValue => {
                             bce.copy(T2, relem_offsetval);
-                            relem_offset = T2;
+                            T2
                         }
                     }
-                }
+                } else {
+                    relem_offsetval
+                };
             }
 
             let dslot = assignment[dst];
@@ -2774,7 +2783,17 @@ fn lower_instruction(
 
             const LOWER_BOUND_SCRATCH: Reg = T4;
             if let SignalBounds::Variable { stride, .. } = bounds {
-                load_lower_bound_from_elem_offset(bce, LOWER_BOUND_SCRATCH, relem_offset, *stride);
+                // @NOTE: The element offset only aliases T4 when it is two-valued, in which case
+                // it was not copied into T2 or T3. A four-valued PARTIAL lives in T3 and its
+                // branch condition in T2 is consumed by now, otherwise T3 is unused.
+                let scratch = if partial.mode().is_four_value() { T2 } else { T3 };
+                load_lower_bound_from_elem_offset(
+                    bce,
+                    LOWER_BOUND_SCRATCH,
+                    relem_offset,
+                    *stride,
+                    scratch,
+                );
             }
 
             if let Some(watcher_range) = watch_map.map().get(signal) {
@@ -3204,17 +3223,28 @@ fn convert_intrinsic(
     }
 }
 
+/// Load `elem_offset * stride` into `rd`.
+///
+/// `scratch` is only clobbered when `rd` is `elem_offset` and the stride fits neither an
+/// immediate nor a shift.
 fn load_lower_bound_from_elem_offset(
     bce: &mut BytecodeEncoder,
     rd: Reg,
     elem_offset: Reg,
     stride: VectorSize,
+    scratch: Reg,
 ) {
-    match SignedImmediate::new(stride.get() as i64) {
-        None => {
-            bce.load_u64(rd, stride.get() as u64);
-            bce.mul(rd, elem_offset, rd, SixBitSize::N32);
-        }
-        Some(imm) => bce.muli(rd, elem_offset, imm, SixBitSize::N32),
+    let stride = stride.get();
+    if let Some(imm) = SignedImmediate::new(i64::from(stride)) {
+        bce.muli(rd, elem_offset, imm, SixBitSize::N32);
+    } else if stride.is_power_of_two() {
+        let shift = SignedImmediate::new(i64::from(stride.trailing_zeros())).unwrap();
+        bce.slli(rd, elem_offset, shift, SixBitSize::N32);
+    } else {
+        // @NOTE: Loading the stride into `rd` would overwrite the element offset if they alias.
+        let rstride = if rd == elem_offset { scratch } else { rd };
+        debug_assert_ne!(rstride, elem_offset);
+        bce.load_u64(rstride, u64::from(stride));
+        bce.mul(rd, elem_offset, rstride, SixBitSize::N32);
     }
 }

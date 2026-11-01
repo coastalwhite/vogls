@@ -293,7 +293,8 @@ impl BytecodeInstruction for PokeEdgeRelative {
         let mut slots = 0;
         slots += 2; // Base
         slots += 1; // Offset
-        slots += 2; // Watch index
+        slots += 2; // Watch start
+        slots += 2; // Watch end
         if !self.source_size.is_inline() {
             slots += 1;
         }
@@ -351,8 +352,8 @@ impl BytecodeInstruction for PokeEdgeRelative {
 
         let offset = additional_slots[2].0;
         let mut size_offset = 0;
-        let target_size = target_size.get(&mut size_offset, &additional_slots[5..]);
-        let source_size = source_size.get(&mut size_offset, &additional_slots[5..]);
+        let target_size = target_size.get(&mut size_offset, &additional_slots[7..]);
+        let source_size = source_size.get(&mut size_offset, &additional_slots[7..]);
 
         let lower_bound = (regs[roff] & 0xFFFF_FFFF) as u32;
         let upper_bound = lower_bound + source_size.get();

@@ -883,22 +883,33 @@ impl BasicBlockBuilder {
         src: VariableKey,
         partial: Option<VariableKey>,
     ) -> VariableKey {
+        let signal_size = gl.signals[signal].size;
+        let partial = partial.map(|offset| {
+            (
+                offset,
+                SignalBounds::Constant(SignalSlice::with_end(signal_size)),
+            )
+        });
+        self.drive_opt_bounded_partial(gl, signal, src, partial)
+    }
+    /// Drive `src` into `signal`, optionally starting at a bit offset. Bits of the drive outside
+    /// of the bounds are not driven.
+    pub fn drive_opt_bounded_partial(
+        &mut self,
+        gl: &mut GlobalContext,
+        signal: SignalKey,
+        src: VariableKey,
+        partial: Option<(VariableKey, SignalBounds)>,
+    ) -> VariableKey {
         let src_size = gl.vars.size(src);
-        let s = &gl.signals[signal];
-        let signal_size = s.size;
         let dst = gl.vars.insert(LogicMode::TwoValue, src_size);
-        let src = self.convert_mode(gl, src, s.mode);
+        let src = self.convert_mode(gl, src, gl.signals[signal].mode);
         match partial {
             None => self.instrs.push(Instruction::Drive(dst, signal, src, 0)),
-            Some(offset) => {
+            Some((offset, bounds)) => {
                 assert_eq!(gl.vars.size(offset), INTEGER_VSIZE);
-                self.instrs.push(Instruction::DriveSlice(
-                    dst,
-                    signal,
-                    src,
-                    offset,
-                    SignalBounds::Constant(SignalSlice::with_end(signal_size)),
-                ))
+                self.instrs
+                    .push(Instruction::DriveSlice(dst, signal, src, offset, bounds))
             }
         }
         dst

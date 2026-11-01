@@ -6,7 +6,8 @@ use vogls_frontend::ident_table::IdentId;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockKey, Bits, ConnectionDirection, GlobalContext, LogicMode,
-    ProcessKey, SCALAR_VSIZE, Signal, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize,
+    ProcessKey, SCALAR_VSIZE, Signal, SignalBounds, SignalFlags, SignalKey, SignalSlice,
+    VariableKey, VectorSize,
 };
 use vogls_utils::{Entry, IndexMap, Table, VgHashMap, new_table_key};
 
@@ -142,14 +143,26 @@ impl Net {
         bbb.probe_slice_constant(gl, self.probe_signal(), slice.lsb(), slice.width())
     }
 
+    /// Probe `width` bits starting at `offset`. Bits outside of `bounds` read as X.
+    pub fn probe_bounded_slice(
+        &self,
+        gl: &mut GlobalContext,
+        bbb: &mut BasicBlockBuilder,
+        offset: VariableKey,
+        width: VectorSize,
+        bounds: SignalBounds,
+    ) -> VariableKey {
+        bbb.probe_slice(gl, self.probe_signal(), offset, width, bounds)
+    }
+
     pub fn drive_blocking(
         &self,
         gl: &mut GlobalContext,
         bbb: &mut BasicBlockBuilder,
         src: VariableKey,
-        partial: Option<VariableKey>,
+        partial: Option<(VariableKey, SignalBounds)>,
     ) -> VariableKey {
-        bbb.drive_opt_partial(gl, self.blocking_drive_signal(), src, partial)
+        bbb.drive_opt_bounded_partial(gl, self.blocking_drive_signal(), src, partial)
     }
     pub fn drive_non_blocking(
         &self,
@@ -157,7 +170,7 @@ impl Net {
         nbas: &mut IndexMap<SignalKey, (ProcessKey, SignalKey, Option<SignalKey>)>,
         bbb: &mut BasicBlockBuilder,
         src: VariableKey,
-        partial: Option<VariableKey>,
+        partial: Option<(VariableKey, SignalBounds)>,
     ) {
         let blocking_signal = self.blocking_drive_signal();
         let (_, value, mask) = match nbas.entry(blocking_signal) {
@@ -166,11 +179,11 @@ impl Net {
                 .get(),
             Entry::Occupied(mut entry) => *entry.get(),
         };
-        bbb.drive_opt_partial(gl, value, src, partial);
+        bbb.drive_opt_bounded_partial(gl, value, src, partial);
         if let Some(mask) = mask {
             let size = gl.vars.size(src);
             let mask_value = bbb.constant(gl, Bits::new_ones(size));
-            bbb.drive_opt_partial(gl, mask, mask_value, partial);
+            bbb.drive_opt_bounded_partial(gl, mask, mask_value, partial);
         }
     }
 

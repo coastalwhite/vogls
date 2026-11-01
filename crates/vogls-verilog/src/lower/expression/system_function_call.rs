@@ -10,7 +10,7 @@ use crate::ast::expr::Expr;
 use crate::ast::statement::SystemTaskIdentifier;
 use crate::ast::{AstId, AstIdRange, AstItem};
 use crate::lower::VSymbolTable;
-use crate::lower::addressing::{Address, LValueAddressingContext, lower_addressing};
+use crate::lower::addressing::{LValueAddressingContext, lower_addressing};
 use crate::lower::expression::{
     coerce_to_max_size_ty, lower_expr, sign_or_zero_extend, to_real, truncate_or_extend,
 };
@@ -623,12 +623,7 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 loc: target.loc,
                 scope,
             };
-            let Address {
-                elem_offset,
-                output_width,
-                array,
-                is_unsigned: _,
-            } = lower_addressing(
+            let address = lower_addressing(
                 &mut actx,
                 net_symbol.ty.bit_length(),
                 &net_symbol.dims,
@@ -636,20 +631,15 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 array_exprs.iter(),
                 bitslice.map(|r| r.into()),
             )?;
+            let address = address.into_signal();
+            let output_width = address.output_width;
 
-            // @TODO: Use array overflow.
-            let partial = match (elem_offset, array) {
-                (Some(elem_offset), Some((array_offset, _array_overflow))) => {
-                    Some(builder.plus(mctx.gl(), elem_offset, array_offset))
-                }
-                (Some(elem_offset), None) => Some(elem_offset),
-                (None, Some((array_offset, _array_overflow))) => Some(array_offset),
-                (None, None) => None,
-            };
+            let signal_size = mctx.gl.signals[signal].size;
+            let partial = address.partial(mctx.gl(), builder, signal_size);
 
             let (value, value_ty) = lower_expr(ctx, mctx, scope, builder, value, None)?;
             let value = truncate_or_extend(mctx.gl(), builder, value, value_ty, output_width);
-            let mask = builder.drive_opt_partial(mctx.gl(), signal, value, partial);
+            let mask = builder.drive_opt_bounded_partial(mctx.gl(), signal, value, partial);
             Ok(Some((mask, VType::UnsignedNet(output_width))))
         }
         "vogls_slice" => {

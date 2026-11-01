@@ -1,13 +1,13 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, VariableKey, VectorSize};
+use vogls_ir::{BasicBlockBuilder, SignalBounds, SignalSlice, VariableKey, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::expr::{BitSlice, BitSliceKind};
 use crate::ast::statement::{NetLValue, NetLValueFlat, VariableLValue, VariableLValueFlat};
 use crate::elaborate::{ArrayDim, VSymbol, VectorTransform};
 use crate::lower::addressing::{
-    Address, AddressingConstantExprWidthContext, LValueAddressingContext, RangeExpr,
-    lower_addressing,
+    Address, AddressBounds, AddressingConstantExprWidthContext, LValueAddressingContext,
+    RangeExpr, lower_addressing,
 };
 use crate::lower::expression::{self, truncate_or_extend};
 use crate::lower::try_resolve_hident;
@@ -165,12 +165,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         scope,
     };
 
-    let Address {
-        elem_offset,
-        output_width,
-        array,
-        is_unsigned: _,
-    } = lower_addressing(
+    let address = lower_addressing(
         &mut actx,
         ty.bit_length(),
         array_dims,
@@ -178,6 +173,8 @@ pub fn assign_variable_lvalue_flat<'a>(
         exprs.iter(),
         range_expr,
     )?;
+    let address = address.into_signal();
+    let output_width = address.output_width;
 
     let VSymbol::Net(net) = &ctx.table[symbol_key].content else {
         mctx.diagnostics
@@ -185,15 +182,8 @@ pub fn assign_variable_lvalue_flat<'a>(
         return Err(());
     };
 
-    // @TODO: Use array overflow.
-    let partial = match (elem_offset, array) {
-        (Some(elem_offset), Some((array_offset, _array_overflow))) => {
-            Some(builder.plus(mctx.gl(), elem_offset, array_offset))
-        }
-        (Some(elem_offset), None) => Some(elem_offset),
-        (None, Some((array_offset, _array_overflow))) => Some(array_offset),
-        (None, None) => None,
-    };
+    let signal_size = mctx.gl.signals[net.net.probe_signal()].size;
+    let partial = address.partial(mctx.gl(), builder, signal_size);
     let variable = expression::coerce_to(
         mctx.gl(),
         builder,
@@ -321,6 +311,7 @@ pub fn net_lvalue_flat_ty<'a>(
         elem_offset: _,
         output_width,
         array: _,
+        bounds: _,
         is_unsigned,
     } = lower_addressing(
         &mut actx,
@@ -375,6 +366,7 @@ fn assign_net_lvalue_flat<'a>(
         elem_offset,
         output_width,
         array,
+        bounds,
         is_unsigned: _,
     } = lower_addressing(
         &mut actx,
@@ -398,14 +390,29 @@ fn assign_net_lvalue_flat<'a>(
         (None, Some((array_offset, _array_overflow))) => Some(array_offset),
         (None, None) => None,
     };
-    let partial = match partial {
-        None => None,
-        Some(partial) => Some(builder.constant_u32(
-            &mut mctx.gl,
-            u32::try_from(partial).map_err(|_| {
+    let signal_size = mctx.gl.signals[s.net.probe_signal()].size;
+    let bounds = match bounds {
+        AddressBounds::Net => SignalSlice::with_end(signal_size),
+        AddressBounds::Element { index, width } => u32::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_mul(width.get()))
+            .and_then(|lsb| SignalSlice::from_width(lsb, width))
+            .ok_or_else(|| {
                 mctx.diagnostics
                     .not_yet_implemented(ctx.arenas.get_span(lvalue), "overflow");
             })?,
+    };
+    let partial = match partial {
+        None => None,
+        Some(partial) => Some((
+            builder.constant_u32(
+                &mut mctx.gl,
+                u32::try_from(partial).map_err(|_| {
+                    mctx.diagnostics
+                        .not_yet_implemented(ctx.arenas.get_span(lvalue), "overflow");
+                })?,
+            ),
+            SignalBounds::Constant(bounds),
         )),
     };
     let var = expression::coerce_to(

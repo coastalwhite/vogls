@@ -984,6 +984,7 @@ impl<'a> Compiler<'a> {
         s_size: u32,
         src_is_fv: bool,
         fill_with_x: bool,
+        bounds: Option<(Value, Value)>,
         vmap: &VgHashMap<VariableKey, Variable>,
         spc_map: &VgHashMap<VariableKey, Variable>,
         wide_map: &WideMap,
@@ -1027,17 +1028,30 @@ impl<'a> Compiler<'a> {
                 types::I32,
                 types::I32,
                 types::I32,
+                types::I32,
+                types::I32,
             ]
             .map(AbiParam::new),
         );
         let sr = b.import_signature(sig);
         let offc = b.ins().ireduce(types::I32, offset);
+        // The inclusive bounds, `0..=u32::MAX` meaning unbounded.
+        let (lower, upper) = match bounds {
+            Some((lower, upper)) => (
+                b.ins().ireduce(types::I32, lower),
+                b.ins().ireduce(types::I32, upper),
+            ),
+            None => (
+                b.ins().iconst(types::I32, 0),
+                b.ins().iconst(types::I32, i64::from(u32::MAX)),
+            ),
+        };
         let dsc = b.ins().iconst(types::I32, d_size as i64);
         let ssc = b.ins().iconst(types::I32, s_size as i64);
         let sfv = b.ins().iconst(types::I32, i64::from(src_is_fv));
         let fx = b.ins().iconst(types::I32, i64::from(fill_with_x));
         b.ins()
-            .call_indirect(sr, fnp, &[dst_ptr, src_ptr, offc, dsc, ssc, sfv, fx]);
+            .call_indirect(sr, fnp, &[dst_ptr, src_ptr, offc, dsc, ssc, sfv, fx, lower, upper]);
         b.ins().jump(merge, &[]);
 
         // Unknown offset -> all x (zero all dst words).

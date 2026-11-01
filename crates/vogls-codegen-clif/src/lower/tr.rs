@@ -15,8 +15,8 @@ use vogls_bits::arithmetic::FvLogicValue;
 use vogls_codegen::{HeapAlignment, SixBitSize};
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Instruction, IntrinsicOp,
-    LogicMode, ResizeOp, SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalSlice, UnaryOp, VSIZE_32,
-    VSIZE_64, VariableKey, VectorSize, WatchEdge,
+    LogicMode, ResizeOp, SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalBounds, SignalSlice, UnaryOp,
+    VSIZE_32, VSIZE_64, VariableKey, VectorSize, WatchEdge,
 };
 use vogls_utils::VgHashMap;
 
@@ -2984,6 +2984,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 s_size,
                                 is_fv(*src),
                                 false,
+                                None,
                                 vmap,
                                 spc_map,
                                 wide_map,
@@ -3128,6 +3129,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                         s_size,
                                         is_fv(*src),
                                         true,
+                                        None,
                                         vmap,
                                         spc_map,
                                         wide_map,
@@ -3431,7 +3433,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let one = b.ins().iconst(types::I8, 1);
                                 let src_is_fv = mode == LogicMode::FourValue;
                                 self.compiler.emit_wide_slice(
-                                    b, params, *dst, src_ptr, offc, one, s_size, src_is_fv, false,
+                                    b, params, *dst, src_ptr, offc, one, s_size, src_is_fv, false, None,
                                     vmap, spc_map, wide_map,
                                 );
                             }
@@ -3521,6 +3523,22 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         let base_word = href.offset.bit_offset / 64;
                         let off = get(b, *offset);
 
+                        let elem = match bounds {
+                            SignalBounds::Constant(_) => None,
+                            SignalBounds::Variable { elem_offset, .. } => {
+                                let elem = get(b, *elem_offset);
+                                let known = if elem_offset.mode().is_four_value() {
+                                    let es = spc_get(b, *elem_offset);
+                                    let mask = mask_of(gl.vars.size(*elem_offset).get());
+                                    Some(b.ins().icmp_imm_u(IntCC::Equal, es, mask))
+                                } else {
+                                    None
+                                };
+                                Some((elem, known))
+                            }
+                        };
+                        let slice_bounds = clif_slice_bounds(b, *bounds, signal_size, elem);
+
                         // Like Slice: the whole result is x if the offset is fully out of
                         // range, or (four-value offset) the offset has any x/z bit. Guard
                         // it with an explicit (predictable) branch so the in-range extract
@@ -3538,6 +3556,23 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             b.ins().bor(all_x, special)
                         } else {
                             all_x
+                        };
+                        // Also all `x` if the slice misses the bounds.
+                        let all_x = match slice_bounds {
+                            Some((lower, end)) => {
+                                let slice_end = b.ins().iadd_imm_s(off, dst_size.get() as i64);
+                                let below =
+                                    b.ins()
+                                        .icmp(IntCC::UnsignedLessThanOrEqual, slice_end, lower);
+                                let above =
+                                    b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, off, end);
+                                let empty =
+                                    b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, lower, end);
+                                let missed = b.ins().bor(below, above);
+                                let missed = b.ins().bor(missed, empty);
+                                b.ins().bor(all_x, missed)
+                            }
+                            None => all_x,
                         };
 
                         let all_x_bb = b.create_block();
@@ -3557,6 +3592,11 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 b.ins().iconst(types::I8, 1)
                             };
                             let src_is_fv = mode == LogicMode::FourValue;
+                            // The shim takes inclusive bounds.
+                            let wide_bounds = match slice_bounds {
+                                Some((lower, end)) => Some((lower, b.ins().iadd_imm_s(end, -1))),
+                                None => None,
+                            };
                             self.compiler.emit_wide_slice(
                                 b,
                                 params,
@@ -3567,6 +3607,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 signal_size.get(),
                                 src_is_fv,
                                 true,
+                                wide_bounds,
                                 vmap,
                                 spc_map,
                                 wide_map,
@@ -3625,6 +3666,28 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 dst_size.get(),
                                 (href.offset.bit_offset % 64) as u32,
                             );
+                            b.def_var(vmap[dst], val);
+                            b.def_var(spc_map[dst], spc);
+                        }
+                        if let (Some((lower, end)), Some(_)) =
+                            (slice_bounds, SixBitSize::from_vector_size(dst_size))
+                        {
+                            // The bits of the slice outside the bounds are `x`. The guard
+                            // ensured the slice overlaps the bounds, so `1 <= width <= 64`.
+                            let start = b.ins().umax(lower, off);
+                            let slice_end = b.ins().iadd_imm_s(off, dst_size.get() as i64);
+                            let stop = b.ins().umin(end, slice_end);
+                            let lo = b.ins().isub(start, off);
+                            let width = b.ins().isub(stop, start);
+                            let ones = b.ins().iconst(I64, -1);
+                            let c64 = b.ins().iconst(I64, 64);
+                            let inv_width = b.ins().isub(c64, width);
+                            let in_bounds = b.ins().ushr(ones, inv_width);
+                            let in_bounds = b.ins().ishl(in_bounds, lo);
+                            let val = b.use_var(vmap[dst]);
+                            let spc = b.use_var(spc_map[dst]);
+                            let val = b.ins().band(val, in_bounds);
+                            let spc = b.ins().band(spc, in_bounds);
                             b.def_var(vmap[dst], val);
                             b.def_var(spc_map[dst], spc);
                         }
@@ -4310,9 +4373,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
 
                         let (heap_ref, rt, mode) = info.heap_ref(*signal);
                         let base_offset = heap_ref.offset.bit_offset as u64;
-                        let lower_bound = 0u64;
-                        // Inclusive: the last bit of the signal that may be written.
-                        let upper_bound = signal_size.get() as u64 - 1;
                         let heap_ptr = params.heap_ptr;
 
                         let conditions = self
@@ -4329,17 +4389,39 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
 
                         let offset_key = *offset;
                         let offset = get(b, offset_key);
-                        let below_lower_bound = b.ins().icmp_imm_s(
-                            IntCC::SignedLessThanOrEqual,
-                            offset,
-                            lower_bound as i64 - src_size.get() as i64,
-                        );
-                        let above_upper_bound = b.ins().icmp_imm_u(
-                            IntCC::SignedGreaterThan,
-                            offset,
-                            upper_bound as i64,
-                        );
+
+                        // The bits that may be written, as `lower..end`.
+                        let elem = match bounds {
+                            SignalBounds::Constant(_) => None,
+                            SignalBounds::Variable { elem_offset, .. } => {
+                                let elem = get(b, *elem_offset);
+                                let known = if elem_offset.mode().is_four_value() {
+                                    let es = spc_get(b, *elem_offset);
+                                    let mask = mask_of(gl.vars.size(*elem_offset).get());
+                                    Some(b.ins().icmp_imm_u(IntCC::Equal, es, mask))
+                                } else {
+                                    None
+                                };
+                                Some((elem, known))
+                            }
+                        };
+                        let (lower, end) =
+                            match clif_slice_bounds(b, *bounds, signal_size, elem) {
+                                Some(bounds) => bounds,
+                                None => (
+                                    b.ins().iconst(I64, 0),
+                                    b.ins().iconst(I64, signal_size.get() as i64),
+                                ),
+                            };
+
+                        let drive_end = b.ins().iadd_imm_s(offset, src_size.get() as i64);
+                        let below_lower_bound =
+                            b.ins().icmp(IntCC::SignedLessThanOrEqual, drive_end, lower);
+                        let above_upper_bound =
+                            b.ins().icmp(IntCC::SignedGreaterThanOrEqual, offset, end);
+                        let is_empty = b.ins().icmp(IntCC::SignedGreaterThanOrEqual, lower, end);
                         let is_fully_oob = b.ins().bor(below_lower_bound, above_upper_bound);
+                        let is_fully_oob = b.ins().bor(is_fully_oob, is_empty);
                         b.ins()
                             .brif(is_fully_oob, full_oob, &[], post_oob_check, &[]);
 
@@ -4387,6 +4469,13 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 WatchEdge::Negedge => false,
                             };
 
+                            // An edge outside the bounds is never written.
+                            if let SignalBounds::Constant(slice) = bounds
+                                && !slice.contains(condition.offset)
+                            {
+                                continue;
+                            }
+
                             let in_bounds_bb = b.create_block();
                             let post_bb = b.create_block();
 
@@ -4408,9 +4497,20 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let oob = b.ins().bor(lb, ub);
                                 b.ins().bnot(oob)
                             };
+                            let condition_v = if let SignalBounds::Variable { .. } = bounds {
+                                let bit = b.ins().iconst(I64, condition.offset as i64);
+                                let above =
+                                    b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, bit, lower);
+                                let below = b.ins().icmp(IntCC::UnsignedLessThan, bit, end);
+                                let in_bounds = b.ins().band(above, below);
+                                b.ins().band(condition_v, in_bounds)
+                            } else {
+                                condition_v
+                            };
                             b.ins().brif(condition_v, in_bounds_bb, &[], post_bb, &[]);
+                            b.switch_to_block(in_bounds_bb);
 
-                            let condition_offset = b.ins().iconst(I32, condition.offset as i64);
+                            let condition_offset = b.ins().iconst(I64, condition.offset as i64);
                             let rel_offset = b.ins().isub(condition_offset, offset);
                             let condition = match mode {
                                 M::TwoValue => {
@@ -4488,6 +4588,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 condition,
                                 &mut condition_index,
                             );
+                            b.ins().jump(post_bb, &[]);
+                            b.switch_to_block(post_bb);
                         }
 
                         let mask = match (src.mode(), SixBitSize::from_vector_size(src_size)) {
@@ -4499,8 +4601,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     heap_ptr,
                                     base_offset,
                                     offset,
-                                    lower_bound,
-                                    upper_bound,
+                                    lower,
+                                    end,
                                     size,
                                 )
                             }
@@ -4513,8 +4615,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     heap_ptr,
                                     base_offset,
                                     offset,
-                                    lower_bound,
-                                    upper_bound,
+                                    lower,
+                                    end,
                                     size,
                                 );
                                 let val_base_offset = HeapAlignment::spc_offset_to_val_offset(
@@ -4527,8 +4629,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                     heap_ptr,
                                     val_base_offset,
                                     offset,
-                                    lower_bound,
-                                    upper_bound,
+                                    lower,
+                                    end,
                                     size,
                                 );
                                 b.ins().bor(spc_mask, val_mask)
@@ -4568,8 +4670,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let zero = b.ins().iconst(I64, 0);
                                 let c64 = b.ins().iconst(I64, 64);
                                 let ones = b.ins().iconst(I64, -1);
-                                let lb = b.ins().iconst(I64, lower_bound as i64);
-                                let ub1 = b.ins().iconst(I64, (upper_bound + 1) as i64);
+                                let lb = lower;
+                                let ub1 = end;
                                 let src_bits = b.ins().iconst(I64, src_size.get() as i64);
 
                                 b.ins().jump(loop_bb, &[zero.into()]);
@@ -4585,7 +4687,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 // The part of this word that is inside both the signal
                                 // and the source, as bit positions within the word.
                                 // Signed throughout: `offset` may be negative, which has
-                                // to clamp up to `lower_bound` rather than wrap.
+                                // to clamp up to `lower` rather than wrap.
                                 let lo_rel = b.ins().isub(lb, chunk_start);
                                 let lo_i = b.ins().smax(lo_rel, zero);
                                 let lo_i = b.ins().smin(lo_i, c64);
@@ -5441,21 +5543,61 @@ fn clif_constant_misaligned_sbs_drive(
     mask
 }
 
+/// The bits a slice of a `signal_size`-bit signal may touch, as the I64 range `lower..end`,
+/// clamped into the signal. `None` if that is the whole signal.
+///
+/// `elem` is the value of a variable bound's element offset, together with whether it is fully
+/// known. An element offset with an X or Z bit gives an empty range.
+fn clif_slice_bounds(
+    b: &mut FunctionBuilder,
+    bounds: SignalBounds,
+    signal_size: VectorSize,
+    elem: Option<(Value, Option<Value>)>,
+) -> Option<(Value, Value)> {
+    let size = u64::from(signal_size.get());
+    match bounds {
+        SignalBounds::Constant(slice) => {
+            let lower = u64::from(slice.lsb()).min(size);
+            let end = (u64::from(slice.msb()) + 1).min(size);
+            if lower == 0 && end == size {
+                return None;
+            }
+            Some((
+                b.ins().iconst(I64, lower as i64),
+                b.ins().iconst(I64, end as i64),
+            ))
+        }
+        SignalBounds::Variable { stride, .. } => {
+            let (elem, elem_known) = elem.expect("variable bounds need an element offset");
+            // A 32-bit element offset times a 32-bit stride cannot overflow 64 bits.
+            let lower = b.ins().imul_imm_u(elem, i64::from(stride.get()));
+            let end = b.ins().iadd_imm_s(lower, i64::from(stride.get()));
+            let size = b.ins().iconst(I64, size as i64);
+            let mut lower = b.ins().umin(lower, size);
+            let mut end = b.ins().umin(end, size);
+            if let Some(known) = elem_known {
+                lower = b.ins().select(known, lower, size);
+                end = b.ins().select(known, end, size);
+            }
+            Some((lower, end))
+        }
+    }
+}
+
 /// Drive a [`SixBitSize`]d value into the heap at a dynamic offset.
 ///
-/// The driven values only take effect if they fall between the `lower_bound..=upper_bound`, with
-/// the invariant that at least 1 bit is between the bounds.
+/// The driven values only take effect if they fall in the range `lower..end`, with the invariant
+/// that at least 1 bit is in that range.
 fn clif_sbs_drive(
     b: &mut FunctionBuilder,
     new_value: Value,
     heap_ptr: Value,
     base_offset: u64,
     offset: Value,
-    lower_bound: u64,
-    upper_bound: u64,
+    lower: Value,
+    end: Value,
     size: SixBitSize,
 ) -> Value {
-    debug_assert!(lower_bound <= upper_bound);
 
     // Fast path: 1-bit drive.
     //
@@ -5548,16 +5690,11 @@ fn clif_sbs_drive(
     let post_bb = b.create_block();
     b.append_block_param(post_bb, I64);
 
-    // Fully contained iff `lower_bound <= offset` and `offset + size - 1 <= upper_bound`.
+    // Fully contained iff `lower <= offset` and `offset + size <= end`.
     // Signed, because `offset` is a signed index that may be negative.
-    let above_lower =
-        b.ins()
-            .icmp_imm_s(IntCC::SignedGreaterThanOrEqual, offset, lower_bound as i64);
-    let below_upper = b.ins().icmp_imm_s(
-        IntCC::SignedLessThanOrEqual,
-        offset,
-        upper_bound as i64 + 1 - size as i64,
-    );
+    let above_lower = b.ins().icmp(IntCC::SignedGreaterThanOrEqual, offset, lower);
+    let drive_end = b.ins().iadd_imm_s(offset, size as i64);
+    let below_upper = b.ins().icmp(IntCC::SignedLessThanOrEqual, drive_end, end);
     let is_in_bounds = b.ins().band(above_lower, below_upper);
     b.ins()
         .brif(is_in_bounds, in_bounds_bb, &[], partial_bb, &[]);
@@ -5598,13 +5735,11 @@ fn clif_sbs_drive(
 
         // First written bit `lo` and one-past-the-last `hi`, clamped into the signal.
         // The caller's invariant guarantees `lo < hi`.
-        let end = b.ins().iadd_imm_u(offset, size as i64);
-        let lb = b.ins().iconst(I64, lower_bound as i64);
-        let ub = b.ins().iconst(I64, (upper_bound + 1) as i64);
-        // Signed: a negative `offset` must clamp up to `lower_bound`, not wrap to a
-        // huge unsigned value.
-        let lo = b.ins().smax(offset, lb);
-        let hi = b.ins().smin(end, ub);
+        let drive_end = b.ins().iadd_imm_u(offset, size as i64);
+        // Signed: a negative `offset` must clamp up to `lower`, not wrap to a huge unsigned
+        // value.
+        let lo = b.ins().smax(offset, lower);
+        let hi = b.ins().smin(drive_end, end);
 
         let shift = b.ins().isub(lo, offset);
         let overlap = b.ins().isub(hi, lo);

@@ -9,7 +9,8 @@ use std::num::NonZeroU32;
 
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{
-    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, VariableKey, VectorSize,
+    BasicBlockBuilder, Bits, GlobalContext, INTEGER_VSIZE, SCALAR_VSIZE, SignalBounds, SignalSlice,
+    VariableKey, VectorSize,
 };
 
 use crate::ast::AstId;
@@ -31,7 +32,65 @@ pub struct Address<C: AddressingContext> {
     pub elem_offset: Option<C::Var>,
     pub output_width: VectorSize,
     pub array: Option<(C::Var, C::Bool)>,
+    pub bounds: AddressBounds<C::Var>,
     pub is_unsigned: bool,
+}
+
+/// The bits an [`Address`] is allowed to touch. Bits outside of them are out-of-bounds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddressBounds<V> {
+    /// The address is bounded by the whole net.
+    Net,
+    /// The address is bounded by the array element `index`, which is `width` bits wide.
+    Element { index: V, width: VectorSize },
+}
+
+/// An [`Address`] into a signal, detached from the context which lowered it.
+pub struct SignalAddress {
+    pub elem_offset: Option<VariableKey>,
+    pub output_width: VectorSize,
+    pub array_offset: Option<VariableKey>,
+    pub bounds: AddressBounds<VariableKey>,
+    pub is_unsigned: bool,
+}
+
+impl<C: AddressingContext<Var = VariableKey>> Address<C> {
+    pub fn into_signal(self) -> SignalAddress {
+        // @TODO: Use array overflow.
+        SignalAddress {
+            elem_offset: self.elem_offset,
+            output_width: self.output_width,
+            array_offset: self.array.map(|(array_offset, _array_overflow)| array_offset),
+            bounds: self.bounds,
+            is_unsigned: self.is_unsigned,
+        }
+    }
+}
+
+impl SignalAddress {
+    /// The bit offset into the signal and its bounds, or `None` if the address starts at bit zero
+    /// of the signal.
+    pub fn partial(
+        &self,
+        gl: &mut GlobalContext,
+        builder: &mut BasicBlockBuilder,
+        signal_size: VectorSize,
+    ) -> Option<(VariableKey, SignalBounds)> {
+        let offset = match (self.elem_offset, self.array_offset) {
+            (Some(elem_offset), Some(array_offset)) => builder.plus(gl, elem_offset, array_offset),
+            (Some(elem_offset), None) => elem_offset,
+            (None, Some(array_offset)) => array_offset,
+            (None, None) => return None,
+        };
+        let bounds = match self.bounds {
+            AddressBounds::Net => SignalBounds::Constant(SignalSlice::with_end(signal_size)),
+            AddressBounds::Element { index, width } => SignalBounds::Variable {
+                elem_offset: index,
+                stride: width,
+            },
+        };
+        Some((offset, bounds))
+    }
 }
 
 pub trait AddressingContext {
@@ -82,6 +141,7 @@ pub fn lower_addressing<C: AddressingContext>(
             elem_offset: None,
             output_width: elem_width,
             array: None,
+            bounds: AddressBounds::Net,
             is_unsigned: false,
         });
     }
@@ -95,8 +155,9 @@ pub fn lower_addressing<C: AddressingContext>(
         return Err(ctx.too_many_selects());
     }
 
-    let mut array: Option<(C::Var, C::Bool)> = None;
-    let mut stride = elem_width;
+    // The flattened index of the selected array element, and whether any index overflowed.
+    let mut element: Option<(C::Var, C::Bool)> = None;
+    let mut stride = NonZeroU32::MIN;
 
     // Handle the array indexing.
     //
@@ -108,18 +169,35 @@ pub fn lower_addressing<C: AddressingContext>(
         let idx = ctx.eval_var(idx)?;
         let idx = ctx.var_sub_i64(idx, dim.offset)?;
         let does_idx_overflow = ctx.var_geq_nonzerou32(idx.clone(), dim.num_elements)?;
-        let added_offset = ctx.var_mul_nonzerou32(idx, stride)?;
-        array = Some(match array {
-            Some((offset, overflow)) => (
-                ctx.var_add(offset, added_offset)?,
+        let added_index = mul_unless_one(ctx, idx, stride)?;
+        element = Some(match element {
+            Some((index, overflow)) => (
+                ctx.var_add(index, added_index)?,
                 ctx.or_overflow(overflow, does_idx_overflow),
             ),
-            None => (added_offset, does_idx_overflow),
+            None => (added_index, does_idx_overflow),
         });
         stride = stride
             .checked_mul(dim.num_elements)
             .ok_or_else(|| ctx.stride_overflow())?;
     }
+    elem_width
+        .checked_mul(stride)
+        .ok_or_else(|| ctx.stride_overflow())?;
+
+    let (array, bounds) = match element {
+        None => (None, AddressBounds::Net),
+        Some((index, overflow)) => {
+            let offset = mul_unless_one(ctx, index.clone(), elem_width)?;
+            (
+                Some((offset, overflow)),
+                AddressBounds::Element {
+                    index,
+                    width: elem_width,
+                },
+            )
+        }
+    };
 
     // Bit-select path.
     if let Some(bit_select) = indices.next() {
@@ -135,6 +213,7 @@ pub fn lower_addressing<C: AddressingContext>(
             elem_offset: Some(elem_offset),
             output_width: SCALAR_VSIZE,
             array,
+            bounds,
             is_unsigned: true,
         });
     }
@@ -145,6 +224,7 @@ pub fn lower_addressing<C: AddressingContext>(
             elem_offset: None,
             output_width: elem_width,
             array,
+            bounds,
             is_unsigned: false,
         });
     };
@@ -189,8 +269,22 @@ pub fn lower_addressing<C: AddressingContext>(
         elem_offset: Some(range_lsb),
         output_width: range_width,
         array,
+        bounds,
         is_unsigned: true,
     })
+}
+
+/// Multiply `lhs` by `rhs`, without emitting a multiplication for a `rhs` of one.
+fn mul_unless_one<C: AddressingContext>(
+    ctx: &mut C,
+    lhs: C::Var,
+    rhs: NonZeroU32,
+) -> Result<C::Var, C::Error> {
+    if rhs == NonZeroU32::MIN {
+        Ok(lhs)
+    } else {
+        ctx.var_mul_nonzerou32(lhs, rhs)
+    }
 }
 
 pub struct AddressingConstantExprWidthContext<'a, 'b> {

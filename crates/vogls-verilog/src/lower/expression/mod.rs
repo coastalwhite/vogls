@@ -11,7 +11,7 @@ use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{BinaryOperator, BitSlice, Expr, Replication, UnaryOperator};
 use crate::ast::{AstId, HIdent};
 use crate::elaborate::{ArrayDim, VSymbol, VSymbolTable, VectorTransform};
-use crate::lower::addressing::{Address, AddressingContext, RangeExpr, lower_addressing};
+use crate::lower::addressing::{AddressingContext, RangeExpr, lower_addressing};
 use crate::lower::{VType, hident_span, try_resolve_hident};
 use crate::number::Sign;
 use crate::parser::AstArenas;
@@ -698,22 +698,20 @@ pub fn lower_expr<'a>(
                     continue;
                 };
                 let symbol = &ctx.table[symbol_key].content;
-                let (ty, dims, transform, var) = match &symbol {
+                // @NOTE: A net is only probed after the addressing is known, such that a select
+                // can probe only the selected bits within their bounds.
+                let (ty, dims, transform, value, net) = match &symbol {
                     VSymbol::Parameter(value) => {
                         let value = value.clone();
                         (
                             value.ty(),
                             &[] as &[ArrayDim],
                             VectorTransform::default(),
-                            builder.constant(mctx.gl(), value.into_bits()),
+                            Some(builder.constant(mctx.gl(), value.into_bits())),
+                            None,
                         )
                     }
-                    VSymbol::Net(s) => (
-                        s.ty,
-                        &s.dims[..],
-                        s.transform,
-                        s.net.probe(mctx.gl(), builder),
-                    ),
+                    VSymbol::Net(s) => (s.ty, &s.dims[..], s.transform, None, Some(&s.net)),
 
                     VSymbol::Task(_)
                     | VSymbol::GenVar
@@ -915,31 +913,38 @@ pub fn lower_expr<'a>(
                     continue;
                 };
 
-                let Address {
-                    elem_offset,
-                    output_width,
-                    array,
-                    is_unsigned,
-                } = part_select;
+                let part_select = part_select.into_signal();
                 result_stack.truncate(end_result_stack_len);
+                let output_width = part_select.output_width;
+                let is_unsigned = part_select.is_unsigned;
 
-                // @TODO:
-                // 1. We should use the overflow value here.
-                // 2. We should limit our write to `ty.force_net_width()` bits as in
-                //    arrays, this will inherently be wrong.
-
-                let var = if let Some(elem_offset) = elem_offset {
-                    let offset = match array {
-                        None => elem_offset,
-                        Some((array_offset, _array_overflow)) => {
-                            builder.plus(mctx.gl(), array_offset, elem_offset)
+                // @TODO: We should use the overflow value here.
+                let var = match (net, value) {
+                    (Some(net), _) => {
+                        let signal_size = mctx.gl.signals[net.probe_signal()].size;
+                        match part_select.partial(mctx.gl(), builder, signal_size) {
+                            Some((offset, bounds)) => net.probe_bounded_slice(
+                                mctx.gl(),
+                                builder,
+                                offset,
+                                output_width,
+                                bounds,
+                            ),
+                            None => {
+                                let var = net.probe(mctx.gl(), builder);
+                                builder.truncate(&mut mctx.gl, var, output_width)
+                            }
                         }
-                    };
-                    builder.slice(&mut mctx.gl, var, offset, output_width)
-                } else if let Some((array_offset, _array_overflow)) = array {
-                    builder.slice(&mut mctx.gl, var, array_offset, output_width)
-                } else {
-                    builder.truncate(&mut mctx.gl, var, output_width)
+                    }
+                    (None, Some(var)) => {
+                        match part_select.partial(mctx.gl(), builder, ty.bit_length()) {
+                            Some((offset, _bounds)) => {
+                                builder.slice(&mut mctx.gl, var, offset, output_width)
+                            }
+                            None => builder.truncate(&mut mctx.gl, var, output_width),
+                        }
+                    }
+                    (None, None) => unreachable!(),
                 };
 
                 let output_ty = if ty.is_real() {

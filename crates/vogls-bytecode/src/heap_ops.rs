@@ -22,7 +22,7 @@ use vogls_bits::shift::{
     fv_l_arithmetic_shift_right, fv_l_logical_shift_left, fv_l_logical_shift_right,
     tv_l_arithmetic_shift_right, tv_l_logical_shift_left, tv_l_logical_shift_right,
 };
-use vogls_bits::slice::copy_shifted_bits;
+use vogls_bits::slice::ll_slice_bounded;
 use vogls_bits::util::CellSlice;
 use vogls_codegen::HeapOffset;
 use vogls_ir::{LogicMode, SCALAR_VSIZE, VSIZE_64, VectorSize};
@@ -1427,19 +1427,7 @@ fn execute_heap_slice(
         dst_plane_words
     };
 
-    // The bits of the source which can be read, as the range `start..end`. They land at bit
-    // `shift` of the slice.
-    let slice_end = offset.saturating_add(dst_size.get());
-    let (start, end) = match bounds {
-        Some((lower, upper)) => (
-            u32::max(offset, lower),
-            slice_end.min(upper.saturating_add(1)).min(src_size.get()),
-        ),
-        None => (offset, slice_end.min(src_size.get())),
-    };
-    let end = end.max(start);
-    let shift = start - offset;
-
+    let (lower, upper) = bounds.unwrap_or((0, u32::MAX));
     let src = state
         .heap
         .get_u64_slice(regs.get_as_addr(rs), src_num_words);
@@ -1447,44 +1435,22 @@ fn execute_heap_slice(
     // @Performance. Remove the need for the scratch here.
     cldctx.heap_scratch.clear();
     cldctx.heap_scratch.resize(dst_num_words, 0u64);
-    let (dst_spc, dst_val) = if has_spc {
-        cldctx.heap_scratch.split_at_mut(dst_plane_words)
-    } else {
-        (&mut [][..], &mut cldctx.heap_scratch[..])
-    };
-
-    if fv {
-        let (src_spc, src_val) = src.split_at(src_plane_words);
-        if !fill_with_x {
-            // A SPC bit without a VAL bit is a 0.
-            set_bit_range(dst_spc, 0, dst_size.get());
-        }
-        copy_shifted_bits(dst_spc, shift as u64, src_spc, start as u64, end as u64);
-        copy_shifted_bits(dst_val, shift as u64, src_val, start as u64, end as u64);
-    } else {
-        if fill_with_x {
-            set_bit_range(dst_spc, shift, shift + (end - start));
-        }
-        copy_shifted_bits(dst_val, shift as u64, src, start as u64, end as u64);
-    }
+    ll_slice_bounded(
+        &mut cldctx.heap_scratch,
+        src,
+        offset,
+        dst_size,
+        src_size,
+        fv,
+        fill_with_x,
+        lower,
+        upper,
+    );
 
     state
         .heap
         .get_mut_u64_slice(regs.get_as_addr(rd), dst_num_words)
         .copy_from_slice(&cldctx.heap_scratch);
-}
-
-/// Set all bits of `words` in the range `start..end`.
-#[inline(always)]
-fn set_bit_range(words: &mut [u64], start: u32, end: u32) {
-    for (i, word) in words.iter_mut().enumerate() {
-        let base = i as u32 * 64;
-        let lo = start.saturating_sub(base).min(64);
-        let hi = end.saturating_sub(base).min(64);
-        if lo < hi {
-            *word |= (u64::MAX >> (64 - (hi - lo))) << lo;
-        }
-    }
 }
 
 impl BytecodeInstruction for HeapSliceBounds {

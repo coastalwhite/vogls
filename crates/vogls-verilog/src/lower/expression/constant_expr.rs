@@ -375,6 +375,7 @@ pub fn eval_constant_expr<'a>(
                     elem_offset,
                     output_width,
                     array,
+                    bounds: _,
                     is_unsigned,
                 }) = result
                 else {

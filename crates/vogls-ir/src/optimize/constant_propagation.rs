@@ -618,6 +618,7 @@ fn constant_propagate_instruction(
 
         I::ProbeSlice(dst, signal, offset, bounds) => {
             let (dst, signal, bounds) = (*dst, *signal, *bounds);
+            let signal_key = signal;
 
             if let SignalBounds::Variable {
                 elem_offset,
@@ -656,16 +657,29 @@ fn constant_propagate_instruction(
                     None => assign_constant!(dst, Bits::new_unknown(vars.size(dst))),
                     Some(offset) => {
                         let dst_size = vars.size(dst);
-                        let src_size = signals[signal].size;
+                        let signal = &signals[signal_key];
 
                         // Don't make it into a constant slice if that slice would overflow the
-                        // signal.
-                        if dst_size
-                            .get()
-                            .checked_add(offset)
-                            .is_some_and(|v| v <= src_size.get())
-                        {
-                            additional.push(I::Probe(dst, signal, offset));
+                        // signal or its bounds.
+                        let fits = SignalSlice::from_width(offset, dst_size).is_some_and(|slice| {
+                            let bounds = match bounds {
+                                SignalBounds::Constant(bounds) => bounds,
+                                SignalBounds::Variable { .. } => return false,
+                            };
+                            slice.msb() < signal.size.get()
+                                && bounds.lsb() <= slice.lsb()
+                                && slice.msb() <= bounds.msb()
+                        });
+                        if fits {
+                            // @NOTE: A probe has the mode of its signal, while a slice is always
+                            // four-valued.
+                            if dst.mode() == signal.mode {
+                                additional.push(I::Probe(dst, signal_key, offset));
+                            } else {
+                                let tgt = vars.insert(signal.mode, dst_size);
+                                additional.push(I::Probe(tgt, signal_key, offset));
+                                additional.push(I::copy(vars, dst, tgt));
+                            }
                             return PropagateResult { replace: true };
                         }
                     }

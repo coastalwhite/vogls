@@ -145,7 +145,7 @@ pub struct FnTable {
     wide_drive: extern "C" fn(*mut u64, u32, *const u64, u32, u32, u32, u32) -> u64,
 
     /// Extract dsize bits at offset from a wide source: (dst, src, offset, dsize, ssize, src_is_fv, fill_with_x).
-    wide_slice: extern "C" fn(*mut u64, *const u64, u32, u32, u32, u32, u32),
+    wide_slice: extern "C" fn(*mut u64, *const u64, u32, u32, u32, u32, u32, u32, u32),
 
     pub set_time_format: extern "C" fn(cldctx: NonNull<ColdContextT>, idx: i64),
 }
@@ -437,7 +437,9 @@ extern "C" fn wide_drive(
 
 /// Extract `dsize` bits at bit `offset` from a (wide) source into `dst`.
 /// `src_is_fv` selects the four-value vs two-value source layout; `fill_with_x`
-/// (used by Slice) makes out-of-range bits x and forces a four-value dst.
+/// (used by Slice) makes out-of-range bits x and forces a four-value dst. Source bits
+/// outside the inclusive range `lower..=upper` are out-of-range and never read.
+#[allow(clippy::too_many_arguments)]
 extern "C" fn wide_slice(
     dst: *mut u64,
     src: *const u64,
@@ -446,8 +448,10 @@ extern "C" fn wide_slice(
     ssize: u32,
     src_is_fv: u32,
     fill_with_x: u32,
+    lower: u32,
+    upper: u32,
 ) {
-    use vogls_bits::slice::{fv_ll_slice, tv_ll_slice};
+    use vogls_bits::slice::{fv_ll_slice, ll_slice_bounded, tv_ll_slice};
     let ds = VectorSize::new(dsize).unwrap();
     let ss = VectorSize::new(ssize).unwrap();
     let snw = (ssize as usize).div_ceil(64);
@@ -460,7 +464,9 @@ extern "C" fn wide_slice(
     unsafe {
         let d = std::slice::from_raw_parts_mut(dst, dst_words);
         let s = std::slice::from_raw_parts(src, src_words);
-        if src_is_fv {
+        if lower != 0 || upper != u32::MAX {
+            ll_slice_bounded(d, s, offset, ds, ss, src_is_fv, fill_x, lower, upper);
+        } else if src_is_fv {
             fv_ll_slice(d, s, offset, ds, ss, fill_x);
         } else {
             tv_ll_slice(d, s, offset, ds, ss, fill_x);
