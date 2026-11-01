@@ -881,6 +881,44 @@ pub enum ShiftImmOp {
     ArithmeticShiftRight,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SignalBounds {
+    /// Probe or drive is a constant lower and upper bound.
+    Constant(SignalSlice),
+
+    /// Probe or drive is bounded by a variable lower and upper bound.
+    ///
+    /// `bounds = elem_offset * stride .. elem_offset * (stride + 1)`
+    Variable {
+        elem_offset: VariableKey,
+        stride: VectorSize,
+    },
+}
+impl SignalBounds {
+    fn map_var(self, mut f: impl FnMut(VariableKey) -> VariableKey) -> Self {
+        match self {
+            Self::Constant(s) => Self::Constant(s),
+            Self::Variable {
+                elem_offset,
+                stride,
+            } => Self::Variable {
+                elem_offset: f(elem_offset),
+                stride,
+            },
+        }
+    }
+
+    fn foreach_var(self, mut f: impl FnMut(VariableKey)) {
+        if let Self::Variable {
+            elem_offset,
+            stride: _,
+        } = self
+        {
+            f(elem_offset);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Instruction {
     /// Load an immediate into a variable.
@@ -927,14 +965,20 @@ pub enum Instruction {
     /// Store the 64-bit simulation time when a signal was last updated.
     LastUpdateTime(VariableKey, SignalKey),
     Probe(VariableKey, SignalKey, u32),
-    ProbeSlice(VariableKey, SignalKey, VariableKey),
+    ProbeSlice(VariableKey, SignalKey, VariableKey, SignalBounds),
 
     /// Update the value of a signal, poking it if the value is different than before.
     ///
     /// A drive can be a "partial" drive, meaning that the source value is offset by a certain
     /// amount of bits, and no bits beyond a certain point will be affected.
     Drive(VariableKey, SignalKey, VariableKey, u32),
-    DriveSlice(VariableKey, SignalKey, VariableKey, VariableKey),
+    DriveSlice(
+        VariableKey,
+        SignalKey,
+        VariableKey,
+        VariableKey,
+        SignalBounds,
+    ),
 
     Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
 }
@@ -981,7 +1025,7 @@ impl Instruction {
             | Self::Phi(dst, _)
             | Self::LastUpdateTime(dst, _)
             | Self::Probe(dst, _, _)
-            | Self::ProbeSlice(dst, _, _)
+            | Self::ProbeSlice(dst, _, _, _)
             | Self::Intrinsic(dst, _, _)
             | Self::Drive(dst, ..)
             | Self::DriveSlice(dst, ..) => *dst,
@@ -1002,7 +1046,7 @@ impl Instruction {
             | Self::Phi(dst, _)
             | Self::LastUpdateTime(dst, _)
             | Self::Probe(dst, _, _)
-            | Self::ProbeSlice(dst, _, _)
+            | Self::ProbeSlice(dst, _, _, _)
             | Self::Intrinsic(dst, _, _)
             | Self::Drive(dst, ..)
             | Self::DriveSlice(dst, ..) => Some(dst),
@@ -1034,10 +1078,14 @@ impl Instruction {
             | Self::Resize(dst, _, src)
             | Self::BinaryImm(dst, _, src, _)
             | Self::SliceImm(dst, src, _)
-            | Self::ShiftImm(dst, _, src, _)
-            | Self::ProbeSlice(dst, _, src) => {
+            | Self::ShiftImm(dst, _, src, _) => {
                 *dst = f(*dst);
-                *src = f(*src)
+                *src = f(*src);
+            }
+            Self::ProbeSlice(dst, _, src, bounds) => {
+                *dst = f(*dst);
+                *src = f(*src);
+                bounds.map_var(&mut f);
             }
             Self::Binary(dst, _, src1, src2) | Self::Slice(dst, src1, src2) => {
                 *dst = f(*dst);
@@ -1056,10 +1104,11 @@ impl Instruction {
                     *s = f(*s);
                 }
             }
-            Self::DriveSlice(dst, _, src, partial) => {
+            Self::DriveSlice(dst, _, src, partial, bounds) => {
                 *dst = f(*dst);
                 *src = f(*src);
                 *partial = f(*partial);
+                bounds.map_var(&mut f);
             }
             Self::Drive(dst, _, src, _) => {
                 *dst = f(*dst);
@@ -1082,10 +1131,14 @@ impl Instruction {
             | Self::Resize(dst, _, src)
             | Self::BinaryImm(dst, _, src, _)
             | Self::SliceImm(dst, src, _)
-            | Self::ShiftImm(dst, _, src, _)
-            | Self::ProbeSlice(dst, _, src) => {
+            | Self::ShiftImm(dst, _, src, _) => {
                 f(*dst);
                 f(*src)
+            }
+            Self::ProbeSlice(dst, _, src, bounds) => {
+                f(*dst);
+                f(*src);
+                bounds.foreach_var(&mut f);
             }
             Self::Binary(dst, _, src1, src2) | Self::Slice(dst, src1, src2) => {
                 f(*dst);
@@ -1108,10 +1161,11 @@ impl Instruction {
                 f(*dst);
                 f(*src);
             }
-            Self::DriveSlice(dst, _, src, partial) => {
+            Self::DriveSlice(dst, _, src, partial, bounds) => {
                 f(*dst);
                 f(*src);
                 f(*partial);
+                bounds.foreach_var(&mut f);
             }
             Self::Select(dst, cond, truthy, falsy, _) => {
                 f(*dst);
@@ -1132,8 +1186,11 @@ impl Instruction {
             | Self::BinaryImm(_, _, src, _)
             | Self::SliceImm(_, src, _)
             | Self::ShiftImm(_, _, src, _)
-            | Self::ProbeSlice(_, _, src)
             | Self::Drive(_, _, src, _) => f(*src),
+            Self::ProbeSlice(_, _, src, bounds) => {
+                f(*src);
+                bounds.foreach_var(&mut f);
+            }
             Self::Binary(_, _, src1, src2) | Self::Slice(_, src1, src2) => {
                 f(*src1);
                 f(*src2);
@@ -1148,9 +1205,10 @@ impl Instruction {
                     f(*s);
                 }
             }
-            Self::DriveSlice(_dst, _, src, partial) => {
+            Self::DriveSlice(_dst, _, src, partial, bounds) => {
                 f(*src);
                 f(*partial);
+                bounds.foreach_var(&mut f);
             }
             Self::Select(_, cond, truthy, falsy, _) => {
                 f(*cond);
@@ -1164,9 +1222,9 @@ impl Instruction {
     fn map_signals(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
         match self {
             Instruction::Probe(_, s, _)
-            | Instruction::ProbeSlice(_, s, _)
+            | Instruction::ProbeSlice(_, s, _, _)
             | Instruction::Drive(_, s, _, _)
-            | Instruction::DriveSlice(_, s, _, _)
+            | Instruction::DriveSlice(_, s, _, _, _)
             | Instruction::LastUpdateTime(_, s) => *s = f(*s),
             Instruction::Constant(..)
             | Instruction::Unary(..)
@@ -1241,7 +1299,7 @@ impl Instruction {
             | Self::Probe(..)
             | Self::ProbeSlice(..)
             | Self::Phi(..) => {}
-            Self::Drive(_, s, _, _) | Self::DriveSlice(_, s, _, _) => *s = f(*s),
+            Self::Drive(_, s, _, _) | Self::DriveSlice(_, s, _, _, _) => *s = f(*s),
         }
     }
 }

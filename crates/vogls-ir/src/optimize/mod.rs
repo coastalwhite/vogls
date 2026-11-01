@@ -15,7 +15,7 @@ pub mod remove_empty_temporal_regions;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
-    Instruction, LogicMode, ProcessKey, ResizeOp, SelectMerge, ShiftImmOp, SignalKey,
+    Instruction, LogicMode, ProcessKey, ResizeOp, SelectMerge, ShiftImmOp, SignalBounds, SignalKey,
     TemporalRegionKey, UnaryOp, VariableKey,
 };
 
@@ -108,7 +108,7 @@ enum CSExpr {
     Select(ExprKey, ExprKey, ExprKey, SelectMerge),
     SliceImm(VectorSize, ExprKey, u32),
     Probe(SignalKey, VectorSize, u32),
-    ProbeSlice(SignalKey, VectorSize, ExprKey),
+    ProbeSlice(SignalKey, VectorSize, ExprKey, SignalBounds),
     LastUpdateTime(SignalKey),
 }
 

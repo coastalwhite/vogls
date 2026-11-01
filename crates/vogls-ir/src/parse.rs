@@ -10,8 +10,8 @@ use crate::token_range::TokenRange;
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext,
     Instruction, IntrinsicOp, LogicMode, ProcessKey, ProcessKind, ResizeOp, SCALAR_VSIZE,
-    SelectMerge, ShiftImmOp, Signal, SignalFlags, SignalKey, TIME_VSIZE, TemporalRegionKey, Time,
-    UnaryOp, VariableKey, WatchCondition, WatchEdge,
+    SelectMerge, ShiftImmOp, Signal, SignalBounds, SignalFlags, SignalKey, SignalSlice, TIME_VSIZE,
+    TemporalRegionKey, Time, UnaryOp, VariableKey, WatchCondition, WatchEdge,
 };
 
 #[derive(Debug)]
@@ -499,7 +499,7 @@ fn parse_process<'a>(
                 I::LastUpdateTime(..) => unreachable!(),
                 I::Probe(..) => unreachable!(),
                 I::ProbeSlice(..) => unreachable!(),
-                I::Drive(_, _, src, _) | I::DriveSlice(_, _, src, _) => {
+                I::Drive(_, _, src, _) | I::DriveSlice(_, _, src, _, _) => {
                     if let VarSize::Resolved(_, src_size) = symbols.var_sizes[&src.identifier()] {
                         symbols
                             .var_sizes
@@ -866,7 +866,12 @@ fn parse_instr<'a>(
                         dst.identifier(),
                         VarSize::Resolved(LogicMode::FourValue, size),
                     );
-                    Instruction::ProbeSlice(dst, signal, offset)
+                    Instruction::ProbeSlice(
+                        dst,
+                        signal,
+                        offset,
+                        SignalBounds::Constant(SignalSlice::with_end(VectorSize::MAX)),
+                    )
                 } else {
                     let offset = parse_u32(c)?;
                     Instruction::Probe(dst, signal, offset)
@@ -890,7 +895,13 @@ fn parse_instr<'a>(
                 c.trim_cursor();
                 if c.is_next_equal_to('%') {
                     let offset = parse_var(c, symbols, gl)?;
-                    Instruction::DriveSlice(dst, signal, src, offset)
+                    Instruction::DriveSlice(
+                        dst,
+                        signal,
+                        src,
+                        offset,
+                        SignalBounds::Constant(SignalSlice::with_end(VectorSize::MAX)),
+                    )
                 } else {
                     let offset = parse_u32(c)?;
                     Instruction::Drive(dst, signal, src, offset)

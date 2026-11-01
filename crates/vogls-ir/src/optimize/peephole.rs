@@ -6,7 +6,8 @@ use crate::optimize::{CSExpr, ExprKey, remap_vars};
 use crate::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryImmOpSimplification, GlobalContext,
     Instruction, LogicMode, ProcessKey, ResizeOp, ResizeOpSimplification, SelectMerge, Signal,
-    SignalKey, TvPushdownVariant, UnaryOp, UnaryOpSimplification, VariableKey, VariableMap,
+    SignalBounds, SignalKey, SignalSlice, TvPushdownVariant, UnaryOp, UnaryOpSimplification,
+    VariableKey, VariableMap,
 };
 
 pub fn peephole(
@@ -115,9 +116,14 @@ pub fn peephole(
                     I::Probe(dst, signal, offset) => {
                         (*dst, CSExpr::Probe(*signal, gl.vars.size(*dst), *offset))
                     }
-                    I::ProbeSlice(dst, signal, offset) => (
+                    I::ProbeSlice(dst, signal, offset, bounds) => (
                         *dst,
-                        CSExpr::ProbeSlice(*signal, gl.vars.size(*dst), try_lookup!(offset)),
+                        CSExpr::ProbeSlice(
+                            *signal,
+                            gl.vars.size(*dst),
+                            try_lookup!(offset),
+                            *bounds,
+                        ),
                     ),
                     I::Drive(..) | I::DriveSlice(..) => continue,
                     I::Phi(_, _) => continue,
@@ -442,7 +448,12 @@ fn peephole_instruction(
                 let (_, expr) = &exprs[*csexpr];
                 match expr {
                     CSExpr::Probe(signal, width, 0) if *width == signals[*signal].size => {
-                        *instr = I::ProbeSlice(*dst, *signal, *offset);
+                        *instr = I::ProbeSlice(
+                            *dst,
+                            *signal,
+                            *offset,
+                            SignalBounds::Constant(SignalSlice::with_end(signals[*signal].size)),
+                        );
                         return PeepholeResult::Changed;
                     }
                     _ => {}

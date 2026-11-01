@@ -92,7 +92,7 @@ fn evaluate_impl(
                 let bits = bits.slicez(*offset, gl.vars.size(*dst));
                 _ = variables.insert(*dst, bits);
             }
-            I::ProbeSlice(dst, src_signal, offset) => {
+            I::ProbeSlice(dst, src_signal, offset, bounds) => {
                 let bits = &signals[src_signal];
                 let offset = &variables[offset];
 
@@ -122,7 +122,7 @@ fn evaluate_impl(
                 variables.insert(*dst, update_mask);
                 signals.insert(*dst_signal, new_value);
             }
-            I::DriveSlice(dst, dst_signal, src, offset) => {
+            I::DriveSlice(dst, dst_signal, src, offset, _bounds) => {
                 let src_size = gl.vars.size(*src);
                 let src = variables[src].clone();
                 let offset = variables[offset].clone();

@@ -65,20 +65,21 @@ pub(super) fn apply_fuse_maps(
                         continue;
                     }
                 }
-                I::ProbeSlice(dst, signal, offset) => {
+                I::ProbeSlice(dst, signal, offset, bounds) => {
                     if let Some(tgt) = fused_signals.get(signal) {
                         match tgt {
                             FuseTarget::Signal(to, slice) => match slice {
-                                None => {
-                                    builder.push_raw_instruction(I::ProbeSlice(*dst, *to, *offset))
-                                }
+                                None => builder.push_raw_instruction(I::ProbeSlice(
+                                    *dst, *to, *offset, *bounds,
+                                )),
                                 Some(slice) => {
                                     let offset = builder.plus_constant(
                                         gl,
                                         *offset,
                                         Bits::new_u32(slice.lsb()),
                                     );
-                                    builder.probe_slice(gl, *to, offset, slice.width());
+                                    // @TODO: Fix bounds
+                                    builder.probe_slice(gl, *to, offset, slice.width(), *bounds);
                                     if let Some(d) = builder
                                         .instrs
                                         .last_mut()
@@ -116,11 +117,13 @@ pub(super) fn apply_fuse_maps(
                         continue;
                     }
                 }
-                I::DriveSlice(dst, signal, src, partial) => {
+                I::DriveSlice(dst, signal, src, partial, bounds) => {
                     if let Some((to, slice)) = drive_map(signal) {
                         let offset =
                             builder.plus_constant(gl, *partial, Bits::new_u32(slice.lsb()));
-                        builder.push_raw_instruction(I::DriveSlice(*dst, *to, *src, offset));
+                        // @TODO: Fix bounds
+                        builder
+                            .push_raw_instruction(I::DriveSlice(*dst, *to, *src, offset, *bounds));
                         continue;
                     }
                 }

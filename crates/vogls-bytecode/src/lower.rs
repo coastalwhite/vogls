@@ -5,8 +5,8 @@ use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
     GlobalContext, Instruction, IntrinsicOp, LabelDisplay, LogicMode, ProcessKey, ResizeOp,
-    SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalFlags, SignalKey, SignalSlice, UnaryOp, VSIZE_64,
-    VariableKey, VariableMap, WatchEdge,
+    SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalBounds, SignalFlags, SignalKey, SignalSlice,
+    UnaryOp, VSIZE_64, VariableKey, VariableMap, VectorSize, WatchEdge,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
@@ -1756,16 +1756,16 @@ fn lower_instruction(
                     bce.fv_slrx(rd, rs, rimm, dst_size, LogicMode::TwoValue);
                 }
                 (M::TwoValue, Some(dst_size), None) => {
-                    bce.tvtv_heap_slicex(rd, rs, rimm, dst_size, src_size);
+                    bce.tv_heap_slicex(rd, rs, rimm, dst_size, src_size);
                 }
                 (M::FourValue, Some(dst_size), None) => {
-                    bce.fvtv_heap_slicex(rd, rs, rimm, dst_size, src_size);
+                    bce.fv_heap_slicex(rd, rs, rimm, dst_size, src_size);
                 }
                 (M::TwoValue, None, None) => {
-                    bce.heap_slice(rd, rs, rimm, dst_size, src_size, false, true, false);
+                    bce.heap_slice(rd, rs, rimm, dst_size, src_size, false, true);
                 }
                 (M::FourValue, None, None) => {
-                    bce.heap_slice(rd, rs, rimm, dst_size, src_size, true, true, false);
+                    bce.heap_slice(rd, rs, rimm, dst_size, src_size, true, true);
                 }
                 (_, None, Some(_)) => todo!(),
             }
@@ -1852,11 +1852,11 @@ fn lower_instruction(
                 }
                 (M::TwoValue, None, None) => {
                     bce.load_u64(T4, *offset as u64);
-                    bce.heap_slice(rd, rs, T4, dst_size, src_size, false, false, false);
+                    bce.heap_slice(rd, rs, T4, dst_size, src_size, false, false);
                 }
                 (M::FourValue, None, None) => {
                     bce.load_u64(T4, *offset as u64);
-                    bce.heap_slice(rd, rs, T4, dst_size, src_size, true, false, false);
+                    bce.heap_slice(rd, rs, T4, dst_size, src_size, true, false);
                 }
                 (M::TwoValue, None, Some(_)) => unreachable!(),
                 (M::FourValue, None, Some(_)) => unreachable!(),
@@ -2205,7 +2205,7 @@ fn lower_instruction(
                         // @Performance: Better lowering.
                         bce.load_u64(rsignal, signal_addr);
                         bce.load_u64(T4, *offset as u64);
-                        bce.heap_slice(rd, rsignal, T4, dst_size, signal_size, false, false, false);
+                        bce.heap_slice(rd, rsignal, T4, dst_size, signal_size, false, false);
                     }
                     (LogicMode::TwoValue, Some(size)) => {
                         let offset = signal_addr.wrapping_add(*offset as u64);
@@ -2215,7 +2215,7 @@ fn lower_instruction(
                         // @Performance: Better lowering.
                         bce.load_u64(rsignal, signal_addr);
                         bce.load_u64(T4, *offset as u64);
-                        bce.heap_slice(rd, rsignal, T4, dst_size, signal_size, true, false, false);
+                        bce.heap_slice(rd, rsignal, T4, dst_size, signal_size, true, false);
                     }
                     (LogicMode::FourValue, Some(size)) => {
                         let (rdspc, rdval) = rd.to_spc_and_val();
@@ -2248,7 +2248,7 @@ fn lower_instruction(
 
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T2);
         }
-        I::ProbeSlice(dst, signal, offset) => {
+        I::ProbeSlice(dst, signal, offset, bounds) => {
             // Temporary Register Allocation:
             // T0:    RD      (ADDR / VAL / SPC)
             // T1:    RD      (VAL) / Scratch if dst_size > 64
@@ -2259,7 +2259,7 @@ fn lower_instruction(
 
             let dslot = assignment[dst];
             let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0, true);
-            let roffset = to_reg(
+            let mut roffset = to_reg(
                 bce,
                 *offset,
                 &gl.vars,
@@ -2273,55 +2273,184 @@ fn lower_instruction(
             let signal_size = gl.signals[*signal].size;
             assert!(dst_size <= signal_size);
 
+            let mut branch_offset: Option<(Reg, usize)> = None;
+            let mut relem_offset = match bounds {
+                SignalBounds::Constant(_) => T4,
+                SignalBounds::Variable {
+                    elem_offset,
+                    stride: _,
+                } => to_reg(
+                    bce,
+                    *elem_offset,
+                    &gl.vars,
+                    assignment[elem_offset],
+                    stack_offsets,
+                    T4,
+                    false,
+                ),
+            };
+
+            use LogicMode as M;
+            if offset.mode().is_four_value() {
+                let offset_size = SixBitSize::from_vector_size(gl.vars.size(*offset)).unwrap();
+                let (roffsetspc, roffsetval) = roffset.to_spc_and_val();
+
+                // TempReg: Destructs OFFSET (SPC). No longer assessible.
+                bce.contains_special(T2, roffsetspc, offset_size);
+
+                branch_offset = Some((T2, bce.data.len()));
+                roffset = roffsetval;
+            }
+
+            if let SignalBounds::Variable { elem_offset, .. } = bounds
+                && elem_offset.mode().is_four_value()
+            {
+                let elem_offset_size =
+                    SixBitSize::from_vector_size(gl.vars.size(*elem_offset)).unwrap();
+                let (relem_offsetspc, relem_offsetval) = relem_offset.to_spc_and_val();
+
+                // TempReg: Destructs ELEM_OFFSET (SPC). No longer assessible.
+                bce.contains_special(T4, relem_offsetspc, elem_offset_size);
+
+                if let Some((rcond, _)) = branch_offset {
+                    bce.or(T4, T4, rcond);
+                }
+                branch_offset = Some((T4, bce.data.len()));
+                relem_offset = relem_offsetval;
+            }
+
+            if branch_offset.is_some() {
+                bce.panic();
+            }
+
+            const LOWER_BOUND_SCRATCH: Reg = T5;
+            // @NOTE: The element offset may live in T4, so compute the lower bound before the
+            // signal address is loaded into it.
+            if let SignalBounds::Variable { stride, .. } = bounds {
+                load_lower_bound_from_elem_offset(bce, LOWER_BOUND_SCRATCH, relem_offset, *stride);
+            }
+
             let rsignal = T4;
             let signal_addr = signal_address(*signal, signals, io_signals);
             // @Performance: Better lowering.
             bce.load_u64(rsignal, signal_addr);
 
-            use LogicMode as M;
             match (
                 gl.signals[*signal].mode,
-                offset.mode(),
                 SixBitSize::from_vector_size(dst_size),
+                bounds,
             ) {
-                (M::TwoValue, _, None) => {
-                    bce.heap_slice(
+                (mode, None, SignalBounds::Constant(bounds)) => {
+                    bce.heap_slice_bounds(
                         rd,
                         rsignal,
                         roffset,
                         dst_size,
                         signal_size,
-                        false,
-                        true,
-                        offset.mode() == M::FourValue,
+                        mode.is_four_value(),
+                        bounds.lsb()..=bounds.msb(),
                     );
                 }
-                (M::TwoValue, M::TwoValue, Some(size)) => {
-                    bce.tvtv_heap_slicex(rd, rsignal, roffset, size, signal_size);
+                (
+                    mode,
+                    None,
+                    SignalBounds::Variable {
+                        elem_offset: _,
+                        stride,
+                    },
+                ) => {
+                    bce.heap_slice_varbounds(
+                        rd,
+                        rsignal,
+                        roffset,
+                        LOWER_BOUND_SCRATCH,
+                        dst_size,
+                        signal_size,
+                        mode.is_four_value(),
+                        *stride,
+                    );
                 }
-                (M::TwoValue, M::FourValue, Some(size)) => {
-                    bce.tvfv_heap_slicex(rd, rsignal, roffset, size, signal_size);
+                (M::TwoValue, Some(size), SignalBounds::Constant(bounds)) => {
+                    bce.tv_heap_slicex_bounds(
+                        rd,
+                        rsignal,
+                        roffset,
+                        size,
+                        signal_size,
+                        bounds.lsb()..=bounds.msb(),
+                    );
                 }
-                (M::FourValue, _, None) => {
-                    // TempReg: dst_size > 64 => T1 is free.
+                (M::FourValue, Some(size), SignalBounds::Constant(bounds)) => {
+                    bce.fv_heap_slicex_bounds(
+                        rd,
+                        rsignal,
+                        roffset,
+                        size,
+                        signal_size,
+                        bounds.lsb()..=bounds.msb(),
+                    );
+                }
+                (
+                    M::TwoValue,
+                    Some(size),
+                    SignalBounds::Variable {
+                        elem_offset: _,
+                        stride,
+                    },
+                ) => {
+                    bce.tv_heap_slicex_varbounds(
+                        rd,
+                        rsignal,
+                        roffset,
+                        LOWER_BOUND_SCRATCH,
+                        size,
+                        signal_size,
+                        *stride,
+                    );
+                }
+                (
+                    M::FourValue,
+                    Some(size),
+                    SignalBounds::Variable {
+                        elem_offset: _,
+                        stride,
+                    },
+                ) => {
+                    bce.fv_heap_slicex_varbounds(
+                        rd,
+                        rsignal,
+                        roffset,
+                        LOWER_BOUND_SCRATCH,
+                        size,
+                        signal_size,
+                        *stride,
+                    );
+                }
+            }
 
-                    bce.heap_slice(
-                        rd,
-                        rsignal,
-                        roffset,
-                        dst_size,
-                        signal_size,
-                        true,
-                        true,
-                        offset.mode() == M::FourValue,
-                    );
+            if let Some((rcond, branch_offset)) = branch_offset {
+                // An offset containing X or Z slices to all X.
+                let jump_offset = bce.data.len();
+                bce.panic();
+
+                bce.data[branch_offset] = BranchTrue {
+                    rcond,
+                    imm: SignedImmediate::new((bce.data.len() - branch_offset) as i64 - 1).unwrap(),
                 }
-                (M::FourValue, M::TwoValue, Some(size)) => {
-                    bce.fvtv_heap_slicex(rd, rsignal, roffset, size, signal_size);
+                .encode();
+
+                match SixBitSize::from_vector_size(dst_size) {
+                    None => bce.fv_heap_fill(rd, FvLogicValue::X, dst_size),
+                    Some(_) => {
+                        let (rdspc, rdval) = rd.to_spc_and_val();
+                        bce.xor(rdspc, rdspc, rdspc);
+                        bce.xor(rdval, rdval, rdval);
+                    }
                 }
-                (M::FourValue, M::FourValue, Some(size)) => {
-                    bce.fvfv_heap_slicex(rd, rsignal, roffset, size, signal_size);
-                }
+
+                bce.data[jump_offset] =
+                    Jump(SignedImmediate::new((bce.data.len() - jump_offset) as i64 - 1).unwrap())
+                        .encode();
             }
 
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T3);
@@ -2609,7 +2738,7 @@ fn lower_instruction(
                 }
             }
         }
-        I::DriveSlice(dst, signal, src, partial) => {
+        I::DriveSlice(dst, signal, src, partial, bounds) => {
             // Temporary Register Allocation:
             // T0:    RS       (ADDR / VAL / SPC)
             // T1:    RS       (VAL)
@@ -2617,15 +2746,6 @@ fn lower_instruction(
             // T4:    RPARTIAL (ADDR / VAL / SPC)
             // T5:    RPARTIAL (VAL)
 
-            let rd = to_reg(
-                bce,
-                *dst,
-                &gl.vars,
-                assignment[dst],
-                stack_offsets,
-                T3,
-                true,
-            );
             let rs = to_reg(
                 bce,
                 *src,
@@ -2645,47 +2765,94 @@ fn lower_instruction(
             let base_addr = signal_addr;
             let base_size = signal_size;
 
-            let mut branch_offset: Option<usize> = None;
+            let mut branch_offset: Option<(Reg, usize)> = None;
             let mut rpartial = to_reg(
                 bce,
                 *partial,
                 &gl.vars,
                 assignment[partial],
                 stack_offsets,
-                T4,
+                T2,
                 false,
             );
 
+            let mut relem_offset = match bounds {
+                SignalBounds::Constant(_) => T4,
+                SignalBounds::Variable {
+                    elem_offset,
+                    stride: _,
+                } => to_reg(
+                    bce,
+                    *elem_offset,
+                    &gl.vars,
+                    assignment[elem_offset],
+                    stack_offsets,
+                    T4,
+                    false,
+                ),
+            };
+
             use LogicMode as M;
-            match partial.mode() {
-                M::TwoValue => {}
-                M::FourValue => {
-                    let partial_size =
-                        SixBitSize::from_vector_size(gl.vars.size(*partial)).unwrap();
-                    let (rpartialspc, rpartialval) = rpartial.to_spc_and_val();
+            if partial.mode().is_four_value() {
+                let partial_size = SixBitSize::from_vector_size(gl.vars.size(*partial)).unwrap();
+                let (rpartialspc, rpartialval) = rpartial.to_spc_and_val();
 
-                    // TempReg: Destructs PARTIAL (SPC). No longer assessible.
-                    bce.contains_special(T4, rpartialspc, partial_size);
+                // TempReg: Destructs PARTIAL (SPC). No longer assessible.
+                bce.contains_special(T2, rpartialspc, partial_size);
 
-                    branch_offset = Some(bce.data.len());
-                    bce.panic();
+                branch_offset = Some((T2, bce.data.len()));
+                rpartial = rpartialval;
+            }
 
-                    rpartial = rpartialval;
+            if let SignalBounds::Variable { elem_offset, .. } = bounds
+                && elem_offset.mode().is_four_value()
+            {
+                let elem_offset_size =
+                    SixBitSize::from_vector_size(gl.vars.size(*elem_offset)).unwrap();
+                let (relem_offsetspc, relem_offsetval) = relem_offset.to_spc_and_val();
+
+                // TempReg: Destructs ELEM_OFFSET (SPC). No longer assessible.
+                bce.contains_special(T4, relem_offsetspc, elem_offset_size);
+
+                if let Some((rcond, _)) = branch_offset {
+                    bce.or(T4, T4, rcond);
+                }
+                branch_offset = Some((T4, bce.data.len()));
+
+                // Make space for the RD.
+                if relem_offsetval == T5 {
+                    match partial.mode() {
+                        M::TwoValue => {
+                            bce.copy(T3, relem_offsetval);
+                            relem_offset = T3;
+                        }
+                        M::FourValue => {
+                            bce.copy(T2, relem_offsetval);
+                            relem_offset = T2;
+                        }
+                    }
                 }
             }
 
+            let dslot = assignment[dst];
+            let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T5, true);
+
+            if branch_offset.is_some() {
+                bce.panic();
+            }
+
+            const LOWER_BOUND_SCRATCH: Reg = T4;
+            if let SignalBounds::Variable { stride, .. } = bounds {
+                load_lower_bound_from_elem_offset(bce, LOWER_BOUND_SCRATCH, relem_offset, *stride);
+            }
+
             // The `rd` may clobber the `rpartial`, but we still need the `rpartial` if we have
-            // watchers.
-            if rd == rpartial && watchers.is_some() {
+            // watchers. The wake checks also use `T2` as scratch, which is the backup register
+            // of `rpartial`. `T3` is free here: `relem_offset` has been consumed above.
+            if watchers.is_some() && (rd == rpartial || rpartial == T2) {
                 bce.copy(T3, rpartial);
                 rpartial = T3;
             }
-
-            // @NOTE: `rpartial` is handed over as the bit within the signal, with the signal's
-            // own base alongside it, rather than the two added together. That is the coordinate a
-            // watch is stated in, and the clamp range cannot stand in for it: the range bounds the
-            // addressable extent of the write, which for an array element starts at the element.
-            let bounds = 0..=base_size.get() - 1;
 
             if let Some(watcher_range) = watch_map.map().get(signal) {
                 let watchers = watch_map.watchers();
@@ -2750,41 +2917,107 @@ fn lower_instruction(
                 }
             }
 
-            match (src.mode(), SixBitSize::from_vector_size(src_size)) {
-                (M::TwoValue, None) => {
+            match (src.mode(), SixBitSize::from_vector_size(src_size), bounds) {
+                (M::TwoValue, None, bounds) => {
+                    let bound_width = match bounds {
+                        SignalBounds::Constant(bounds) => {
+                            bce.load_u64(LOWER_BOUND_SCRATCH, bounds.lsb() as u64);
+                            bounds.width()
+                        }
+                        SignalBounds::Variable {
+                            elem_offset: _,
+                            stride,
+                        } => *stride,
+                    };
                     bce.tv_set_heaprel(
                         Some(rd),
                         rs,
                         rpartial,
                         InlineAddrOffset::ZERO,
-                        bounds.clone(),
+                        LOWER_BOUND_SCRATCH,
+                        bound_width,
                         base_addr,
                         src_size,
                         base_size,
                     );
                 }
-                (M::FourValue, None) => {
+                (M::FourValue, None, bounds) => {
+                    let bound_width = match bounds {
+                        SignalBounds::Constant(bounds) => {
+                            bce.load_u64(LOWER_BOUND_SCRATCH, bounds.lsb() as u64);
+                            bounds.width()
+                        }
+                        SignalBounds::Variable {
+                            elem_offset: _,
+                            stride,
+                        } => *stride,
+                    };
                     bce.fv_set_heaprel(
                         Some(rd),
                         rs,
                         rpartial,
                         InlineAddrOffset::ZERO,
-                        bounds.clone(),
+                        LOWER_BOUND_SCRATCH,
+                        bound_width,
                         base_addr,
                         src_size,
                         signal_size,
                     );
                 }
-                (M::TwoValue, Some(size)) => {
-                    bce.tv_setrel(Some(rd), rs, rpartial, signal_addr, bounds.clone(), size);
+                (M::TwoValue, Some(size), SignalBounds::Constant(bounds)) => {
+                    bce.tv_setrel(
+                        Some(rd),
+                        rs,
+                        rpartial,
+                        signal_addr,
+                        bounds.lsb()..=bounds.msb(),
+                        size,
+                    );
                 }
-                (M::FourValue, Some(size)) => {
+                (M::FourValue, Some(size), SignalBounds::Constant(bounds)) => {
                     bce.fv_setrel(
                         Some(rd),
                         rs,
                         rpartial,
                         base_addr,
-                        bounds.clone(),
+                        bounds.lsb()..=bounds.msb(),
+                        size,
+                        signal_size,
+                    );
+                }
+                (
+                    M::TwoValue,
+                    Some(size),
+                    SignalBounds::Variable {
+                        elem_offset: _,
+                        stride,
+                    },
+                ) => {
+                    bce.tv_setrel_varbounds(
+                        Some(rd),
+                        rs,
+                        rpartial,
+                        signal_addr,
+                        LOWER_BOUND_SCRATCH,
+                        *stride,
+                        size,
+                    );
+                }
+                (
+                    M::FourValue,
+                    Some(size),
+                    SignalBounds::Variable {
+                        elem_offset: _,
+                        stride,
+                    },
+                ) => {
+                    bce.fv_setrel_varbounds(
+                        Some(rd),
+                        rs,
+                        rpartial,
+                        base_addr,
+                        LOWER_BOUND_SCRATCH,
+                        *stride,
                         size,
                         signal_size,
                     );
@@ -2854,13 +3087,28 @@ fn lower_instruction(
                 }
             }
 
-            if let Some(branch_offset) = branch_offset {
+            if let Some((rcond, branch_offset)) = branch_offset {
+                // A drive to an offset containing X or Z is ignored, so nothing is updated.
+                let jump_offset = bce.data.len();
+                bce.panic();
+
                 bce.data[branch_offset] = BranchTrue {
-                    rcond: T4,
+                    rcond,
                     imm: SignedImmediate::new((bce.data.len() - branch_offset) as i64 - 1).unwrap(),
                 }
                 .encode();
+
+                match SixBitSize::from_vector_size(src_size) {
+                    None => bce.tv_heap_fill(rd, false, src_size),
+                    Some(_) => bce.xor(rd, rd, rd),
+                }
+
+                bce.data[jump_offset] =
+                    Jump(SignedImmediate::new((bce.data.len() - jump_offset) as i64 - 1).unwrap())
+                        .encode();
             }
+
+            store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T0);
         }
         I::Phi(..) => {
             // These are handles at the basic block level.
@@ -3026,5 +3274,20 @@ fn convert_intrinsic(
             mode: gl.signals[readmem.signal].mode,
             inner: readmem.as_ref().clone(),
         })),
+    }
+}
+
+fn load_lower_bound_from_elem_offset(
+    bce: &mut BytecodeEncoder,
+    rd: Reg,
+    elem_offset: Reg,
+    stride: VectorSize,
+) {
+    match SignedImmediate::new(stride.get() as i64) {
+        None => {
+            bce.load_u64(rd, stride.get() as u64);
+            bce.mul(rd, elem_offset, rd, SixBitSize::N32);
+        }
+        Some(imm) => bce.muli(rd, elem_offset, imm, SixBitSize::N32),
     }
 }
