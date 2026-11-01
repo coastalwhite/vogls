@@ -353,7 +353,7 @@ impl<'a> DriverResolution<'a> {
             for i in &bb.instrs {
                 use Instruction as I;
                 match &i {
-                    I::Drive(_, s, _, _) | I::DriveSlice(_, s, _, _) => {
+                    I::Drive(_, s, _, _) | I::DriveSlice(_, s, _, _, _) => {
                         if let Some(&node) = self.signal_lut.get(s) {
                             assert!(
                                 !matches!(self.nodes[node], DriveNode::Net { .. }),

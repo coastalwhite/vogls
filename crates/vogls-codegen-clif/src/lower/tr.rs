@@ -144,7 +144,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                 for instr in &compiler.gl.bbs[k].instrs {
                     // An upper bound: every `Drive` / `DriveSlice` pushes at most one transaction.
                     let (Instruction::Drive(_, signal, _, _)
-                    | Instruction::DriveSlice(_, signal, _, _)) = instr
+                    | Instruction::DriveSlice(_, signal, _, _, _)) = instr
                     else {
                         continue;
                     };
@@ -3679,7 +3679,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             }
                         }
                     }
-                    Instruction::ProbeSlice(dst, signal, offset) => {
+                    Instruction::ProbeSlice(dst, signal, offset, bounds) => {
                         let dst_size = gl.vars.size(*dst);
                         let signal_size = gl.signals[*signal].size;
                         let offset_size = gl.vars.size(*offset);
@@ -4457,7 +4457,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             );
                         }
                     }
-                    Instruction::DriveSlice(dst, signal, src, offset) => {
+                    Instruction::DriveSlice(dst, signal, src, offset, bounds) => {
                         use LogicMode as M;
 
                         let src_size = gl.vars.size(*src);
