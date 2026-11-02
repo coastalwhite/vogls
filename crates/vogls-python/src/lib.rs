@@ -22,6 +22,7 @@ mod vogls {
     use vogls_plan::expand::Expand;
     use vogls_plan::map::{build_array_map, build_run_vector_map};
     use vogls_plan::mutual_information::MutualInformation;
+    use vogls_plan::noise::Noise;
     use vogls_plan::output::{DslLazyOutput, DslPlanComponent, Output};
     use vogls_plan::pearson_corr::PearsonCorrelation;
     use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
@@ -502,6 +503,28 @@ mod vogls {
         }))
     }
 
+    /// Validate the Gaussian parameters and resolve `seed = None`.
+    fn build_noise(stddev: f64, mean: f64, seed: Option<u64>) -> PyResult<Noise> {
+        // Box-Muller is symmetric, so a negative `stddev` would be silently
+        // indistinguishable from its absolute value.
+        if !stddev.is_finite() || stddev < 0.0 {
+            return Err(PyValueError::new_err(format!(
+                "noise stddev must be finite and non-negative, got {stddev}"
+            )));
+        }
+        // A NaN parameter poisons the entire output array.
+        if !mean.is_finite() {
+            return Err(PyValueError::new_err(format!(
+                "noise mean must be finite, got {mean}"
+            )));
+        }
+        Ok(Noise {
+            stddev,
+            mean,
+            seed: seed.unwrap_or_else(rand::random::<u64>),
+        })
+    }
+
     #[pyo3::pyclass(frozen)]
     pub struct PyLazyPlan(DslLazyPlan);
     #[pyo3::pyclass(frozen)]
@@ -690,6 +713,12 @@ mod vogls {
                 output_dtype: parse_uint_type(output_dtype)?,
             };
             Ok(PyLazyArray(build_array_map(quantize, [self.0.clone()])?))
+        }
+
+        #[pyo3(signature = (stddev, *, mean = 0.0, seed = None))]
+        pub fn noise(&self, stddev: f64, mean: f64, seed: Option<u64>) -> PyResult<PyLazyArray> {
+            let noise = build_noise(stddev, mean, seed)?;
+            Ok(PyLazyArray(build_array_map(noise, [self.0.clone()])?))
         }
 
         #[staticmethod]
@@ -943,6 +972,20 @@ mod vogls {
             };
             Ok(PyLazyRunVector(build_run_vector_map(
                 quantize,
+                [self.0.clone()],
+            )?))
+        }
+
+        #[pyo3(signature = (stddev, *, mean = 0.0, seed = None))]
+        pub fn noise(
+            &self,
+            stddev: f64,
+            mean: f64,
+            seed: Option<u64>,
+        ) -> PyResult<PyLazyRunVector> {
+            let noise = build_noise(stddev, mean, seed)?;
+            Ok(PyLazyRunVector(build_run_vector_map(
+                noise,
                 [self.0.clone()],
             )?))
         }

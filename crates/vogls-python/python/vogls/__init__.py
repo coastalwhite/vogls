@@ -159,6 +159,30 @@ class Array:
             .compute()
         )
 
+    def noise(
+        self,
+        stddev: int | float,
+        *,
+        mean: int | float = 0,
+        seed: int | None = None,
+    ) -> Self:
+        """
+        Add Gaussian noise to integer or floating point data.
+
+        Calculated as:
+            $$ noise(x) = x + sample_gaussian(mean, stddev) $$
+
+        Integer output saturates at the bounds of its storage type.
+
+        If `seed` is None, a seed is drawn at planning time which is *not*
+        reproducible. Two calls with the same `seed` on the same input are the
+        *same* node and produce identical noise, so any correlation between them
+        reads 1.0; two calls with `seed=None` are independent realizations.
+
+        On integer `stddev` below 0.5 does nothing.
+        """
+        return self.lazy().noise(stddev, mean=mean, seed=seed).compute()
+
     def as_list(self) -> list:
         return self._inner.as_list()
 
@@ -209,6 +233,30 @@ class LazyArray(Lazy[Array]):
                 upperbound=upperbound,
             )
         )
+
+    def noise(
+        self,
+        stddev: int | float,
+        *,
+        mean: int | float = 0,
+        seed: int | None = None,
+    ) -> Self:
+        """
+        Add Gaussian noise to integer or floating point data.
+
+        Calculated as:
+            $$ noise(x) = x + sample_gaussian(mean, stddev) $$
+
+        Integer output saturates at the bounds of its storage type.
+
+        If `seed` is None, a seed is drawn at planning time which is *not*
+        reproducible. Two calls with the same `seed` on the same input are the
+        *same* node and produce identical noise, so any correlation between them
+        reads 1.0; two calls with `seed=None` are independent realizations.
+
+        On integer a `stddev` below 0.5 does nothing.
+        """
+        return LazyArray._from_py(self._producer.noise(stddev, mean=mean, seed=seed))
 
     def entropy(self) -> "LazyValue":
         return LazyValue._from_py(self._producer.entropy())
@@ -402,6 +450,30 @@ class RunVector:
             .compute()
         )
 
+    def noise(
+        self,
+        stddev: int | float,
+        *,
+        mean: int | float = 0,
+        seed: int | None = None,
+    ) -> Self:
+        """
+        Add Gaussian noise to integer or floating point data.
+
+        Calculated as:
+            $$ noise(x) = x + sample_gaussian(mean, stddev) $$
+
+        Integer output saturates at the bounds of its storage type.
+
+        If `seed` is None, a seed is drawn at planning time which is *not*
+        reproducible. Two calls with the same `seed` on the same input are the
+        *same* node and produce identical noise, so any correlation between them
+        reads 1.0; two calls with `seed=None` are independent realizations.
+
+        On integer a `stddev` below 0.5 does nothing.
+        """
+        return self.lazy().noise(stddev, mean=mean, seed=seed).compute()
+
     def as_list(self) -> list[list]:
         return self._inner.as_list()
 
@@ -451,6 +523,32 @@ class LazyRunVector(Lazy[RunVector]):
                 lowerbound=lowerbound,
                 upperbound=upperbound,
             )
+        )
+
+    def noise(
+        self,
+        stddev: int | float,
+        *,
+        mean: int | float = 0,
+        seed: int | None = None,
+    ) -> Self:
+        """
+        Add Gaussian noise to integer or floating point data.
+
+        Calculated as:
+            $$ noise(x) = x + sample_gaussian(mean, stddev) $$
+
+        Integer output saturates at the bounds of its storage type.
+
+        If `seed` is None, a seed is drawn at planning time which is *not*
+        reproducible. Two calls with the same `seed` on the same input are the
+        *same* node and produce identical noise, so any correlation between them
+        reads 1.0; two calls with `seed=None` are independent realizations.
+
+        On integer a `stddev` below 0.5 does nothing.
+        """
+        return LazyRunVector._from_py(
+            self._producer.noise(stddev, mean=mean, seed=seed)
         )
 
     def map(self, f: Callable[[Array], Array]) -> Self:

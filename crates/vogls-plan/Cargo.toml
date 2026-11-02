@@ -8,7 +8,7 @@ vogls = { workspace = true, features = ["unstable", "random", "native", "stdworl
 vogls-trace.workspace = true
 hashbrown.workspace = true
 foldhash.workspace = true
-rand.workspace = true
+rand = { workspace = true, features = ["chacha"] }
 rayon.workspace = true
 pyo3 = { workspace = true, optional = true }
 
