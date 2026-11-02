@@ -428,6 +428,13 @@ class RunVector:
         instance._inner = py
         return instance
 
+    @property
+    def __array_interface__(self) -> dict:
+        """
+        A zero-copy 2-D view of the runs, as `(runs, width)`.
+        """
+        return self._inner.__array_interface__
+
     def lazy(self) -> "LazyRunVector":
         return LazyRunVector._from_py(self._inner.lazy())
 

@@ -3,6 +3,7 @@ use pyo3::types::{PyDict, PyDictMethods, PyTuple};
 use pyo3::{Bound, PyResult, Python};
 
 use crate::array::{Array, UIntArray};
+use crate::run_vector::{RunOffsets, RunVector};
 
 use pyo3::buffer::{Element, PyBuffer};
 use pyo3::prelude::*;
@@ -48,6 +49,51 @@ pub fn to_array_interface<'py>(py: Python<'py>, arr: &Array) -> PyResult<Bound<'
     d.set_item(
         "data",
         PyTuple::new(py, [arr.as_byte_ptr() as usize, 0_usize])?,
+    )?;
+    d.set_item("strides", py.None())?;
+    Ok(d)
+}
+
+/// Export a run vector as a 2-D `__array_interface__` of shape `(runs, width)`.
+pub fn run_vector_to_array_interface<'py>(
+    py: Python<'py>,
+    rv: &RunVector,
+) -> PyResult<Bound<'py, PyDict>> {
+    let (runs, width) = match &rv.offsets {
+        RunOffsets::Scalar(runs) => (*runs, 1_usize),
+        RunOffsets::Constant(width, runs) => (*runs, *width as usize),
+        RunOffsets::Offsets(..) => {
+            return Err(PyValueError::new_err(
+                "a variable-width RunVector has no rectangular numpy shape; use as_list()",
+            ));
+        }
+    };
+
+    // The rows are only back-to-back in `data` -- and so only C-contiguous --
+    // if the declared extent really is covered by the buffer.
+    let extent = runs
+        .checked_mul(width)
+        .ok_or_else(|| PyValueError::new_err("RunVector shape overflows"))?;
+    if extent > rv.data.len() {
+        return Err(PyValueError::new_err(format!(
+            "RunVector declares {runs}x{width} elements but holds {}",
+            rv.data.len()
+        )));
+    }
+
+    let d = PyDict::new(py);
+    d.set_item("version", 3)?;
+    d.set_item("shape", PyTuple::new(py, [runs, width])?)?;
+    d.set_item(
+        "typestr",
+        rv.data
+            .data_type()
+            .type_str()
+            .ok_or_else(|| PyValueError::new_err("cannot export to numpy"))?,
+    )?;
+    d.set_item(
+        "data",
+        PyTuple::new(py, [rv.data.as_byte_ptr() as usize, 0_usize])?,
     )?;
     d.set_item("strides", py.None())?;
     Ok(d)
