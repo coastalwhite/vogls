@@ -22,6 +22,15 @@ pub struct Plan {
 }
 
 impl Plan {
+    /// Build a plan from an iterator over its named components.
+    ///
+    /// A repeated key keeps its original position, but takes the last value.
+    pub fn from_components(components: impl IntoIterator<Item = (String, Output)>) -> Self {
+        Plan {
+            components: components.into_iter().collect(),
+        }
+    }
+
     pub fn to_lazy_dsl(&self) -> DslLazyPlan {
         DslLazyPlan {
             ty: Arc::new(Type::Plan(self.ty())),
@@ -59,6 +68,27 @@ pub struct LazyPlan {
 }
 
 impl DslLazyPlan {
+    /// Build a plan literal from an iterator over its named lazy components.
+    ///
+    /// The plan type is derived from the component types. A repeated key keeps
+    /// its original position, but takes the last value.
+    pub fn from_components(components: impl IntoIterator<Item = (String, DslLazyOutput)>) -> Self {
+        let components = components
+            .into_iter()
+            .collect::<IndexMap<String, DslLazyOutput>>();
+        DslLazyPlan {
+            ty: Arc::new(Type::Plan(PlanType {
+                components: Arc::new(
+                    components
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.ty().as_ref().clone()))
+                        .collect::<IndexMap<String, Type>>(),
+                ),
+            })),
+            f: Arc::new(DslLiteralPlan { components }),
+        }
+    }
+
     pub fn ty(&self) -> &PlanType {
         let Type::Plan(ty) = self.ty.as_ref() else {
             unreachable!()
@@ -67,6 +97,20 @@ impl DslLazyPlan {
     }
 }
 impl LazyPlan {
+    /// Build a plan literal from an iterator over its already-converted named
+    /// components.
+    pub fn from_components(
+        ty: PlanType,
+        components: impl IntoIterator<Item = (String, LazyOutputKey)>,
+    ) -> Self {
+        LazyPlan {
+            ty: Arc::new(Type::Plan(ty)),
+            f: Arc::new(LazyLiteralPlan {
+                components: components.into_iter().collect(),
+            }),
+        }
+    }
+
     pub fn ty(&self) -> &PlanType {
         let Type::Plan(ty) = self.ty.as_ref() else {
             unreachable!()

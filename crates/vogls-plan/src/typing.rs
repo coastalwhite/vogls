@@ -73,7 +73,7 @@ impl Type {
         matches!(self, Self::Value(..))
     }
     pub fn is_array(&self) -> bool {
-        matches!(self, Self::Value(..))
+        matches!(self, Self::Array(..))
     }
     pub fn is_plan(&self) -> bool {
         matches!(self, Self::Plan(..))

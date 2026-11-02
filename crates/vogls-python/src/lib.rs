@@ -31,7 +31,7 @@ mod vogls {
     use vogls_plan::run::DslLazyStep;
     use vogls_plan::run_vector::{DslRunVector, DslRunVectorRepeatArray, LazyRunVector, RunVector};
     use vogls_plan::ttest::TTest;
-    use vogls_plan::typing::{DataType, PlanType, Type, TypeKind, UIntType};
+    use vogls_plan::typing::{DataType, Type, TypeKind, UIntType};
     use vogls_plan::value::{DslLazyValue, LazyValue, UIntValue, Value};
     use vogls_plan::window_sum::WindowSum;
 
@@ -637,19 +637,12 @@ mod vogls {
         #[staticmethod]
         pub fn from_dict(dict: Bound<pyo3::types::PyDict>) -> PyResult<Self> {
             let mut components = IndexMap::<String, DslLazyOutput>::default();
-            let mut ty = IndexMap::<String, Type>::default();
             for (key, value) in dict.iter() {
                 let key = key.str()?;
                 let value = value.extract::<PyLazyOutput>()?;
-                _ = ty.insert(key.to_string(), value.0.ty().as_ref().clone());
                 _ = components.insert(key.to_string(), value.0);
             }
-            Ok(Self(vogls_plan::plan::DslLazyPlan {
-                ty: Arc::new(Type::Plan(PlanType {
-                    components: Arc::new(ty),
-                })),
-                f: Arc::new(vogls_plan::plan::DslLiteralPlan { components }) as _,
-            }))
+            Ok(Self(DslLazyPlan::from_components(components)))
         }
 
         pub fn get(&self, key: String) -> PyLazyOutput {
@@ -664,6 +657,17 @@ mod vogls {
     }
     #[pymethods]
     impl PyPlan {
+        #[staticmethod]
+        pub fn from_dict(dict: Bound<pyo3::types::PyDict>) -> PyResult<Self> {
+            let mut components = IndexMap::<String, Output>::default();
+            for (key, value) in dict.iter() {
+                let key = key.str()?;
+                let value = value.extract::<PyOutput>()?;
+                _ = components.insert(key.to_string(), value.0);
+            }
+            Ok(Self(Plan::from_components(components)))
+        }
+
         pub fn lazy(&self) -> PyLazyPlan {
             PyLazyPlan(self.0.to_lazy_dsl())
         }
