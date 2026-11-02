@@ -70,6 +70,7 @@ pub mod expand;
 pub mod map;
 pub mod minmax;
 pub mod mutual_information;
+pub mod noise;
 #[cfg(feature = "python")]
 pub mod numpy;
 pub mod output;
