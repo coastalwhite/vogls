@@ -41,16 +41,36 @@ pub enum UIntArray {
 pub trait UIntElement: Copy {
     fn to_u64(self) -> u64;
 
+    /// Get a value from a `u64`.
+    fn from_u64(value: u64) -> Self;
+
     /// The buffer of a [`UIntArray`] whose width is `Self`, else `None`.
     fn from_uint_array(array: &UIntArray) -> Option<&Buffer<Self>>;
+
+    fn into_uint_array(buffer: Buffer<Self>) -> UIntArray;
+
+    fn into_uint_value(self) -> UIntValue;
 }
 
+// The widening and narrowing expressions are passed in rather than written as
+// `as` casts in the macro body, so that the `u64` arm does not become an
+// `unnecessary_cast`.
 macro_rules! impl_uint_element {
-    ($t:ty, $variant:ident, |$slf:ident| $to_u64:expr) => {
+    ($t:ty, $variant:ident, |$slf:ident| $to_u64:expr, |$value:ident| $from_u64:expr) => {
         impl UIntElement for $t {
             #[inline(always)]
             fn to_u64($slf) -> u64 {
                 $to_u64
+            }
+            #[inline(always)]
+            fn from_u64($value: u64) -> Self {
+                let narrowed = $from_u64;
+                debug_assert_eq!(
+                    <Self as UIntElement>::to_u64(narrowed),
+                    $value,
+                    "value does not fit the target width"
+                );
+                narrowed
             }
             fn from_uint_array(array: &UIntArray) -> Option<&Buffer<Self>> {
                 match array {
@@ -58,13 +78,20 @@ macro_rules! impl_uint_element {
                     _ => None,
                 }
             }
+            fn into_uint_array(buffer: Buffer<Self>) -> UIntArray {
+                UIntArray::$variant(buffer)
+            }
+            #[inline(always)]
+            fn into_uint_value(self) -> UIntValue {
+                UIntValue::$variant(self)
+            }
         }
     };
 }
-impl_uint_element!(u8, U8, |self| self as u64);
-impl_uint_element!(u16, U16, |self| self as u64);
-impl_uint_element!(u32, U32, |self| self as u64);
-impl_uint_element!(u64, U64, |self| self);
+impl_uint_element!(u8, U8, |self| self as u64, |value| value as u8);
+impl_uint_element!(u16, U16, |self| self as u64, |value| value as u16);
+impl_uint_element!(u32, U32, |self| self as u64, |value| value as u32);
+impl_uint_element!(u64, U64, |self| self, |value| value);
 
 impl UIntArray {
     pub fn len(&self) -> usize {
@@ -78,6 +105,12 @@ impl UIntArray {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn zeros(ty: UIntType, len: usize) -> Self {
+        with_match_uint_type!(ty, |$T| {
+            <$T as UIntElement>::into_uint_array(Buffer::from_vec(vec![0; len]))
+        })
     }
 
     /// The backing slice at a statically-known width.

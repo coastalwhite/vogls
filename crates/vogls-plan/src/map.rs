@@ -91,6 +91,34 @@ pub trait Map: std::hash::Hash + Eq + Clone + Send + Sync + 'static {
     /// Get the output type for the map given the input types.
     fn output_type(&self, inputs: Self::Inputs<ArrayType>) -> ComputeResult<ArrayType>;
 
+    /// Fill `scratch` with anything that has to be derived from the entire
+    /// input before the first compute call.
+    ///
+    /// The default is a no-op.
+    fn prepare_scratches_array(
+        &self,
+        inputs: &Self::Inputs<Array>,
+        ctx: &ComputeContext,
+        scratch: &mut Self::Scratches,
+    ) -> ComputeResult<()> {
+        let _ = (inputs, ctx, scratch);
+        Ok(())
+    }
+
+    /// Fill `scratch` with anything that has to be derived from the entire
+    /// input before the first compute call.
+    ///
+    /// The default is a no-op.
+    fn prepare_scratches_run_vector(
+        &self,
+        inputs: &Self::Inputs<RunVector>,
+        ctx: &ComputeContext,
+        scratch: &mut Self::Scratches,
+    ) -> ComputeResult<()> {
+        let _ = (inputs, ctx, scratch);
+        Ok(())
+    }
+
     /// Compute the map.
     ///
     /// Scratches may not be cleared.
@@ -180,6 +208,8 @@ where
         let output_dtype = self.inner.output_type(input_dtypes)?;
 
         let mut scratch = T::Scratches::default();
+        self.inner
+            .prepare_scratches_run_vector(&inputs, ctx, &mut scratch)?;
         let mut builder = new_array_builder(&output_dtype.data);
         let mut offsets = match output_dtype.length {
             None => Some(Vec::with_capacity(num_runs)),
@@ -258,6 +288,8 @@ where
         let inputs = <T::Inputs<Array> as InputCollection>::from_iter(
             self.inputs.iter().map(|key| inputs.arrays[key].clone()),
         );
+        self.inner
+            .prepare_scratches_array(&inputs, ctx, &mut scratch)?;
         T::compute(&self.inner, inputs, ctx, &mut scratch)
     }
 }
