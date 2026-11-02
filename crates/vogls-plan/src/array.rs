@@ -16,8 +16,8 @@ use crate::compute::{
 };
 use crate::dsl::{DslNode, DslPtr};
 use crate::output::{DslLazyOutput, LazyOutputKey, Output};
-use crate::typing::{ArrayType, DataType, Type};
-use crate::value::Value;
+use crate::typing::{ArrayType, DataType, Type, UIntType};
+use crate::value::{UIntValue, Value};
 
 new_table_key! { pub struct LazyArrayKey; }
 
@@ -25,8 +25,105 @@ new_table_key! { pub struct LazyArrayKey; }
 pub enum Array {
     Floats(Buffer<f64>),
     Ints(Buffer<i64>),
-    UInts(Buffer<u64>),
+    UInts(UIntArray),
     Bits(Bits, NonZeroU32),
+}
+
+/// Width-tagged unsigned integer storage.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum UIntArray {
+    U8(Buffer<u8>),
+    U16(Buffer<u16>),
+    U32(Buffer<u32>),
+    U64(Buffer<u64>),
+}
+
+pub trait UIntElement: Copy {
+    fn to_u64(self) -> u64;
+
+    /// The buffer of a [`UIntArray`] whose width is `Self`, else `None`.
+    fn from_uint_array(array: &UIntArray) -> Option<&Buffer<Self>>;
+}
+
+macro_rules! impl_uint_element {
+    ($t:ty, $variant:ident, |$slf:ident| $to_u64:expr) => {
+        impl UIntElement for $t {
+            #[inline(always)]
+            fn to_u64($slf) -> u64 {
+                $to_u64
+            }
+            fn from_uint_array(array: &UIntArray) -> Option<&Buffer<Self>> {
+                match array {
+                    UIntArray::$variant(items) => Some(items),
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+impl_uint_element!(u8, U8, |self| self as u64);
+impl_uint_element!(u16, U16, |self| self as u64);
+impl_uint_element!(u32, U32, |self| self as u64);
+impl_uint_element!(u64, U64, |self| self);
+
+impl UIntArray {
+    pub fn len(&self) -> usize {
+        match self {
+            Self::U8(items) => items.len(),
+            Self::U16(items) => items.len(),
+            Self::U32(items) => items.len(),
+            Self::U64(items) => items.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The backing slice at a statically-known width.
+    ///
+    /// Panics if `T` is not this array's width.
+    pub fn as_slice<T: UIntElement>(&self) -> &[T] {
+        T::from_uint_array(self)
+            .expect("as_slice called with a width other than the array's own")
+            .as_slice()
+    }
+
+    pub fn ty(&self) -> UIntType {
+        match self {
+            Self::U8(_) => UIntType::U8,
+            Self::U16(_) => UIntType::U16,
+            Self::U32(_) => UIntType::U32,
+            Self::U64(_) => UIntType::U64,
+        }
+    }
+
+    pub fn as_byte_ptr(&self) -> *const u8 {
+        match self {
+            Self::U8(items) => items.as_ptr().cast(),
+            Self::U16(items) => items.as_ptr().cast(),
+            Self::U32(items) => items.as_ptr().cast(),
+            Self::U64(items) => items.as_ptr().cast(),
+        }
+    }
+
+    pub fn get(&self, idx: usize) -> UIntValue {
+        match self {
+            Self::U8(items) => UIntValue::U8(items[idx]),
+            Self::U16(items) => UIntValue::U16(items[idx]),
+            Self::U32(items) => UIntValue::U32(items[idx]),
+            Self::U64(items) => UIntValue::U64(items[idx]),
+        }
+    }
+
+    pub fn slice(&self, offset: usize, length: usize) -> Self {
+        match self {
+            Self::U8(items) => Self::U8(items[offset..][..length].to_vec().into()),
+            Self::U16(items) => Self::U16(items[offset..][..length].to_vec().into()),
+            Self::U32(items) => Self::U32(items[offset..][..length].to_vec().into()),
+            Self::U64(items) => Self::U64(items[offset..][..length].to_vec().into()),
+        }
+    }
 }
 
 pub trait ArrayBuilder {
@@ -65,23 +162,31 @@ impl Primitive for f64 {
         Array::Floats(buf)
     }
 }
-impl Primitive for u64 {
-    fn from_value(value: &Value) -> Option<Self> {
-        match value {
-            Value::UInt(v) => Some(*v),
-            _ => None,
+macro_rules! impl_uint_primitive {
+    ($t:ty, $variant:ident) => {
+        impl Primitive for $t {
+            fn from_value(value: &Value) -> Option<Self> {
+                match value {
+                    Value::UInt(UIntValue::$variant(v)) => Some(*v),
+                    _ => None,
+                }
+            }
+            fn from_array(array: &Array) -> Option<&Buffer<Self>> {
+                match array {
+                    Array::UInts(UIntArray::$variant(v)) => Some(v),
+                    _ => None,
+                }
+            }
+            fn into_array(buf: Buffer<Self>) -> Array {
+                Array::UInts(UIntArray::$variant(buf))
+            }
         }
-    }
-    fn from_array(array: &Array) -> Option<&Buffer<Self>> {
-        match array {
-            Array::UInts(v) => Some(v),
-            _ => None,
-        }
-    }
-    fn into_array(buf: Buffer<Self>) -> Array {
-        Array::UInts(buf)
-    }
+    };
 }
+impl_uint_primitive!(u8, U8);
+impl_uint_primitive!(u16, U16);
+impl_uint_primitive!(u32, U32);
+impl_uint_primitive!(u64, U64);
 impl Primitive for i64 {
     fn from_value(value: &Value) -> Option<Self> {
         match value {
@@ -120,7 +225,10 @@ pub fn new_array_builder(data_type: &DataType) -> Box<dyn ArrayBuilder> {
     match data_type {
         DataType::Float => Box::new(PrimitiveArrayBuilder::<f64>::default()),
         DataType::Int => Box::new(PrimitiveArrayBuilder::<i64>::default()),
-        DataType::UInt => Box::new(PrimitiveArrayBuilder::<u64>::default()),
+        DataType::UInt(UIntType::U8) => Box::new(PrimitiveArrayBuilder::<u8>::default()),
+        DataType::UInt(UIntType::U16) => Box::new(PrimitiveArrayBuilder::<u16>::default()),
+        DataType::UInt(UIntType::U32) => Box::new(PrimitiveArrayBuilder::<u32>::default()),
+        DataType::UInt(UIntType::U64) => Box::new(PrimitiveArrayBuilder::<u64>::default()),
         DataType::Bits(_) => todo!(),
     }
 }
@@ -168,7 +276,7 @@ impl Array {
         match self {
             Array::Floats(vs) => vs.as_ptr().cast(),
             Array::Ints(vs) => vs.as_ptr().cast(),
-            Array::UInts(vs) => vs.as_ptr().cast(),
+            Array::UInts(vs) => vs.as_byte_ptr(),
             Array::Bits(vs, _) => vs.as_u64_slice().as_ptr().cast(),
         }
     }
@@ -177,21 +285,8 @@ impl Array {
         match self {
             Array::Floats(i) => Value::Float(i[idx]),
             Array::Ints(i) => Value::Int(i[idx]),
-            Array::UInts(i) => Value::UInt(i[idx]),
+            Array::UInts(i) => Value::UInt(i.get(idx)),
             Array::Bits(i, stride) => Value::Bits(i.slicex(idx as u32 * stride.get(), *stride)),
-        }
-    }
-
-    pub fn as_u64(&self) -> Option<&Buffer<u64>> {
-        match self {
-            Self::UInts(vs) => Some(vs),
-            _ => None,
-        }
-    }
-    pub fn as_i64(&self) -> Option<&Buffer<i64>> {
-        match self {
-            Self::Ints(vs) => Some(vs),
-            _ => None,
         }
     }
 
@@ -199,7 +294,7 @@ impl Array {
         match self {
             Array::Floats(i) => Array::Floats(i[offset..][..length].to_vec().into()),
             Array::Ints(i) => Array::Ints(i[offset..][..length].to_vec().into()),
-            Array::UInts(i) => Array::UInts(i[offset..][..length].to_vec().into()),
+            Array::UInts(i) => Array::UInts(i.slice(offset, length)),
             Array::Bits(..) => todo!(),
         }
     }
@@ -208,7 +303,7 @@ impl Array {
         match self {
             Self::Floats(..) => DataType::Float,
             Self::Ints(..) => DataType::Int,
-            Self::UInts(..) => DataType::UInt,
+            Self::UInts(d) => DataType::UInt(d.ty()),
             Self::Bits(.., stride) => DataType::Bits(*stride),
         }
     }
@@ -239,11 +334,32 @@ impl Array {
             };
         }
 
+        // One arm per width, matching exactly the width `output_type` declared.
+        // A node that declares a width and then yields another has broken the
+        // `Map`/`Agg` contract, which `unreachable!` reports loudly.
+        macro_rules! uint_arm {
+            ($variant:ident) => {
+                values
+                    .map(|v| {
+                        let v = v?;
+                        let Value::UInt(UIntValue::$variant(v)) = v else {
+                            unreachable!();
+                        };
+                        Ok(v)
+                    })
+                    .collect::<Result<Buffer<_>, E>>()
+                    .map(|b| Self::UInts(UIntArray::$variant(b)))
+            };
+        }
+
         use DataType as DT;
         match arr_type.data {
             DT::Float => primitive_arm!(Float, Floats),
             DT::Int => primitive_arm!(Int, Ints),
-            DT::UInt => primitive_arm!(UInt, UInts),
+            DT::UInt(UIntType::U8) => uint_arm!(U8),
+            DT::UInt(UIntType::U16) => uint_arm!(U16),
+            DT::UInt(UIntType::U32) => uint_arm!(U32),
+            DT::UInt(UIntType::U64) => uint_arm!(U64),
             DT::Bits(_) => todo!(),
         }
     }

@@ -248,7 +248,9 @@ class Value:
     _inner: vgr.PyValue
 
     def __init__(self, v: int | float) -> None:
-        if isinstance(v, int) and v > 0:
+        # `>= 0`, not `> 0`: zero is the single most likely bound anyone passes,
+        # and it belongs on the unsigned side.
+        if isinstance(v, int) and v >= 0:
             self._inner = vgr.PyValue.from_unsigned_int(v)
         elif isinstance(v, int):
             self._inner = vgr.PyValue.from_signed_int(v)

@@ -19,11 +19,20 @@ pub enum TypeKind {
     RunVector,
 }
 
+/// The storage width of an unsigned integer datatype.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum UIntType {
+    U8,
+    U16,
+    U32,
+    U64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DataType {
     Float,
     Int,
-    UInt,
+    UInt(UIntType),
     Bits(VectorSize),
 }
 
@@ -95,25 +104,68 @@ impl RunWidth {
     }
 }
 
+impl UIntType {
+    pub const fn max_value(&self) -> u64 {
+        match self {
+            Self::U8 => u8::MAX as u64,
+            Self::U16 => u16::MAX as u64,
+            Self::U32 => u32::MAX as u64,
+            Self::U64 => u64::MAX,
+        }
+    }
+
+    pub const fn size_in_bytes(&self) -> isize {
+        match self {
+            Self::U8 => 1,
+            Self::U16 => 2,
+            Self::U32 => 4,
+            Self::U64 => 8,
+        }
+    }
+
+    /// The numpy `typestr` for this width.
+    pub fn type_str(&self) -> &'static str {
+        match self {
+            Self::U8 => "|u1",
+            Self::U16 => "<u2",
+            Self::U32 => "<u4",
+            Self::U64 => "<u8",
+        }
+    }
+
+    pub fn format(&self) -> &'static std::ffi::CStr {
+        match self {
+            Self::U8 => c"B",
+            Self::U16 => c"H",
+            Self::U32 => c"I",
+            Self::U64 => c"Q",
+        }
+    }
+}
+
 impl DataType {
     pub fn type_str(&self) -> Option<&'static str> {
         match self {
             DataType::Float => Some("<f8"),
             DataType::Int => Some("<i8"),
-            DataType::UInt => Some("<u8"),
+            DataType::UInt(width) => Some(width.type_str()),
             DataType::Bits(_) => None,
         }
     }
 
     pub fn itemsize(&self) -> isize {
-        8 // f64 / i64 / u64 are all 8 bytes here
+        match self {
+            Self::Float | Self::Int => 8,
+            Self::UInt(width) => width.size_in_bytes(),
+            Self::Bits(_) => 8,
+        }
     }
 
     pub fn format(&self) -> &'static std::ffi::CStr {
         match self {
             Self::Float => c"d",
             Self::Int => c"q",
-            Self::UInt => c"Q",
+            Self::UInt(width) => width.format(),
             Self::Bits(_) => todo!(),
         }
     }

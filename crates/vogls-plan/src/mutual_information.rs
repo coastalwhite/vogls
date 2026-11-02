@@ -3,7 +3,7 @@ use std::fmt;
 use vogls::utils::IndexMap;
 
 use crate::agg::Agg;
-use crate::array::Array;
+use crate::array::{Array, UIntElement};
 use crate::compute::{ComputeContext, ComputeError, ComputeResult};
 use crate::entropy::prenormalized_entropy;
 use crate::typing::DataType;
@@ -11,9 +11,12 @@ use crate::value::Value;
 
 const NUM_BREAKS: usize = 64;
 
-fn cut(data: impl Iterator<Item = u64> + Clone, out: &mut Vec<u64>) {
+fn cut<T: UIntElement>(data: &[T], out: &mut Vec<u64>) {
     out.clear();
-    let (Some(min), Some(max)) = (data.clone().min(), data.clone().max()) else {
+    let (Some(min), Some(max)) = (
+        data.iter().map(|&v| v.to_u64()).min(),
+        data.iter().map(|&v| v.to_u64()).max(),
+    ) else {
         return;
     };
 
@@ -21,8 +24,8 @@ fn cut(data: impl Iterator<Item = u64> + Clone, out: &mut Vec<u64>) {
     let max = max as f64;
     let width = (max - min) / (NUM_BREAKS as f64);
 
-    out.extend(data.map(|v| {
-        let v = v as f64;
+    out.extend(data.iter().map(|&v| {
+        let v = v.to_u64() as f64;
         if v.is_nan() || v.is_infinite() {
             return 0;
         }
@@ -55,7 +58,8 @@ impl Agg for MutualInformation {
         f.write_str("Mutual Information")
     }
     fn output_type(&self, inputs: Self::Inputs<DataType>) -> ComputeResult<DataType> {
-        let [DataType::UInt, DataType::UInt] = inputs else {
+        // Read-only; `cut` rebins into `NUM_BREAKS` regardless of storage width.
+        let [DataType::UInt(_), DataType::UInt(_)] = inputs else {
             return Err(ComputeError::InvalidTypes);
         };
         Ok(DataType::Float)
@@ -78,8 +82,8 @@ impl Agg for MutualInformation {
         scratch.db.clear();
         scratch.dab.clear();
 
-        cut(lhs.iter().copied(), &mut scratch.bins_a);
-        cut(rhs.iter().copied(), &mut scratch.bins_b);
+        with_match_uint_type!(lhs.ty(), |$T| cut(lhs.as_slice::<$T>(), &mut scratch.bins_a));
+        with_match_uint_type!(rhs.ty(), |$T| cut(rhs.as_slice::<$T>(), &mut scratch.bins_b));
 
         for (&a, &b) in scratch.bins_a.iter().zip(&scratch.bins_b) {
             *scratch.da.entry(a).or_default() += 1;

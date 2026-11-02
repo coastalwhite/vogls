@@ -30,7 +30,7 @@ mod vogls {
     use vogls_plan::run_vector::{DslRunVector, DslRunVectorRepeatArray, LazyRunVector, RunVector};
     use vogls_plan::ttest::TTest;
     use vogls_plan::typing::{PlanType, Type, TypeKind};
-    use vogls_plan::value::{DslLazyValue, LazyValue, Value};
+    use vogls_plan::value::{DslLazyValue, LazyValue, UIntValue, Value};
     use vogls_plan::window_sum::WindowSum;
 
     #[pyo3::pyclass(frozen)]
@@ -740,11 +740,14 @@ mod vogls {
 
         pub fn as_list(&self, py: pyo3::Python<'_>) -> PyResult<pyo3::Py<pyo3::types::PyList>> {
             use pyo3::types::PyList;
-            use vogls_plan::array::Array;
+            use vogls_plan::array::{Array, UIntArray};
             Ok(match &self.0 {
                 Array::Floats(items) => PyList::new(py, items.iter())?.into(),
                 Array::Ints(items) => PyList::new(py, items.iter())?.into(),
-                Array::UInts(items) => PyList::new(py, items.iter())?.into(),
+                Array::UInts(UIntArray::U8(items)) => PyList::new(py, items.iter())?.into(),
+                Array::UInts(UIntArray::U16(items)) => PyList::new(py, items.iter())?.into(),
+                Array::UInts(UIntArray::U32(items)) => PyList::new(py, items.iter())?.into(),
+                Array::UInts(UIntArray::U64(items)) => PyList::new(py, items.iter())?.into(),
                 Array::Bits(..) => todo!(),
             })
         }
@@ -802,7 +805,8 @@ mod vogls {
         }
         #[staticmethod]
         pub fn from_unsigned_int(v: u64) -> Self {
-            Self(Value::UInt(v))
+            // A bare Python `int` is widest-width; narrowing is the caller's choice.
+            Self(Value::UInt(UIntValue::U64(v)))
         }
         #[staticmethod]
         pub fn from_signed_int(v: i64) -> Self {
@@ -817,7 +821,7 @@ mod vogls {
             match &self.0 {
                 Value::Float(v) => v.into_py_any(py),
                 Value::Int(v) => v.into_py_any(py),
-                Value::UInt(v) => v.into_py_any(py),
+                Value::UInt(v) => v.to_u64().into_py_any(py),
                 Value::Bits(_) => todo!(),
             }
         }
@@ -832,7 +836,7 @@ mod vogls {
         pub fn extract_int(&self) -> PyResult<i64> {
             match &self.0 {
                 Value::Int(v) => Ok(*v),
-                Value::UInt(v) => Ok(*v as i64),
+                Value::UInt(v) => Ok(v.to_u64() as i64),
                 _ => todo!(),
             }
         }

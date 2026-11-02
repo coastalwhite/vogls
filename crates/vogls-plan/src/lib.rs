@@ -19,6 +19,46 @@ macro_rules! impl_dyn_eq_hash {
     };
 }
 
+/// Monomorphize `$body` once per `UInt` width, with `$T` naming the element type.
+macro_rules! with_match_uint_type {(
+    $uint_type:expr, | $_:tt $T:ident | $($body:tt)*
+) => ({
+    macro_rules! __with_uint_ty__ {( $_ $T:ident ) => ( $($body)* )}
+    use $crate::typing::UIntType::*;
+    match $uint_type {
+        U8 => __with_uint_ty__! { u8 },
+        U16 => __with_uint_ty__! { u16 },
+        U32 => __with_uint_ty__! { u32 },
+        U64 => __with_uint_ty__! { u64 },
+    }
+})}
+
+/// [`with_match_uint_type`] for two independently-typed widths.
+macro_rules! with_match_uint_type_pair {(
+    $lhs_type:expr, $rhs_type:expr, | $_:tt $T:ident, $__:tt $U:ident | $($body:tt)*
+) => ({
+    macro_rules! __with_uint_ty2__ {( $_ $T:ident, $__ $U:ident ) => ( $($body)* )}
+    use $crate::typing::UIntType::*;
+    match ($lhs_type, $rhs_type) {
+        (U8, U8) => __with_uint_ty2__! { u8, u8 },
+        (U8, U16) => __with_uint_ty2__! { u8, u16 },
+        (U8, U32) => __with_uint_ty2__! { u8, u32 },
+        (U8, U64) => __with_uint_ty2__! { u8, u64 },
+        (U16, U8) => __with_uint_ty2__! { u16, u8 },
+        (U16, U16) => __with_uint_ty2__! { u16, u16 },
+        (U16, U32) => __with_uint_ty2__! { u16, u32 },
+        (U16, U64) => __with_uint_ty2__! { u16, u64 },
+        (U32, U8) => __with_uint_ty2__! { u32, u8 },
+        (U32, U16) => __with_uint_ty2__! { u32, u16 },
+        (U32, U32) => __with_uint_ty2__! { u32, u32 },
+        (U32, U64) => __with_uint_ty2__! { u32, u64 },
+        (U64, U8) => __with_uint_ty2__! { u64, u8 },
+        (U64, U16) => __with_uint_ty2__! { u64, u16 },
+        (U64, U32) => __with_uint_ty2__! { u64, u32 },
+        (U64, U64) => __with_uint_ty2__! { u64, u64 },
+    }
+})}
+
 pub mod agg;
 pub mod array;
 pub mod buffer;

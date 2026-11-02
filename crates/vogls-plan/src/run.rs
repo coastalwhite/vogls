@@ -8,7 +8,7 @@ use vogls::utils::{IndexMap, VgHashMap};
 use vogls_trace::Trace;
 
 use crate::TraceRef;
-use crate::array::{Array, DslLazyArray, LazyArrayKey};
+use crate::array::{Array, DslLazyArray, LazyArrayKey, UIntArray};
 use crate::buffer::Buffer;
 use crate::compute::{
     ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs, ComputeResult,
@@ -19,8 +19,8 @@ use crate::dsl::{DslNode, DslPtr};
 use crate::output::Output;
 use crate::plan::{DslLazyPlan, DslPlanNode, Plan, PlanNode};
 use crate::run_vector::{RunOffsets, RunVector};
-use crate::typing::{DataType, PlanType, RunVectorType, RunWidth, Type};
-use crate::value::Value;
+use crate::typing::{DataType, PlanType, RunVectorType, RunWidth, Type, UIntType};
+use crate::value::{UIntValue, Value};
 
 #[derive(Clone)]
 pub struct LazyRun {
@@ -93,12 +93,12 @@ impl DslLazyRun {
             .push(DslLazyStep::TraceAgg(name.clone(), RunAgg::HammingDistance));
 
         let time = RunVectorType {
-            data: DataType::UInt,
+            data: DataType::UInt(UIntType::U64),
             length: None,
             width: RunWidth::Variable,
         };
         let dist = RunVectorType {
-            data: DataType::UInt,
+            data: DataType::UInt(UIntType::U64),
             length: None,
             width: RunWidth::Variable,
         };
@@ -182,11 +182,15 @@ impl LazyStep {
                             components: [
                                 (
                                     "dist".to_string(),
-                                    Output::Array(Array::UInts(Buffer::from_vec(distances))),
+                                    Output::Array(Array::UInts(UIntArray::U64(Buffer::from_vec(
+                                        distances,
+                                    )))),
                                 ),
                                 (
                                     "time".to_string(),
-                                    Output::Array(Array::UInts(Buffer::from_vec(times))),
+                                    Output::Array(Array::UInts(UIntArray::U64(Buffer::from_vec(
+                                        times,
+                                    )))),
                                 ),
                             ]
                             .into_iter()
@@ -387,6 +391,61 @@ impl PlanNode for LazyRun {
 }
 
 // @Performance: Dyn overhead
+/// Collapse `length` scalar `UInt` outputs into a `UIntArray` of `width`.
+fn collapse_uint_values<'a>(
+    width: UIntType,
+    f: &dyn Fn(usize) -> &'a Output,
+    length: usize,
+) -> UIntArray {
+    macro_rules! arm {
+        ($variant:ident) => {
+            UIntArray::$variant(
+                (0..length)
+                    .map(|i| match f(i) {
+                        Output::Value(Value::UInt(UIntValue::$variant(v))) => *v,
+                        _ => unreachable!(),
+                    })
+                    .collect::<Buffer<_>>(),
+            )
+        };
+    }
+
+    match width {
+        UIntType::U8 => arm!(U8),
+        UIntType::U16 => arm!(U16),
+        UIntType::U32 => arm!(U32),
+        UIntType::U64 => arm!(U64),
+    }
+}
+
+/// Concatenate `length` `UInt` array outputs into one `UIntArray` of `width`.
+fn concat_uint_arrays<'a>(
+    width: UIntType,
+    f: &dyn Fn(usize) -> &'a Output,
+    length: usize,
+    capacity: usize,
+) -> UIntArray {
+    macro_rules! arm {
+        ($variant:ident) => {{
+            let mut data = Vec::with_capacity(capacity);
+            (0..length).for_each(|i| match f(i) {
+                Output::Array(Array::UInts(UIntArray::$variant(v))) => {
+                    data.extend_from_slice(v.as_slice())
+                }
+                _ => unreachable!(),
+            });
+            UIntArray::$variant(Buffer::from_vec(data))
+        }};
+    }
+
+    match width {
+        UIntType::U8 => arm!(U8),
+        UIntType::U16 => arm!(U16),
+        UIntType::U32 => arm!(U32),
+        UIntType::U64 => arm!(U64),
+    }
+}
+
 fn collapse_outputs<'a>(f: &dyn Fn(usize) -> &'a Output, length: usize) -> Output {
     match f(0) {
         Output::Value(v) => {
@@ -407,14 +466,8 @@ fn collapse_outputs<'a>(f: &dyn Fn(usize) -> &'a Output, length: usize) -> Outpu
                         })
                         .collect::<Buffer<i64>>(),
                 ),
-                Value::UInt(_) => Array::UInts(
-                    (0..length)
-                        .map(|i| match f(i) {
-                            Output::Value(Value::UInt(v)) => *v,
-                            _ => unreachable!(),
-                        })
-                        .collect::<Buffer<u64>>(),
-                ),
+                // Structural: preserve the width the first value declares.
+                Value::UInt(uv) => Array::UInts(collapse_uint_values(uv.ty(), f, length)),
                 Value::Bits(_) => todo!(),
             };
             Output::RunVector(RunVector {
@@ -450,14 +503,8 @@ fn collapse_outputs<'a>(f: &dyn Fn(usize) -> &'a Output, length: usize) -> Outpu
                     });
                     Array::Ints(Buffer::from_vec(data))
                 }
-                Array::UInts(_) => {
-                    let mut data = Vec::with_capacity(offset);
-                    (0..length).for_each(|i| match f(i) {
-                        Output::Array(Array::UInts(v)) => data.extend_from_slice(v.as_slice()),
-                        _ => unreachable!(),
-                    });
-                    Array::UInts(Buffer::from_vec(data))
-                }
+                // Structural: preserve the width the first array declares.
+                Array::UInts(a) => Array::UInts(concat_uint_arrays(a.ty(), f, length, offset)),
                 Array::Bits(..) => todo!(),
             };
 

@@ -5,7 +5,7 @@ use pyo3::types::PyAnyMethods;
 use pyo3::{Py, PyAny};
 use vogls_plan::array::Array;
 use vogls_plan::compute::{ComputeContext, ComputeResult};
-use vogls_plan::typing::{ArrayType, DataType};
+use vogls_plan::typing::{ArrayType, DataType, UIntType};
 
 use crate::vogls::PyArray;
 
@@ -38,8 +38,9 @@ impl vogls_plan::map::Map for PyAnonymousMap {
 
     fn output_type(&self, _inputs: Self::Inputs<ArrayType>) -> ComputeResult<ArrayType> {
         // @TODO: Make these configurable.
+        // A producer, so it declares the widest width rather than guessing.
         Ok(ArrayType {
-            data: DataType::UInt,
+            data: DataType::UInt(UIntType::U64),
             length: None,
         })
     }

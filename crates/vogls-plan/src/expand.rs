@@ -1,8 +1,8 @@
-use crate::array::{Array, Primitive};
+use crate::array::{Array, Primitive, UIntArray};
 use crate::buffer::Buffer;
 use crate::compute::{ComputeContext, ComputeError, ComputeResult};
 use crate::map::Map;
-use crate::typing::ArrayType;
+use crate::typing::{ArrayType, DataType, UIntType};
 
 #[derive(Hash, PartialEq, Eq, Clone)]
 pub struct Expand;
@@ -44,6 +44,9 @@ impl Map for Expand {
 
     fn output_type(&self, inputs: Self::Inputs<ArrayType>) -> ComputeResult<ArrayType> {
         let [input] = inputs;
+        if matches!(input.data, DataType::UInt(width) if width != UIntType::U64) {
+            return Err(ComputeError::InvalidTypes);
+        }
         let length = match input.length {
             None => None,
             Some(length) => Some(output_size(length).ok_or_else(|| ComputeError::Overflow)?),
@@ -65,7 +68,11 @@ impl Map for Expand {
         let data = match input {
             A::Floats(vs) => A::Floats(expand_primitive(vs.as_slice())?),
             A::Ints(vs) => A::Ints(expand_primitive(vs.as_slice())?),
-            A::UInts(vs) => A::UInts(expand_primitive(vs.as_slice())?),
+            A::UInts(UIntArray::U64(vs)) => {
+                A::UInts(UIntArray::U64(expand_primitive(vs.as_slice())?))
+            }
+            // Narrow widths are rejected in `output_type`.
+            A::UInts(_) => return Err(ComputeError::InvalidTypes),
             A::Bits(..) => todo!(),
         };
         Ok(data)

@@ -7,7 +7,7 @@ use vogls::utils::{VgHashMap, new_table_key};
 use vogls::{Bits, VectorSize};
 
 use crate::CspAble;
-use crate::array::Array;
+use crate::array::{Array, UIntArray};
 use crate::buffer::Buffer;
 use crate::compute::{
     CommonSubPlan, ComputeContext, ComputeDependencies, ComputeError, ComputeGraph, ComputeInputs,
@@ -15,15 +15,44 @@ use crate::compute::{
 };
 use crate::dsl::{DslNode, DslPtr};
 use crate::output::{DslLazyOutput, LazyOutputKey, Output};
-use crate::typing::{DataType, Type, ValueType};
+use crate::typing::{DataType, Type, UIntType, ValueType};
 
 new_table_key! { pub struct LazyValueKey; }
+
+/// An unsigned integer together with its storage width.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UIntValue {
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+}
+
+impl UIntValue {
+    pub fn to_u64(self) -> u64 {
+        match self {
+            Self::U8(v) => v as u64,
+            Self::U16(v) => v as u64,
+            Self::U32(v) => v as u64,
+            Self::U64(v) => v,
+        }
+    }
+
+    pub fn ty(self) -> UIntType {
+        match self {
+            Self::U8(_) => UIntType::U8,
+            Self::U16(_) => UIntType::U16,
+            Self::U32(_) => UIntType::U32,
+            Self::U64(_) => UIntType::U64,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Float(f64),
     Int(i64),
-    UInt(u64),
+    UInt(UIntValue),
     Bits(Bits),
 }
 impl Value {
@@ -38,7 +67,20 @@ impl Value {
         match self {
             Self::Float(v) => Array::Floats(Buffer::from_vec(std::iter::repeat_n(*v, n).collect())),
             Self::Int(v) => Array::Ints(Buffer::from_vec(std::iter::repeat_n(*v, n).collect())),
-            Self::UInt(v) => Array::UInts(Buffer::from_vec(std::iter::repeat_n(*v, n).collect())),
+            Self::UInt(v) => Array::UInts(match *v {
+                UIntValue::U8(v) => {
+                    UIntArray::U8(Buffer::from_vec(std::iter::repeat_n(v, n).collect()))
+                }
+                UIntValue::U16(v) => {
+                    UIntArray::U16(Buffer::from_vec(std::iter::repeat_n(v, n).collect()))
+                }
+                UIntValue::U32(v) => {
+                    UIntArray::U32(Buffer::from_vec(std::iter::repeat_n(v, n).collect()))
+                }
+                UIntValue::U64(v) => {
+                    UIntArray::U64(Buffer::from_vec(std::iter::repeat_n(v, n).collect()))
+                }
+            }),
             Self::Bits(v) => {
                 // @Performance: This is horrendous.
                 let mut acc = v.clone();
@@ -54,7 +96,7 @@ impl Value {
         match self {
             Value::Float(_) => todo!(),
             Value::Int(_) => todo!(),
-            Value::UInt(value) => Bits::from_u64(size, *value),
+            Value::UInt(value) => Bits::from_u64(size, value.to_u64()),
             Value::Bits(bits) => bits.clone(),
         }
     }
@@ -63,7 +105,7 @@ impl Value {
         match self {
             Self::Float(_) => DataType::Float,
             Self::Int(_) => DataType::Int,
-            Self::UInt(_) => DataType::UInt,
+            Self::UInt(v) => DataType::UInt(v.ty()),
             Self::Bits(bits) => DataType::Bits(bits.size()),
         }
     }
