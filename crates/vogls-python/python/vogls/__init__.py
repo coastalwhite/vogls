@@ -301,6 +301,15 @@ class Plan:
         instance._inner = py
         return instance
 
+    @staticmethod
+    def from_dict(components: dict[str, "Output"]) -> "Plan":
+        """Build a plan out of a dictionary of named components."""
+        return Plan._from_py(
+            vgr.PyPlan.from_dict(
+                {key: _output_to_py(value) for key, value in components.items()}
+            )
+        )
+
     def lazy(self) -> "LazyPlan":
         return LazyPlan._from_py(self._inner.lazy())
 
@@ -326,6 +335,15 @@ class LazyPlan(Lazy[Plan]):
         instance = cls.__new__(cls)
         super(LazyPlan, instance).__init__(py, Plan)
         return instance
+
+    @staticmethod
+    def from_dict(components: dict[str, "LazyOutput"]) -> "LazyPlan":
+        """Build a plan out of a dictionary of named lazy components."""
+        return LazyPlan._from_py(
+            vgr.PyLazyPlan.from_dict(
+                {key: _lazyoutput_to_py(value) for key, value in components.items()}
+            )
+        )
 
     @overload
     def get(self, key: str, kind: type["LazyRunVector"]) -> "LazyRunVector": ...
@@ -584,6 +602,20 @@ def _lazyoutput_from_py(v: Any) -> LazyOutput:
         return LazyPlan._from_py(v)
 
     raise ValueError(f"cannot turn {_type_name(v)} into Output")
+
+
+def _output_to_py(v: Output) -> Any:
+    if isinstance(v, (RunVector, Array, Value, Plan)):
+        return v._inner
+
+    raise ValueError(f"cannot turn {_type_name(v)} into an Output")
+
+
+def _lazyoutput_to_py(v: LazyOutput) -> Any:
+    if isinstance(v, (LazyRunVector, LazyArray, LazyValue, LazyPlan)):
+        return v._producer
+
+    raise ValueError(f"cannot turn {_type_name(v)} into a lazy Output")
 
 
 def _type_name(v: Any) -> str:

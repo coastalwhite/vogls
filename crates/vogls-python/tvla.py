@@ -1,8 +1,9 @@
 import vogls as vg
 import os
 import matplotlib.pyplot as plt
+import numpy as np
 
-DUT = "../vogls-test/tests/integration/aoki-aes/lut.v"
+DUT = "../../tests/integration/aoki-aes/lut.v"
 
 CYCLE = 10
 NUM_RUNS = 1000
@@ -35,13 +36,21 @@ def run(*, random: bool) -> vg.LazyRunVector:
     hd = r.get("hd", vg.LazyPlan)
     d = hd.get("dist", vg.LazyRunVector)
     t = hd.get("time", vg.LazyRunVector)
-    return d.window_sum(by=t, width=CYCLE, start=6 * CYCLE, end=22 * CYCLE)
+    window_sum = d.window_sum(by=t, width=CYCLE, start=6 * CYCLE, end=22 * CYCLE)
+    return window_sum.quantize()
 
 
-fixed = run(random=False)
-random = run(random=True)
 
-tvla = vg.welch_t_test(fixed, random)
+runs = vg.LazyPlan.from_dict({
+    'fixed': run(random=False),
+    'random': run(random=True),
+})
+
+runs = runs.compute()
+
+print(np.array(runs.get("fixed", vg.RunVector)))
+print(np.array(runs.get("random", vg.RunVector)))
+exit(0)
 
 # Plan is finished -> Start computing the result
 result = tvla.compute()
