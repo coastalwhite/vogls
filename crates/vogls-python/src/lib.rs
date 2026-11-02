@@ -1013,6 +1013,11 @@ mod vogls {
 
     #[pyo3::pymethods]
     impl PyRunVector {
+        #[getter]
+        pub fn __array_interface__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+            vogls_plan::numpy::run_vector_to_array_interface(py, &self.0)
+        }
+
         pub fn as_list(&self, py: pyo3::Python<'_>) -> PyResult<pyo3::Py<pyo3::types::PyList>> {
             let lst = pyo3::types::PyList::new(
                 py,
