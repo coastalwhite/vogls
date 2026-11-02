@@ -67,6 +67,10 @@ impl FvLogicValue {
             FvLogicValue::L1 => '1',
         }
     }
+
+    pub fn is_special(self) -> bool {
+        matches!(self, Self::X | Self::Z)
+    }
 }
 
 impl From<bool> for FvLogicValue {

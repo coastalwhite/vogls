@@ -4,6 +4,7 @@
 """
 
 from typing import (
+    Literal,
     TypeVar,
     Generic,
     Any,
@@ -132,6 +133,32 @@ class Array:
     def entropy(self) -> "Value":
         return self.lazy().entropy().compute()
 
+    def quantize(
+        self,
+        *,
+        output_dtype: Literal["u8", "u16", "u32", "u64"] = "u16",
+        lowerbound: int | float | None = None,
+        upperbound: int | float | None = None,
+    ) -> Self:
+        """
+        Quantize to a certain output type.
+
+        The output values are given as:
+            $$ quantize(x) = round((clamp(x, lb, ub) - lb) / (ub - lb) * uXX::MAX) $$
+
+        where `lb` (resp. `ub`) is the `lowerbound` (resp. `upperbound`) or `min(x)`
+        (resp. `max(x)`) if `lowerbound` (resp. `upperbound`) is None.
+        """
+        return (
+            self.lazy()
+            .quantize(
+                output_dtype=output_dtype,
+                lowerbound=lowerbound,
+                upperbound=upperbound,
+            )
+            .compute()
+        )
+
     def as_list(self) -> list:
         return self._inner.as_list()
 
@@ -158,6 +185,30 @@ class LazyArray(Lazy[Array]):
 
     def expand(self) -> Self:
         return LazyArray._from_py(self._producer.expand())
+
+    def quantize(
+        self,
+        *,
+        output_dtype: Literal["u8", "u16", "u32", "u64"] = "u16",
+        lowerbound: int | float | None = None,
+        upperbound: int | float | None = None,
+    ) -> Self:
+        """
+        Quantize to a certain output type.
+
+        The output values are given as:
+            $$ quantize(x) = round((clamp(x, lb, ub) - lb) / (ub - lb) * uXX::MAX) $$
+
+        where `lb` (resp. `ub`) is the `lowerbound` (resp. `upperbound`) or `min(x)`
+        (resp. `max(x)`) if `lowerbound` (resp. `upperbound`) is None.
+        """
+        return LazyArray._from_py(
+            self._producer.quantize(
+                output_dtype=output_dtype,
+                lowerbound=lowerbound,
+                upperbound=upperbound,
+            )
+        )
 
     def entropy(self) -> "LazyValue":
         return LazyValue._from_py(self._producer.entropy())
@@ -325,6 +376,32 @@ class RunVector:
     def entropy(self) -> Array:
         return self.lazy().entropy().compute()
 
+    def quantize(
+        self,
+        *,
+        output_dtype: Literal["u8", "u16", "u32", "u64"] = "u16",
+        lowerbound: int | float | None = None,
+        upperbound: int | float | None = None,
+    ) -> Self:
+        """
+        Quantize to a certain output type.
+
+        The output values are given as:
+            $$ quantize(x) = round((clamp(x, lb, ub) - lb) / (ub - lb) * uXX::MAX) $$
+
+        where `lb` (resp. `ub`) is the `lowerbound` (resp. `upperbound`) or `min(x)`
+        (resp. `max(x)`) if `lowerbound` (resp. `upperbound`) is None.
+        """
+        return (
+            self.lazy()
+            .quantize(
+                output_dtype=output_dtype,
+                lowerbound=lowerbound,
+                upperbound=upperbound,
+            )
+            .compute()
+        )
+
     def as_list(self) -> list[list]:
         return self._inner.as_list()
 
@@ -351,6 +428,30 @@ class LazyRunVector(Lazy[RunVector]):
 
     def entropy(self) -> LazyArray:
         return LazyArray._from_py(self._producer.entropy())
+
+    def quantize(
+        self,
+        *,
+        output_dtype: Literal["u8", "u16", "u32", "u64"] = "u16",
+        lowerbound: int | float | None = None,
+        upperbound: int | float | None = None,
+    ) -> Self:
+        """
+        Quantize to a certain output type.
+
+        The output values are given as:
+            $$ quantize(x) = round((clamp(x, lb, ub) - lb) / (ub - lb) * uXX::MAX) $$
+
+        where `lb` (resp. `ub`) is the `lowerbound` (resp. `upperbound`) or `min(x)`
+        (resp. `max(x)`) if `lowerbound` (resp. `upperbound`) is None.
+        """
+        return LazyRunVector._from_py(
+            self._producer.quantize(
+                output_dtype=output_dtype,
+                lowerbound=lowerbound,
+                upperbound=upperbound,
+            )
+        )
 
     def map(self, f: Callable[[Array], Array]) -> Self:
         return LazyRunVector._from_py(self._producer.map(_create_arr_map_wrap(f)))

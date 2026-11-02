@@ -68,12 +68,14 @@ pub mod dsl;
 pub mod entropy;
 pub mod expand;
 pub mod map;
+pub mod minmax;
 pub mod mutual_information;
 #[cfg(feature = "python")]
 pub mod numpy;
 pub mod output;
 pub mod pearson_corr;
 pub mod plan;
+pub mod quantize;
 pub mod random;
 pub mod run;
 pub mod run_vector;

@@ -25,11 +25,12 @@ mod vogls {
     use vogls_plan::output::{DslLazyOutput, DslPlanComponent, Output};
     use vogls_plan::pearson_corr::PearsonCorrelation;
     use vogls_plan::plan::{DslLazyPlan, LazyPlan, Plan};
+    use vogls_plan::quantize::Quantize;
     use vogls_plan::random::RandomBits;
     use vogls_plan::run::DslLazyStep;
     use vogls_plan::run_vector::{DslRunVector, DslRunVectorRepeatArray, LazyRunVector, RunVector};
     use vogls_plan::ttest::TTest;
-    use vogls_plan::typing::{PlanType, Type, TypeKind};
+    use vogls_plan::typing::{DataType, PlanType, Type, TypeKind, UIntType};
     use vogls_plan::value::{DslLazyValue, LazyValue, UIntValue, Value};
     use vogls_plan::window_sum::WindowSum;
 
@@ -461,6 +462,46 @@ mod vogls {
         Ok(result)
     }
 
+    fn parse_uint_type(name: &str) -> PyResult<UIntType> {
+        Ok(match name {
+            "u8" => UIntType::U8,
+            "u16" => UIntType::U16,
+            "u32" => UIntType::U32,
+            "u64" => UIntType::U64,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown output_dtype {other:?}; expected one of 'u8', 'u16', 'u32', 'u64'"
+                )));
+            }
+        })
+    }
+
+    /// Coerce a Python `int` bound to the *input*'s dtype.
+    fn coerce_bound(bound: Option<Bound<'_, PyAny>>, data: DataType) -> PyResult<Option<Value>> {
+        let Some(bound) = bound else {
+            return Ok(None);
+        };
+        Ok(Some(match data {
+            DataType::UInt(UIntType::U8) => Value::UInt(UIntValue::U8(bound.extract()?)),
+            DataType::UInt(UIntType::U16) => Value::UInt(UIntValue::U16(bound.extract()?)),
+            DataType::UInt(UIntType::U32) => Value::UInt(UIntValue::U32(bound.extract()?)),
+            DataType::UInt(UIntType::U64) => Value::UInt(UIntValue::U64(bound.extract()?)),
+            DataType::Int => Value::Int(bound.extract()?),
+            DataType::Float => Value::Float(bound.extract()?),
+            DataType::Bits(size) => {
+                // A Python `int` is placed in a vector of the input's own width.
+                let value = bound.extract::<u64>()?;
+                if size.get() < 64 && value >= (1u64 << size.get()) {
+                    return Err(PyValueError::new_err(format!(
+                        "bound {value} does not fit the input's {}-bit vectors",
+                        size.get()
+                    )));
+                }
+                Value::Bits(vogls::Bits::from_u64(size, value))
+            }
+        }))
+    }
+
     #[pyo3::pyclass(frozen)]
     pub struct PyLazyPlan(DslLazyPlan);
     #[pyo3::pyclass(frozen)]
@@ -633,6 +674,22 @@ mod vogls {
 
         pub fn expand(&self) -> PyResult<PyLazyArray> {
             Ok(PyLazyArray(build_array_map(Expand, [self.0.clone()])?))
+        }
+
+        #[pyo3(signature = (*, output_dtype = "u16", lowerbound = None, upperbound = None))]
+        pub fn quantize(
+            &self,
+            output_dtype: &str,
+            lowerbound: Option<Bound<'_, PyAny>>,
+            upperbound: Option<Bound<'_, PyAny>>,
+        ) -> PyResult<PyLazyArray> {
+            let data = self.0.ty().data;
+            let quantize = Quantize {
+                lower: coerce_bound(lowerbound, data)?,
+                upper: coerce_bound(upperbound, data)?,
+                output_dtype: parse_uint_type(output_dtype)?,
+            };
+            Ok(PyLazyArray(build_array_map(quantize, [self.0.clone()])?))
         }
 
         #[staticmethod]
@@ -867,6 +924,25 @@ mod vogls {
         pub fn expand(&self) -> PyResult<PyLazyRunVector> {
             Ok(PyLazyRunVector(build_run_vector_map(
                 Expand,
+                [self.0.clone()],
+            )?))
+        }
+
+        #[pyo3(signature = (*, output_dtype = "u16", lowerbound = None, upperbound = None))]
+        pub fn quantize(
+            &self,
+            output_dtype: &str,
+            lowerbound: Option<Bound<'_, PyAny>>,
+            upperbound: Option<Bound<'_, PyAny>>,
+        ) -> PyResult<PyLazyRunVector> {
+            let data = self.0.ty().data;
+            let quantize = Quantize {
+                lower: coerce_bound(lowerbound, data)?,
+                upper: coerce_bound(upperbound, data)?,
+                output_dtype: parse_uint_type(output_dtype)?,
+            };
+            Ok(PyLazyRunVector(build_run_vector_map(
+                quantize,
                 [self.0.clone()],
             )?))
         }
