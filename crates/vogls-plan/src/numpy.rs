@@ -2,7 +2,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::types::{PyDict, PyDictMethods, PyTuple};
 use pyo3::{Bound, PyResult, Python};
 
-use crate::array::Array;
+use crate::array::{Array, UIntArray};
 
 use pyo3::buffer::{Element, PyBuffer};
 use pyo3::prelude::*;
@@ -66,9 +66,12 @@ pub fn from_array_interface<'py>(py: Python<'py>, obj: Bound<'_, PyAny>) -> PyRe
     match &typestr[1..] {
         "f8" => Ok(Array::Floats(import_contiguous::<f64>(obj)?)),
         "i8" => Ok(Array::Ints(import_contiguous::<i64>(obj)?)),
-        "u8" => Ok(Array::UInts(import_contiguous::<u64>(obj)?)),
+        "u1" => Ok(Array::UInts(UIntArray::U8(import_contiguous::<u8>(obj)?))),
+        "u2" => Ok(Array::UInts(UIntArray::U16(import_contiguous::<u16>(obj)?))),
+        "u4" => Ok(Array::UInts(UIntArray::U32(import_contiguous::<u32>(obj)?))),
+        "u8" => Ok(Array::UInts(UIntArray::U64(import_contiguous::<u64>(obj)?))),
         other => Err(PyValueError::new_err(format!(
-            "unsupported dtype {other:?}; expected float64/int64/uint64"
+            "unsupported dtype {other:?}; expected float64/int64/uint8/uint16/uint32/uint64"
         ))),
     }
 }

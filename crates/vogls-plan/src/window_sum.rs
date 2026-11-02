@@ -1,10 +1,11 @@
 use std::fmt;
 
 use crate::array::Array;
+use crate::array::UIntArray;
 use crate::buffer::Buffer;
 use crate::compute::{ComputeContext, ComputeError, ComputeResult};
 use crate::map::Map;
-use crate::typing::{ArrayType, DataType};
+use crate::typing::{ArrayType, DataType, UIntType};
 
 #[derive(Hash, PartialEq, Eq, Clone)]
 pub struct WindowSum {
@@ -33,9 +34,12 @@ impl Map for WindowSum {
         &self,
         inputs: Self::Inputs<ArrayType>,
     ) -> ComputeResult<crate::typing::ArrayType> {
+        // `sum += on[i]` accumulates, so a narrower input would overflow (panic in
+        // debug, wrap in release). Reject narrow widths here rather than in
+        // `compute`, and keep today's `U64`-only behaviour exactly.
         if !matches!(
             (inputs[0].data, inputs[1].data),
-            (DataType::UInt, DataType::UInt)
+            (DataType::UInt(UIntType::U64), DataType::UInt(UIntType::U64))
         ) {
             return Err(ComputeError::InvalidTypes);
         }
@@ -54,7 +58,8 @@ impl Map for WindowSum {
         _scratch: &mut Self::Scratches,
     ) -> ComputeResult<Array> {
         let [on, by] = inputs;
-        let (Array::UInts(on), Array::UInts(by)) = (&on, &by) else {
+        let (Array::UInts(UIntArray::U64(on)), Array::UInts(UIntArray::U64(by))) = (&on, &by)
+        else {
             return Err(ComputeError::InvalidTypes);
         };
 
@@ -88,6 +93,6 @@ impl Map for WindowSum {
             })
             .collect::<Buffer<u64>>();
 
-        Ok(Array::UInts(sums))
+        Ok(Array::UInts(UIntArray::U64(sums)))
     }
 }

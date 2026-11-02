@@ -31,6 +31,8 @@ pub enum ComputeError {
 
     InvalidTypes,
 
+    InvalidUsage(String),
+
     Overflow,
 
     #[cfg(feature = "python")]
@@ -56,8 +58,10 @@ impl fmt::Display for ComputeError {
             ComputeError::FailedToResolveNumTraces => f.write_str("FailedToResolveNumTraces"),
 
             ComputeError::InvalidTypes => f.write_str("InvalidTypes"),
+            ComputeError::InvalidUsage(reason) => write!(f, "invalid usage: {reason}"),
             ComputeError::Overflow => f.write_str("Overflow"),
 
+            #[cfg(feature = "python")]
             ComputeError::Python(err) => write!(f, "Python error: {err}"),
         }
     }

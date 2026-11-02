@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::agg::Agg;
-use crate::array::Array;
+use crate::array::{Array, UIntElement};
 use crate::compute::{ComputeContext, ComputeError, ComputeResult};
 use crate::typing::DataType;
 use crate::value::Value;
@@ -23,13 +23,19 @@ impl Default for TTest {
     }
 }
 
-fn moment_stats(data: &[u64], order: u32) -> (f64, f64) {
+/// Generic over the element width, so `with_match_uint_array!` monomorphizes one
+/// copy per width and the three passes below run over a concrete `&[uN]`.
+fn moment_stats<T: UIntElement>(data: &[T], order: u32) -> (f64, f64) {
     let n = data.len() as f64;
-    let mean = data.iter().map(|&v| v as f64).sum::<f64>() / n;
+    let mean = data.iter().map(|&v| v.to_u64() as f64).sum::<f64>() / n;
 
     // Standard deviation is only needed to standardise orders >= 3.
     let std = if order >= 3 {
-        let var = data.iter().map(|&v| (v as f64 - mean).powi(2)).sum::<f64>() / n;
+        let var = data
+            .iter()
+            .map(|&v| (v.to_u64() as f64 - mean).powi(2))
+            .sum::<f64>()
+            / n;
         var.sqrt()
     } else {
         1.0
@@ -46,7 +52,7 @@ fn moment_stats(data: &[u64], order: u32) -> (f64, f64) {
         }
     };
 
-    let preprocessed: Vec<f64> = data.iter().map(|&v| preprocess(v)).collect();
+    let preprocessed: Vec<f64> = data.iter().map(|&v| preprocess(v.to_u64())).collect();
     let pmean = preprocessed.iter().sum::<f64>() / n;
     let psumsq = preprocessed
         .iter()
@@ -67,7 +73,8 @@ impl Agg for TTest {
     }
 
     fn output_type(&self, inputs: Self::Inputs<DataType>) -> ComputeResult<DataType> {
-        let [DataType::UInt, DataType::UInt] = inputs else {
+        // Read-only and widens to `f64` anyway: every width is accepted.
+        let [DataType::UInt(_), DataType::UInt(_)] = inputs else {
             return Err(ComputeError::InvalidTypes);
         };
         Ok(DataType::Float)
@@ -83,8 +90,14 @@ impl Agg for TTest {
             return Err(ComputeError::InvalidTypes);
         };
 
-        let (lmean, lsumsq) = moment_stats(&ldata, self.order);
-        let (rmean, rsumsq) = moment_stats(&rdata, self.order);
+        let (lmean, lsumsq) = with_match_uint_type!(ldata.ty(), |$T| moment_stats(
+            ldata.as_slice::<$T>(),
+            self.order
+        ));
+        let (rmean, rsumsq) = with_match_uint_type!(rdata.ty(), |$T| moment_stats(
+            rdata.as_slice::<$T>(),
+            self.order
+        ));
 
         let numerator = lmean - rmean;
         let denumerator =

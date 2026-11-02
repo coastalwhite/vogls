@@ -5,7 +5,7 @@ use std::sync::Arc;
 use vogls::utils::{VgHashMap, new_table_key};
 
 use crate::CspAble;
-use crate::array::{Array, DslLazyArray, LazyArrayKey};
+use crate::array::{Array, DslLazyArray, LazyArrayKey, UIntArray};
 use crate::buffer::Buffer;
 use crate::compute::{
     CommonSubPlan, ComputeContext, ComputeDependencies, ComputeGraph, ComputeInputs, ComputeNode,
@@ -173,13 +173,22 @@ impl RunVector {
             (A::Ints(b), O::Constant(stride, _)) => {
                 A::Ints(gather_strided(b, height, *stride as usize, x))
             }
-            (A::UInts(b), O::Constant(stride, _)) => {
-                A::UInts(gather_strided(b, height, *stride as usize, x))
-            }
+            // Structural: one arm per width, each preserving its own.
+            (A::UInts(b), O::Constant(stride, _)) => A::UInts(match b {
+                UIntArray::U8(b) => UIntArray::U8(gather_strided(b, height, *stride as usize, x)),
+                UIntArray::U16(b) => UIntArray::U16(gather_strided(b, height, *stride as usize, x)),
+                UIntArray::U32(b) => UIntArray::U32(gather_strided(b, height, *stride as usize, x)),
+                UIntArray::U64(b) => UIntArray::U64(gather_strided(b, height, *stride as usize, x)),
+            }),
 
             (A::Floats(b), O::Offsets(offsets)) => A::Floats(gather_offsets(b, offsets, x)),
             (A::Ints(b), O::Offsets(offsets)) => A::Ints(gather_offsets(b, offsets, x)),
-            (A::UInts(b), O::Offsets(offsets)) => A::UInts(gather_offsets(b, offsets, x)),
+            (A::UInts(b), O::Offsets(offsets)) => A::UInts(match b {
+                UIntArray::U8(b) => UIntArray::U8(gather_offsets(b, offsets, x)),
+                UIntArray::U16(b) => UIntArray::U16(gather_offsets(b, offsets, x)),
+                UIntArray::U32(b) => UIntArray::U32(gather_offsets(b, offsets, x)),
+                UIntArray::U64(b) => UIntArray::U64(gather_offsets(b, offsets, x)),
+            }),
 
             (A::Bits(..), _) => todo!(),
         }
@@ -299,12 +308,23 @@ impl RunVectorNode for RunVectorRepeatArray {
                 let data = Array::Ints(Buffer::from_vec(data));
                 Ok(RunVector { offsets, data })
             }
+            // Structural: one arm per width, each preserving its own.
             Array::UInts(buffer) => {
-                let mut data = Vec::with_capacity(buffer.len() * n);
-                for &v in buffer.iter() {
-                    data.extend(std::iter::repeat_n(v, *n));
+                macro_rules! arm {
+                    ($variant:ident, $buffer:expr) => {{
+                        let mut data = Vec::with_capacity($buffer.len() * n);
+                        for &v in $buffer.iter() {
+                            data.extend(std::iter::repeat_n(v, *n));
+                        }
+                        UIntArray::$variant(Buffer::from_vec(data))
+                    }};
                 }
-                let data = Array::UInts(Buffer::from_vec(data));
+                let data = Array::UInts(match buffer {
+                    UIntArray::U8(b) => arm!(U8, b),
+                    UIntArray::U16(b) => arm!(U16, b),
+                    UIntArray::U32(b) => arm!(U32, b),
+                    UIntArray::U64(b) => arm!(U64, b),
+                });
                 Ok(RunVector { offsets, data })
             }
             Array::Bits(..) => todo!(),
