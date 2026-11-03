@@ -331,8 +331,8 @@ mod tests {
             ((size, lhs, rhs) in u64_arith_target())
         {
             let mask = (1u64.unbounded_shl(size.get())).wrapping_sub(1);
-            let expected_quotient = lhs.checked_div(rhs).map_or([0, 0], |r| u64_to_fvu64x2(r & mask, size));
-            let expected_modulus = lhs.checked_rem(rhs).map_or([0, 0], |r| u64_to_fvu64x2(r & mask, size));
+            let expected_quotient = u64_to_fvu64x2(lhs.checked_div(rhs).unwrap_or(0) & mask, size);
+            let expected_modulus = u64_to_fvu64x2(lhs.checked_rem(rhs).unwrap_or(0) & mask, size);
             let mut given_quotient = [0u64; 2];
             let mut given_modulus = [0u64; 2];
 
@@ -723,8 +723,8 @@ mod tests {
     fn test_fv_division_vectors() {
         macro_rules! assert_test_vector {
             ($size:literal, $a:expr, $b:expr, $q:expr, $m:expr) => {
-                let mut quotient = [0u64; $size.div_ceil(32) as usize];
-                let mut modulus = [0u64; $size.div_ceil(32) as usize];
+                let mut quotient = [0u64; 2 * $size.div_ceil(64) as usize];
+                let mut modulus = [0u64; 2 * $size.div_ceil(64) as usize];
                 fv_division(
                     &mut quotient,
                     &mut modulus,
@@ -737,15 +737,69 @@ mod tests {
             };
         }
 
-        // assert_test_vector!(1u32, &[2u64], &[2u64], &[0u64], &[0u64]);
-        // assert_test_vector!(1u32, &[2u64], &[3u64], &[0u64], &[0u64]);
-        // assert_test_vector!(1u32, &[3u64], &[3u64], &[1u64], &[0u64]);
+        // 1'b0 / 1'b0 = 1'b0, 1'b0 % 1'b0 = 1'b0 (`Div0` semantics)
+        assert_test_vector!(
+            1u32,
+            &[1u64, 0u64],
+            &[1u64, 0u64],
+            &[1u64, 0u64],
+            &[1u64, 0u64]
+        );
+        // 1'b1 / 1'b0 = 1'b0, 1'b1 % 1'b0 = 1'b0 (`Div0` semantics)
+        assert_test_vector!(
+            1u32,
+            &[1u64, 1u64],
+            &[1u64, 0u64],
+            &[1u64, 0u64],
+            &[1u64, 0u64]
+        );
+        // 1'b1 / 1'b1 = 1'b1, 1'b1 % 1'b1 = 1'b0
+        assert_test_vector!(
+            1u32,
+            &[1u64, 1u64],
+            &[1u64, 1u64],
+            &[1u64, 1u64],
+            &[1u64, 0u64]
+        );
+        // 8'd64 / 8'd7 = 8'd9, 8'd64 % 8'd7 = 8'd1
+        assert_test_vector!(
+            8u32,
+            &[0xFFu64, 64u64],
+            &[0xFFu64, 7u64],
+            &[0xFFu64, 9u64],
+            &[0xFFu64, 1u64]
+        );
+        // An `x` in either operand makes both results all-`x` (special plane and value plane
+        // both zero).
+        assert_test_vector!(
+            8u32,
+            &[0xFEu64, 64u64],
+            &[0xFFu64, 7u64],
+            &[0u64, 0u64],
+            &[0u64, 0u64]
+        );
+        assert_test_vector!(
+            8u32,
+            &[0xFFu64, 64u64],
+            &[0x7Fu64, 7u64],
+            &[0u64, 0u64],
+            &[0u64, 0u64]
+        );
+        // 33'h1_0000_0000 / 33'h1_0000_0001 = 0 remainder 33'h1_0000_0000
         assert_test_vector!(
             33u32,
-            &[0xFFFF_FFFF_0000_0000u64, 0x3u64],
-            &[0xFFFF_FFFF_0000_0001u64, 0x2u64],
-            &[0xFFFF_FFFF_8000_0000u64, 0x2u64],
-            &[0xFFFF_FFFF_0000_0000u64, 0x2u64]
+            &[0x0000_0001_FFFF_FFFFu64, 0x0000_0001_0000_0000u64],
+            &[0x0000_0001_FFFF_FFFFu64, 0x0000_0001_0000_0001u64],
+            &[0x0000_0001_FFFF_FFFFu64, 0x0000_0000_0000_0000u64],
+            &[0x0000_0001_FFFF_FFFFu64, 0x0000_0001_0000_0000u64]
+        );
+        // 128'h1_0000_0000_0000_0000 / 128'd2 = 128'h8000_0000_0000_0000 remainder 0
+        assert_test_vector!(
+            128u32,
+            &[u64::MAX, u64::MAX, 0u64, 1u64],
+            &[u64::MAX, u64::MAX, 2u64, 0u64],
+            &[u64::MAX, u64::MAX, 0x8000_0000_0000_0000u64, 0u64],
+            &[u64::MAX, u64::MAX, 0u64, 0u64]
         );
     }
 }

@@ -638,14 +638,9 @@ mod tests {
     }
 
     pub fn u64_to_fvu64x2(v: u64, size: VectorSize) -> [u64; 2] {
-        let bmask = 1u64.unbounded_shl(size.get()).wrapping_sub(1);
-        let tmask = 1u64
-            .unbounded_shl(size.get().saturating_sub(32))
-            .wrapping_sub(1);
-        [
-            (bmask << size.get().min(32)) | (v & 0xFFFF_FFFF),
-            (tmask << size.get().saturating_sub(32).min(32)) | (v >> 32),
-        ]
+        assert!(size.get() <= 64);
+        let mask = last_word_mask(size);
+        [mask, v & mask]
     }
     pub fn u128_to_u64x2(v: u128) -> [u64; 2] {
         [v as u64, (v >> 64) as u64]
@@ -661,14 +656,12 @@ mod tests {
         }
     }
     pub fn fvu64x2_to_slice(v: &[u64; 2], size: VectorSize) -> &[u64] {
-        if size.get() > 32 { &v[..] } else { &v[..1] }
+        assert!(size.get() <= 64);
+        &v[..]
     }
     pub fn fvu64x2_to_slice_mut(v: &mut [u64; 2], size: VectorSize) -> &mut [u64] {
-        if size.get() > 32 {
-            &mut v[..]
-        } else {
-            &mut v[..1]
-        }
+        assert!(size.get() <= 64);
+        &mut v[..]
     }
 
     proptest::prop_compose! {
