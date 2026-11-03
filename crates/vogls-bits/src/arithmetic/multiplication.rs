@@ -337,18 +337,36 @@ mod tests {
     fn test_fv_multiplication_vectors() {
         macro_rules! assert_test_vector {
             ($size:literal, $a:expr, $b:expr, $z:expr) => {
-                let mut dst = [0u64; $size.div_ceil(32) as usize];
+                let mut dst = [0u64; 2 * $size.div_ceil(64) as usize];
                 fv_multiplication(&mut dst, $a, $b, VectorSize::new($size).unwrap());
                 assert_eq!(dst.as_slice(), $z, "u64");
             };
         }
 
-        assert_test_vector!(1u32, &[2u64], &[2u64], &[2u64]); // 1'b0 x 1'b0 = 1'b0
-        assert_test_vector!(1u32, &[2u64], &[3u64], &[2u64]); // 1'b0 x 1'b1 = 1'b0
-        assert_test_vector!(1u32, &[3u64], &[3u64], &[3u64]); // 1'b1 x 1'b1 = 1'b1
-        assert_test_vector!(1u32, &[3u64], &[2u64], &[2u64]); // 1'b1 x 1'b0 = 1'b0
-        assert_test_vector!(2u32, &[0xCu64], &[0xCu64], &[0xCu64]); // 2'b0 x 2'b0 = 2'b0
-        assert_test_vector!(2u32, &[0xFu64], &[0xFu64], &[0xDu64]); // 2'b3 x 2'b3 = 2'b1
-        assert_test_vector!(2u32, &[0xFu64], &[0xEu64], &[0xEu64]); // 2'b3 x 2'b2 = 2'b2
+        // 1'b0 x 1'b0 = 1'b0
+        assert_test_vector!(1u32, &[1u64, 0u64], &[1u64, 0u64], &[1u64, 0u64]);
+        // 1'b0 x 1'b1 = 1'b0
+        assert_test_vector!(1u32, &[1u64, 0u64], &[1u64, 1u64], &[1u64, 0u64]);
+        // 1'b1 x 1'b1 = 1'b1
+        assert_test_vector!(1u32, &[1u64, 1u64], &[1u64, 1u64], &[1u64, 1u64]);
+        // 1'b1 x 1'b0 = 1'b0
+        assert_test_vector!(1u32, &[1u64, 1u64], &[1u64, 0u64], &[1u64, 0u64]);
+        // 1'bx x 1'b1 = 1'bx
+        assert_test_vector!(1u32, &[0u64, 0u64], &[1u64, 1u64], &[0u64, 0u64]);
+        // 2'd0 x 2'd0 = 2'd0
+        assert_test_vector!(2u32, &[3u64, 0u64], &[3u64, 0u64], &[3u64, 0u64]);
+        // 2'd3 x 2'd3 = 2'd1 (truncated)
+        assert_test_vector!(2u32, &[3u64, 3u64], &[3u64, 3u64], &[3u64, 1u64]);
+        // 2'd3 x 2'd2 = 2'd2 (truncated)
+        assert_test_vector!(2u32, &[3u64, 3u64], &[3u64, 2u64], &[3u64, 2u64]);
+        // A single `x` bit in an operand makes the whole result all-`x`
+        assert_test_vector!(2u32, &[1u64, 1u64], &[3u64, 3u64], &[0u64, 0u64]);
+        // 128'd2 x 128'h8000_0000_0000_0000 = 128'h1_0000_0000_0000_0000
+        assert_test_vector!(
+            128u32,
+            &[u64::MAX, u64::MAX, 2u64, 0u64],
+            &[u64::MAX, u64::MAX, 0x8000_0000_0000_0000u64, 0u64],
+            &[u64::MAX, u64::MAX, 0u64, 1u64]
+        );
     }
 }
