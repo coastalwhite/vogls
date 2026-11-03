@@ -13,12 +13,13 @@ use vogls_frontend::symbol_table::FrozenSymbolTable;
 use vogls_ir::ProcessKind;
 use vogls_ir::optimize::Optimizations;
 use vogls_ir::time::{TimeFormat, TimeResolution};
+use vogls_ir::token_range::TokenRange;
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{GlobalContext, LogicMode, SCALAR_VSIZE, Signal, SignalKey, SignalSlice};
 use vogls_runtime::plugins::RuntimePlugin;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_utils::{TableKey as _, VgHashMap};
-use vogls_verilog::lower::Diagnostics;
+use vogls_verilog::lower::{Diagnostics, WarningsReport};
 use vogls_verilog::tokenizer::Tokenized;
 
 use crate::design::{Design, DesignBackend, DesignState, RtSignal, vcd_scope};
@@ -35,8 +36,8 @@ pub struct LoweredDesign {
     pub(crate) has_vcd: bool,
     // @TODO: This is duplicated in the ParsedDesign. Maybe we can somehow, remove this?
     pub(crate) ident_table: IdentTable,
-    #[expect(unused)]
     pub(crate) token_buffer: Tokenized,
+    pub(crate) warnings: Vec<(TokenRange, String)>,
 
     pub itrace: bool,
     pub emit_vm: bool,
@@ -89,6 +90,10 @@ struct CodegenPreparation {
 
 const NUM_REGIONS: u8 = 3;
 impl LoweredDesign {
+    pub fn report_warnings(&self) -> WarningsReport<'_> {
+        WarningsReport::new(&self.warnings, &self.token_buffer)
+    }
+
     pub fn optimize(&mut self, opts: Optimizations) -> &mut Self {
         let processes = self.gl.processes.keys().collect::<Vec<_>>();
         vogls_ir::optimize::optimize_processes(&mut self.gl, &processes, opts);

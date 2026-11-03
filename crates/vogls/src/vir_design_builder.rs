@@ -44,6 +44,7 @@ impl<'a> VirDesignBuilder<'a> {
             has_vcd: false,
             ident_table,
             token_buffer: Tokenized::default(),
+            warnings: Vec::new(),
             itrace: false,
             emit_vm: false,
             stats: false,

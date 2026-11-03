@@ -465,7 +465,7 @@ use self::expression::lower_expr;
 use self::fuse::{FuseDestination, FuseSource};
 pub use self::vtype::VType;
 pub use self::vvalue::VValue;
-pub use diagnostics::{Diagnostics, LowerErrorReason};
+pub use diagnostics::{Diagnostics, LowerErrorReason, WarningsReport};
 
 pub fn lower_module_to_ir<'a>(
     root: AstId<'a, Module<'a>>,

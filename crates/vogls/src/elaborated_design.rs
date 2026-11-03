@@ -14,7 +14,8 @@ use vogls_verilog::ast::module::{Module, ModuleItem, NonPortModuleItem, TimeScal
 use vogls_verilog::ast::udp::UdpDeclaration;
 use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable, determine_module_context};
 use vogls_verilog::lower::{
-    Diagnostics, LowerContext, LowerErrorReason, MutLowerContext, lower_module_to_ir,
+    Diagnostics, LowerContext, LowerErrorReason, MutLowerContext, WarningsReport,
+    lower_module_to_ir,
 };
 use vogls_verilog::parser::{Ast, AstArenas, ReportKind, SpanError};
 use vogls_verilog::tokenizer::Tokenized;
@@ -37,6 +38,8 @@ pub struct ElaboratedDesign<'a> {
     pub(crate) udps: VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
     pub(crate) gl: GlobalContext,
     pub(crate) nbas: IndexMap<SignalKey, (ProcessKey, SignalKey, Option<SignalKey>)>,
+
+    pub(crate) warnings: Vec<(TokenRange, String)>,
 
     pub(crate) unoptimized_fgs: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>>,
     pub(crate) optimized_fgs: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>>,
@@ -252,7 +255,12 @@ impl<'a> ElaboratedDesign<'a> {
         self.udps = ctx.udps;
         self.gl = mctx.gl;
         self.nbas = mctx.nbas;
+        self.warnings = mctx.diagnostics.warnings;
         result
+    }
+
+    pub fn report_warnings(&self) -> WarningsReport<'_> {
+        WarningsReport::new(&self.warnings, &self.token_buffer)
     }
 
     pub fn annotate_sdf<'b>(
@@ -374,6 +382,8 @@ impl<'a> ElaboratedDesign<'a> {
 
             max_fuse_signals_rounds,
             time_resolution,
+
+            warnings: _,
         } = self;
 
         let mut ctx = LowerContext {
@@ -471,6 +481,8 @@ impl<'a> ElaboratedDesign<'a> {
 
                     max_fuse_signals_rounds,
                     time_resolution,
+
+                    warnings: Vec::new(),
                 },
                 diagnostics: mctx.diagnostics,
                 stage: LowerErrorStage::GlobalItems,
@@ -516,6 +528,8 @@ impl<'a> ElaboratedDesign<'a> {
 
                     max_fuse_signals_rounds,
                     time_resolution,
+
+                    warnings: Vec::new(),
                 },
                 diagnostics: mctx.diagnostics,
                 stage: LowerErrorStage::Modules,
@@ -582,6 +596,7 @@ impl<'a> ElaboratedDesign<'a> {
         Ok(LoweredDesign {
             table,
             gl: mctx.gl,
+            warnings: mctx.diagnostics.warnings,
             plugins,
             vcd: None,
             has_vcd: mctx.has_vcd,

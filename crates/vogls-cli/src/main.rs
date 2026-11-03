@@ -102,6 +102,9 @@ struct Args {
     profile: Option<PathBuf>,
 
     #[arg(long)]
+    no_warnings: bool,
+
+    #[arg(long)]
     emit_unoptimized_fuse_graph: bool,
     #[arg(long)]
     emit_optimized_fuse_graph: bool,
@@ -157,6 +160,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         no_cadence_ifnone_edge,
         no_data_sourceless_edge_path,
         profile,
+        no_warnings,
         emit_unoptimized_fuse_graph,
         emit_optimized_fuse_graph,
         max_fuse_signals_rounds,
@@ -227,6 +231,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("failed to elaborate".into());
             }
         };
+        if !no_warnings {
+            eprint!("{}", elaborate.report_warnings());
+        }
 
         if let Some(max_fuse_signals_rounds) = max_fuse_signals_rounds {
             elaborate.max_fuse_signals_rounds = max_fuse_signals_rounds;
@@ -248,12 +255,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("{err}");
                 return Err("failed to annotate sdf".into());
             }
+            if !no_warnings {
+                eprint!("{}", elaborate.report_warnings());
+            }
         }
 
         timers.start("lower_specify_blocks");
         if let Err(err) = elaborate.annotate_specify() {
             eprintln!("{err}");
             return Err("failed to annotate specify".into());
+        }
+        if !no_warnings {
+            eprint!("{}", elaborate.report_warnings());
         }
         timers.stop();
 
@@ -264,6 +277,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Err("failed to lower".into());
             }
         };
+        if !no_warnings {
+            eprint!("{}", lowered.report_warnings());
+        }
         arena.reset();
         lowered
     };

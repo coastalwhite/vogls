@@ -148,27 +148,45 @@ impl Diagnostics {
     ) -> DiagnosticsReport<'a> {
         DiagnosticsReport(self, tokens, arenas)
     }
+
+    pub fn report_warnings<'a>(&'a self, tokens: &'a Tokenized) -> WarningsReport<'a> {
+        WarningsReport::new(&self.warnings, tokens)
+    }
+}
+
+pub struct WarningsReport<'a>(&'a [(TokenRange, String)], &'a Tokenized);
+
+impl<'a> WarningsReport<'a> {
+    pub fn new(warnings: &'a [(TokenRange, String)], tokens: &'a Tokenized) -> Self {
+        Self(warnings, tokens)
+    }
+}
+
+impl<'a> fmt::Display for WarningsReport<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (location, warning) in self.0 {
+            SpanError {
+                spans: &self.1.spans,
+                file_idxs: &self.1.file_idxs,
+                paths: &self.1.paths,
+                contents: &self.1.contents,
+                error: warning,
+                kind: ReportKind::Warning,
+                code: None,
+                location: *location,
+            }
+            .fmt(f)?;
+        }
+
+        Ok(())
+    }
 }
 
 pub struct DiagnosticsReport<'a>(&'a Diagnostics, &'a Tokenized, &'a AstArenas);
 
 impl<'a> fmt::Display for DiagnosticsReport<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if !self.0.warnings.is_empty() {
-            for (location, warning) in &self.0.warnings {
-                SpanError {
-                    spans: &self.1.spans,
-                    file_idxs: &self.1.file_idxs,
-                    paths: &self.1.paths,
-                    contents: &self.1.contents,
-                    error: warning,
-                    kind: ReportKind::Warning,
-                    code: None,
-                    location: *location,
-                }
-                .fmt(f)?;
-            }
-        }
+        self.0.report_warnings(self.1).fmt(f)?;
 
         for (location, err, _context) in &self.0.errors {
             SpanError {
