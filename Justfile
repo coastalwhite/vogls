@@ -22,6 +22,9 @@ test *FLAGS:
     cargo build --bin vogls-test --profile=fast-dev
     ./target/fast-dev/vogls-test unit {{FLAGS}}
 
+cargo-test:
+    cargo test --workspace
+
 integration-test-setup:
     git submodule update --init
     {{just_executable()}} -f tests/bench/prime/Justfile build

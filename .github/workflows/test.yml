@@ -39,6 +39,9 @@ jobs:
         if: hashFiles('Cargo.lock') == ''
         run: cargo generate-lockfile
 
+      - name: Cargo Tests
+        run: just cargo-test
+
       - name: Tests
         run: just test
 
