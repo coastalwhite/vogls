@@ -237,6 +237,27 @@ pub fn fv_bin_u64_cell_bitwise_op(
     }
 }
 
+pub fn tv_bin_u64_cell_bitwise_op_output_fv(
+    dst: &[Cell<u64>],
+    lhs: &[Cell<u64>],
+    rhs: &[Cell<u64>],
+    op: impl Fn(u64, u64) -> (u64, u64),
+    size: VectorSize,
+) {
+    let nwords = dst.len() / 2;
+    assert!(dst.len() == 2 * nwords && lhs.len() == nwords && lhs.len() == rhs.len());
+    for (i, (l, r)) in lhs.iter().zip(rhs).enumerate() {
+        let (spc, val) = op(l.get(), r.get());
+        dst[i].set(spc);
+        dst[nwords + i].set(val);
+    }
+
+    let last_word_mask = last_word_mask(size);
+
+    dst[nwords - 1].update(|v| v & last_word_mask);
+    dst[2 * nwords - 1].update(|v| v & last_word_mask);
+}
+
 pub fn fv_bin_u64_cell_bitwise_op_output_tv(
     dst: &[Cell<u64>],
     lhs: &[Cell<u64>],
@@ -322,6 +343,51 @@ pub fn fv_bitwise_and_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
     let zvalue = xspc & x & yspc & y;
     let zspc = (xspc & !x) | (yspc & !y) | zvalue;
     (zspc, zvalue)
+}
+#[inline(always)]
+pub fn fv_resolve_wire_elem(xspc: u64, xval: u64, yspc: u64, yval: u64) -> (u64, u64) {
+    // IEEE Std 1364-2005 table 7-2
+    // Resolution of two equal-strength drivers of a `wire`.
+    //
+    //   | x  z  1  0
+    // --+-----------
+    // x | x  x  x  x
+    // z | x  z  1  0
+    // 1 | x  1  1  x
+    // 0 | x  0  x  0
+    //
+    // z1z0 = fv.resolve_wire(x1x0, y1y0)
+    //
+    // z0 = x0 & y0         z1 = (x1 & (y1 ^ y0)) ^ (x0 & y1)
+    //   | x  z  1  0         | x  z  1  0
+    // --+-----------       --+-----------
+    // x | 0  0  0  0       x | 0  0  0  0
+    // z | 0  1  1  0       z | 0  0  1  1
+    // 1 | 0  1  1  0       1 | 0  1  1  0
+    // 0 | 0  0  0  0       0 | 0  1  0  1
+    let zval = xval & yval;
+    let zspc = (xspc & (yspc ^ yval)) ^ (xval & yspc);
+    (zspc, zval)
+}
+#[inline(always)]
+pub fn tv_resolve_wire_elem(x: u64, y: u64) -> (u64, u64) {
+    // Two-valued variant of `fv_resolve_wire_elem`.
+    //
+    //   | 0  1
+    // --+-----
+    // 0 | 0  x
+    // 1 | x  1
+    //
+    // z1z0 = tv.resolve_wire(x, y)
+    //
+    // z0 = x & y           z1 = x == y
+    //   | 0  0               | 0  1
+    // --+-----             --+-----
+    // 0 | 0  0             0 | 1  0
+    // 1 | 0  1             0 | 0  1
+    let zval = x & y;
+    let zspc = !(x ^ y);
+    (zspc, zval)
 }
 #[inline(always)]
 pub fn fv_bitwise_or_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
@@ -514,27 +580,27 @@ mod tests {
     use proptest::prelude::Just;
 
     #[rustfmt::skip]
-    const FV_BIN_TEST_VECTORS: [[L; 7]; 16] = [
-        //  lhs rhs       AND    OR     XOR    ANDNOT  ORNOT
-        [   X,  X,        X,     X,     X,     X,      X,   ],
-        [   X,  Z,        X,     X,     X,     X,      X,   ],
-        [   X,  L0,       L0,    X,     X,     X,      L1,  ],
-        [   X,  L1,       X,     L1,    X,     L0,     X,   ],
+    const FV_BIN_TEST_VECTORS: [[L; 8]; 16] = [
+        //  lhs rhs       AND    OR     XOR    ANDNOT  ORNOT  RESOLVE
+        [   X,  X,        X,     X,     X,     X,      X,     X,   ],
+        [   X,  Z,        X,     X,     X,     X,      X,     X,   ],
+        [   X,  L0,       L0,    X,     X,     X,      L1,    X,   ],
+        [   X,  L1,       X,     L1,    X,     L0,     X,     X,   ],
 
-        [   Z,  X,        X,     X,     X,     X,      X,   ],
-        [   Z,  Z,        X,     X,     X,     X,      X,   ],
-        [   Z,  L0,       L0,    X,     X,     X,      L1,  ],
-        [   Z,  L1,       X,     L1,    X,     L0,     X,   ],
+        [   Z,  X,        X,     X,     X,     X,      X,     X,   ],
+        [   Z,  Z,        X,     X,     X,     X,      X,     Z,   ],
+        [   Z,  L0,       L0,    X,     X,     X,      L1,    L0,  ],
+        [   Z,  L1,       X,     L1,    X,     L0,     X,     L1,  ],
 
-        [   L0, X,        L0,    X,     X,     L0,     X,   ],
-        [   L0, Z,        L0,    X,     X,     L0,     X,   ],
-        [   L0, L0,       L0,    L0,    L0,    L0,     L1,  ],
-        [   L0, L1,       L0,    L1,    L1,    L0,     L0,  ],
+        [   L0, X,        L0,    X,     X,     L0,     X,     X,   ],
+        [   L0, Z,        L0,    X,     X,     L0,     X,     L0,  ],
+        [   L0, L0,       L0,    L0,    L0,    L0,     L1,    L0,  ],
+        [   L0, L1,       L0,    L1,    L1,    L0,     L0,    X,   ],
 
-        [   L1, X,        X,     L1,    X,     X,      L1,  ],
-        [   L1, Z,        X,     L1,    X,     X,      L1,  ],
-        [   L1, L0,       L0,    L1,    L1,    L1,     L1,  ],
-        [   L1, L1,       L1,    L1,    L0,    L0,     L1,  ],
+        [   L1, X,        X,     L1,    X,     X,      L1,    X,   ],
+        [   L1, Z,        X,     L1,    X,     X,      L1,    L1,  ],
+        [   L1, L0,       L0,    L1,    L1,    L1,     L1,    X,   ],
+        [   L1, L1,       L1,    L1,    L0,    L0,     L1,    L1,  ],
     ];
 
     #[rustfmt::skip]
@@ -555,6 +621,7 @@ mod tests {
             expect_xor,
             expect_andnot,
             expect_ornot,
+            expect_resolve,
         ] in FV_BIN_TEST_VECTORS
         {
             let (xspc, xval) = (x.spc() as u64, x.val() as u64);
@@ -565,12 +632,14 @@ mod tests {
             let (z_xorspc, z_xor) = fv_bitwise_xor_elem(xspc, xval, yspc, yval);
             let (z_andnotspc, z_andnot) = fv_bitwise_andnot_elem(xspc, xval, yspc, yval);
             let (z_ornotspc, z_ornot) = fv_bitwise_ornot_elem(xspc, xval, yspc, yval);
+            let (z_resolvespc, z_resolve) = fv_resolve_wire_elem(xspc, xval, yspc, yval);
 
             let z_and = FvLogicValue::from_repr(((z_and << 1) | z_andspc) as u8);
             let z_or = FvLogicValue::from_repr(((z_or << 1) | z_orspc) as u8);
             let z_xor = FvLogicValue::from_repr(((z_xor << 1) | z_xorspc) as u8);
             let z_andnot = FvLogicValue::from_repr(((z_andnot << 1) | z_andnotspc) as u8);
             let z_ornot = FvLogicValue::from_repr(((z_ornot << 1) | z_ornotspc) as u8);
+            let z_resolve = FvLogicValue::from_repr(((z_resolve << 1) | z_resolvespc) as u8);
 
             assert_eq!(
                 z_and, expect_and,
@@ -591,6 +660,10 @@ mod tests {
             assert_eq!(
                 z_ornot, expect_ornot,
                 "{x:?} | !{y:?}, expected = {expect_ornot:?}, gotten = {z_ornot:?}"
+            );
+            assert_eq!(
+                z_resolve, expect_resolve,
+                "resolve({x:?}, {y:?}), expected = {expect_resolve:?}, gotten = {z_resolve:?}"
             );
 
             let spc = (xspc << 1) | (yspc);

@@ -412,6 +412,7 @@ impl BasicBlockBuilder {
         (negedge, Negedge)
         (copy_x, CopyX)
         (copy_z, CopyZ)
+        (resolve_wire, ResolveWire)
         (unsigned_le, UnsignedLessEqual)
         (case_equals, CaseEquality)
         (logical_shift_left, LogicalShiftLeft)

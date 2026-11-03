@@ -1182,6 +1182,51 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 false,
                             ),
 
+                            (O::ResolveWire, _, M::TwoValue, Some(size), _, _) => {
+                                map!(lhs, rhs => @fv clif_tv_resolve_wire(b, lhs, rhs, size))
+                            }
+                            (O::ResolveWire, _, M::FourValue, Some(_), _, _) => {
+                                map!((lval, lspc), (rval, rspc) => @fv
+                                    clif_fv_resolve_wire(b, lval, lspc, rval, rspc)
+                                )
+                            }
+                            (O::ResolveWire, _, M::TwoValue, None, _, _) => {
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let lhs_base = wide_map[lhs].addr(b, ptr, params.cldctx, 0);
+                                let rhs_base = wide_map[rhs].addr(b, ptr, params.cldctx, 0);
+                                clif_binary_bitwise(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    lhs_base,
+                                    rhs_base,
+                                    TvFvFn {
+                                        iter: |b: &mut FunctionBuilder, l, r| {
+                                            clif_tv_resolve_wire(b, l, r, SixBitSize::N64)
+                                        },
+                                        spc_mask: true, // SPC is a xnor.
+                                        val_mask: false,
+                                    },
+                                )
+                            }
+                            (O::ResolveWire, _, M::FourValue, None, _, _) => {
+                                let dst_base = wide_map[dst].addr(b, ptr, params.cldctx, 0);
+                                let lhs_base = wide_map[lhs].addr(b, ptr, params.cldctx, 0);
+                                let rhs_base = wide_map[rhs].addr(b, ptr, params.cldctx, 0);
+                                clif_binary_bitwise(
+                                    b,
+                                    dst_size,
+                                    dst_base,
+                                    lhs_base,
+                                    rhs_base,
+                                    FvFvFn {
+                                        iter: clif_fv_resolve_wire,
+                                        spc_mask: false,
+                                        val_mask: false,
+                                    },
+                                )
+                            }
+
                             (O::Add, _, _, Some(_), _, _) => {
                                 bin_arith!(lhs, rhs => b.ins().iadd(lhs, rhs), true)
                             }
@@ -5831,6 +5876,36 @@ fn clif_fv_copyz(
     let ncm = b.ins().bnot(cm0);
     let spc = b.ins().band(lspc, ncm);
     let val = b.ins().bor(lval, cm0);
+    (val, spc)
+}
+
+fn clif_fv_resolve_wire(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    // val = lval & rval
+    // spc = (lspc & (rspc ^ rval)) ^ (lval & rspc)
+    let val = b.ins().band(lval, rval);
+    let rhs_differs = b.ins().bxor(rspc, rval);
+    let from_lspc = b.ins().band(lspc, rhs_differs);
+    let from_rspc = b.ins().band(lval, rspc);
+    let spc = b.ins().bxor(from_lspc, from_rspc);
+    (val, spc)
+}
+
+fn clif_tv_resolve_wire(
+    b: &mut FunctionBuilder,
+    lhs: Value,
+    rhs: Value,
+    size: SixBitSize,
+) -> (Value, Value) {
+    let val = b.ins().band(lhs, rhs);
+    let differ = b.ins().bxor(lhs, rhs);
+    let spc = b.ins().bnot(differ);
+    let spc = maskvsbs(b, spc, size);
     (val, spc)
 }
 
