@@ -542,7 +542,7 @@ pub enum BinaryOp {
     ///
     /// Results are calculated according to the following truth-table.
     ///
-    /// ```
+    /// ```text
     /// & | x  z  1  0
     /// --+-----------
     /// x | x  x  x  0
@@ -558,7 +558,7 @@ pub enum BinaryOp {
     ///
     /// Results are calculated according to the following truth-table.
     ///
-    /// ```
+    /// ```text
     /// | | x  z  1  0
     /// --+-----------
     /// x | x  x  1  x
@@ -574,7 +574,7 @@ pub enum BinaryOp {
     ///
     /// Results are calculated according to the following truth-table.
     ///
-    /// ```
+    /// ```text
     /// ^ | x  z  1  0
     /// --+-----------
     /// x | x  x  x  x
