@@ -15,7 +15,9 @@ use vogls_ir::optimize::Optimizations;
 use vogls_ir::time::{TimeFormat, TimeResolution};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::watchers::WatchMap;
-use vogls_ir::{GlobalContext, LogicMode, SCALAR_VSIZE, Signal, SignalKey, SignalSlice};
+use vogls_ir::{
+    GlobalContext, LogicMode, SCALAR_VSIZE, Signal, SignalFlags, SignalKey, SignalSlice,
+};
 use vogls_runtime::plugins::RuntimePlugin;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_utils::{TableKey as _, VgHashMap};
@@ -276,7 +278,7 @@ impl LoweredDesign {
                 heap.store_bits(signal_to_heap[rt_key.as_usize()], signal.mode, initialize);
             }
 
-            if signal.triggers_t0_poke()
+            if signal.flags.contains(SignalFlags::POKE_T0)
                 && let Some(rt_key) = rt_signal_map.get(&key)
                 && let Some(lupdt_idx) = lupdt_indexes.get(rt_key)
             {
@@ -377,7 +379,7 @@ impl LoweredDesign {
                 heap.store_bits(signal_to_heap[rt_key.as_usize()], signal.mode, initialize);
             }
 
-            if signal.triggers_t0_poke()
+            if signal.flags.contains(SignalFlags::POKE_T0)
                 && let Some(rt_key) = rt_signal_map.get(&key)
                 && let Some(lupdt_idx) = lupdt_indexes.get(rt_key)
             {

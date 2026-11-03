@@ -57,7 +57,7 @@ impl MonitorSignals {
             size: SCALAR_VSIZE,
             initialize: Some(FvLogicValue::L1.into()),
             mode: LogicMode::TwoValue,
-            flags: SignalFlags::NO_START_POKE,
+            flags: SignalFlags::EMPTY,
             origin: TokenRange::default(),
         });
         let selected = gl.signals.insert(Signal {
@@ -65,7 +65,7 @@ impl MonitorSignals {
             size: VSIZE_64,
             initialize: None,
             mode: LogicMode::TwoValue,
-            flags: SignalFlags::NO_START_POKE,
+            flags: SignalFlags::EMPTY,
             origin: TokenRange::default(),
         });
 
@@ -706,7 +706,7 @@ pub fn create_nba_process(
             name: mask_name,
             size,
             initialize: None,
-            flags: SignalFlags::NO_START_POKE,
+            flags: SignalFlags::EMPTY,
             mode: LogicMode::TwoValue,
             origin,
         })
@@ -715,7 +715,7 @@ pub fn create_nba_process(
         name: value_name,
         size,
         initialize: None,
-        flags: SignalFlags::NO_START_POKE,
+        flags: SignalFlags::EMPTY,
         mode,
         origin,
     });

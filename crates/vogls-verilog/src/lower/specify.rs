@@ -775,11 +775,13 @@ pub fn lower_iopath<'a>(
                 if path.condition.is_posedge() || path.condition.is_negedge() {
                     let Signal { size, mode, .. } = &mctx.gl.signals[*input];
                     let (size, mode) = (*size, *mode);
+                    let mut flags = SignalFlags::EMPTY;
+                    flags.set(SignalFlags::POKE_T0, mode.is_two_value());
                     let signal = mctx.gl.signals.insert(Signal {
                         name: format!("SPECIFY_BEFORE/{}", mctx.gl.signals.len()),
                         size,
                         initialize: None,
-                        flags: SignalFlags::EMPTY,
+                        flags,
                         origin: TokenRange::default(),
                         mode,
                     });
@@ -948,11 +950,13 @@ pub fn lower_iopath<'a>(
         let old_proxy_value = builder.probe(mctx.gl(), proxy);
         let old_proxy_value =
             builder.select_bit_constant(mctx.gl(), old_proxy_value, output_bitidx);
+        let mut flags = SignalFlags::EMPTY;
+        flags.set(SignalFlags::POKE_T0, old_proxy_value.mode().is_two_value());
         let old_proxy_signal = mctx.gl.signals.insert(Signal {
             name: format!("SPECIFY_OLD_PROXY/{}", mctx.gl.signals.len()),
             size: mctx.gl.vars.size(old_proxy_value),
             initialize: None,
-            flags: SignalFlags::EMPTY,
+            flags,
             origin: TokenRange::default(),
             mode: old_proxy_value.mode(),
         });

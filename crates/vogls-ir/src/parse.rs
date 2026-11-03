@@ -218,6 +218,15 @@ fn parse_signal_definition<'a>(
         initialize = Some(parse_imm(c)?);
     }
 
+    let mut flags = SignalFlags::EMPTY;
+    flags.set(
+        SignalFlags::POKE_T0,
+        mode.is_two_value()
+            || initialize
+                .as_ref()
+                .is_some_and(|v| v.count_unknown() != v.size().get()),
+    );
+
     if symbols
         .signals
         .insert(
@@ -225,7 +234,7 @@ fn parse_signal_definition<'a>(
             gl.signals.insert(Signal {
                 name: name.to_string(),
                 size,
-                flags: SignalFlags::EMPTY,
+                flags,
                 initialize,
                 mode,
                 origin: TokenRange::default(),

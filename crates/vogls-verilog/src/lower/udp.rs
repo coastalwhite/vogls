@@ -155,11 +155,13 @@ pub fn lower_udp<'a>(
                     let ast_output = port_list.pop_front().unwrap();
                     let output = *ast_output;
                     let output_name = output.0;
+                    let mut flags = SignalFlags::EMPTY;
+                    flags.set(SignalFlags::POKE_T0, ctx.logic_mode.is_two_value());
                     let output_signal = mctx.gl.signals.insert(vogls_ir::Signal {
                         name: ctx.arenas.ident_table[output.0].to_string(),
                         size: SCALAR_VSIZE,
                         initialize: None,
-                        flags: SignalFlags::EMPTY,
+                        flags,
                         origin: ctx.arenas.get_span(ast_output),
                         mode: ctx.logic_mode,
                     });
@@ -168,11 +170,13 @@ pub fn lower_udp<'a>(
                 UdpPorts::DeclarationPortList(decl_list) => {
                     let output = *decl_list.output_decl;
                     let output_name = output.port_identifier.item.0;
+                    let mut flags = SignalFlags::EMPTY;
+                    flags.set(SignalFlags::POKE_T0, ctx.logic_mode.is_two_value());
                     let output_signal = mctx.gl.signals.insert(vogls_ir::Signal {
                         name: ctx.arenas.ident_table[output_name].to_string(),
                         size: SCALAR_VSIZE,
                         initialize: None,
-                        flags: SignalFlags::EMPTY,
+                        flags,
                         origin: ctx.arenas.get_item_span(output.port_identifier),
                         mode: ctx.logic_mode,
                     });
@@ -219,12 +223,14 @@ pub fn lower_udp<'a>(
                 if level_list.len() < inputs.len() && edge_list.is_some() {
                     let i = level_list.len();
                     if before_inputs[i].is_none() {
+                        let mut flags = SignalFlags::EMPTY;
+                        flags.set(SignalFlags::POKE_T0, ctx.logic_mode.is_two_value());
                         let signal = Signal {
                             name: String::from("__UDP_INPUT"),
                             size: SCALAR_VSIZE,
                             initialize: None,
                             mode: ctx.logic_mode,
-                            flags: SignalFlags::EMPTY,
+                            flags,
                             origin: TokenRange::default(),
                         };
                         let signal = mctx.gl.signals.insert(signal);

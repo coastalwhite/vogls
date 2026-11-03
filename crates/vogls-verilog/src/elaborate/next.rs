@@ -153,7 +153,7 @@ pub fn elaborate<'a>(
         name: "".to_string(),
         size: SCALAR_VSIZE,
         initialize: None,
-        flags: SignalFlags::EMPTY,
+        flags: SignalFlags::POKE_T0,
         mode: vogls_ir::LogicMode::TwoValue,
         origin: TokenRange { start: 0, end: 0 },
     });
@@ -258,12 +258,14 @@ pub fn elaborate<'a>(
 
                 // @TODO: Warn for implicitly generated nets.
 
+                let mut flags = SignalFlags::EMPTY;
+                flags.set(SignalFlags::POKE_T0, ctx.logic_mode.is_two_value());
                 let signal = gl.signals.insert(Signal {
                     name: ctx.arenas.ident_table[ident].to_string(),
                     size: SCALAR_VSIZE,
                     initialize: None,
                     mode: ctx.logic_mode,
-                    flags: SignalFlags::EMPTY,
+                    flags,
                     origin,
                 });
                 let net = Net {

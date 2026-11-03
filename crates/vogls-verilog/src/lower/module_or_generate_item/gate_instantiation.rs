@@ -705,11 +705,13 @@ pub(crate) fn lower_delayed_drive(
         return assign(mctx, bb_builder, value);
     };
 
+    let mut flags = SignalFlags::EMPTY;
+    flags.set(SignalFlags::POKE_T0, value.mode().is_two_value());
     let proxy = mctx.gl.signals.insert(Signal {
         name: format!("GATE_DELAY_PROXY/{}", mctx.gl.signals.len()),
         size: output_bit_length,
         initialize: None,
-        flags: SignalFlags::EMPTY,
+        flags,
         origin: span,
         mode: value.mode(),
     });
@@ -722,11 +724,13 @@ pub(crate) fn lower_delayed_drive(
     let new_value = delay_bb_builder.probe(mctx.gl(), proxy);
 
     // The value this process last drove onto the output.
+    let mut flags = SignalFlags::EMPTY;
+    flags.set(SignalFlags::POKE_T0, new_value.mode().is_two_value());
     let driven = mctx.gl.signals.insert(Signal {
         name: format!("GATE_DELAY_DRIVEN/{}", mctx.gl.signals.len()),
         size: output_bit_length,
         initialize: None,
-        flags: SignalFlags::EMPTY,
+        flags,
         origin: span,
         mode: new_value.mode(),
     });
@@ -741,11 +745,13 @@ pub(crate) fn lower_delayed_drive(
     let elapsed = delay_bb_builder.min(mctx.gl(), elapsed, delay);
     let wait_time = delay_bb_builder.minus(mctx.gl(), delay, elapsed);
 
+    let mut flags = SignalFlags::EMPTY;
+    flags.set(SignalFlags::POKE_T0, new_value.mode().is_two_value());
     let scheduled = mctx.gl.signals.insert(Signal {
         name: format!("GATE_DELAY_SCHEDULED/{}", mctx.gl.signals.len()),
         size: output_bit_length,
         initialize: None,
-        flags: SignalFlags::EMPTY,
+        flags,
         origin: span,
         mode: new_value.mode(),
     });

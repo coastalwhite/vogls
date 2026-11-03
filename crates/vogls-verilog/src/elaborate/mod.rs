@@ -355,11 +355,21 @@ fn new_net(
 
     let name = format!("{name}/{}", gl.signals.len());
 
+    let initialize = initialize.map(|i| i.into_bits());
+    let mut flags = SignalFlags::EMPTY;
+    flags.set(
+        SignalFlags::POKE_T0,
+        mode.is_two_value()
+            || initialize
+                .as_ref()
+                .is_some_and(|v| v.count_unknown() != v.size().get()),
+    );
+
     let signal = gl.signals.insert(Signal {
         name,
         size,
-        initialize: initialize.map(|i| i.into_bits()),
-        flags: SignalFlags::EMPTY,
+        initialize,
+        flags,
         mode,
         origin,
     });
