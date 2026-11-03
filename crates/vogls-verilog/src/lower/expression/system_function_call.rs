@@ -15,7 +15,7 @@ use crate::lower::expression::{
     coerce_to_max_size_ty, lower_expr, sign_or_zero_extend, to_real, truncate_or_extend,
 };
 use crate::lower::vvalue::{Real, VValue};
-use crate::lower::{Diagnostics, LowerContext, MutLowerContext, VType, try_resolve_net};
+use crate::lower::{Diagnostics, LowerContext, MutLowerContext, VType, try_resolve_signal};
 use crate::parser::AstArenas;
 
 use super::get_expr_type;
@@ -609,14 +609,14 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 return Err(());
             }
 
-            let net_symbol = try_resolve_net(
+            let symbol = try_resolve_signal(
                 scope,
                 &ctx.table,
                 ctx.arenas,
                 *arg_ident,
                 &mut mctx.diagnostics,
             )?;
-            let signal = net_symbol.net.probe_signal();
+            let signal = symbol.terminals.probe_signal();
             Ok(Some((
                 builder.lupdt(mctx.gl(), signal),
                 VType::UnsignedNet(TIME_VSIZE),
@@ -639,14 +639,14 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 );
                 return Err(());
             };
-            let net_symbol = try_resolve_net(
+            let symbol = try_resolve_signal(
                 scope,
                 &ctx.table,
                 ctx.arenas,
                 *arg_ident,
                 &mut mctx.diagnostics,
             )?;
-            let signal = net_symbol.net.probe_signal();
+            let signal = symbol.terminals.probe_signal();
 
             // The bit-select and part-selects decide both how wide the driven
             // value is and where it lands in the signal.
@@ -664,9 +664,9 @@ pub fn lower_unevaluated_system_function_call<'a>(
                 is_unsigned: _,
             } = lower_addressing(
                 &mut actx,
-                net_symbol.ty.bit_length(),
-                &net_symbol.dims,
-                net_symbol.transform,
+                symbol.ty.bit_length(),
+                &symbol.dims,
+                symbol.transform,
                 array_exprs.iter(),
                 bitslice.map(|r| r.into()),
             )?;
@@ -795,7 +795,7 @@ pub fn lower_unevaluated_system_function_call_ty<'a>(
                 );
                 return Err(());
             };
-            let net = try_resolve_net(scope, table, arenas, *arg_ident, diagnostics)?;
+            let net = try_resolve_signal(scope, table, arenas, *arg_ident, diagnostics)?;
             Ok(Some(VType::UnsignedNet(net.ty.bit_length())))
         }
         "vogls_slice" => {
@@ -1026,7 +1026,7 @@ fn get_prob_dist_fn_seed_signals<'a, 'b>(
         return Err(());
     }
 
-    let net_symbol = try_resolve_net(
+    let symbol = try_resolve_signal(
         scope,
         &ctx.table,
         ctx.arenas,
@@ -1034,8 +1034,8 @@ fn get_prob_dist_fn_seed_signals<'a, 'b>(
         &mut mctx.diagnostics,
     )?;
     Ok((
-        net_symbol.net.probe_signal(),
-        net_symbol.net.blocking_drive_signal(),
-        net_symbol.ty,
+        symbol.terminals.probe_signal(),
+        symbol.terminals.blocking_drive_signal(),
+        symbol.ty,
     ))
 }

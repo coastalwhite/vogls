@@ -119,15 +119,15 @@ fn extend_symbol_table_to_vcd_scope(
                     .items
                     .push(vogls_ir::vcd::VcdScopeItem::Scope(subscope));
             }
-            S::Net(i) => {
-                let net = &i.net;
+            S::Signal(i) => {
+                let terminals = &i.terminals;
 
                 // @TODO: Property implement this.
                 let lsb = 0;
                 let msb = i.ty.bit_length().get() - 1;
                 let msb_lsb = (msb > 0).then_some((msb, lsb));
 
-                let signal = net.probe_signal();
+                let signal = terminals.probe_signal();
                 let variable_key = variable_table.insert(vogls_ir::vcd::VcdVariable {
                     name: ident_table[table[*sid].name()].to_string(),
                     value: VcdValue::Signal(signal, None),
@@ -303,48 +303,48 @@ pub fn try_resolve_module<'a, 's>(
     Ok(n)
 }
 
-pub fn try_resolve_net<'a, 's>(
+pub fn try_resolve_signal<'a, 's>(
     scope: SymbolId,
     table: &'s VSymbolTable,
     arenas: &AstArenas,
     ident: impl Into<HIdent<'a>>,
     diagnostics: &mut Diagnostics,
-) -> Result<&'s NetSymbol, ()> {
+) -> Result<&'s SignalSymbol, ()> {
     let ident = ident.into();
     let sid = try_resolve_hident(scope, table, arenas, ident, diagnostics)?;
-    let VSymbol::Net(n) = &table[sid].content else {
-        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
+    let VSymbol::Signal(n) = &table[sid].content else {
+        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as signal");
         return Err(());
     };
     Ok(n)
 }
 
-pub fn try_resolve_net_mut<'a, 's>(
+pub fn try_resolve_signal_mut<'a, 's>(
     scope: SymbolId,
     table: &'s mut VSymbolTable,
     arenas: &AstArenas,
     ident: impl Into<HIdent<'a>>,
     diagnostics: &mut Diagnostics,
-) -> Result<&'s mut NetSymbol, ()> {
+) -> Result<&'s mut SignalSymbol, ()> {
     let ident = ident.into();
     let sid = try_resolve_hident(scope, table, arenas, ident, diagnostics)?;
-    let VSymbol::Net(n) = &mut table[sid].content else {
-        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
+    let VSymbol::Signal(n) = &mut table[sid].content else {
+        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as signal");
         return Err(());
     };
     Ok(n)
 }
-pub fn try_resolve_net_with_sid<'a, 's>(
+pub fn try_resolve_signal_with_sid<'a, 's>(
     scope: SymbolId,
     table: &'s VSymbolTable,
     arenas: &AstArenas,
     ident: impl Into<HIdent<'a>>,
     diagnostics: &mut Diagnostics,
-) -> Result<(SymbolId, &'s NetSymbol), ()> {
+) -> Result<(SymbolId, &'s SignalSymbol), ()> {
     let ident = ident.into();
     let sid = try_resolve_hident(scope, table, arenas, ident, diagnostics)?;
-    let VSymbol::Net(n) = &table[sid].content else {
-        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as net");
+    let VSymbol::Signal(n) = &table[sid].content else {
+        diagnostics.not_yet_implemented(hident_span(arenas, ident), "cannot be used as signal");
         return Err(());
     };
     Ok((sid, n))
@@ -363,30 +363,34 @@ pub fn unwrap_get_task_mut(table: &mut VSymbolTable, sid: SymbolId) -> &mut Task
     n
 }
 
-pub fn unwrap_get_net(table: &VSymbolTable, sid: SymbolId) -> &NetSymbol {
-    let VSymbol::Net(n) = &table[sid].content else {
+pub fn unwrap_get_signal(table: &VSymbolTable, sid: SymbolId) -> &SignalSymbol {
+    let VSymbol::Signal(n) = &table[sid].content else {
         panic!()
     };
     n
 }
-pub fn unwrap_get_net_mut(table: &mut VSymbolTable, sid: SymbolId) -> &mut NetSymbol {
-    let VSymbol::Net(n) = &mut table[sid].content else {
+pub fn unwrap_get_signal_mut(table: &mut VSymbolTable, sid: SymbolId) -> &mut SignalSymbol {
+    let VSymbol::Signal(n) = &mut table[sid].content else {
         panic!()
     };
     n
 }
 
-pub fn unwrap_resolve_net(scope: SymbolId, table: &VSymbolTable, ident: IdentId) -> &NetSymbol {
+pub fn unwrap_resolve_signal(
+    scope: SymbolId,
+    table: &VSymbolTable,
+    ident: IdentId,
+) -> &SignalSymbol {
     let sid = resolve_symbol_id(scope, table, ident).unwrap();
-    unwrap_get_net(table, sid)
+    unwrap_get_signal(table, sid)
 }
-pub fn unwrap_resolve_net_mut(
+pub fn unwrap_resolve_signal_mut(
     scope: SymbolId,
     table: &mut VSymbolTable,
     ident: IdentId,
-) -> &mut NetSymbol {
+) -> &mut SignalSymbol {
     let sid = resolve_symbol_id(scope, table, ident).unwrap();
-    unwrap_get_net_mut(table, sid)
+    unwrap_get_signal_mut(table, sid)
 }
 
 pub fn unwrap_get_module(table: &VSymbolTable, sid: SymbolId) -> &ModuleSymbol {
@@ -455,7 +459,7 @@ use crate::ast::statement::{Statement, StatementContent, StatementOrNull};
 use crate::ast::udp::UdpDeclaration;
 use crate::ast::{AstId, AstIdRange, AstItem, HIdent, Identifier};
 use crate::elaborate::{
-    FunctionSymbol, ModuleSymbol, NetSymbol, SymbolAstRefs, TaskSymbol, VSymbol, VSymbolTable,
+    FunctionSymbol, ModuleSymbol, SignalSymbol, SymbolAstRefs, TaskSymbol, VSymbol, VSymbolTable,
 };
 use crate::parser::AstArenas;
 use crate::tokenizer::Tokenized;
@@ -561,7 +565,7 @@ fn assign_task_output<'a>(
                     *ast_ident,
                     &mut mctx.diagnostics,
                 )?;
-                let VSymbol::Net(s) = &ctx.table[symbol_key].content else {
+                let VSymbol::Signal(s) = &ctx.table[symbol_key].content else {
                     mctx.diagnostics
                         .output_expr_not_allowed(ctx.arenas.get_span(expr));
                     error = true;
@@ -606,7 +610,7 @@ fn assign_task_output<'a>(
                     ty,
                     s.ty.resize_net_to(output_width),
                 );
-                s.net.drive_blocking(mctx.gl(), builder, src, partial);
+                s.terminals.drive_blocking(mctx.gl(), builder, src, partial);
             }
 
             Expr::Replication(_) => {
@@ -875,7 +879,7 @@ pub fn instantiate_stmts_nba_signals<'a>(
         match stmt.content {
             StatementContent::NonBlockingAssignment(nba) => {
                 for vlvalue in nba.variable_lvalue.0 {
-                    let (sid, net) = try_resolve_net_with_sid(
+                    let (sid, net) = try_resolve_signal_with_sid(
                         scope,
                         &ctx.table,
                         ctx.arenas,
@@ -888,7 +892,7 @@ pub fn instantiate_stmts_nba_signals<'a>(
                     match nba_signals.entry(sid) {
                         vogls_utils::Entry::Occupied(mut entry) => entry.get().1 |= needs_mask,
                         vogls_utils::Entry::Vacant(entry) => {
-                            _ = entry.insert((net.net.blocking_drive_signal(), needs_mask))
+                            _ = entry.insert((net.terminals.blocking_drive_signal(), needs_mask))
                         }
                     }
                 }

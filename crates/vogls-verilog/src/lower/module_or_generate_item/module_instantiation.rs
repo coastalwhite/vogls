@@ -9,7 +9,7 @@ use crate::ast::expr::Expr;
 use crate::ast::module::{
     ListOfPortConnections, ModuleInstance, ModuleInstantiation, NamedPortConnection,
 };
-use crate::elaborate::{NetSymbol, VSymbol};
+use crate::elaborate::{SignalSymbol, VSymbol};
 use crate::lower::addressing::{Address, LValueAddressingContext, lower_addressing};
 use crate::lower::expression::{self, get_expr_type};
 use crate::lower::fuse::{
@@ -17,7 +17,7 @@ use crate::lower::fuse::{
     convert_fuse_srcs_to_dsts, try_expr_to_fuse, try_expr_to_fuse_sources, try_fuse_srcs_to_dsts,
 };
 use crate::lower::{
-    LowerContext, MutLowerContext, VType, resolve_symbol_id, try_resolve_hident, unwrap_get_net,
+    LowerContext, MutLowerContext, VType, resolve_symbol_id, try_resolve_hident, unwrap_get_signal,
 };
 
 /// Lower a Verilog module instantiation to Vogls IR.
@@ -89,7 +89,7 @@ pub fn lower<'a>(
                     let Some(port_idx) = ctx
                         .table
                         .resolve(module_sid, port_identifier.item.0)
-                        .and_then(|sid| ctx.table[sid].content.as_net())
+                        .and_then(|sid| ctx.table[sid].content.as_signal())
                         .and_then(|net| net.port_idx)
                     else {
                         mctx.diagnostics
@@ -135,7 +135,7 @@ fn assign_port<'a>(
     let port_ident = ctx.table[port].name();
     let port_net = ctx.table[port]
         .content
-        .as_net()
+        .as_signal()
         .expect("Port should always be nets");
     let is_input = matches!(
         direction,
@@ -208,7 +208,7 @@ fn assign_input_port<'a>(
     port: SymbolId,
     expr_slice: Option<SignalSlice>,
 ) -> Result<(), ()> {
-    let port = unwrap_get_net(&ctx.table, port);
+    let port = unwrap_get_signal(&ctx.table, port);
 
     if try_fuse_input_port(ctx, mctx, scope, expr, port, expr_slice) == FuseResult::Success {
         return Ok(());
@@ -235,7 +235,8 @@ fn assign_input_port<'a>(
         None => expression::coerce_to(mctx.gl(), &mut bb_builder, v, v_ty, port.ty),
         Some(slice) => bb_builder.slice_constant(mctx.gl(), v, slice.lsb(), slice.width()),
     };
-    port.net.drive_blocking(mctx.gl(), &mut bb_builder, v, None);
+    port.terminals
+        .drive_blocking(mctx.gl(), &mut bb_builder, v, None);
 
     bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_tr);
     proc_builder.finalize(mctx.gl());
@@ -247,7 +248,7 @@ fn try_fuse_input_port<'a>(
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
-    port: &NetSymbol,
+    port: &SignalSymbol,
     expr_slice: Option<SignalSlice>,
 ) -> FuseResult {
     mctx.fuse_srcs_scratch.clear();
@@ -255,7 +256,7 @@ fn try_fuse_input_port<'a>(
 
     // Destinations
     mctx.fuse_dsts_scratch.push(FuseDestination {
-        signal: port.net.blocking_drive_signal(),
+        signal: port.terminals.blocking_drive_signal(),
         slice: SignalSlice::with_end(port.ty.bit_length()),
         ty: port.ty.into(),
     });
@@ -289,7 +290,7 @@ fn assign_port_output<'a>(
     output_net: SymbolId,
     expr_slice: Option<SignalSlice>,
 ) -> Result<(), ()> {
-    let output = unwrap_get_net(&ctx.table, output_net);
+    let output = unwrap_get_signal(&ctx.table, output_net);
 
     if try_fuse_output_port(ctx, mctx, scope, expr, output, expr_slice) == FuseResult::Success {
         return Ok(());
@@ -307,14 +308,14 @@ fn assign_port_output<'a>(
         ProcessBuilder::new(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
     let entry_tr = proc_builder.entry();
 
-    let output_net = &output.net;
-    let probed = output.net.probe(mctx.gl(), &mut bb_builder);
+    let output_terminals = &output.terminals;
+    let probed = output.terminals.probe(mctx.gl(), &mut bb_builder);
 
     let mut driving: Vec<(VariableKey, VType, AstId<Expr>)> = Vec::new();
     driving.push((probed, output.ty, expr));
 
     let mut sensitivity_list = OrderedSet::new();
-    sensitivity_list.insert(output_net.probe_signal());
+    sensitivity_list.insert(output_terminals.probe_signal());
 
     let mut error = false;
     while let Some((var, var_ty, expr)) = driving.pop() {
@@ -344,7 +345,7 @@ fn assign_port_output<'a>(
                     *ast_ident,
                     &mut mctx.diagnostics,
                 )?;
-                let VSymbol::Net(s) = &ctx.table[symbol_key].content else {
+                let VSymbol::Signal(s) = &ctx.table[symbol_key].content else {
                     mctx.diagnostics
                         .output_expr_not_allowed(ctx.arenas.get_span(expr));
                     error = true;
@@ -389,7 +390,7 @@ fn assign_port_output<'a>(
                     var_ty,
                     s.ty.resize_net_to(output_width),
                 );
-                s.net
+                s.terminals
                     .drive_blocking(mctx.gl(), &mut bb_builder, variable, partial);
             }
 
@@ -431,7 +432,7 @@ fn try_fuse_output_port<'a>(
     mctx: &mut MutLowerContext,
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
-    port: &NetSymbol,
+    port: &SignalSymbol,
     expr_slice: Option<SignalSlice>,
 ) -> FuseResult {
     mctx.fuse_srcs_scratch.clear();
@@ -464,7 +465,7 @@ fn try_fuse_output_port<'a>(
     // Sources
     mctx.fuse_srcs_scratch.push(FuseSource {
         content: FuseSourceContent::Signal {
-            signal: port.net.probe_signal(),
+            signal: port.terminals.probe_signal(),
             slice: SignalSlice::with_end(port.ty.bit_length()),
         },
         ty: FuseType::from(port.ty),

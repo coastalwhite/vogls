@@ -15,7 +15,7 @@ pub use vogls_verilog::tokenizer::Macro;
 use vogls_world::World;
 
 use crate::elaborated_design::SignalHandle;
-use crate::symbol::{NetSignal, NetSymbol, NetValue, Symbol};
+use crate::symbol::{SignalRefs, SignalSymbol, SignalValue, Symbol};
 
 #[expect(clippy::large_enum_variant)]
 pub enum DesignBackend {
@@ -141,14 +141,14 @@ impl Design {
         self.time_resolution
     }
 
-    pub fn resolve_handle_sym(&self, signal: SignalHandle) -> (&NetSymbol, &NetSignal) {
-        let Symbol::Net(net) = &self.elab_table[signal.symbol].content else {
+    pub fn resolve_handle_sym(&self, signal: SignalHandle) -> (&SignalSymbol, &SignalRefs) {
+        let Symbol::Signal(symbol) = &self.elab_table[signal.symbol].content else {
             unreachable!();
         };
-        let NetValue::Signal(signal) = &net.net else {
+        let SignalValue::Signal(refs) = &symbol.value else {
             unreachable!();
         };
-        (net, signal)
+        (symbol, refs)
     }
 
     pub fn resolve_handle(&self, signal: SignalHandle) -> RtSignal {
@@ -280,20 +280,18 @@ fn extend_symbol_table_to_vcd_scope(
                     .items
                     .push(vogls_ir::vcd::VcdScopeItem::Scope(subscope));
             }
-            Symbol::Net(i) => {
-                let net = &i.net;
-
+            Symbol::Signal(i) => {
                 // @TODO: Property implement this.
                 let lsb = 0;
                 let msb = i.ty.bit_length().get() - 1;
                 let msb_lsb = (msb > 0).then_some((msb, lsb));
 
-                let (value, signal) = match net {
-                    NetValue::Signal(net_signal) => {
-                        let (signal, slice) = net_signal.probe_signal();
+                let (value, signal) = match &i.value {
+                    SignalValue::Signal(refs) => {
+                        let (signal, slice) = refs.probe_signal();
                         (VcdValue::Signal(signal, slice), Some(signal))
                     }
-                    NetValue::Constant(bits) => (VcdValue::Constant(bits.clone()), None),
+                    SignalValue::Constant(bits) => (VcdValue::Constant(bits.clone()), None),
                 };
                 let variable_key = variable_table.insert(vogls_ir::vcd::VcdVariable {
                     name: ident_table[table[*sid].name()].to_string(),

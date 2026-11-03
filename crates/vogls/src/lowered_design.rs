@@ -26,7 +26,7 @@ use vogls_verilog::tokenizer::Tokenized;
 
 use crate::design::{Design, DesignBackend, DesignState, RtSignal, vcd_scope};
 use crate::plugin::VoglsPlugin;
-use crate::symbol::{NetValue, Symbol};
+use crate::symbol::{SignalValue, Symbol};
 use crate::{ElaboratedDesign, SignalHandle};
 
 #[derive(Clone)]
@@ -126,10 +126,10 @@ impl LoweredDesign {
         let signal_mode: Arc<[LogicMode]> = signal_mode.into();
 
         let handle_map = VgHashMap::from_iter(self.table.symbol_id_iter().filter_map(|sid| {
-            let Symbol::Net(net) = &self.table[sid].content else {
+            let Symbol::Signal(sym) = &self.table[sid].content else {
                 return None;
             };
-            let NetValue::Signal(signal) = &net.net else {
+            let SignalValue::Signal(signal) = &sym.value else {
                 return None;
             };
             let (k, slice) = signal.probe_signal();

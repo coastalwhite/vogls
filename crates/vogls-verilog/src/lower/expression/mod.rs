@@ -708,11 +708,11 @@ pub fn lower_expr<'a>(
                             builder.constant(mctx.gl(), value.into_bits()),
                         )
                     }
-                    VSymbol::Net(s) => (
+                    VSymbol::Signal(s) => (
                         s.ty,
                         &s.dims[..],
                         s.transform,
-                        s.net.probe(mctx.gl(), builder),
+                        s.terminals.probe(mctx.gl(), builder),
                     ),
 
                     VSymbol::Task(_)
@@ -1320,8 +1320,8 @@ pub fn get_used_ident_signals<'a>(
         return Err(());
     };
     match &ctx.table[symbol_key].content {
-        VSymbol::Net(s) => {
-            _ = signals.insert(s.net.probe_signal());
+        VSymbol::Signal(s) => {
+            _ = signals.insert(s.terminals.probe_signal());
         }
         VSymbol::Parameter(_)
         | VSymbol::GenVar

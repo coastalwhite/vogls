@@ -12,10 +12,10 @@ use crate::ast::statement::{
     ProceduralTimingControl, ProceduralTimingControlStatement, StatementOrNull,
 };
 use crate::ast::{AstId, AstItem};
-use crate::elaborate::NetSymbol;
+use crate::elaborate::SignalSymbol;
 use crate::lower::delay::{f64_delay_to_ticks, typed_var_delay_to_ticks, u64_delay_to_ticks};
 use crate::lower::expression::lower_expr;
-use crate::lower::{LowerContext, MutLowerContext, try_resolve_net};
+use crate::lower::{LowerContext, MutLowerContext, try_resolve_signal};
 use crate::lower::{WatchCondition, try_resolve_constant};
 
 use super::Region;
@@ -77,7 +77,7 @@ pub fn lower<'a>(
                 builder.finished_switch_to(mctx.gl(), start_tr.entry());
 
                 let mut contains_edge = false;
-                let mut conditions: Vec<(WatchCondition, VariableKey, &NetSymbol, AstId<Expr>)> =
+                let mut conditions: Vec<(WatchCondition, VariableKey, &SignalSymbol, AstId<Expr>)> =
                     Vec::new();
                 let mut signals = Vec::new();
                 for event_expression in event_expression.0.iter() {
@@ -101,16 +101,16 @@ pub fn lower<'a>(
                         return Err(());
                     }
 
-                    let net = try_resolve_net(
+                    let symbol = try_resolve_signal(
                         scope,
                         &ctx.table,
                         ctx.arenas,
                         *ast_ident,
                         &mut mctx.diagnostics,
                     )?;
-                    let signal = net.net.probe_signal();
+                    let signal = symbol.terminals.probe_signal();
                     let dummy = mctx.gl().vars.insert(LogicMode::FourValue, SCALAR_VSIZE);
-                    conditions.push((condition, dummy, net, *expr));
+                    conditions.push((condition, dummy, symbol, *expr));
                     signals.push(signal);
                 }
                 // When every entry is an edge on a one-bit two-valued signal, the watch itself
@@ -136,7 +136,7 @@ pub fn lower<'a>(
                 let mut before_signals = Vec::new();
                 if contains_edge && !watch_decides_edge {
                     for (_, v, net, _) in conditions.iter_mut() {
-                        *v = net.net.probe(mctx.gl(), &mut builder);
+                        *v = net.terminals.probe(mctx.gl(), &mut builder);
                         let mut flags = SignalFlags::EMPTY;
                         flags.set(SignalFlags::POKE_T0, v.mode().is_two_value());
                         let before_signal = mctx.gl.signals.insert(Signal {

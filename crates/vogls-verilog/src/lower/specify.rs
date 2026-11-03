@@ -16,7 +16,7 @@ use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::VSymbol;
 use crate::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
 use crate::lower::expression::lower_expr;
-use crate::lower::{eval_constant_expr, try_resolve_hident, unwrap_get_net_mut};
+use crate::lower::{eval_constant_expr, try_resolve_hident, unwrap_get_signal_mut};
 
 use super::{LowerContext, MutLowerContext, VValue};
 
@@ -216,14 +216,14 @@ pub fn lower_specify<'a>(
                     input.ident,
                     &mut mctx.diagnostics,
                 )?;
-                let VSymbol::Net(input_net) = &ctx.table[input_sid].content else {
+                let VSymbol::Signal(input_net) = &ctx.table[input_sid].content else {
                     mctx.diagnostics.not_yet_implemented(
                         ctx.arenas.get_item_span(input.ident),
                         "cannot be used as net",
                     );
                     return Err(());
                 };
-                let input = input_net.net.probe_signal();
+                let input = input_net.terminals.probe_signal();
                 let output_sid = try_resolve_hident(
                     scope,
                     &ctx.table,
@@ -231,14 +231,14 @@ pub fn lower_specify<'a>(
                     output.ident,
                     &mut mctx.diagnostics,
                 )?;
-                let VSymbol::Net(output_net) = &ctx.table[output_sid].content else {
+                let VSymbol::Signal(output_net) = &ctx.table[output_sid].content else {
                     mctx.diagnostics.not_yet_implemented(
                         ctx.arenas.get_item_span(output.ident),
                         "cannot be used as net",
                     );
                     return Err(());
                 };
-                let output = output_net.net.blocking_drive_signal();
+                let output = output_net.terminals.blocking_drive_signal();
 
                 if matches!(variant, PathDeclarationVariant::Full)
                     && input_net.ty.bit_length() != output_net.ty.bit_length()
@@ -349,8 +349,8 @@ pub fn lower_iopath<'a>(
     let mut proxy = mctx.gl.signals.get(output).unwrap().clone();
     proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
     let proxy = mctx.gl.signals.insert(proxy);
-    let net = unwrap_get_net_mut(&mut ctx.table, specify.sid);
-    let prev = net.net.set_specify(proxy);
+    let symbol = unwrap_get_signal_mut(&mut ctx.table, specify.sid);
+    let prev = symbol.terminals.set_specify(proxy);
     assert!(prev.is_none());
 
     for output_bitidx in 0..mctx.gl.signals[output].size.get() {

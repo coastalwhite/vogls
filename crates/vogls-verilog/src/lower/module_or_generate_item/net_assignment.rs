@@ -6,7 +6,7 @@ use crate::ast::AstId;
 use crate::ast::expr::Expr;
 use crate::ast::module::{ModuleOrGenerateItemDeclaration, NetDeclAssignment, NetDeclarationNets};
 use crate::ast::statement::Delay3;
-use crate::elaborate::{NetSymbol, VSymbol};
+use crate::elaborate::{SignalSymbol, VSymbol};
 use crate::lower::expression::{self, get_used_signals, lower_expr};
 use crate::lower::fuse::{
     FuseDestination, FuseResult, try_expr_to_fuse_sources, try_fuse_srcs_to_dsts,
@@ -87,7 +87,7 @@ fn assign_net<'a>(
     rvalue: AstId<'a, Expr<'a>>,
     delay3: Option<AstId<'a, Delay3<'a>>>,
 ) -> Result<(), ()> {
-    let VSymbol::Net(net_symbol) = &ctx.table[net].content else {
+    let VSymbol::Signal(net_symbol) = &ctx.table[net].content else {
         unreachable!("A net assignment should always be directly on a net");
     };
 
@@ -152,7 +152,7 @@ fn assign_net<'a>(
     });
     let assign = |mctx: &mut MutLowerContext, builder: &mut BasicBlockBuilder, value| {
         net_symbol
-            .net
+            .terminals
             .drive_blocking(mctx.gl(), builder, value, None);
         Ok(())
     };
@@ -176,7 +176,7 @@ pub fn try_fuse_net_assignment<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext,
     scope: SymbolId,
-    net_symbol: &NetSymbol,
+    symbol: &SignalSymbol,
     rvalue: AstId<'a, Expr<'a>>,
 ) -> FuseResult {
     mctx.fuse_srcs_scratch.clear();
@@ -184,9 +184,9 @@ pub fn try_fuse_net_assignment<'a>(
 
     // Destinations
     mctx.fuse_dsts_scratch.push(FuseDestination {
-        signal: net_symbol.net.blocking_drive_signal(),
-        slice: SignalSlice::with_end(net_symbol.ty.bit_length()),
-        ty: net_symbol.ty.into(),
+        signal: symbol.terminals.blocking_drive_signal(),
+        slice: SignalSlice::with_end(symbol.ty.bit_length()),
+        ty: symbol.ty.into(),
     });
 
     // Sources

@@ -22,7 +22,7 @@ use vogls_verilog::tokenizer::Tokenized;
 
 use crate::lowered_design::LowerErrorStage;
 use crate::plugin::VoglsPlugin;
-use crate::symbol::{NetValue, Symbol};
+use crate::symbol::{SignalValue, Symbol};
 use crate::{LowerError, LoweredDesign, ParsedDesign};
 
 #[derive(Clone)]
@@ -158,11 +158,11 @@ impl<'a> ElaboratedDesign<'a> {
     }
 
     pub fn get_signal_handle(&mut self, symbol: SymbolId) -> Option<SignalHandle> {
-        let VSymbol::Net(net) = &self.table[symbol].content else {
+        let VSymbol::Signal(net) = &self.table[symbol].content else {
             return None;
         };
 
-        let signal = net.net.probe_signal();
+        let signal = net.terminals.probe_signal();
         self.gl.signals[signal].flags |= SignalFlags::EXT_DRIVE | SignalFlags::EXT_PROBE;
         Some(SignalHandle { symbol })
     }
@@ -191,7 +191,7 @@ impl<'a> ElaboratedDesign<'a> {
                                         write!(f, "{}", v.clone().into_bits())?;
                                         Ok(())
                                     }
-                                    VSymbol::Net(s) => {
+                                    VSymbol::Signal(s) => {
                                         f.write_str("net")?;
                                         if s.ty.is_signed() {
                                             f.write_str(" signed")?;
@@ -448,7 +448,7 @@ impl<'a> ElaboratedDesign<'a> {
         }
         // for (sid, (signal, needs_mask)) in nba_signals.into_iter() {
         //     let (process, nba, mask) = create_nba_process(mctx.gl(), signal, needs_mask);
-        //     let VSymbol::Net(net) = &mut ctx.table[sid].content else {
+        //     let VSymbol::Signal(net) = &mut ctx.table[sid].content else {
         //         unreachable!();
         //     };
         //     net.net.nba = Some((process, nba, mask));
@@ -564,15 +564,15 @@ impl<'a> ElaboratedDesign<'a> {
 
         let mut table: FrozenSymbolTable<Symbol> = ctx.table.into();
         for symbol in table.symbol_id_iter() {
-            if let Symbol::Net(net) = &mut table[symbol].content {
-                match &mut net.net {
-                    NetValue::Signal(s) => {
+            if let Symbol::Signal(sym) = &mut table[symbol].content {
+                match &mut sym.value {
+                    SignalValue::Signal(s) => {
                         let prb = s.probe_signal().0;
                         if let Some(FuseTarget::Constant(value)) = prb_fuse.get(&prb) {
                             if prb_fuse.contains_key(&prb) {
                                 mctx.gl.signals.remove(prb);
                             }
-                            net.net = NetValue::Constant(value.clone());
+                            sym.value = SignalValue::Constant(value.clone());
                         } else {
                             s.map_prb(|s| match prb_fuse.get(&s) {
                                 None => (s, None),
@@ -590,7 +590,7 @@ impl<'a> ElaboratedDesign<'a> {
                             });
                         }
                     }
-                    NetValue::Constant(_) => unreachable!(),
+                    SignalValue::Constant(_) => unreachable!(),
                 }
             }
         }

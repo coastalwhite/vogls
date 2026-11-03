@@ -417,10 +417,12 @@ pub fn lower_sdf<'a>(
                                                 };
 
                                                 let (
-                                                    vogls_verilog::elaborate::VSymbol::Net(
+                                                    vogls_verilog::elaborate::VSymbol::Signal(
                                                         from_net,
                                                     ),
-                                                    vogls_verilog::elaborate::VSymbol::Net(to_net),
+                                                    vogls_verilog::elaborate::VSymbol::Signal(
+                                                        to_net,
+                                                    ),
                                                 ) = (
                                                     &ctx.table[from_sid].content,
                                                     &ctx.table[to_sid].content,
@@ -434,8 +436,8 @@ pub fn lower_sdf<'a>(
                                                     continue;
                                                 };
 
-                                                let from = from_net.net.probe_signal();
-                                                let to = to_net.net.blocking_drive_signal();
+                                                let from = from_net.terminals.probe_signal();
+                                                let to = to_net.terminals.blocking_drive_signal();
                                                 let property = TimingProperty { from, to };
                                                 let delays = parse_delvallist(
                                                     delval_list,
@@ -491,10 +493,12 @@ pub fn lower_sdf<'a>(
                                                 };
 
                                                 let (
-                                                    vogls_verilog::elaborate::VSymbol::Net(
+                                                    vogls_verilog::elaborate::VSymbol::Signal(
                                                         from_net,
                                                     ),
-                                                    vogls_verilog::elaborate::VSymbol::Net(to_net),
+                                                    vogls_verilog::elaborate::VSymbol::Signal(
+                                                        to_net,
+                                                    ),
                                                 ) = (
                                                     &ctx.table[from_sid].content,
                                                     &ctx.table[to_sid].content,
@@ -508,8 +512,8 @@ pub fn lower_sdf<'a>(
                                                     continue;
                                                 };
 
-                                                let from = from_net.net.probe_signal();
-                                                let to = to_net.net.blocking_drive_signal();
+                                                let from = from_net.terminals.probe_signal();
+                                                let to = to_net.terminals.blocking_drive_signal();
                                                 let property = TimingProperty { from, to };
                                                 let delays = parse_delvallist(
                                                     delval_list,

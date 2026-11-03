@@ -10,7 +10,7 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::lower::statement::{get_used_signals_stmt_or_null, lower_stmts};
-use crate::lower::{LowerContext, MutLowerContext, try_resolve_net};
+use crate::lower::{LowerContext, MutLowerContext, try_resolve_signal};
 
 /// Lower a Verilog `always` construct to Vogls IR.
 ///
@@ -129,14 +129,14 @@ fn extract_standing_signals<'a>(
                     return Ok(None);
                 }
 
-                let net = try_resolve_net(
+                let symbol = try_resolve_signal(
                     scope,
                     &ctx.table,
                     ctx.arenas,
                     *ast_ident,
                     &mut mctx.diagnostics,
                 )?;
-                let signal = net.net.probe_signal();
+                let signal = symbol.terminals.probe_signal();
                 signals.insert(signal);
             }
             let mut signals = signals.take_keys();

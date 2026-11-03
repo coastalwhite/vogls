@@ -34,14 +34,14 @@ use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::elaborate::{FunctionSymbol, TaskSymbol};
 use crate::lower::{
     Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr, resolve_hident,
-    try_resolve_hident, unwrap_get_module, unwrap_get_module_mut, unwrap_get_net_mut,
-    unwrap_get_param_mut,
+    try_resolve_hident, unwrap_get_module, unwrap_get_module_mut, unwrap_get_param_mut,
+    unwrap_get_signal_mut,
 };
 use crate::parser::DefaultNettype;
 
 use super::{
-    ModuleSymbol, Net, NetSymbol, VSymbol, VSymbolTable, VectorTransform, evaluate_net_msb_lsb,
-    port_declaration_to_info, try_table_insert,
+    ModuleSymbol, SignalKind, SignalSymbol, Terminals, VSymbol, VSymbolTable, VectorTransform,
+    evaluate_net_msb_lsb, port_declaration_to_info, try_table_insert,
 };
 
 pub enum ElabLevel<'a> {
@@ -117,8 +117,8 @@ impl<'a, 'b> ElaborationState<'a, 'b> {
         assert!(self.lvl_symbols.insert(sid, symbol).is_ok());
     }
 
-    fn dummy_net(&self) -> Net {
-        Net {
+    fn dummy_net(&self) -> Terminals {
+        Terminals {
             width: SCALAR_VSIZE,
             specify: None,
             ba: self.dummy_signal,
@@ -268,20 +268,21 @@ pub fn elaborate<'a>(
                     flags,
                     origin,
                 });
-                let net = Net {
+                let net = Terminals {
                     width: SCALAR_VSIZE,
                     specify: None,
                     ba: signal,
                     nba: None,
                 };
-                let symbol = NetSymbol {
+                let symbol = SignalSymbol {
+                    kind: SignalKind::Net,
                     ty: VType::SCALAR_NET,
                     dims: Vec::new(),
-                    net,
+                    terminals: net,
                     transform: VectorTransform::default(),
                     port_idx: None,
                 };
-                let symbol = VSymbol::Net(symbol);
+                let symbol = VSymbol::Signal(symbol);
 
                 let Ok(_) = try_table_insert(
                     ctx.arenas,
@@ -778,14 +779,15 @@ fn elaborate_module<'a, 'b>(
                     Port::PortExpression(id) => {
                         let PortExpression { references } = &**id;
                         let PortReference { identifier, .. } = &**references;
-                        let symbol = NetSymbol {
+                        let symbol = SignalSymbol {
+                            kind: SignalKind::Net,
                             ty: VType::SCALAR_NET,
                             dims: Vec::new(),
-                            net: st.dummy_net(),
+                            terminals: st.dummy_net(),
                             transform: VectorTransform::default(),
                             port_idx: Some(port_idx),
                         };
-                        let symbol = VSymbol::Net(symbol);
+                        let symbol = VSymbol::Signal(symbol);
                         let Ok(sid) = try_table_insert(
                             ctx.arenas,
                             &mut ctx.table,
@@ -817,14 +819,15 @@ fn elaborate_module<'a, 'b>(
 
                 for ident in identifiers.iter() {
                     let ident = ctx.arenas.to_item(ident);
-                    let symbol = NetSymbol {
+                    let symbol = SignalSymbol {
+                        kind: SignalKind::Net,
                         ty: VType::SCALAR_NET,
                         dims: Vec::new(),
-                        net: st.dummy_net(),
+                        terminals: st.dummy_net(),
                         transform: VectorTransform::default(),
                         port_idx: Some(port_idx),
                     };
-                    let symbol = VSymbol::Net(symbol);
+                    let symbol = VSymbol::Signal(symbol);
                     let Ok(sid) = try_table_insert(
                         ctx.arenas,
                         &mut ctx.table,
@@ -872,7 +875,7 @@ fn elaborate_module<'a, 'b>(
                         error = true;
                         continue;
                     };
-                    let VSymbol::Net(net) = &mut ctx.table[sid].content else {
+                    let VSymbol::Signal(net) = &mut ctx.table[sid].content else {
                         diagnostics.not_yet_implemented(
                             ctx.arenas.get_span(ident),
                             "non-port used as port",
@@ -985,14 +988,15 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                                 continue;
                             }
 
-                            let symbol = NetSymbol {
+                            let symbol = SignalSymbol {
+                                kind: SignalKind::Net,
                                 ty: VType::SCALAR_NET,
                                 dims: Vec::new(),
-                                net: st.dummy_net(),
+                                terminals: st.dummy_net(),
                                 transform: VectorTransform::default(),
                                 port_idx: None,
                             };
-                            let symbol = VSymbol::Net(symbol);
+                            let symbol = VSymbol::Signal(symbol);
 
                             let Ok(sid) = try_table_insert(
                                 ctx.arenas,
@@ -1030,14 +1034,15 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                                 continue;
                             }
 
-                            let symbol = NetSymbol {
+                            let symbol = SignalSymbol {
+                                kind: SignalKind::Net,
                                 ty: VType::SCALAR_NET,
                                 dims: Vec::new(),
-                                net: st.dummy_net(),
+                                terminals: st.dummy_net(),
                                 transform: VectorTransform::default(),
                                 port_idx: None,
                             };
-                            let symbol = VSymbol::Net(symbol);
+                            let symbol = VSymbol::Signal(symbol);
 
                             let Ok(sid) = try_table_insert(
                                 ctx.arenas,
@@ -1745,14 +1750,15 @@ fn extend_variable_type_sids<'a, 'b>(
 ) -> Result<(), ()> {
     let mut error = false;
     for var_type in var_types.iter() {
-        let symbol = NetSymbol {
+        let symbol = SignalSymbol {
+            kind: SignalKind::Variable,
             ty: VType::SCALAR_NET,
             dims: Vec::new(),
-            net: st.dummy_net(),
+            terminals: st.dummy_net(),
             transform: VectorTransform::default(),
             port_idx: None,
         };
-        let symbol = VSymbol::Net(symbol);
+        let symbol = VSymbol::Signal(symbol);
 
         let Ok(sid) = try_table_insert(
             ctx.arenas,
@@ -2303,8 +2309,9 @@ pub fn finalize_symbol<'a>(
                     ),
                 ),
             };
-            let net = unwrap_get_net_mut(&mut ctx.table, sid);
-            net.net = super::new_net(
+            let symbol = unwrap_get_signal_mut(&mut ctx.table, sid);
+            symbol.kind = SignalKind::Variable;
+            symbol.terminals = super::new_terminals(
                 gl,
                 ctx.logic_mode,
                 ctx.arenas,
@@ -2313,9 +2320,9 @@ pub fn finalize_symbol<'a>(
                 *identifier,
                 initialize,
             );
-            net.dims = dims;
-            net.transform = transform;
-            net.ty = ty;
+            symbol.dims = dims;
+            symbol.transform = transform;
+            symbol.ty = ty;
         }
         InLevelSymbol::Net(NetInLevelSymbol { decl, dim, ident }) => {
             let NetDeclaration {
@@ -2356,11 +2363,13 @@ pub fn finalize_symbol<'a>(
                     *dims,
                 )?,
             };
-            let net = unwrap_get_net_mut(&mut ctx.table, sid);
-            net.net = super::new_net(gl, ctx.logic_mode, ctx.arenas, &ty, &dims, *ident, None);
-            net.dims = dims;
-            net.transform = transform;
-            net.ty = ty;
+            let symbol = unwrap_get_signal_mut(&mut ctx.table, sid);
+            symbol.kind = SignalKind::Net;
+            symbol.terminals =
+                super::new_terminals(gl, ctx.logic_mode, ctx.arenas, &ty, &dims, *ident, None);
+            symbol.dims = dims;
+            symbol.transform = transform;
+            symbol.ty = ty;
         }
         InLevelSymbol::Integer(id) => {
             let VariableType {
@@ -2397,8 +2406,9 @@ pub fn finalize_symbol<'a>(
                     ),
                 ),
             };
-            let net = unwrap_get_net_mut(&mut ctx.table, sid);
-            net.net = super::new_net(
+            let symbol = unwrap_get_signal_mut(&mut ctx.table, sid);
+            symbol.kind = SignalKind::Variable;
+            symbol.terminals = super::new_terminals(
                 gl,
                 ctx.logic_mode,
                 ctx.arenas,
@@ -2407,8 +2417,8 @@ pub fn finalize_symbol<'a>(
                 *identifier,
                 initialize,
             );
-            net.dims = dims;
-            net.ty = ty;
+            symbol.dims = dims;
+            symbol.ty = ty;
         }
         InLevelSymbol::Time(id) => {
             let VariableType {
@@ -2445,8 +2455,9 @@ pub fn finalize_symbol<'a>(
                     ),
                 ),
             };
-            let net = unwrap_get_net_mut(&mut ctx.table, sid);
-            net.net = super::new_net(
+            let symbol = unwrap_get_signal_mut(&mut ctx.table, sid);
+            symbol.kind = SignalKind::Variable;
+            symbol.terminals = super::new_terminals(
                 gl,
                 ctx.logic_mode,
                 ctx.arenas,
@@ -2455,8 +2466,8 @@ pub fn finalize_symbol<'a>(
                 *identifier,
                 initialize,
             );
-            net.dims = dims;
-            net.ty = ty;
+            symbol.dims = dims;
+            symbol.ty = ty;
         }
         InLevelSymbol::Real(id) => {
             let VariableType {
@@ -2493,8 +2504,9 @@ pub fn finalize_symbol<'a>(
                     ),
                 ),
             };
-            let net = unwrap_get_net_mut(&mut ctx.table, sid);
-            net.net = super::new_net(
+            let symbol = unwrap_get_signal_mut(&mut ctx.table, sid);
+            symbol.kind = SignalKind::Variable;
+            symbol.terminals = super::new_terminals(
                 gl,
                 LogicMode::TwoValue,
                 ctx.arenas,
@@ -2503,16 +2515,18 @@ pub fn finalize_symbol<'a>(
                 *identifier,
                 initialize,
             );
-            net.dims = dims;
-            net.ty = VType::Real;
+            symbol.dims = dims;
+            symbol.ty = VType::Real;
         }
         InLevelSymbol::Port(PortInLevelSymbol { decl, ident }) => {
-            let (ty, transform, _, _) =
+            let (kind, ty, transform, _, _) =
                 port_declaration_to_info(gl, ctx.arenas, *decl, scope, &ctx.table, diagnostics)?;
-            let net = unwrap_get_net_mut(&mut ctx.table, sid);
-            net.net = super::new_net(gl, ctx.logic_mode, ctx.arenas, &ty, &[], *ident, None);
-            net.transform = transform;
-            net.ty = ty;
+            let symbol = unwrap_get_signal_mut(&mut ctx.table, sid);
+            symbol.kind = kind;
+            symbol.terminals =
+                super::new_terminals(gl, ctx.logic_mode, ctx.arenas, &ty, &[], *ident, None);
+            symbol.transform = transform;
+            symbol.ty = ty;
         }
         InLevelSymbol::Task(_) => {
             super::function::elaborate_task(gl, sid, ctx, diagnostics)?;
