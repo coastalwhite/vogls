@@ -667,6 +667,17 @@ pub enum BinaryOp {
     /// Copy Z from rhs into lhs
     CopyZ,
 
+    /// Resolution of two equal-strength drivers of a `wire`.
+    /// Per IEEE Std 1364-2005 table 7-2,
+    ///
+    ///   | x  z  1  0
+    /// --+-----------
+    /// x | x  x  x  x
+    /// z | x  z  1  0
+    /// 1 | x  1  1  x
+    /// 0 | x  0  x  0
+    ResolveWire,
+
     /// Minimum of lhs and rhs
     Min,
     /// Maximum of lhs and rhs
@@ -1456,6 +1467,7 @@ impl BinaryOp {
             O::Concat => Bits::concatenate(lhs, rhs),
             O::CopyX => Bits::copyx(lhs, rhs),
             O::CopyZ => Bits::copyz(lhs, rhs),
+            O::ResolveWire => Bits::resolve_wire(lhs, rhs),
 
             O::Min => Bits::min(lhs, rhs),
             O::Max => Bits::max(lhs, rhs),
@@ -1561,6 +1573,7 @@ impl BinaryOp {
             | O::Modulus0
             | O::CopyX
             | O::CopyZ
+            | O::ResolveWire
             | O::Min
             | O::Max => {
                 if lhs != rhs {
@@ -1639,7 +1652,7 @@ impl BinaryOp {
                     rhs: dst_mode,
                 }
             }
-            O::DivideX | O::ModulusX => {
+            O::DivideX | O::ModulusX | O::ResolveWire => {
                 let convert_mode = lhs.max(rhs);
                 BinaryOutputMode {
                     dst: LogicMode::FourValue,
@@ -1700,6 +1713,9 @@ impl BinaryOp {
 
             Self::DivideX | Self::ModulusX => None,
             Self::LogicalShiftLeft | Self::LogicalShiftRight | Self::ArithmeticShiftRight => None,
+
+            // `fvtotv(resolve(a, b)) != resolve(tv(a), tv(b))`
+            Self::ResolveWire => None,
 
             Self::RealAdd
             | Self::RealSub
@@ -2144,6 +2160,15 @@ impl LogicMode {
     #[inline(always)]
     pub fn is_four_value(self) -> bool {
         matches!(self, Self::FourValue)
+    }
+
+    /// Number of bit planes a value of this mode occupies.
+    #[inline(always)]
+    pub fn num_planes(self) -> usize {
+        match self {
+            Self::TwoValue => 1,
+            Self::FourValue => 2,
+        }
     }
 }
 

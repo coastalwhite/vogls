@@ -962,6 +962,17 @@ fn lower_instruction(
                 (O::CopyZ, _, Some(size), M::FourValue, _) => bce.fv_copyz(rd, rs1, rs2, size),
                 (O::CopyZ, _, None, M::FourValue, _) => bce.heap_fv_copyz(rd, rs1, rs2, lhs_size),
 
+                (O::ResolveWire, _, Some(size), M::TwoValue, _) => {
+                    bce.tv_resolve_wire(rd, rs1, rs2, size)
+                }
+                (O::ResolveWire, _, None, M::TwoValue, _) => {
+                    bce.heap_tv_resolve_wire(rd, rs1, rs2, dst_size)
+                }
+                (O::ResolveWire, _, Some(_), M::FourValue, _) => bce.fv_resolve_wire(rd, rs1, rs2),
+                (O::ResolveWire, _, None, M::FourValue, _) => {
+                    bce.heap_fv_resolve_wire(rd, rs1, rs2, dst_size)
+                }
+
                 (O::Min, _, Some(_), M::TwoValue, _) => bce.min(rd, rs1, rs2),
                 (O::Min, _, None, M::TwoValue, _) => bce.heap_tv_min(rd, rs1, rs2, lhs_size),
                 (O::Min, _, Some(size), M::FourValue, _) => bce.fv_min(rd, rs1, rs2, size),
