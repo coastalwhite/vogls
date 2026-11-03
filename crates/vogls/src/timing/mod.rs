@@ -13,14 +13,11 @@ use vogls_sdf::{
 };
 use vogls_utils::{IterSliceContinguous, VgHashMap};
 use vogls_verilog::elaborate::VSymbol;
+use vogls_verilog::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
 use vogls_verilog::lower::specify::{
     Condition, LowerIoPathScratches, SpecifyOutput, SpecifyPath, lower_iopath,
 };
 use vogls_verilog::lower::{Diagnostics, LowerContext, LowerErrorReason, MutLowerContext};
-
-use self::delay_pointer::{DelayPtr, DelayPtrVariant};
-
-mod delay_pointer;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct TimingProperty {
