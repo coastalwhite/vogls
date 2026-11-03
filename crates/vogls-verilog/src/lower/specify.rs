@@ -1,9 +1,8 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::bits::arithmetic::FvLogicValue;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    Bits, GlobalContext, LogicMode, ProcessBuilder, ProcessKind, SCALAR_VSIZE, Signal, SignalFlags,
-    SignalKey, TIME_VSIZE, VariableKey,
+    Bits, ProcessBuilder, ProcessKind, SCALAR_VSIZE, Signal, SignalFlags, SignalKey, TIME_VSIZE,
+    Time, VariableKey,
 };
 use vogls_utils::VgHashMap;
 
@@ -15,6 +14,7 @@ use crate::ast::specify::{
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::VSymbol;
+use crate::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
 use crate::lower::expression::lower_expr;
 use crate::lower::{eval_constant_expr, try_resolve_hident, unwrap_get_net_mut};
 
@@ -69,7 +69,7 @@ pub struct SpecifyOutput<'a> {
 
 pub struct SpecifyPath<'a> {
     pub condition: Condition<'a>,
-    pub delays: Delays,
+    pub delays: DelayPtr,
     pub span: TokenRange,
 }
 
@@ -83,361 +83,6 @@ pub struct LowerIoPathScratches {
     inputs_before: Vec<(SignalKey, VariableKey, SignalKey)>,
     /// The condition under which each path of an input applies, where `None` means always.
     conditions: Vec<Option<VariableKey>>,
-}
-
-// @Performance.
-//
-// This structure is huge... 296 bytes at time of writing. Most of the time, this should only be
-// around 16 bytes.
-//
-// We should probably have a vector that contains all the times and a 64-bit DelayPtr that points
-// into this vector. We could use 12 bits to indicate whether that delay is `min:typ:max` or `typ`
-// and 3 bits to indicate whether it is 1, 2, 3, 6 or 12 delays. That leaves 49 bits to point into
-// the delay vector. That is plenty.
-//
-// Then again. This structure is generally very short lived so it is not that much of a memoryhog
-// I guess.
-#[derive(Clone)]
-pub enum Delays {
-    One(Delay),
-    Two {
-        trise: Delay,
-        tfall: Delay,
-    },
-    Three {
-        trise: Delay,
-        tfall: Delay,
-        tz: Delay,
-    },
-    Six {
-        t01: Delay,
-        t10: Delay,
-        t0z: Delay,
-        tz1: Delay,
-        t1z: Delay,
-        tz0: Delay,
-    },
-    Twelve {
-        t01: Delay,
-        t10: Delay,
-        t0z: Delay,
-        tz1: Delay,
-        t1z: Delay,
-        tz0: Delay,
-
-        t0x: Delay,
-        tx1: Delay,
-        t1x: Delay,
-        tx0: Delay,
-        txz: Delay,
-        tzx: Delay,
-    },
-}
-impl Delays {
-    fn calculate(
-        &self,
-        gl: &mut GlobalContext,
-        builder: &mut vogls_ir::BasicBlockBuilder,
-        tstart: SignalKey,
-        tend: SignalKey,
-        bitidx: u32,
-    ) -> VariableKey {
-        let tstart_mode = gl.signals[tstart].mode;
-        let tend_mode = gl.signals[tend].mode;
-
-        assert_eq!(tstart_mode, tend_mode);
-
-        if let Delays::One(delay) = self {
-            // @Performance: At the moment, this is still a variable wait. We could propagate this
-            // constant up so that the wait can be become a constant wait. This should allow for
-            // better optimization / codegen further on.
-            return builder.constant_u64(gl, delay.get());
-        }
-
-        // Fast path: Two value logic.
-        if tstart_mode == LogicMode::TwoValue {
-            let (Delays::Two {
-                trise: t01,
-                tfall: t10,
-            }
-            | Delays::Three {
-                trise: t01,
-                tfall: t10,
-                ..
-            }
-            | Delays::Six { t01, t10, .. }
-            | Delays::Twelve { t01, t10, .. }) = self
-            else {
-                unreachable!("Delays::One handled before.");
-            };
-
-            let (t01, t10) = (t01.get(), t10.get());
-            let mut out_delay = builder.constant_u64(gl, t01);
-            if t01 != t10 {
-                let tstart = builder.probe(gl, tstart);
-                let tstart = builder.select_bit_constant(gl, tstart, bitidx);
-                let tend = builder.probe(gl, tend);
-                let tend = builder.select_bit_constant(gl, tend, bitidx);
-                let is_t10 = builder.ornot(gl, tstart, tend);
-                let t10_delay = builder.constant_u64(gl, t10);
-                out_delay = builder.select(gl, is_t10, t10_delay, out_delay)
-            }
-            return out_delay;
-        }
-
-        if let Delays::Two { trise, tfall } = self {
-            // Derived from Chapter 14 of IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001)
-            //
-            // | f | t | delay             | C |
-            // |---|---|-------------------|---|
-            // | 0 | 1 | trise             | 0 |
-            // | 1 | 0 | tfall             | 1 |
-            // | 0 | z | trise             | 0 |
-            // | z | 1 | trise             | 0 |
-            // | 1 | z | tfall             | 1 |
-            // | z | 0 | tfall             | 1 |
-            // | 0 | x | trise             | 0 |
-            // | x | 1 | trise             | 0 |
-            // | 1 | x | tfall             | 1 |
-            // | x | 0 | tfall             | 1 |
-            // | x | z | max(trise, tfall) | 2 |
-            // | z | x | min(trise, tfall) | 3 |
-            //
-            // C0: (t == 1 || f == 0) -> trise
-            // C1: (f == 1 || t == 0) -> tfall
-            // C2: ({f,t} == 2'bxz)   -> max(trise, tfall)
-            // C3: ({f,t} == 2'bzx)   -> min(trise, tfall)
-
-            let trise = trise.get();
-            let tfall = tfall.get();
-
-            let mut out_delay = builder.constant_u64(gl, trise);
-            if trise != tfall {
-                let tstart = builder.probe(gl, tstart);
-                let tstart = builder.select_bit_constant(gl, tstart, bitidx);
-                let tend = builder.probe(gl, tend);
-                let tend = builder.select_bit_constant(gl, tend, bitidx);
-                let x = builder.constant(gl, Bits::from(FvLogicValue::X));
-                let z = builder.constant(gl, Bits::from(FvLogicValue::Z));
-                let zero = builder.constant(gl, Bits::from(false));
-                let one = builder.constant(gl, Bits::from(true));
-
-                // C1
-                let start_is_one = builder.case_equals(gl, tstart, one);
-                let end_is_zero = builder.case_equals(gl, tend, zero);
-                let is_c1 = builder.or(gl, start_is_one, end_is_zero);
-                let c1_delay = builder.constant_u64(gl, tfall);
-                out_delay = builder.select(gl, is_c1, c1_delay, out_delay);
-
-                // C2
-                let start_is_x = builder.case_equals(gl, tstart, x);
-                let end_is_z = builder.case_equals(gl, tend, z);
-                let is_c2 = builder.and(gl, start_is_x, end_is_z);
-                let c2_delay = builder.constant_u64(gl, u64::max(trise, tfall));
-                out_delay = builder.select(gl, is_c2, c2_delay, out_delay);
-
-                // C3
-                let start_is_z = builder.case_equals(gl, tstart, z);
-                let end_is_x = builder.case_equals(gl, tend, x);
-                let is_c3 = builder.and(gl, start_is_z, end_is_x);
-                let c3_delay = builder.constant_u64(gl, u64::min(trise, tfall));
-                out_delay = builder.select(gl, is_c3, c3_delay, out_delay);
-            }
-            return out_delay;
-        }
-
-        if let Delays::Three { trise, tfall, tz } = self {
-            // Derived from Chapter 14 of IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001)
-            //
-            // | f | t | delay             | C |
-            // |---|---|-------------------|---|
-            // | 0 | 1 | trise             | 0 |
-            // | 1 | 0 | tfall             | 1 |
-            // | 0 | z | tz                | 2 |
-            // | z | 1 | trise             | 0 |
-            // | 1 | z | tz                | 2 |
-            // | z | 0 | tfall             | 1 |
-            // | 0 | x | min(tz, trise)    | 3 |
-            // | x | 1 | trise             | 0 |
-            // | 1 | x | min(tz, tfall)    | 4 |
-            // | x | 0 | tfall             | 1 |
-            // | x | z | tz                | 2 |
-            // | z | x | min(tfall, trise) | 5 |
-            //
-            // C0: (t == 1 || f == 0) -> trise
-            // C1: (f == 1 || t == 0) -> tfall
-            // C2: (t == 1'bz)        -> tz
-            // C3: ({f,t} == 2'b0x)   -> min(tz, trise)
-            // C4: ({f,t} == 2'b1x)   -> min(tz, tfall)
-            // C5: ({f,t} == 2'bzx)   -> min(tfall, trise)
-
-            let trise_delay = trise.get();
-            let tfall_delay = tfall.get();
-            let tz_delay = tz.get();
-
-            let mut out_delay = builder.constant_u64(gl, trise_delay);
-            if trise_delay != tfall_delay || trise_delay != tz_delay {
-                let tstart = builder.probe(gl, tstart);
-                let tstart = builder.select_bit_constant(gl, tstart, bitidx);
-                let tend = builder.probe(gl, tend);
-                let tend = builder.select_bit_constant(gl, tend, bitidx);
-                let zero = builder.constant(gl, Bits::from(false));
-                let one = builder.constant(gl, Bits::from(true));
-                let x = builder.constant(gl, Bits::from(FvLogicValue::X));
-                let z = builder.constant(gl, Bits::from(FvLogicValue::Z));
-
-                // C1
-                if trise_delay != tfall_delay {
-                    let start_is_one = builder.case_equals(gl, tstart, one);
-                    let end_is_zero = builder.case_equals(gl, tend, zero);
-                    let is_c1 = builder.or(gl, start_is_one, end_is_zero);
-                    let c1_delay = builder.constant_u64(gl, tfall_delay);
-                    out_delay = builder.select(gl, is_c1, c1_delay, out_delay);
-                }
-
-                // C2
-                if trise_delay != tz_delay {
-                    let is_c2 = builder.case_equals(gl, tend, z);
-                    let c2_delay = builder.constant_u64(gl, tz_delay);
-                    out_delay = builder.select(gl, is_c2, c2_delay, out_delay);
-                }
-
-                // C3
-                if trise_delay != tz_delay {
-                    let start_is_zero = builder.case_equals(gl, tstart, zero);
-                    let end_is_x = builder.case_equals(gl, tend, x);
-                    let is_c3 = builder.and(gl, start_is_zero, end_is_x);
-                    let c3_delay = builder.constant_u64(gl, u64::min(tz_delay, trise_delay));
-                    out_delay = builder.select(gl, is_c3, c3_delay, out_delay);
-                }
-
-                // C4
-                if tfall_delay != tz_delay {
-                    let start_is_one = builder.case_equals(gl, tstart, one);
-                    let end_is_x = builder.case_equals(gl, tend, x);
-                    let is_c4 = builder.and(gl, start_is_one, end_is_x);
-                    let c4_delay = builder.constant_u64(gl, u64::min(tz_delay, tfall_delay));
-                    out_delay = builder.select(gl, is_c4, c4_delay, out_delay);
-                }
-
-                // C5
-                if trise_delay != tfall_delay {
-                    let start_is_z = builder.case_equals(gl, tstart, z);
-                    let end_is_x = builder.case_equals(gl, tend, x);
-
-                    let is_c5 = builder.and(gl, start_is_z, end_is_x);
-                    let c5_delay = builder.constant_u64(gl, u64::min(trise_delay, tfall_delay));
-                    out_delay = builder.select(gl, is_c5, c5_delay, out_delay);
-                }
-            }
-            return out_delay;
-        }
-
-        let (t01, t10, t0z, tz1, t1z, tz0, t0x, tx1, t1x, tx0, txz, tzx) = match self {
-            Delays::Six {
-                t01,
-                t10,
-                t0z,
-                tz1,
-                t1z,
-                tz0,
-            } => {
-                let (t01, t10, t0z, tz1, t1z, tz0) = (
-                    t01.get(),
-                    t10.get(),
-                    t0z.get(),
-                    tz1.get(),
-                    t1z.get(),
-                    tz0.get(),
-                );
-                (
-                    t01,
-                    t10,
-                    t0z,
-                    tz1,
-                    t1z,
-                    tz0,
-                    t0z.min(t01),
-                    tz1.max(t01),
-                    t1z.min(t10),
-                    tz0.max(t10),
-                    t1z.max(t0z),
-                    tz1.min(tz0),
-                )
-            }
-            Delays::Twelve {
-                t01,
-                t10,
-                t0z,
-                tz1,
-                t1z,
-                tz0,
-                t0x,
-                tx1,
-                t1x,
-                tx0,
-                txz,
-                tzx,
-            } => (
-                t01.get(),
-                t10.get(),
-                t0z.get(),
-                tz1.get(),
-                t1z.get(),
-                tz0.get(),
-                t0x.get(),
-                tx1.get(),
-                t1x.get(),
-                tx0.get(),
-                txz.get(),
-                tzx.get(),
-            ),
-            _ => unreachable!(),
-        };
-
-        // @Performance
-        // We should be able to do some better delay merging here.
-        let mut out_delay = builder.constant_u64(gl, t01);
-        let tstart = builder.probe(gl, tstart);
-        let tstart = builder.select_bit_constant(gl, tstart, bitidx);
-        let tend = builder.probe(gl, tend);
-        let tend = builder.select_bit_constant(gl, tend, bitidx);
-        let zero = builder.constant(gl, Bits::from(false));
-        let one = builder.constant(gl, Bits::from(true));
-        let x = builder.constant(gl, Bits::from(FvLogicValue::X));
-        let z = builder.constant(gl, Bits::from(FvLogicValue::Z));
-        macro_rules! transition {
-            ($t:expr, $l:expr, $r:expr) => {
-                if t01 != $t {
-                    let is_start = builder.case_equals(gl, tstart, $l);
-                    let is_end = builder.case_equals(gl, tend, $r);
-                    let is_transition = builder.and(gl, is_start, is_end);
-                    let transition_time = builder.constant_u64(gl, $t);
-                    out_delay = builder.select(gl, is_transition, transition_time, out_delay);
-                }
-            };
-        }
-        transition!(t10, one, zero);
-        transition!(t0z, zero, z);
-        transition!(tz1, z, one);
-        transition!(t1z, one, z);
-        transition!(tz0, z, zero);
-        transition!(t0x, zero, x);
-        transition!(tx1, x, one);
-        transition!(t1x, one, x);
-        transition!(tx0, x, zero);
-        transition!(txz, x, z);
-        transition!(tzx, z, x);
-
-        out_delay
-    }
-}
-
-#[derive(Clone)]
-pub struct Delay {
-    pub min: u64,
-    pub typ: u64,
-    pub max: u64,
 }
 
 fn eval_delay_to_ticks<'a>(
@@ -470,41 +115,27 @@ fn eval_delay_to_ticks<'a>(
     Ok(value.delay_to_ticks(ctx.time_scale, ctx.time_resolution))
 }
 
-impl Delay {
-    fn eval<'a>(
-        ctx: &LowerContext<'a, '_>,
-        mctx: &mut MutLowerContext,
-        scope: SymbolId,
-        id: AstId<'a, ConstantMinTypMaxExpression<'a>>,
-    ) -> Result<Self, ()> {
-        match &*id {
-            ConstantMinTypMaxExpression::Single(delay) => {
-                let delay = eval_delay_to_ticks(ctx, mctx, scope, *delay)?;
-                Ok(Self {
-                    min: delay,
-                    typ: delay,
-                    max: delay,
-                })
-            }
-            ConstantMinTypMaxExpression::MinTypMax { min, typ, max } => Ok(Self {
-                min: eval_delay_to_ticks(ctx, mctx, scope, *min)?,
-                typ: eval_delay_to_ticks(ctx, mctx, scope, *typ)?,
-                max: eval_delay_to_ticks(ctx, mctx, scope, *max)?,
-            }),
+/// Evaluate one path delay and append it to the delay store.
+fn push_delay<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext,
+    scope: SymbolId,
+    id: AstId<'a, ConstantMinTypMaxExpression<'a>>,
+    delays: &mut Vec<Time>,
+) -> Result<bool, ()> {
+    match &*id {
+        ConstantMinTypMaxExpression::Single(delay) => {
+            let delay = eval_delay_to_ticks(ctx, mctx, scope, *delay)?;
+            delays.push(Time(delay));
+            Ok(false)
         }
-    }
-
-    fn is_single(&self) -> bool {
-        self.min == self.typ && self.typ == self.max
-    }
-
-    fn get(&self) -> u64 {
-        if self.is_single() {
-            return self.typ;
+        ConstantMinTypMaxExpression::MinTypMax { min, typ, max } => {
+            let min = eval_delay_to_ticks(ctx, mctx, scope, *min)?;
+            let typ = eval_delay_to_ticks(ctx, mctx, scope, *typ)?;
+            let max = eval_delay_to_ticks(ctx, mctx, scope, *max)?;
+            delays.extend([Time(min), Time(typ), Time(max)]);
+            Ok(true)
         }
-
-        // @TODO: Make this configurable
-        self.typ
     }
 }
 
@@ -514,9 +145,12 @@ pub fn lower_specify<'a>(
     scope: SymbolId,
 
     items: AstIdRange<'a, SpecifyBlockItem<'a>>,
+    delays: &mut Vec<Time>,
     outs_lut: &mut VgHashMap<SignalKey, usize>,
     outs: &mut Vec<(SignalKey, SpecifyOutput<'a>)>,
 ) -> Result<(), ()> {
+    delays.clear();
+
     for item in items.iter() {
         match &*item {
             SpecifyBlockItem::SpecParamDeclaration => todo!(),
@@ -637,67 +271,24 @@ pub fn lower_specify<'a>(
                     return Err(());
                 }
 
-                let delays = &**path_delay_value;
-                let delays = delays.list_of_delay_expressions;
-                let delays = match delays.len() {
-                    1 => Delays::One(Delay::eval(ctx, mctx, scope, delays.get(0))?),
-                    2 => {
-                        let trise = Delay::eval(ctx, mctx, scope, delays.get(0))?;
-                        let tfall = Delay::eval(ctx, mctx, scope, delays.get(1))?;
-                        Delays::Two { trise, tfall }
-                    }
-                    3 => {
-                        let trise = Delay::eval(ctx, mctx, scope, delays.get(0))?;
-                        let tfall = Delay::eval(ctx, mctx, scope, delays.get(1))?;
-                        let tz = Delay::eval(ctx, mctx, scope, delays.get(2))?;
-                        Delays::Three { trise, tfall, tz }
-                    }
-                    6 => {
-                        let t01 = Delay::eval(ctx, mctx, scope, delays.get(0))?;
-                        let t10 = Delay::eval(ctx, mctx, scope, delays.get(1))?;
-                        let t0z = Delay::eval(ctx, mctx, scope, delays.get(2))?;
-                        let tz1 = Delay::eval(ctx, mctx, scope, delays.get(3))?;
-                        let t1z = Delay::eval(ctx, mctx, scope, delays.get(4))?;
-                        let tz0 = Delay::eval(ctx, mctx, scope, delays.get(5))?;
-                        Delays::Six {
-                            t01,
-                            t10,
-                            t0z,
-                            tz1,
-                            t1z,
-                            tz0,
-                        }
-                    }
-                    12 => {
-                        let t01 = Delay::eval(ctx, mctx, scope, delays.get(0))?;
-                        let t10 = Delay::eval(ctx, mctx, scope, delays.get(1))?;
-                        let t0z = Delay::eval(ctx, mctx, scope, delays.get(2))?;
-                        let tz1 = Delay::eval(ctx, mctx, scope, delays.get(3))?;
-                        let t1z = Delay::eval(ctx, mctx, scope, delays.get(4))?;
-                        let tz0 = Delay::eval(ctx, mctx, scope, delays.get(5))?;
-                        let t0x = Delay::eval(ctx, mctx, scope, delays.get(6))?;
-                        let tx1 = Delay::eval(ctx, mctx, scope, delays.get(7))?;
-                        let t1x = Delay::eval(ctx, mctx, scope, delays.get(8))?;
-                        let tx0 = Delay::eval(ctx, mctx, scope, delays.get(9))?;
-                        let txz = Delay::eval(ctx, mctx, scope, delays.get(10))?;
-                        let tzx = Delay::eval(ctx, mctx, scope, delays.get(11))?;
-                        Delays::Twelve {
-                            t01,
-                            t10,
-                            t0z,
-                            tz1,
-                            t1z,
-                            tz0,
-                            t0x,
-                            tx1,
-                            t1x,
-                            tx0,
-                            txz,
-                            tzx,
-                        }
-                    }
-                    _ => unreachable!(),
+                let exprs = path_delay_value.list_of_delay_expressions;
+                use DelayPtrVariant as V;
+                let delay_variant = match exprs.len() {
+                    1 => V::One,
+                    2 => V::Two,
+                    3 => V::Three,
+                    6 => V::Six,
+                    12 => V::Twelve,
+                    // The parser only accepts these counts.
+                    n => unreachable!("{n} path delays"),
                 };
+                let offset = delays.len() as u64;
+                let mut triple_mask = 0u16;
+                for (i, expr) in exprs.iter().enumerate() {
+                    let is_triple = push_delay(ctx, mctx, scope, expr, delays)?;
+                    triple_mask |= u16::from(is_triple) << i;
+                }
+                let delays = DelayPtr::new(offset, delay_variant, triple_mask);
 
                 let out = *outs_lut.entry(output).or_insert_with(|| {
                     let idx = outs.len();
@@ -734,7 +325,7 @@ pub fn lower_specify<'a>(
 
     outs_lut.clear();
     for (output, specify) in outs.drain(..) {
-        lower_iopath(ctx, mctx, scope, output, specify, &mut scratches)?;
+        lower_iopath(ctx, mctx, scope, output, specify, delays, &mut scratches)?;
     }
 
     Ok(())
@@ -746,6 +337,7 @@ pub fn lower_iopath<'a>(
     scope: SymbolId,
     output: SignalKey,
     specify: SpecifyOutput,
+    delays: &[Time],
     scratches: &mut LowerIoPathScratches,
 ) -> Result<(), ()> {
     let LowerIoPathScratches {
@@ -916,9 +508,14 @@ pub fn lower_iopath<'a>(
                     }
                 }
 
-                let delay =
-                    path.delays
-                        .calculate(mctx.gl(), &mut builder, output, proxy, output_bitidx);
+                let delay = path.delays.calculate(
+                    delays,
+                    mctx.gl(),
+                    &mut builder,
+                    output,
+                    proxy,
+                    output_bitidx,
+                );
                 let path_wait_time = builder.min(mctx.gl(), new_wait_time, delay);
 
                 new_wait_time = match condition {

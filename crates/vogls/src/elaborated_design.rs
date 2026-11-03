@@ -310,6 +310,7 @@ impl<'a> ElaboratedDesign<'a> {
     pub fn annotate_specify<'b>(&'b mut self) -> Result<&'b mut Self, AnnotationError<'a, 'b>> {
         let result = self.with_context(|ctx, mctx, module_lut| {
             let mut error = false;
+            let mut delays = Vec::new();
             let mut outs_lut = VgHashMap::default();
             let mut outs = Vec::new();
 
@@ -331,6 +332,7 @@ impl<'a> ElaboratedDesign<'a> {
                                 mctx,
                                 key,
                                 specify_block.items,
+                                &mut delays,
                                 &mut outs_lut,
                                 &mut outs,
                             )
