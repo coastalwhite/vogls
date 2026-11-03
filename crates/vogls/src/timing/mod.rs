@@ -570,12 +570,11 @@ pub fn lower_sdf<'a>(
 
         for (p, c) in paths_to_output {
             inputs.insert(p.from, paths.len());
-            let delays = c.delays.materialize(&delays);
             paths.push((
                 p.from,
                 vec![SpecifyPath {
                     condition: Condition::None,
-                    delays,
+                    delays: c.delays,
                     span: TokenRange::default(),
                 }],
             ));
@@ -583,7 +582,7 @@ pub fn lower_sdf<'a>(
 
         let specify = SpecifyOutput { sid, inputs, paths };
 
-        lower_iopath(ctx, mctx, sid, output, specify, &mut scratches)?;
+        lower_iopath(ctx, mctx, sid, output, specify, &delays, &mut scratches)?;
     }
 
     Ok(())
