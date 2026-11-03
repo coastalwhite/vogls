@@ -37,8 +37,8 @@ use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::time::{TimeFormat, TimeResolution};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
-    BasicBlockKey, GlobalContext, LogicMode, ShiftImmOp, SignalKey, TemporalRegionKey, VariableKey,
-    VectorSize,
+    BasicBlockKey, GlobalContext, LogicMode, ShiftImmOp, SignalFlags, SignalKey, TemporalRegionKey,
+    VariableKey, VectorSize,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::VgHashMap;
@@ -1376,7 +1376,7 @@ pub fn compile<'a>(
         if let Some(conditions) = &process.standing
             && conditions
                 .iter()
-                .all(|c| !gl.signals[c.signal].triggers_t0_poke())
+                .all(|c| !gl.signals[c.signal].flags.contains(SignalFlags::POKE_T0))
         {
             c.standing_procs.insert(pi);
 

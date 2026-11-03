@@ -7,8 +7,8 @@ use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
     GlobalContext, Instruction, IntrinsicOp, LabelDisplay, LogicMode, ProcessKey, ResizeOp,
-    SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalKey, SignalSlice, UnaryOp, VSIZE_64, VariableKey,
-    VariableMap, VectorSize, WatchEdge,
+    SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalFlags, SignalKey, SignalSlice, UnaryOp, VSIZE_64,
+    VariableKey, VariableMap, VectorSize, WatchEdge,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
@@ -94,7 +94,7 @@ pub fn lower_process_to_bytecode(
         Some(conditions)
             if conditions
                 .iter()
-                .all(|c| !gl.signals[c.signal].triggers_t0_poke()) =>
+                .all(|c| !gl.signals[c.signal].flags.contains(SignalFlags::POKE_T0)) =>
         {
             let entry = process.regions[0];
             let index = watch_map

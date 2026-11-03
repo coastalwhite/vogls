@@ -31,7 +31,7 @@ pub fn lower_loop_statement<'a>(
                 size: INTEGER_VSIZE,
                 initialize: None,
                 mode: LogicMode::TwoValue,
-                flags: SignalFlags::EMPTY,
+                flags: SignalFlags::POKE_T0,
                 origin: TokenRange::default(),
             });
             // IEEE Std 1364-2005 p. 130:
@@ -46,7 +46,7 @@ pub fn lower_loop_statement<'a>(
                 size: mctx.gl.vars.size(size),
                 initialize: None,
                 mode: LogicMode::TwoValue,
-                flags: SignalFlags::EMPTY,
+                flags: SignalFlags::POKE_T0,
                 origin: TokenRange::default(),
             });
             builder.drive(mctx.gl(), size_signal, size);

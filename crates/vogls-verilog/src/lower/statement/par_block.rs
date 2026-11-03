@@ -41,7 +41,7 @@ pub fn lower<'a>(
         name: "::fork_trigger".to_string(),
         size: num_processes,
         initialize: Some(vogls_ir::Bits::new_zeroed(num_processes)),
-        flags: SignalFlags::EMPTY,
+        flags: SignalFlags::POKE_T0,
         origin,
         mode: LogicMode::TwoValue,
     });

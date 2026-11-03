@@ -14,7 +14,7 @@ pub mod watchers;
 
 use std::fmt;
 use std::num::NonZeroU32;
-use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign};
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
 pub use vogls_bits as bits;
 pub use vogls_bits::{Bits, Mode, VectorSize};
 
@@ -348,12 +348,27 @@ impl SignalFlags {
     pub const EXT_DRIVE: Self = Self(0b0001u8);
     pub const EXT_PROBE: Self = Self(0b0010u8);
 
-    /// Do not poke standing watchers at the start of the simulation, and do not count the start
-    /// of the simulation as the last update of the signal.
-    pub const NO_START_POKE: Self = Self(0b0100u8);
+    /// Poke standing watchers at the start of the simulation, and count the start of the
+    /// simulation as the last update of the signal.
+    pub const POKE_T0: Self = Self(0b0100u8);
 
     pub fn contains(self, rhs: Self) -> bool {
         self.0 & rhs.0 == rhs.0
+    }
+
+    pub fn set(&mut self, flags: SignalFlags, do_set: bool) {
+        if do_set {
+            *self |= flags;
+        } else {
+            *self &= !flags;
+        }
+    }
+}
+
+impl Not for SignalFlags {
+    type Output = Self;
+    fn not(self) -> Self::Output {
+        self ^ Self::ALL
     }
 }
 
@@ -396,7 +411,7 @@ impl fmt::Debug for SignalFlags {
         f.debug_struct("SignalFlags")
             .field("drive", &self.contains(Self::EXT_DRIVE))
             .field("probe", &self.contains(Self::EXT_PROBE))
-            .field("no_start_poke", &self.contains(Self::NO_START_POKE))
+            .field("poke_t0", &self.contains(Self::POKE_T0))
             .finish()
     }
 }
@@ -409,30 +424,6 @@ pub struct Signal {
     pub mode: LogicMode,
     pub flags: SignalFlags,
     pub origin: TokenRange,
-}
-impl Signal {
-    /// Should the signal poke all standing watchers at `t=0`?
-    ///
-    /// This is a write at `t=0`, so a signal that triggers a poke also has `t=0` as its initial
-    /// last update time. Otherwise, it starts out as never updated.
-    pub fn triggers_t0_poke(&self) -> bool {
-        if self.flags.contains(SignalFlags::NO_START_POKE) {
-            return false;
-        }
-
-        match self.mode {
-            // Two-value logic does not represent `x`. There is an implicit transition from `x->0`
-            // at the start of the simulation. We emulate that behavior by poking all standing
-            // processes.
-            LogicMode::TwoValue => true,
-
-            // Four-valued logic starts as `x`, so a write of `x` does not trigger a poke.
-            LogicMode::FourValue => self
-                .initialize
-                .as_ref()
-                .is_some_and(|v| v.count_unknown() != v.size().get()),
-        }
-    }
 }
 
 pub const SCALAR_VSIZE: VectorSize = NonZeroU32::new(1).unwrap();

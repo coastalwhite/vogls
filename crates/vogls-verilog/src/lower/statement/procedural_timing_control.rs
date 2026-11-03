@@ -137,11 +137,13 @@ pub fn lower<'a>(
                 if contains_edge && !watch_decides_edge {
                     for (_, v, net, _) in conditions.iter_mut() {
                         *v = net.net.probe(mctx.gl(), &mut builder);
+                        let mut flags = SignalFlags::EMPTY;
+                        flags.set(SignalFlags::POKE_T0, v.mode().is_two_value());
                         let before_signal = mctx.gl.signals.insert(Signal {
                             name: format!("EVENT_BEFORE/{}", mctx.gl.signals.len()),
                             size: mctx.gl.vars.size(*v),
                             initialize: None,
-                            flags: SignalFlags::EMPTY,
+                            flags,
                             origin: TokenRange::default(),
                             mode: v.mode(),
                         });
