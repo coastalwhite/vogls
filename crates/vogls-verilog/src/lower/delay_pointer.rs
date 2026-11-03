@@ -1,7 +1,8 @@
 use std::fmt;
 
 use vogls_ir::Time;
-use vogls_verilog::lower::specify::{Delay, Delays};
+
+use super::specify::{Delay, Delays};
 
 /// A pointer to a certain amount of delay values.
 ///
@@ -38,10 +39,13 @@ pub enum DelayPtrVariant {
 impl DelayPtr {
     pub fn new(offset: u64, variant: DelayPtrVariant, triple_mask: u16) -> Self {
         debug_assert_eq!(offset & 0x1_FFFF_FFFF_FFFF, offset);
-        debug_assert_eq!(triple_mask & ((1u16 << variant.len()) - 1), triple_mask);
+        debug_assert_eq!(
+            triple_mask & ((1u16 << variant.num_delays()) - 1),
+            triple_mask
+        );
 
         let offset = offset & 0x1_FFFF_FFFF_FFFF;
-        let triple_mask = triple_mask & ((1u16 << variant.len()) - 1);
+        let triple_mask = triple_mask & ((1u16 << variant.num_delays()) - 1);
 
         Self((offset << 15) | ((triple_mask as u64) << 3) | (variant as u64))
     }
@@ -52,10 +56,9 @@ impl DelayPtr {
     }
     #[inline(always)]
     pub fn num_delays(self) -> usize {
-        self.variant().len()
+        self.variant().num_delays()
     }
 
-    #[expect(unused)]
     pub fn total_num_entries(self) -> usize {
         self.num_triples() as usize * 2 + self.num_delays()
     }
@@ -80,6 +83,7 @@ impl DelayPtr {
         ((self.0 >> 3) & 0xFFF) as u16
     }
 
+    /// Unpack into the form `Delays::calculate` consumes.
     // @TODO: Remove and internalize DelayPtr into timing lowering.
     pub fn materialize(self, delays: &[Time]) -> Delays {
         use DelayPtrVariant as V;
@@ -146,7 +150,8 @@ pub fn read_one(delays: &[Time], ptr: &mut u64, triple_mask: &mut u16) -> Delay 
 }
 
 impl DelayPtrVariant {
-    pub fn len(self) -> usize {
+    /// How many delay values this variant names.
+    pub fn num_delays(self) -> usize {
         match self {
             DelayPtrVariant::One => 1,
             DelayPtrVariant::Two => 2,

@@ -1,6 +1,7 @@
 mod addressing;
 mod assign;
 mod delay;
+pub mod delay_pointer;
 mod diagnostics;
 pub mod expression;
 mod fuse;
