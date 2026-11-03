@@ -272,7 +272,7 @@ pub fn get_expr_type<'a>(
                 };
                 let (ty, dims) = match &table[symbol_id].content {
                     VSymbol::Parameter(vvalue) => (vvalue.ty(), &[] as &[ArrayDim]),
-                    VSymbol::Net(n) => (n.ty, n.dims.as_slice()),
+                    VSymbol::Signal(n) => (n.ty, n.dims.as_slice()),
                     _ => {
                         diagnostics
                             .not_yet_implemented(hident_span(arenas, ident), "not a valid net");

@@ -340,19 +340,19 @@ where
     ) else {
         return FuseResult::Failed;
     };
-    let net = match &ctx.table[symbol_id].content {
-        VSymbol::Net(n) => n,
+    let symbol = match &ctx.table[symbol_id].content {
+        VSymbol::Signal(n) => n,
         _ => return FuseResult::Failed,
     };
 
     let signal = match side {
-        SignalSide::Probe => net.net.probe_signal(),
-        SignalSide::BlockingDrive => net.net.blocking_drive_signal(),
+        SignalSide::Probe => symbol.terminals.probe_signal(),
+        SignalSide::BlockingDrive => symbol.terminals.blocking_drive_signal(),
     };
 
     // Fast path: no part select or array indexing.
-    if exprs.is_empty() && range_expr.is_none() && net.dims.is_empty() {
-        let (ty, bit_length) = match net.ty {
+    if exprs.is_empty() && range_expr.is_none() && symbol.dims.is_empty() {
+        let (ty, bit_length) = match symbol.ty {
             VType::SignedNet(bit_length) => (FuseType::Signed, bit_length),
             VType::UnsignedNet(bit_length) => (FuseType::Unsigned, bit_length),
             VType::Real => (FuseType::Real, VSIZE_64),
@@ -380,9 +380,9 @@ where
 
     let Ok(address) = lower_addressing(
         &mut actx,
-        net.ty.bit_length(),
-        &net.dims,
-        net.transform,
+        symbol.ty.bit_length(),
+        &symbol.dims,
+        symbol.transform,
         exprs.iter(),
         range_expr.map(Into::into),
     ) else {
@@ -398,7 +398,7 @@ where
     if let Some(elem_offset) = address.elem_offset
         && (elem_offset < 0
             || elem_offset + i64::from(address.output_width.get())
-                > i64::from(net.ty.bit_length().get()))
+                > i64::from(symbol.ty.bit_length().get()))
     {
         return FuseResult::Failed;
     }
@@ -411,11 +411,11 @@ where
         return FuseResult::Failed;
     };
 
-    let ty = if net.ty.is_real() {
+    let ty = if symbol.ty.is_real() {
         FuseType::Real
     } else if address.is_unsigned {
         FuseType::Unsigned
-    } else if net.ty.is_signed_net() {
+    } else if symbol.ty.is_signed_net() {
         FuseType::Signed
     } else {
         FuseType::Unsigned

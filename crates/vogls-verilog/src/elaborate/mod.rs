@@ -11,8 +11,8 @@ use vogls_ir::{
 use vogls_utils::{Entry, IndexMap, Table, VgHashMap, new_table_key};
 
 use crate::ast::module::{
-    Dimension, FunctionDeclaration, ModuleOrGenerateItem, PortDeclaration, Range, TaskDeclaration,
-    TimeScale,
+    Dimension, FunctionDeclaration, ModuleOrGenerateItem, OutputNet, PortDeclaration, Range,
+    TaskDeclaration, TimeScale,
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::lower::{Diagnostics, VType, VValue, create_nba_process, eval_constant_expr};
@@ -38,7 +38,7 @@ pub struct SymbolAstRefs<'a> {
 pub enum VSymbol {
     Module(ModuleSymbol),
     Parameter(VValue),
-    Net(NetSymbol),
+    Signal(SignalSymbol),
     NamedBlock,
     GenerateBlock(AstGenBlockKey),
     GenVar,
@@ -49,9 +49,9 @@ pub enum VSymbol {
     ModuleRange(ModuleSymbol),
 }
 impl VSymbol {
-    pub fn as_net(&self) -> Option<&NetSymbol> {
+    pub fn as_signal(&self) -> Option<&SignalSymbol> {
         match self {
-            VSymbol::Net(s) => Some(s),
+            VSymbol::Signal(s) => Some(s),
             _ => None,
         }
     }
@@ -74,7 +74,10 @@ impl fmt::Debug for VSymbol {
         f.write_str(match self {
             VSymbol::Module(_) => "module",
             VSymbol::Parameter(_) => "param",
-            VSymbol::Net(_) => "net",
+            VSymbol::Signal(s) => match s.kind {
+                SignalKind::Net => "net",
+                SignalKind::Variable => "variable",
+            },
             VSymbol::NamedBlock => "named_block",
             VSymbol::GenerateBlock(_) => "generate_block",
             VSymbol::GenVar => "genvar",
@@ -101,14 +104,14 @@ pub struct ModuleSymbol {
 }
 
 #[derive(Clone)]
-pub struct Net {
+pub struct Terminals {
     width: VectorSize,
     pub specify: Option<SignalKey>,
     pub ba: SignalKey,
     pub nba: Option<(ProcessKey, SignalKey, Option<SignalKey>)>,
 }
 
-impl Net {
+impl Terminals {
     pub fn set_specify(&mut self, value: SignalKey) -> Option<SignalKey> {
         self.specify.replace(value)
     }
@@ -216,12 +219,26 @@ pub struct ArrayDim {
     pub num_elements: NonZeroU32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignalKind {
+    /// Verilog nets.
+    ///
+    /// For instance, `wire`, ports or `tri`.
+    Net,
+
+    /// Verilog variables.
+    ///
+    /// For instance, `reg`, `time` or `real`.
+    Variable,
+}
+
 #[derive(Clone)]
-pub struct NetSymbol {
+pub struct SignalSymbol {
+    pub kind: SignalKind,
     pub ty: VType,
     pub dims: Vec<ArrayDim>,
     pub transform: VectorTransform,
-    pub net: Net,
+    pub terminals: Terminals,
     pub port_idx: Option<usize>,
 }
 
@@ -310,6 +327,7 @@ pub fn port_declaration_to_info<'a>(
     diagnostics: &mut Diagnostics,
 ) -> Result<
     (
+        SignalKind,
         VType,
         VectorTransform,
         ConnectionDirection,
@@ -318,13 +336,37 @@ pub fn port_declaration_to_info<'a>(
     (),
 > {
     use ConnectionDirection as D;
-    let (direction, range, signed, identifiers) = match &*id {
-        PortDeclaration::Inout(inout) => {
-            (D::Both, inout.range, inout.signed, inout.port_identifiers)
-        }
-        PortDeclaration::Input(input) => (D::In, input.range, input.signed, input.port_identifiers),
+    let (kind, direction, range, signed, identifiers) = match &*id {
+        PortDeclaration::Inout(inout) => (
+            SignalKind::Net,
+            D::Both,
+            inout.range,
+            inout.signed,
+            inout.port_identifiers,
+        ),
+        PortDeclaration::Input(input) => (
+            SignalKind::Net,
+            D::In,
+            input.range,
+            input.signed,
+            input.port_identifiers,
+        ),
         PortDeclaration::Output(output) => {
-            (D::Out, output.range, output.signed, output.identifiers)
+            // `output reg`, `output integer` and `output time` declare a variable, every other
+            // port form declares a net.
+            let kind = match output.net.map(|net| net.item) {
+                Some(OutputNet::Register | OutputNet::Integer | OutputNet::Time) => {
+                    SignalKind::Variable
+                }
+                Some(OutputNet::NetType(_)) | None => SignalKind::Net,
+            };
+            (
+                kind,
+                D::Out,
+                output.range,
+                output.signed,
+                output.identifiers,
+            )
         }
     };
 
@@ -334,10 +376,10 @@ pub fn port_declaration_to_info<'a>(
     };
 
     let ty = VType::net(size, signed);
-    Ok((ty, transform, direction, identifiers))
+    Ok((kind, ty, transform, direction, identifiers))
 }
 
-fn new_net(
+fn new_terminals(
     gl: &mut GlobalContext,
     mode: LogicMode,
     arenas: &AstArenas,
@@ -345,7 +387,7 @@ fn new_net(
     dims: &[ArrayDim],
     name: AstItem<Identifier>,
     initialize: Option<VValue>,
-) -> Net {
+) -> Terminals {
     let mut size = ty.bit_length();
     for dim in dims {
         size = size.checked_mul(dim.num_elements).unwrap();
@@ -374,7 +416,7 @@ fn new_net(
         origin,
     });
 
-    Net {
+    Terminals {
         width: size,
         specify: None,
         ba: signal,

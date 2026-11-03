@@ -13,7 +13,7 @@ use crate::lower::expression::{self, truncate_or_extend};
 use crate::lower::try_resolve_hident;
 
 use super::addressing::ConstantAddressingContext;
-use super::{LowerContext, try_resolve_net};
+use super::{LowerContext, try_resolve_signal};
 use super::{MutLowerContext, VType};
 
 pub fn assign_variable_lvalue<'a>(
@@ -97,7 +97,7 @@ pub fn variable_lvalue_flat_ty<'a>(
 
     let exprs = *exprs;
     let (ty, array_dims, transform) = match &ctx.table[symbol_key].content {
-        VSymbol::Net(s) => (s.ty, s.dims.as_slice(), s.transform),
+        VSymbol::Signal(s) => (s.ty, s.dims.as_slice(), s.transform),
         _ => todo!(),
     };
 
@@ -152,7 +152,7 @@ pub fn assign_variable_lvalue_flat<'a>(
 
     let (ty, array_dims, transform) = match &ctx.table[symbol_key].content {
         VSymbol::Parameter(v) => (v.ty(), &[] as &[ArrayDim], VectorTransform::default()),
-        VSymbol::Net(s) => (s.ty, s.dims.as_slice(), s.transform),
+        VSymbol::Signal(s) => (s.ty, s.dims.as_slice(), s.transform),
         v => todo!("lvalue assign: {v:?}"),
     };
 
@@ -179,7 +179,7 @@ pub fn assign_variable_lvalue_flat<'a>(
         range_expr,
     )?;
 
-    let VSymbol::Net(net) = &ctx.table[symbol_key].content else {
+    let VSymbol::Signal(symbol) = &ctx.table[symbol_key].content else {
         mctx.diagnostics
             .not_yet_implemented(ctx.arenas.get_span(ast_lvalue), "assign not to non-net");
         return Err(());
@@ -199,17 +199,23 @@ pub fn assign_variable_lvalue_flat<'a>(
         builder,
         variable,
         variable_ty,
-        match net.ty {
+        match symbol.ty {
             VType::SignedNet(_) => VType::SignedNet(output_width),
             VType::UnsignedNet(_) => VType::UnsignedNet(output_width),
             VType::Real => VType::Real,
         },
     );
     if nba {
-        net.net
-            .drive_non_blocking(&mut mctx.gl, &mut mctx.nbas, builder, variable, partial);
+        symbol.terminals.drive_non_blocking(
+            &mut mctx.gl,
+            &mut mctx.nbas,
+            builder,
+            variable,
+            partial,
+        );
     } else {
-        net.net
+        symbol
+            .terminals
             .drive_blocking(mctx.gl(), builder, variable, partial);
     }
 
@@ -296,7 +302,7 @@ pub fn net_lvalue_flat_ty<'a>(
 
     let (ty, dims, transform) = match &ctx.table[symbol_key].content {
         VSymbol::Parameter(v) => (v.ty(), &[] as &[ArrayDim], VectorTransform::default()),
-        VSymbol::Net(s) => (s.ty, s.dims.as_slice(), s.transform),
+        VSymbol::Signal(s) => (s.ty, s.dims.as_slice(), s.transform),
         _ => todo!(),
     };
 
@@ -353,7 +359,7 @@ fn assign_net_lvalue_flat<'a>(
         constant_range_expression,
     } = &*lvalue;
 
-    let s = try_resolve_net(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
+    let s = try_resolve_signal(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
 
     let mut actx = ConstantAddressingContext {
         gl: &mctx.gl,
@@ -415,7 +421,7 @@ fn assign_net_lvalue_flat<'a>(
         variable_ty,
         s.ty.resize_net_to(output_width),
     );
-    s.net.drive_blocking(mctx.gl(), builder, var, partial);
+    s.terminals.drive_blocking(mctx.gl(), builder, var, partial);
     Ok(())
 }
 

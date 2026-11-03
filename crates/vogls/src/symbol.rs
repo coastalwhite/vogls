@@ -9,7 +9,7 @@ use vogls_verilog::lower::VType;
 pub enum Symbol {
     Module,
     Parameter(Bits),
-    Net(NetSymbol),
+    Signal(SignalSymbol),
     Block,
     Task,
     Function,
@@ -24,7 +24,7 @@ impl fmt::Debug for Symbol {
             Symbol::Module => "module",
             Symbol::Modules => "modules",
             Symbol::Parameter(_) => "param",
-            Symbol::Net(_) => "net",
+            Symbol::Signal(_) => "signal",
             Symbol::Block => "block",
             Symbol::Task => "task",
             Symbol::Function => "function",
@@ -39,14 +39,14 @@ impl From<VSymbol> for Symbol {
             VSymbol::Module(..) => Self::Module,
             VSymbol::ModuleRange(..) => Self::Modules,
             VSymbol::Parameter(vvalue) => Self::Parameter(vvalue.into_bits()),
-            VSymbol::Net(net) => Self::Net(NetSymbol {
-                ty: net.ty,
-                dims: net.dims,
-                net: NetValue::Signal(NetSignal {
-                    width: net.net.width(),
-                    prb: (net.net.probe_signal(), None),
-                    drv: (net.net.blocking_drive_signal(), None),
-                    nba: net.net.nba.map(|(p, s, m)| (p, s, None, m, None)),
+            VSymbol::Signal(signal) => Self::Signal(SignalSymbol {
+                ty: signal.ty,
+                dims: signal.dims,
+                value: SignalValue::Signal(SignalRefs {
+                    width: signal.terminals.width(),
+                    prb: (signal.terminals.probe_signal(), None),
+                    drv: (signal.terminals.blocking_drive_signal(), None),
+                    nba: signal.terminals.nba.map(|(p, s, m)| (p, s, None, m, None)),
                 }),
             }),
             VSymbol::NamedBlock => Self::Block,
@@ -60,28 +60,28 @@ impl From<VSymbol> for Symbol {
 }
 
 #[derive(Clone)]
-pub struct NetSymbol {
+pub struct SignalSymbol {
     pub ty: VType,
     pub dims: Vec<ArrayDim>,
-    pub net: NetValue,
+    pub value: SignalValue,
 }
 
 #[derive(Clone)]
-pub enum NetValue {
-    Signal(NetSignal),
+pub enum SignalValue {
+    Signal(SignalRefs),
     Constant(Bits),
 }
-impl NetValue {
+impl SignalValue {
     pub fn size(&self) -> VectorSize {
         match self {
-            NetValue::Signal(s) => s.width,
-            NetValue::Constant(b) => b.size(),
+            SignalValue::Signal(s) => s.width,
+            SignalValue::Constant(b) => b.size(),
         }
     }
 }
 
 #[derive(Clone)]
-pub struct NetSignal {
+pub struct SignalRefs {
     width: VectorSize,
     pub prb: (SignalKey, Option<NonMaxU32>),
     pub drv: (SignalKey, Option<NonMaxU32>),
@@ -94,7 +94,7 @@ pub struct NetSignal {
     )>,
 }
 
-impl NetSignal {
+impl SignalRefs {
     pub fn probe_signal(&self) -> (SignalKey, Option<SignalSlice>) {
         let (s, o) = self.prb;
         (

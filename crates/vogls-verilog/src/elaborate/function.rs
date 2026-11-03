@@ -7,7 +7,7 @@ use crate::ast::module::{
     FunctionDeclaration, FunctionRangeOrType, TaskDeclaration, TaskPortItemContent,
     TfInputDeclaration, TfType,
 };
-use crate::elaborate::{NetSymbol, VectorTransform, evaluate_net_msb_lsb};
+use crate::elaborate::{SignalKind, SignalSymbol, VectorTransform, evaluate_net_msb_lsb};
 use crate::lower::{Diagnostics, LowerContext, VType};
 
 use super::VSymbol;
@@ -58,7 +58,7 @@ pub fn elaborate_fn<'a>(
         FunctionRangeOrType::Time => (VectorTransform::default(), VType::TIME),
     };
 
-    let net = super::new_net(
+    let terminals = super::new_terminals(
         gl,
         ctx.logic_mode,
         ctx.arenas,
@@ -67,17 +67,18 @@ pub fn elaborate_fn<'a>(
         *ident,
         None,
     );
-    let output_key = net.ba;
+    let output_key = terminals.ba;
     if ctx
         .table
         .insert(
             ident.item.0,
             symbol,
             ctx.arenas.get_item_span(*ident),
-            VSymbol::Net(NetSymbol {
+            VSymbol::Signal(SignalSymbol {
+                kind: SignalKind::Variable,
                 ty: output_ty,
                 dims: [].into(),
-                net,
+                terminals,
                 transform,
                 port_idx: None,
             }),
@@ -121,18 +122,20 @@ pub fn elaborate_fn<'a>(
             };
             let ident = ctx.arenas.to_item(ident);
             let origin = ctx.arenas.get_item_span(ident);
-            let net = super::new_net(gl, ctx.logic_mode, ctx.arenas, &ty, &[], ident, None);
-            let signal = net.ba;
+            let terminals =
+                super::new_terminals(gl, ctx.logic_mode, ctx.arenas, &ty, &[], ident, None);
+            let signal = terminals.ba;
             if ctx
                 .table
                 .insert(
                     ident.item.0,
                     symbol,
                     origin,
-                    VSymbol::Net(NetSymbol {
+                    VSymbol::Signal(SignalSymbol {
+                        kind: SignalKind::Variable,
                         ty,
                         dims: [].into(),
-                        net,
+                        terminals,
                         transform,
                         port_idx: None,
                     }),
@@ -211,18 +214,20 @@ pub fn elaborate_task<'a>(
             };
             let ident = ctx.arenas.to_item(ident);
             let origin = ctx.arenas.get_item_span(ident);
-            let net = super::new_net(gl, ctx.logic_mode, ctx.arenas, &ty, &[], ident, None);
-            let signal = net.ba;
+            let terminals =
+                super::new_terminals(gl, ctx.logic_mode, ctx.arenas, &ty, &[], ident, None);
+            let signal = terminals.ba;
             if ctx
                 .table
                 .insert(
                     ident.item.0,
                     symbol,
                     origin,
-                    VSymbol::Net(NetSymbol {
+                    VSymbol::Signal(SignalSymbol {
+                        kind: SignalKind::Variable,
                         ty,
                         dims: [].into(),
-                        net,
+                        terminals,
                         transform,
                         port_idx: None,
                     }),

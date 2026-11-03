@@ -14,7 +14,7 @@ use crate::ast::statement::SystemTaskEnable;
 use crate::elaborate::{VSymbol, determine_module_context};
 use crate::lower::expression::{get_expr_type, lower_expr, to_real};
 use crate::lower::{LowerContext, MonitorSignals, MutLowerContext, Region, try_resolve_hident};
-use crate::lower::{expression, hident_span, try_resolve_net};
+use crate::lower::{expression, hident_span, try_resolve_signal};
 
 pub fn lower_system_task_enable<'a>(
     ctx: &LowerContext<'a, '_>,
@@ -604,9 +604,9 @@ pub fn lower_system_task_enable<'a>(
                 );
                 return Err(());
             }
-            let net =
-                try_resolve_net(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
-            if net.dims.len() != 1 {
+            let symbol =
+                try_resolve_signal(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
+            if symbol.dims.len() != 1 {
                 mctx.diagnostics.not_yet_implemented(
                     hident_span(ctx.arenas, *ident),
                     "only single arrays are supported as memory at the moment",
@@ -627,10 +627,10 @@ pub fn lower_system_task_enable<'a>(
                 );
             }
 
-            let stride = net.ty.bit_length();
+            let stride = symbol.ty.bit_length();
             let offset = 0;
-            let limit = net.dims[0].num_elements.get();
-            let signal = net.net.blocking_drive_signal();
+            let limit = symbol.dims[0].num_elements.get();
+            let signal = symbol.terminals.blocking_drive_signal();
 
             let binary = system_task_ident == "readmemb";
             let readmem = ReadMem {
