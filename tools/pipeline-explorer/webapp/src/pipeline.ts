@@ -1,5 +1,5 @@
 import { colors } from "./colors.ts";
-import type { Trace } from "./lib/types.ts";
+import type { Trace } from "./types.ts";
 
 const textPad = 8;
 
@@ -141,7 +141,6 @@ export class PipelineCanvas {
     draw() {
         const dpr = window.devicePixelRatio || 1;
 
-        const numStages = this.trace.pipeline.keys.length;
         const canvasWidth = Math.round(this.width * dpr);
         const canvasHeight = Math.round(this.height * dpr);
         if (this.canvas.width !== canvasWidth) this.canvas.width = canvasWidth;
@@ -153,94 +152,33 @@ export class PipelineCanvas {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, this.width, this.height);
 
-        const pxHeight = (this.trace.instructions.length + 1) *
-            convertRemToPixels(2);
-
-        const paddingX = this.maxTextWidth + textPad * 2;
-
         const cellW = convertRemToPixels(2);
-        const cellH = convertRemToPixels(2);
-
-        const numWidthCells = this.width / cellW;
-
         const startX = Math.floor(this.offsetX / cellW) - 1;
-        const endX = Math.ceil(startX + numWidthCells) + 2;
+        const endX = Math.ceil(startX + this.width / cellW) + 2;
 
-        if (this.currentCycle >= startX && this.currentCycle <= endX) {
-            const baseX = this.currentCycle * cellW + paddingX;
-            const baseY = 0;
+        renderPipeline(ctx, this.trace, {
+            rows: this.trace.instructions.map((_, i) => i),
+            startCycle: startX,
+            endCycle: endX,
+            offsetX: this.offsetX,
+            offsetY: this.offsetY,
+            width: this.width,
+            height: this.height,
+            maxTextWidth: this.maxTextWidth,
+            currentCycle: this.currentCycle,
+        });
+    }
 
-            const x = baseX - this.offsetX;
-            const y = baseY - this.offsetY;
-
-            ctx.fillStyle = "#ccc";
-            ctx.fillRect(x, y, convertRemToPixels(2), this.height);
-        }
-
-        // Vertical guide lines.
-        ctx.fillStyle = "#000";
-        ctx.font = "0.75rem monospace";
-        ctx.textBaseline = "top";
-        ctx.setLineDash([5, 15]);
-        for (let c = startX - (startX % 5); c < endX; c += 5) {
-            const baseX = c * cellW + paddingX;
-            const baseY = 0;
-
-            const x = baseX - this.offsetX;
-            const y = baseY - this.offsetY;
-
-            ctx.beginPath();
-            ctx.moveTo(x, y);
-            ctx.lineTo(x, y + pxHeight);
-            ctx.stroke();
-
-            ctx.fillText(c.toString(), x + 2, baseY + 2);
-        }
-
-        // Horizontal guide lines.
-        ctx.setLineDash([1, 15]);
-        for (let i = 0; i < this.trace.instructions.length; i++) {
-            ctx.beginPath();
-            const y = cellH * (i + 1);
-            ctx.moveTo(this.width + 16 - this.offsetX % 16, y - this.offsetY);
-            ctx.lineTo(paddingX, y - this.offsetY);
-            ctx.stroke();
-        }
-
-        // Pipeline stages.
-        ctx.font = "1rem monospace";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        for (let i = 0; i < numStages; i++) {
-            const stageTrace = this.trace.pipeline.traces[i];
-            for (let c = startX; c < endX; c++) {
-                const value = stageTrace[c];
-                if (value === 0) continue;
-                const y = value * cellH - this.offsetY;
-                const x = c * cellW - this.offsetX + paddingX;
-                ctx.fillStyle = colors[i % colors.length];
-                ctx.fillRect(x, y, cellW, cellH);
-                ctx.fillStyle = "#000";
-                ctx.fillText(
-                    this.trace.pipeline.keys[i],
-                    x + cellW / 2,
-                    y + cellH / 2,
-                );
-            }
-        }
-
-        ctx.textAlign = "left";
-        ctx.textBaseline = "middle";
-        ctx.fillStyle = "#fff";
-        ctx.fillRect(0, 0, paddingX - 1, this.height);
-        ctx.fillStyle = "#000";
-        for (let i = 0; i < this.trace.instructions.length; i++) {
-            ctx.fillText(
-                this.trace.instructions[i],
-                textPad,
-                cellW * (i + 1) + cellW / 2 - this.offsetY,
-            );
-        }
+    /** The cycles currently (at least partially) on screen. */
+    visibleCycles(): [number, number] {
+        const cellW = convertRemToPixels(2);
+        const lo = Math.floor(this.offsetX / cellW);
+        const hi = Math.ceil(
+            (this.offsetX + this.width - this.maxTextWidth - 2 * textPad) /
+                cellW,
+        ) - 1;
+        const last = this.trace.pipeline.cycles - 1;
+        return [clamp(lo, 0, last), clamp(hi, 0, last)];
     }
 
     onClick(e: MouseEvent) {
@@ -342,6 +280,154 @@ export class PipelineCanvas {
         requestAnimationFrame(tick);
     }
 }
+
+/** A display row: an instruction index, or `null` for an elided gap. */
+export type Row = number | null;
+
+export type PipelineLayout = {
+    rows: Row[];
+    /** Cells are drawn for cycles in [startCycle, endCycle). */
+    startCycle: number;
+    endCycle: number;
+    offsetX: number;
+    offsetY: number;
+    width: number;
+    height: number;
+    maxTextWidth: number;
+    currentCycle: number | null;
+};
+
+/** The subset of `CanvasRenderingContext2D` that `renderPipeline` uses, so
+ *  the same drawing code can target the canvas and the SVG exporter. */
+export type Ctx2D = Pick<
+    CanvasRenderingContext2D,
+    | "fillStyle"
+    | "font"
+    | "textAlign"
+    | "textBaseline"
+    | "fillRect"
+    | "fillText"
+    | "beginPath"
+    | "moveTo"
+    | "lineTo"
+    | "stroke"
+    | "setLineDash"
+>;
+
+export function renderPipeline(
+    ctx: Ctx2D,
+    trace: Trace,
+    layout: PipelineLayout,
+) {
+    const { rows, startCycle, endCycle, offsetX, offsetY, width, height } =
+        layout;
+    const numStages = trace.pipeline.keys.length;
+
+    // Trace values are 1-based instruction indices; map them to display rows.
+    const rowOf = new Int32Array(trace.instructions.length).fill(-1);
+    rows.forEach((r, i) => {
+        if (r !== null) rowOf[r] = i;
+    });
+
+    const cellW = convertRemToPixels(2);
+    const cellH = convertRemToPixels(2);
+
+    const pxHeight = (rows.length + 1) * cellH;
+    const paddingX = layout.maxTextWidth + textPad * 2;
+
+    if (
+        layout.currentCycle !== null &&
+        layout.currentCycle >= startCycle &&
+        layout.currentCycle <= endCycle
+    ) {
+        const x = layout.currentCycle * cellW + paddingX - offsetX;
+        ctx.fillStyle = "#ccc";
+        ctx.fillRect(x, -offsetY, cellW, height);
+    }
+
+    // Vertical guide lines.
+    ctx.fillStyle = "#000";
+    ctx.font = "0.75rem monospace";
+    ctx.textBaseline = "top";
+    ctx.setLineDash([5, 15]);
+    for (let c = startCycle - (startCycle % 5); c < endCycle; c += 5) {
+        const x = c * cellW + paddingX - offsetX;
+        const y = -offsetY;
+
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x, y + pxHeight);
+        ctx.stroke();
+
+        ctx.fillText(c.toString(), x + 2, 2);
+    }
+
+    // Horizontal guide lines.
+    ctx.setLineDash([1, 15]);
+    for (let i = 0; i < rows.length; i++) {
+        if (rows[i] === null) continue;
+        ctx.beginPath();
+        const y = cellH * (i + 1);
+        ctx.moveTo(width + 16 - offsetX % 16, y - offsetY);
+        ctx.lineTo(paddingX, y - offsetY);
+        ctx.stroke();
+    }
+
+    // Pipeline stages.
+    ctx.font = "1rem monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    for (let i = 0; i < numStages; i++) {
+        const stageTrace = trace.pipeline.traces[i];
+        for (let c = Math.max(startCycle, 0); c < endCycle; c++) {
+            const value = stageTrace[c];
+            if (!value) continue;
+            const row = rowOf[value - 1];
+            if (row < 0) continue;
+            const y = (row + 1) * cellH - offsetY;
+            const x = c * cellW - offsetX + paddingX;
+            ctx.fillStyle = colors[i % colors.length];
+            ctx.fillRect(x, y, cellW, cellH);
+            ctx.fillStyle = "#000";
+            ctx.fillText(trace.pipeline.keys[i], x + cellW / 2, y + cellH / 2);
+        }
+    }
+
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, paddingX - 1, height);
+    ctx.fillStyle = "#000";
+    for (let i = 0; i < rows.length; i++) {
+        const r = rows[i];
+        ctx.fillText(
+            r === null ? "..." : trace.instructions[r],
+            textPad,
+            cellH * (i + 1) + cellH / 2 - offsetY,
+        );
+    }
+}
+
+/** Width of the widest instruction label among `rows`. */
+export function measureRows(trace: Trace, rows: Row[]): number {
+    const ctx = document.createElement("canvas").getContext("2d")!;
+    ctx.font = "1rem monospace";
+    return rows.reduce<number>(
+        (max, r) =>
+            Math.max(
+                max,
+                ctx.measureText(r === null ? "..." : trace.instructions[r])
+                    .width,
+            ),
+        0,
+    );
+}
+
+export function pipelineCellSize(): number {
+    return convertRemToPixels(2);
+}
+
+export const pipelineTextPad = textPad;
 
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const easeInOut = (t: number) =>

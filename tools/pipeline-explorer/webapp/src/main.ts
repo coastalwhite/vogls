@@ -6,6 +6,7 @@ import type { Trace } from "./types.ts";
 
 import { PipelineCanvas } from "./pipeline.ts";
 import { ScrubberCanvas } from "./scrubber.ts";
+import { pipelineSvg } from "./svg.ts";
 
 let pending = 0;
 let currentCycle = 0;
@@ -53,6 +54,7 @@ const chipMenuName: HTMLSpanElement = document.getElementById(
     "chipMenuName",
 )!;
 let scrubber: ScrubberCanvas | null = null;
+let currentTrace: Trace | null = null;
 let pipeline: PipelineCanvas | null = null;
 
 function percentForStage(trace: Trace, stageIdx: number): number {
@@ -65,6 +67,7 @@ function percentForStage(trace: Trace, stageIdx: number): number {
 }
 
 function setTrace(trace: Trace) {
+    currentTrace = trace;
     if (pipeline === null) {
         pipeline = new PipelineCanvas(
             pipelineContainer,
@@ -98,6 +101,7 @@ function setTrace(trace: Trace) {
     }
     pipelineStages.innerHTML = s;
     totalCyclesElem.innerText = trace.pipeline.cycles.toString();
+    onShareTrace();
 }
 
 function setCurrentCycle(cycle: number) {
@@ -121,7 +125,14 @@ worker.onmessage = (e) => {
     }
 };
 
-const procConfigFields = {
+type ConfigField = {
+    id: string;
+    type: "checkbox";
+    title: string;
+    default: boolean;
+};
+
+const procConfigFields: Record<string, ConfigField[]> = {
     "picorv32": [
         { "id": "enable_mul", "type": "checkbox", "title": "Enable MUL", 'default': true },
         { "id": "enable_div", "type": "checkbox", "title": "Enable DIV", 'default': true },
@@ -152,18 +163,20 @@ function runSim() {
     const procSelectValue = procSelect.value;
     const numCycles = numCyclesInput.value;
 
-    let proc = "ibex";
-    if (procSelectValue === "picorv32") {
-        proc = "picorv32";
-    } else if (procSelectValue === "ibex") {
-        proc = "ibex";
-    } else if (procSelectValue === "neorv32") {
-        proc = "neorv32";
-    } else if (procSelectValue === "hazard3") {
-        proc = "hazard3";
-    }
+    const proc = procSelectValue in procConfigFields ? procSelectValue : "ibex";
 
-    const config = {};
+    worker.postMessage({
+        "proc": proc,
+        "asm": assembly,
+        "config": readProcConfig(proc),
+        "numCycles": numCycles,
+    });
+    pending += 1;
+    simStatusElem.innerHTML = `<img src="spinner.svg" class="spinner"/>`;
+}
+
+function readProcConfig(proc: string): Record<string, boolean> {
+    const config: Record<string, boolean> = {};
     for (const field of procConfigFields[proc]) {
         const elem = document.getElementById(`pcf-${field["id"]}`);
         if (!(elem instanceof HTMLInputElement)) {
@@ -175,15 +188,7 @@ function runSim() {
                 break;
         }
     }
-
-    worker.postMessage({
-        "proc": proc,
-        "asm": assembly,
-        "config": config,
-        "numCycles": numCycles,
-    });
-    pending += 1;
-    simStatusElem.innerHTML = `<img src="spinner.svg" class="spinner"/>`;
+    return config;
 }
 
 function staggerRunSim() {
@@ -198,7 +203,8 @@ function unstaggerRunSim() {
     timeoutId = null;
     runSim();
 }
-function onProcSelect() {
+/** Rebuilds the config fields for the selected processor, at their defaults. */
+function buildProcConfig() {
     const procSelectValue = procSelect.value;
     chipMenuName.innerText =
         procSelect.options[procSelect.selectedIndex]?.text ?? procSelectValue;
@@ -221,16 +227,83 @@ function onProcSelect() {
         switch (field["type"]) {
             case "checkbox": f = unstaggerRunSim; break;
         }
-        elem.addEventListener("input", f);
+        elem!.addEventListener("input", f);
     }
-
+}
+function onProcSelect() {
+    buildProcConfig();
     unstaggerRunSim();
 }
-assemblyTextarea.value = initialAsm;
-renderEditor();
-numCyclesInput.value = "500";
+
+/* ---------- shareable link ---------- */
+
+type ShareState = {
+    proc: string;
+    asm: string;
+    config: Record<string, boolean>;
+    cycles: string;
+};
+
+const SHARE_PARAM = "share";
+
+function toBase64Url(text: string): string {
+    let bin = "";
+    for (const b of new TextEncoder().encode(text)) bin += String.fromCharCode(b);
+    return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function fromBase64Url(b64: string): string {
+    const bin = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
+    return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+}
+
+function shareLink(): string {
+    const proc = procSelect.value;
+    const state: ShareState = {
+        proc,
+        asm: assemblyTextarea.value,
+        config: readProcConfig(proc),
+        cycles: numCyclesInput.value,
+    };
+    const url = new URL(window.location.href);
+    url.hash = `${SHARE_PARAM}=${toBase64Url(JSON.stringify(state))}`;
+    return url.toString();
+}
+
+function readShareState(): ShareState | null {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const encoded = params.get(SHARE_PARAM);
+    if (!encoded) return null;
+    try {
+        const state = JSON.parse(fromBase64Url(encoded));
+        if (!(state.proc in procConfigFields) || typeof state.asm !== "string") {
+            return null;
+        }
+        return state;
+    } catch (e) {
+        console.warn("Ignoring malformed share link", e);
+        return null;
+    }
+}
+
+/** Loads a shared state, falling back to the defaults for anything missing. */
+function applyShareState(state: ShareState | null) {
+    assemblyTextarea.value = state?.asm ?? initialAsm;
+    renderEditor();
+    numCyclesInput.value = state?.cycles ?? "500";
+    if (state) procSelect.value = state.proc;
+    buildProcConfig();
+    for (const field of procConfigFields[procSelect.value]) {
+        const value = state?.config?.[field.id];
+        const elem = document.getElementById(`pcf-${field.id}`);
+        if (typeof value === "boolean" && elem instanceof HTMLInputElement) {
+            elem.checked = value;
+        }
+    }
+}
+
 setCurrentCycle(0);
-onProcSelect();
+applyShareState(readShareState());
+unstaggerRunSim();
 
 assemblyTextarea.addEventListener("input", staggerRunSim);
 numCyclesInput.addEventListener("input", staggerRunSim);
@@ -255,5 +328,146 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !chipMenuPanel.hidden) {
         setChipMenuOpen(false);
         chipMenuBtn.focus();
+    }
+});
+
+/* ---------- share menu ---------- */
+
+const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
+const shareBtn = el<HTMLButtonElement>("shareBtn");
+const sharePanel = el<HTMLDivElement>("sharePanel");
+const shareTabs = {
+    image: [el<HTMLButtonElement>("shareTabImage"), el<HTMLDivElement>("sharePaneImage")],
+    link: [el<HTMLButtonElement>("shareTabLink"), el<HTMLDivElement>("sharePaneLink")],
+} as const;
+const svgStartRange = el<HTMLInputElement>("svgStartRange");
+const svgStartInput = el<HTMLInputElement>("svgStartInput");
+const svgEndRange = el<HTMLInputElement>("svgEndRange");
+const svgEndInput = el<HTMLInputElement>("svgEndInput");
+const svgRangeFill = el<HTMLDivElement>("svgRangeFill");
+const svgLimitPc = el<HTMLInputElement>("svgLimitPc");
+const svgSpacing = el<HTMLInputElement>("svgSpacing");
+const svgPreview = el<HTMLDivElement>("svgPreview");
+const svgInfo = el<HTMLSpanElement>("svgInfo");
+const shareLinkInput = el<HTMLInputElement>("shareLinkInput");
+
+let svgStart = 0;
+let svgEnd = 0;
+let svgText = "";
+
+function selectShareTab(tab: keyof typeof shareTabs) {
+    for (const [name, [btn, pane]] of Object.entries(shareTabs)) {
+        btn.setAttribute("aria-selected", name === tab ? "true" : "false");
+        pane.hidden = name !== tab;
+    }
+    if (tab === "link") shareLinkInput.value = shareLink();
+}
+
+function setShareOpen(open: boolean) {
+    sharePanel.hidden = !open;
+    shareBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    if (!open) return;
+    // Default to the part of the pipeline that is on screen.
+    if (pipeline !== null) [svgStart, svgEnd] = pipeline.visibleCycles();
+    shareLinkInput.value = shareLink();
+    onShareTrace();
+}
+
+/** Clamps the range to the trace, syncs every control, and redraws. */
+function updateSvg() {
+    if (sharePanel.hidden || currentTrace === null) return;
+    const last = Math.max(0, currentTrace.pipeline.cycles - 1);
+    svgStart = Math.min(Math.max(0, Math.round(svgStart) || 0), last);
+    svgEnd = Math.min(Math.max(svgStart, Math.round(svgEnd) || 0), last);
+    for (const range of [svgStartRange, svgEndRange]) range.max = last.toString();
+    svgStartRange.value = svgStartInput.value = svgStart.toString();
+    svgEndRange.value = svgEndInput.value = svgEnd.toString();
+    // The thumb centre travels across the track minus one thumb width.
+    const frac = (v: number) => (last === 0 ? 0 : v / last);
+    svgRangeFill.style.left = `calc(0.5rem + (100% - 1rem) * ${frac(svgStart)})`;
+    svgRangeFill.style.right = `calc(0.5rem + (100% - 1rem) * ${1 - frac(svgEnd)})`;
+    // When the thumbs overlap, the end thumb is on top; at the far right it
+    // could then only move left, so lift the start thumb above it instead.
+    svgStartRange.style.zIndex = svgStart === last ? "2" : "1";
+    svgEndRange.style.zIndex = svgStart === last ? "1" : "2";
+    svgSpacing.disabled = !svgLimitPc.checked;
+
+    const spacing = Math.max(0, parseInt(svgSpacing.value) || 0);
+    svgText = pipelineSvg(currentTrace, {
+        start: svgStart,
+        end: svgEnd,
+        spacing: svgLimitPc.checked ? spacing : null,
+    });
+    svgPreview.innerHTML = svgText;
+    svgInfo.innerText = `${svgEnd - svgStart + 1} cycles`;
+}
+
+function onShareTrace() {
+    if (sharePanel.hidden) return;
+    updateSvg();
+}
+
+shareBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    setChipMenuOpen(false);
+    setShareOpen(sharePanel.hidden !== false);
+});
+sharePanel.addEventListener("click", (e) => e.stopPropagation());
+shareTabs.image[0].addEventListener("click", () => selectShareTab("image"));
+shareTabs.link[0].addEventListener("click", () => selectShareTab("link"));
+
+// The start control pushes the end along (and vice versa) rather than
+// refusing to move past it.
+function setStart(v: number) {
+    svgStart = v;
+    if (svgEnd < svgStart) svgEnd = svgStart;
+    updateSvg();
+}
+function setEnd(v: number) {
+    svgEnd = v;
+    if (svgStart > svgEnd) svgStart = svgEnd;
+    updateSvg();
+}
+svgStartRange.addEventListener("input", () => setStart(svgStartRange.valueAsNumber));
+svgEndRange.addEventListener("input", () => setEnd(svgEndRange.valueAsNumber));
+svgStartInput.addEventListener("change", () => setStart(svgStartInput.valueAsNumber));
+svgEndInput.addEventListener("change", () => setEnd(svgEndInput.valueAsNumber));
+svgLimitPc.addEventListener("change", updateSvg);
+svgSpacing.addEventListener("input", updateSvg);
+
+el<HTMLButtonElement>("svgDownloadBtn").addEventListener("click", () => {
+    const url = URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pipeline-${procSelect.value}-${svgStart}-${svgEnd}.svg`;
+    a.click();
+    URL.revokeObjectURL(url);
+});
+
+async function copyWithFeedback(btn: HTMLButtonElement, text: string) {
+    const label = btn.innerText;
+    try {
+        await navigator.clipboard.writeText(text);
+        btn.innerText = "Copied";
+    } catch {
+        btn.innerText = "Copy failed";
+    }
+    setTimeout(() => (btn.innerText = label), 1500);
+}
+const svgCopyBtn = el<HTMLButtonElement>("svgCopyBtn");
+svgCopyBtn.addEventListener("click", () => copyWithFeedback(svgCopyBtn, svgText));
+const shareLinkCopyBtn = el<HTMLButtonElement>("shareLinkCopyBtn");
+shareLinkCopyBtn.addEventListener("click", () => {
+    shareLinkInput.value = shareLink();
+    copyWithFeedback(shareLinkCopyBtn, shareLinkInput.value);
+});
+shareLinkInput.addEventListener("focus", () => shareLinkInput.select());
+
+document.addEventListener("click", () => setShareOpen(false));
+document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !sharePanel.hidden) {
+        setShareOpen(false);
+        shareBtn.focus();
     }
 });
