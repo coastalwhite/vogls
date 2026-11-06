@@ -285,15 +285,175 @@ main #central {
 @-webkit-keyframes spin { 100% { -webkit-transform: rotate(360deg); } }
 @keyframes spin { 100% { -webkit-transform: rotate(360deg); transform:rotate(360deg); } }
 
-#uploadBtn {
+/* Share menu ------------------------------------------------------------ */
+
+.share-menu {
+    position: relative;   /* anchor for the popover */
+}
+
+#shareBtn {
     display: flex;
-    width: 6rem;
     align-items: center;
-    justify-content: space-between;
+    gap: 0.25rem;
+    font: inherit;
+    color: var(--text-h);
     background: none;
     border: none;
+    border-radius: 0.375rem;
+    padding: 0 0.5rem;
     cursor: pointer;
 }
+#shareBtn img { width: 1rem; height: 1rem; }
+#shareBtn:hover,
+#shareBtn[aria-expanded="true"] { background: var(--accent-bg); }
+
+/* Opens downward: the button lives in the top bar. */
+#sharePanel {
+    position: absolute;
+    top: calc(100% + 0.5rem);
+    right: 0;
+    z-index: 20;
+    width: min(40rem, calc(100vw - 2rem));
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 0.75rem;
+    font-size: 0.9rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    box-shadow: var(--shadow);
+}
+#sharePanel[hidden],
+#sharePanel [role="tabpanel"][hidden] { display: none; }
+
+.share-tabs {
+    display: flex;
+    gap: 0.25rem;
+    margin-bottom: 0.75rem;
+    border-bottom: 1px solid var(--border);
+}
+.share-tabs button {
+    font: inherit;
+    color: var(--text);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    padding: 0.35rem 0.75rem;
+    cursor: pointer;
+}
+.share-tabs button[aria-selected="true"] {
+    color: var(--text-h);
+    border-bottom-color: var(--accent);
+}
+
+.share-row {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.35rem 0;
+}
+.share-row > span:first-child,
+.share-row > label:first-child { width: 7rem; flex: none; }
+
+/* Two range inputs stacked on one track. The inputs ignore the pointer so
+   only their thumbs are grabbable; the track and fill are drawn here. */
+.dual-range {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    height: 1.25rem;
+}
+.dual-range::before,
+.dual-range-fill {
+    content: "";
+    position: absolute;
+    top: 50%;
+    height: 0.3rem;
+    transform: translateY(-50%);
+    border-radius: 0.15rem;
+}
+.dual-range::before { left: 0; right: 0; background: var(--border); }
+.dual-range-fill { background: var(--accent); }
+.dual-range input[type="range"] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    margin: 0;
+    background: none;
+    pointer-events: none;
+    -webkit-appearance: none;
+    appearance: none;
+}
+.dual-range input[type="range"]::-webkit-slider-runnable-track { background: none; }
+.dual-range input[type="range"]::-moz-range-track { background: none; }
+.dual-range input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    pointer-events: auto;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--bg);
+    box-shadow: 0 0 0 1px var(--accent-border);
+    cursor: pointer;
+}
+.dual-range input[type="range"]::-moz-range-thumb {
+    pointer-events: auto;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--bg);
+    box-shadow: 0 0 0 1px var(--accent-border);
+    cursor: pointer;
+}
+.dual-range input[type="range"]:focus-visible { outline: none; }
+.dual-range input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--accent-border); }
+.dual-range input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px var(--accent-border); }
+.share-row input[type="checkbox"] { accent-color: var(--accent); }
+.share-sub { color: var(--text); font-size: 0.85rem; }
+#sharePanel p.share-sub { margin: 0 0 0.5rem; }
+
+#sharePanel input[type="number"],
+#sharePanel input[type="text"] {
+    font: inherit;
+    width: 5rem;
+    padding: 0.25rem 0.4rem;
+    color: var(--text-h);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+}
+#sharePanel input:disabled { opacity: 0.5; }
+
+#svgPreview {
+    margin: 0.5rem 0;
+    max-height: 40vh;
+    overflow: auto;
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    background: #fff;
+}
+#svgPreview svg { display: block; }
+
+.share-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+#svgInfo { flex: 1; color: var(--text); font-size: 0.85rem; }
+#sharePanel #shareLinkInput { flex: 1; width: auto; min-width: 0; font-family: var(--mono); font-size: 0.8rem; }
+.share-actions button {
+    font: inherit;
+    color: var(--text-h);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.75rem;
+    cursor: pointer;
+}
+.share-actions button:hover { background: var(--accent-bg); border-color: var(--accent-border); }
 
 #procConfigDetail {
     display: block;

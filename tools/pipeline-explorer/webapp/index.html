@@ -11,8 +11,49 @@
 		<div id="statsbar">
 			<div class="mx-4">Cycle <a id="currentCycle">0</a> / <a id="totalCycles">0</a></div>
 			<div id="pipelineStages"></div>
-            <div></div>
-			<!-- <button id="uploadBtn" class="mx-4">Upload <img src="/arrow-rightup.svg" /></button> -->
+			<div class="share-menu mx-4">
+				<button id="shareBtn" type="button" aria-haspopup="dialog" aria-expanded="false"
+				        aria-controls="sharePanel">Share <img src="/arrow-rightup.svg" alt="" /></button>
+				<div id="sharePanel" role="dialog" aria-label="Share" hidden>
+					<div class="share-tabs" role="tablist">
+						<button type="button" role="tab" id="shareTabImage" aria-selected="true"
+						        aria-controls="sharePaneImage">Pipeline Image</button>
+						<button type="button" role="tab" id="shareTabLink" aria-selected="false"
+						        aria-controls="sharePaneLink">Link</button>
+					</div>
+					<div id="sharePaneImage" role="tabpanel">
+						<div class="share-row">
+							<span>Cycles</span>
+							<input type="number" id="svgStartInput" min="0" aria-label="Start cycle" />
+							<div class="dual-range" id="svgRange">
+								<div class="dual-range-fill" id="svgRangeFill"></div>
+								<input type="range" id="svgStartRange" min="0" aria-label="Start cycle" />
+								<input type="range" id="svgEndRange" min="0" aria-label="End cycle" />
+							</div>
+							<input type="number" id="svgEndInput" min="0" aria-label="End cycle" />
+						</div>
+						<div class="share-row">
+							<label for="svgLimitPc">Limit PC domain</label>
+							<input type="checkbox" id="svgLimitPc" checked />
+							<span class="share-sub">spacing</span>
+							<input type="number" id="svgSpacing" min="0" value="1" />
+						</div>
+						<div id="svgPreview"></div>
+						<div class="share-actions">
+							<span id="svgInfo"></span>
+							<button type="button" id="svgCopyBtn">Copy SVG</button>
+							<button type="button" id="svgDownloadBtn">Download SVG</button>
+						</div>
+					</div>
+					<div id="sharePaneLink" role="tabpanel" hidden>
+						<p class="share-sub">Opens the explorer with this assembly, processor and configuration.</p>
+						<div class="share-actions">
+							<input type="text" id="shareLinkInput" readonly />
+							<button type="button" id="shareLinkCopyBtn">Copy</button>
+						</div>
+					</div>
+				</div>
+			</div>
 		</div>
 
 		<div id="content">
