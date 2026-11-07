@@ -1,6 +1,5 @@
 module x();
-	reg a;
-	wire b;
+	reg a, b;
 
 	initial begin
         a <= 'b0;

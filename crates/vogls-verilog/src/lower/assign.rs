@@ -4,7 +4,7 @@ use vogls_ir::{BasicBlockBuilder, VariableKey, VectorSize};
 use crate::ast::AstId;
 use crate::ast::expr::{BitSlice, BitSliceKind};
 use crate::ast::statement::{NetLValue, NetLValueFlat, VariableLValue, VariableLValueFlat};
-use crate::elaborate::{ArrayDim, VSymbol, VectorTransform};
+use crate::elaborate::{ArrayDim, SignalKind, VSymbol, VectorTransform};
 use crate::lower::addressing::{
     Address, AddressingConstantExprWidthContext, LValueAddressingContext, RangeExpr,
     lower_addressing,
@@ -150,11 +150,19 @@ pub fn assign_variable_lvalue_flat<'a>(
     let symbol_key =
         try_resolve_hident(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
 
-    let (ty, array_dims, transform) = match &ctx.table[symbol_key].content {
-        VSymbol::Parameter(v) => (v.ty(), &[] as &[ArrayDim], VectorTransform::default()),
-        VSymbol::Signal(s) => (s.ty, s.dims.as_slice(), s.transform),
-        v => todo!("lvalue assign: {v:?}"),
+    let VSymbol::Signal(s) = &ctx.table[symbol_key].content else {
+        mctx.diagnostics
+            .not_yet_implemented(ctx.arenas.get_span(ast_lvalue), "assign not to non-net");
+        return Err(());
     };
+
+    if s.kind != SignalKind::Variable {
+        mctx.diagnostics.not_yet_implemented(
+            ctx.arenas.get_span(ast_lvalue),
+            "can only assign variables here",
+        );
+        return Err(());
+    }
 
     let range_expr = range_expression.map(|r| (*r).into());
     let mut actx = LValueAddressingContext {
@@ -172,18 +180,12 @@ pub fn assign_variable_lvalue_flat<'a>(
         is_unsigned: _,
     } = lower_addressing(
         &mut actx,
-        ty.bit_length(),
-        array_dims,
-        transform,
+        s.ty.bit_length(),
+        s.dims.as_slice(),
+        s.transform,
         exprs.iter(),
         range_expr,
     )?;
-
-    let VSymbol::Signal(symbol) = &ctx.table[symbol_key].content else {
-        mctx.diagnostics
-            .not_yet_implemented(ctx.arenas.get_span(ast_lvalue), "assign not to non-net");
-        return Err(());
-    };
 
     // @TODO: Use array overflow.
     let partial = match (elem_offset, array) {
@@ -199,23 +201,17 @@ pub fn assign_variable_lvalue_flat<'a>(
         builder,
         variable,
         variable_ty,
-        match symbol.ty {
+        match s.ty {
             VType::SignedNet(_) => VType::SignedNet(output_width),
             VType::UnsignedNet(_) => VType::UnsignedNet(output_width),
             VType::Real => VType::Real,
         },
     );
     if nba {
-        symbol.terminals.drive_non_blocking(
-            &mut mctx.gl,
-            &mut mctx.nbas,
-            builder,
-            variable,
-            partial,
-        );
+        s.terminals
+            .drive_non_blocking(&mut mctx.gl, &mut mctx.nbas, builder, variable, partial);
     } else {
-        symbol
-            .terminals
+        s.terminals
             .drive_blocking(mctx.gl(), builder, variable, partial);
     }
 

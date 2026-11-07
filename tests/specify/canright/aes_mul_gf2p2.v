@@ -52,7 +52,6 @@ module tb();
 		RST_N = 1'b0;
 		CLK = 1'b0;
 		TX = 1'b0;
-		RX = 1'b0;
 
 		test_case(2'b00, 2'b00, 2'b00);
 		test_case(2'b01, 2'b00, 2'b00);

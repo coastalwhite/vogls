@@ -76,7 +76,7 @@ module tb();
         8'h17,8'h2b,8'h04,8'h7e,8'hba,8'h77,8'hd6,8'h26,8'he1,8'h69,8'h14,8'h63,8'h55,8'h21,8'h0c,8'h7d  // f	
     };
 
-	wire[7:0] data_i;
+	reg[7:0] data_i;
 	wire[7:0] sbox_fwd_o;
 	wire[7:0] sbox_inv_o;
 

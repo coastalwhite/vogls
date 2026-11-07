@@ -1,5 +1,5 @@
 // vogls: verify-stdout
 module x();
-    wire a;
+    reg a;
     initial a = $vogls_dbg(42);
 endmodule
