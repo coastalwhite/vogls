@@ -1,7 +1,7 @@
 module aes_mvn(vec, mat, data_o);
     input [7:0] vec;
     input [63:0] mat;
-    output data_o;
+    output reg data_o;
 
 	always @* begin
 		data_o =

@@ -1,6 +1,6 @@
 module top_module ( 
     input [3:0] in, 
-    output [1:0] pos
+    output reg [1:0] pos
 );
     always @(*) begin
         case (in)

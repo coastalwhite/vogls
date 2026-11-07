@@ -9,7 +9,7 @@ endmodule
 
 module top2 ();
     reg [1:0] a;
-    wire z;
+    reg z;
 
     bufmod _b0 ( .i(a[0]), .o(z) );
 

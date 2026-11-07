@@ -1,5 +1,5 @@
 module x();
-    wire y;
+    reg y;
 
     initial begin
         y <= 0;

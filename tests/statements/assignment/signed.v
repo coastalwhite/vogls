@@ -1,5 +1,5 @@
 module x();
-    wire [7:0] y;
+    reg [7:0] y;
     initial begin
         // Blocking Assignment
         y = $signed(4'h8);
