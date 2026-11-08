@@ -1252,7 +1252,7 @@ impl Bits {
                 let (lhs_val, lhs_spc) = lhs.to_u64_slices();
                 let (rhs_val, rhs_spc) = rhs.to_u64_slices();
                 let nwords = lhs_val.len();
-                let mut dst = vec![0u64; nwords];
+                let mut dst = vec![0u64; nwords * 2];
                 for i in 0..nwords - 1 {
                     (dst[i], dst[nwords + i]) = fv_op(
                         lhs_val[i],

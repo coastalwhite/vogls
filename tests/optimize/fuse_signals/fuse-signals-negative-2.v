@@ -1,7 +1,7 @@
 `timescale 1fs / 1fs
 module top();
     reg a, b;
-    reg [1:0] e;
+    wire [1:0] e;
 
     assign e[0] = a;
     assign e[1] = b;

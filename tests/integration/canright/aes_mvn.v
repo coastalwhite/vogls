@@ -5,7 +5,7 @@
 module tb();
     reg [7:0] vec;
     reg [63:0] mat;
-    reg [7:0] o;
+    wire [7:0] o;
 
     aes_mvn m(vec, mat, o);
 

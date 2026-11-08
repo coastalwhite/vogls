@@ -19,7 +19,7 @@ endmodule
 module tb();
     reg [7:0] vec;
     reg [63:0] mat;
-    reg o;
+    wire o;
 
     aes_mvn m(vec, mat, o);
 

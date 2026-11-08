@@ -1,7 +1,8 @@
 // vogls: verify-ir
 // vogls: mode=template
 module tb();
-    reg a, b, c, d, e;
+    wire a, b, c, d;
+    reg e;
     assign a = b, b = c, c = d, d = e;
 
 `ifndef __VOGLS_VERIFY_IR

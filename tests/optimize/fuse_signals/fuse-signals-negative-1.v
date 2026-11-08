@@ -1,10 +1,11 @@
 module top();
     reg a, b, c;
     reg [1:0] e;
+    wire [1:0] ew;
 
-    assign e[0] = a;
-    assign e[1] = b;
-    assign c = a;
+    assign ew[0] = a;
+    assign ew[1] = b;
+    assign ew = e;
 
     initial begin
         #1 e = 2'b11;

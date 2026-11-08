@@ -1,5 +1,6 @@
 module tb();
-	reg [7:0] x, y;
+	reg [7:0] x;
+    wire [7:0] y;
 
     function [7:0] S;
     input    [7:0] x;
