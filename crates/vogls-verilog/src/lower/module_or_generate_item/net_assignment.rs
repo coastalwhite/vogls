@@ -99,9 +99,7 @@ fn assign_net<'a>(
 
     // Optimization: Try to alias LValue and RValue. This allows a future pass to eliminate the
     // marshalling process. An alias cannot be delayed.
-    if delay3.is_none()
-        && try_fuse_net_assignment(ctx, mctx, scope, net_symbol, rvalue) == FuseResult::Success
-    {
+    if delay3.is_none() && try_fuse_net_assignment(ctx, mctx, scope, net_symbol, rvalue).is_ok() {
         return Ok(());
     }
 
@@ -190,11 +188,7 @@ pub fn try_fuse_net_assignment<'a>(
     });
 
     // Sources
-    if try_expr_to_fuse_sources(ctx, &mctx.gl, &mut mctx.fuse_srcs_scratch, scope, rvalue)
-        == FuseResult::Failed
-    {
-        return FuseResult::Failed;
-    }
+    try_expr_to_fuse_sources(ctx, &mctx.gl, &mut mctx.fuse_srcs_scratch, scope, rvalue)?;
 
     try_fuse_srcs_to_dsts(
         &mctx.gl,

@@ -42,9 +42,7 @@ pub fn lower<'a>(
 
         // Optimization: Try to alias the expression into the assignee. If this is successful,
         // future analysis may be able to completely remove this process.
-        if delay3.is_none()
-            && try_fuse_assign(ctx, mctx, scope, ast_net_assignment) == FuseResult::Success
-        {
+        if delay3.is_none() && try_fuse_assign(ctx, mctx, scope, ast_net_assignment).is_ok() {
             continue;
         }
 
@@ -191,30 +189,24 @@ fn try_fuse_assign<'a>(
     // Destinations
     // Iterate net lvalues least significant to most significant.
     for net_flat_lvalue in net_assignment.net_lvalue.0.iter().rev() {
-        if try_net_flat_lvalue_to_dsts(
+        try_net_flat_lvalue_to_dsts(
             ctx,
             &mctx.gl,
             &mut mctx.fuse_dsts_scratch,
             &mut mctx.fuse_srcs_scratch,
             scope,
             net_flat_lvalue,
-        ) == FuseResult::Failed
-        {
-            return FuseResult::Failed;
-        }
+        )?;
     }
 
     // Sources
-    if try_expr_to_fuse_sources(
+    try_expr_to_fuse_sources(
         ctx,
         &mctx.gl,
         &mut mctx.fuse_srcs_scratch,
         scope,
         net_assignment.expression,
-    ) == FuseResult::Failed
-    {
-        return FuseResult::Failed;
-    }
+    )?;
 
     try_fuse_srcs_to_dsts(
         &mctx.gl,

@@ -13,8 +13,7 @@ use crate::elaborate::{SignalSymbol, VSymbol};
 use crate::lower::addressing::{Address, LValueAddressingContext, lower_addressing};
 use crate::lower::expression::{self, get_expr_type};
 use crate::lower::fuse::{
-    FuseDestination, FuseResult, FuseSource, FuseSourceContent, FuseType, SignalSide,
-    convert_fuse_srcs_to_dsts, try_expr_to_fuse, try_expr_to_fuse_sources, try_fuse_srcs_to_dsts,
+    FuseDestination, FuseFailure, FuseResult, FuseSource, FuseSourceContent, FuseType, RequiredFuseSignalKind, SignalSide, convert_fuse_srcs_to_dsts, try_expr_to_fuse, try_expr_to_fuse_sources, try_fuse_srcs_to_dsts
 };
 use crate::lower::{
     LowerContext, MutLowerContext, VType, resolve_symbol_id, try_resolve_hident, unwrap_get_signal,
@@ -210,7 +209,7 @@ fn assign_input_port<'a>(
 ) -> Result<(), ()> {
     let port = unwrap_get_signal(&ctx.table, port);
 
-    if try_fuse_input_port(ctx, mctx, scope, expr, port, expr_slice) == FuseResult::Success {
+    if try_fuse_input_port(ctx, mctx, scope, expr, port, expr_slice).is_ok() {
         return Ok(());
     }
 
@@ -262,16 +261,10 @@ fn try_fuse_input_port<'a>(
     });
 
     // Sources
-    if try_expr_to_fuse_sources(ctx, &mctx.gl, &mut mctx.fuse_srcs_scratch, scope, expr)
-        == FuseResult::Failed
-    {
-        return FuseResult::Failed;
-    }
+    try_expr_to_fuse_sources(ctx, &mctx.gl, &mut mctx.fuse_srcs_scratch, scope, expr)?;
     if let Some(expr_slice) = expr_slice {
         // If we only include a part of the expression, we slice fuse sources afterwards.
-        if slice_fuse_sources(&mut mctx.fuse_srcs_scratch, expr_slice) == FuseResult::Failed {
-            return FuseResult::Failed;
-        }
+        slice_fuse_sources(&mut mctx.fuse_srcs_scratch, expr_slice)?;
     }
 
     try_fuse_srcs_to_dsts(
@@ -292,7 +285,7 @@ fn assign_port_output<'a>(
 ) -> Result<(), ()> {
     let output = unwrap_get_signal(&ctx.table, output_net);
 
-    if try_fuse_output_port(ctx, mctx, scope, expr, output, expr_slice) == FuseResult::Success {
+    if try_fuse_output_port(ctx, mctx, scope, expr, output, expr_slice).is_ok() {
         return Ok(());
     }
 
@@ -439,28 +432,20 @@ fn try_fuse_output_port<'a>(
     mctx.fuse_dsts_scratch.clear();
 
     // Destinations
-    if try_expr_to_fuse(
+    try_expr_to_fuse(
         ctx,
         &mctx.gl,
         &mut mctx.fuse_srcs_scratch,
         scope,
         expr,
         SignalSide::BlockingDrive,
-    ) == FuseResult::Failed
-    {
-        return FuseResult::Failed;
-    }
+        RequiredFuseSignalKind::Net,
+    )?;
     if let Some(expr_slice) = expr_slice {
         // If we only include a part of the expression, we slice fuse destinations afterwards.
-        if slice_fuse_sources(&mut mctx.fuse_srcs_scratch, expr_slice) == FuseResult::Failed {
-            return FuseResult::Failed;
-        }
+        slice_fuse_sources(&mut mctx.fuse_srcs_scratch, expr_slice)?;
     }
-    if convert_fuse_srcs_to_dsts(0, &mut mctx.fuse_dsts_scratch, &mut mctx.fuse_srcs_scratch)
-        == FuseResult::Failed
-    {
-        return FuseResult::Failed;
-    }
+    convert_fuse_srcs_to_dsts(0, &mut mctx.fuse_dsts_scratch, &mut mctx.fuse_srcs_scratch)?;
 
     // Sources
     mctx.fuse_srcs_scratch.push(FuseSource {
@@ -525,8 +510,8 @@ fn slice_fuse_sources(srcs: &mut Vec<FuseSource>, slice: SignalSlice) -> FuseRes
     });
 
     if failed {
-        return FuseResult::Failed;
+        return FuseResult::Err(FuseFailure);
     }
 
-    FuseResult::Success
+    FuseResult::Ok(()) 
 }

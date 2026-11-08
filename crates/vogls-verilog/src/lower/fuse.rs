@@ -11,7 +11,7 @@ use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::Expr;
 use crate::ast::statement::NetLValueFlat;
 use crate::ast::{AstId, AstIdRange, HIdent};
-use crate::elaborate::VSymbol;
+use crate::elaborate::{SignalKind, VSymbol};
 use crate::lower::addressing::lower_addressing;
 use crate::lower::try_resolve_hident;
 use crate::number::Sign;
@@ -19,12 +19,9 @@ use crate::number::Sign;
 use super::addressing::{ConstantAddressingContext, RangeExpr};
 use super::{Diagnostics, LowerContext, VType};
 
-#[must_use]
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum FuseResult {
-    Success,
-    Failed,
-}
+pub struct FuseFailure;
+pub type FuseResult = Result<(), FuseFailure>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FuseType {
@@ -115,13 +112,13 @@ pub fn try_fuse_srcs_to_dsts(
 
         slice.msb() >= gl.signals[signal].size.get()
     }) {
-        return FuseResult::Failed;
+        return FuseResult::Err(FuseFailure);
     }
     if dsts
         .iter()
         .any(|dst| dst.slice.msb() >= gl.signals[dst.signal].size.get())
     {
-        return FuseResult::Failed;
+        return FuseResult::Err(FuseFailure);
     }
 
     // Fast path and base case: both sides consist of 1 signal that has the same bit length and
@@ -142,7 +139,7 @@ pub fn try_fuse_srcs_to_dsts(
             drivee: dst.signal,
             drivee_slice: signal_slice_to_opt(&gl.signals, dst.signal, dst.slice),
         });
-        return FuseResult::Success;
+        return FuseResult::Ok(());
     }
 
     use FuseType as T;
@@ -158,7 +155,7 @@ pub fn try_fuse_srcs_to_dsts(
         // Don't do any kind of fusing if only one side is a real.
         if (src.ty == T::Real) ^ (dst.ty == T::Real) {
             connections.truncate(start_connections_len);
-            return FuseResult::Failed;
+            return FuseResult::Err(FuseFailure);
         }
 
         let src_bit_length = src.bit_length();
@@ -213,7 +210,7 @@ pub fn try_fuse_srcs_to_dsts(
     //    that it would make sense to have some kind of repeated driver.
     if dst_i < dsts.len() && srcs.last().is_some_and(|src| src.ty == T::Signed) {
         connections.truncate(start_connections_len);
-        return FuseResult::Failed;
+        return FuseResult::Err(FuseFailure);
     }
 
     // Zero-extend the destination.
@@ -232,7 +229,7 @@ pub fn try_fuse_srcs_to_dsts(
         dst_bit_offset = 0;
     }
 
-    FuseResult::Success
+    FuseResult::Ok(())
 }
 
 pub fn convert_fuse_srcs_to_dsts(
@@ -259,10 +256,10 @@ pub fn convert_fuse_srcs_to_dsts(
 
     if failed_conversion {
         fuse_dsts.truncate(dsts_start_length);
-        return FuseResult::Failed;
+        return FuseResult::Err(FuseFailure);
     }
 
-    FuseResult::Success
+    FuseResult::Ok(())
 }
 
 pub fn try_expr_to_fuse_sources<'a>(
@@ -272,12 +269,25 @@ pub fn try_expr_to_fuse_sources<'a>(
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
 ) -> FuseResult {
-    try_expr_to_fuse(ctx, gl, fuse_srcs, scope, expr, SignalSide::Probe)
+    try_expr_to_fuse(
+        ctx,
+        gl,
+        fuse_srcs,
+        scope,
+        expr,
+        SignalSide::Probe,
+        RequiredFuseSignalKind::None,
+    )
 }
 
 pub enum SignalSide {
     Probe,
     BlockingDrive,
+}
+
+pub enum RequiredFuseSignalKind {
+    None,
+    Net,
 }
 
 pub fn try_expr_to_fuse<'a>(
@@ -287,6 +297,7 @@ pub fn try_expr_to_fuse<'a>(
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
     side: SignalSide,
+    required_signal_kind: RequiredFuseSignalKind,
 ) -> FuseResult {
     // @TODO: This could also allow for `Concat` and `Replication`.
 
@@ -300,6 +311,7 @@ pub fn try_expr_to_fuse<'a>(
             exprs.into_constant(),
             *range_expr,
             side,
+            required_signal_kind,
         ),
         Expr::Sized(sized) => {
             let sized = &ctx.arenas.sized_numbers[sized.item.at];
@@ -312,9 +324,9 @@ pub fn try_expr_to_fuse<'a>(
                 content: FuseSourceContent::Constant(value),
                 ty,
             });
-            FuseResult::Success
+            FuseResult::Ok(())
         }
-        _ => FuseResult::Failed,
+        _ => FuseResult::Err(FuseFailure),
     }
 }
 
@@ -327,6 +339,7 @@ pub fn try_ident_to_fuse_sources<'a, R>(
     exprs: AstIdRange<'a, ConstantExpr<'a>>,
     range_expr: Option<R>,
     side: SignalSide,
+    required_signal_kind: RequiredFuseSignalKind,
 ) -> FuseResult
 where
     R: for<'b> Into<RangeExpr<ConstantAddressingContext<'a, 'b>>>,
@@ -338,12 +351,21 @@ where
         ident,
         &mut Diagnostics::default(),
     ) else {
-        return FuseResult::Failed;
+        return FuseResult::Err(FuseFailure);
     };
     let symbol = match &ctx.table[symbol_id].content {
         VSymbol::Signal(n) => n,
-        _ => return FuseResult::Failed,
+        _ => return FuseResult::Err(FuseFailure),
     };
+
+    match required_signal_kind {
+        RequiredFuseSignalKind::None => {}
+        RequiredFuseSignalKind::Net => {
+            if symbol.kind != SignalKind::Net {
+                return FuseResult::Err(FuseFailure);
+            }
+        }
+    }
 
     let signal = match side {
         SignalSide::Probe => symbol.terminals.probe_signal(),
@@ -365,7 +387,7 @@ where
             },
             ty,
         });
-        return FuseResult::Success;
+        return FuseResult::Ok(());
     }
 
     let mut actx = ConstantAddressingContext {
@@ -386,12 +408,12 @@ where
         exprs.iter(),
         range_expr.map(Into::into),
     ) else {
-        return FuseResult::Failed;
+        return FuseResult::Err(FuseFailure);
     };
 
     // Array element overflow.
     if matches!(address.array, Some((_, true))) {
-        return FuseResult::Failed;
+        return FuseResult::Err(FuseFailure);
     }
 
     // A bit- or part-select past the element reads x, not the neighbouring element.
@@ -400,15 +422,15 @@ where
             || elem_offset + i64::from(address.output_width.get())
                 > i64::from(symbol.ty.bit_length().get()))
     {
-        return FuseResult::Failed;
+        return FuseResult::Err(FuseFailure);
     }
 
     let Some(offset) = address.signal_offset_as_u32() else {
-        return FuseResult::Failed;
+        return FuseResult::Err(FuseFailure);
     };
 
     let Some(output_slice) = SignalSlice::from_width(offset, address.output_width) else {
-        return FuseResult::Failed;
+        return FuseResult::Err(FuseFailure);
     };
 
     let ty = if symbol.ty.is_real() {
@@ -427,7 +449,7 @@ where
         },
         ty,
     });
-    FuseResult::Success
+    FuseResult::Ok(())
 }
 
 pub fn try_net_flat_lvalue_to_dsts<'a>(
@@ -439,7 +461,7 @@ pub fn try_net_flat_lvalue_to_dsts<'a>(
     net_lvalue: AstId<'a, NetLValueFlat<'a>>,
 ) -> FuseResult {
     let srcs_start_length = fuse_srcs.len();
-    if try_ident_to_fuse_sources(
+    try_ident_to_fuse_sources(
         ctx,
         gl,
         fuse_srcs,
@@ -448,10 +470,8 @@ pub fn try_net_flat_lvalue_to_dsts<'a>(
         net_lvalue.constant_exprs,
         net_lvalue.constant_range_expression.map(|r| *r),
         SignalSide::BlockingDrive,
-    ) == FuseResult::Failed
-    {
-        return FuseResult::Failed;
-    }
+        RequiredFuseSignalKind::Net,
+    )?;
 
     convert_fuse_srcs_to_dsts(srcs_start_length, fuse_dsts, fuse_srcs)
 }
