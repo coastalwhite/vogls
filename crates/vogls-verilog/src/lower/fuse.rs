@@ -8,7 +8,7 @@ use vogls_ir::{
 };
 
 use crate::ast::constant_expr::ConstantExpr;
-use crate::ast::expr::Expr;
+use crate::ast::expr::{Expr, Replication};
 use crate::ast::statement::NetLValueFlat;
 use crate::ast::{AstId, AstIdRange, HIdent};
 use crate::elaborate::{SignalKind, VSymbol};
@@ -17,20 +17,20 @@ use crate::lower::try_resolve_hident;
 use crate::number::Sign;
 
 use super::addressing::{ConstantAddressingContext, RangeExpr};
-use super::{Diagnostics, LowerContext, VType};
+use super::{Diagnostics, LowerContext, VType, eval_constant_expr, hident_span};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct FuseFailure;
 pub type FuseResult = Result<(), FuseFailure>;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum FuseType {
+pub enum SiteType {
     Unsigned,
     Signed,
     Real,
 }
 
-pub enum FuseSourceContent {
+pub enum SourceSiteContent {
     Constant(Bits),
     Signal {
         signal: SignalKey,
@@ -38,29 +38,41 @@ pub enum FuseSourceContent {
     },
 }
 
-pub struct FuseSource {
-    pub content: FuseSourceContent,
-    pub ty: FuseType,
+pub struct SourceSite {
+    pub content: SourceSiteContent,
+    pub ty: SiteType,
 }
 
-pub struct FuseDestination {
+pub struct DestinationSite {
     pub signal: SignalKey,
     pub slice: SignalSlice,
-    pub ty: FuseType,
+    pub ty: SiteType,
 }
 
-impl FuseSource {
+#[derive(Clone, Copy)]
+pub enum SiteTerminal {
+    Probe,
+    BlockingDrive,
+}
+
+#[derive(Clone, Copy)]
+pub enum RequiredSignalKind {
+    None,
+    Net,
+}
+
+impl SourceSite {
     pub fn bit_length(&self) -> VectorSize {
         match &self.content {
-            FuseSourceContent::Constant(bits) => bits.size(),
-            FuseSourceContent::Signal { signal: _, slice } => slice.width(),
+            SourceSiteContent::Constant(bits) => bits.size(),
+            SourceSiteContent::Signal { signal: _, slice } => slice.width(),
         }
     }
 
-    fn to_destination(&self) -> Option<FuseDestination> {
+    fn to_destination(&self) -> Option<DestinationSite> {
         match self.content {
-            FuseSourceContent::Constant(_) => None,
-            FuseSourceContent::Signal { signal, slice } => Some(FuseDestination {
+            SourceSiteContent::Constant(_) => None,
+            SourceSiteContent::Signal { signal, slice } => Some(DestinationSite {
                 signal,
                 slice,
                 ty: self.ty,
@@ -69,17 +81,17 @@ impl FuseSource {
     }
 }
 
-impl From<VType> for FuseType {
+impl From<VType> for SiteType {
     fn from(value: VType) -> Self {
         match value {
-            VType::SignedNet(_) => FuseType::Signed,
-            VType::UnsignedNet(_) => FuseType::Unsigned,
-            VType::Real => FuseType::Real,
+            VType::SignedNet(_) => SiteType::Signed,
+            VType::UnsignedNet(_) => SiteType::Unsigned,
+            VType::Real => SiteType::Real,
         }
     }
 }
 
-impl FuseDestination {
+impl DestinationSite {
     pub fn bit_length(&self) -> VectorSize {
         self.slice.width()
     }
@@ -98,15 +110,15 @@ pub fn try_fuse_srcs_to_dsts(
     gl: &GlobalContext,
     connections: &mut Vec<InputEdge>,
 
-    // Fuse sources from least significant bits to most significant bits.
-    srcs: &[FuseSource],
+    // Source sites from least significant bits to most significant bits.
+    srcs: &[SourceSite],
 
-    // Fuse destinations from least significant bits to most significant bits.
-    dsts: &[FuseDestination],
+    // Destination sites from least significant bits to most significant bits.
+    dsts: &[DestinationSite],
 ) -> FuseResult {
     // Prevent the fuse if any source or destination reads a signal out of bounds.
     if srcs.iter().any(|src| {
-        let FuseSourceContent::Signal { signal, slice } = src.content else {
+        let SourceSiteContent::Signal { signal, slice } = src.content else {
             return false;
         };
 
@@ -129,8 +141,8 @@ pub fn try_fuse_srcs_to_dsts(
         && (src.ty == T::Real) == (dst.ty == T::Real)
     {
         let driver = match &src.content {
-            FuseSourceContent::Constant(bits) => Driver::Constant(bits.clone()),
-            FuseSourceContent::Signal { signal, slice } => {
+            SourceSiteContent::Constant(bits) => Driver::Constant(bits.clone()),
+            SourceSiteContent::Signal { signal, slice } => {
                 Driver::Signal(*signal, signal_slice_to_opt(&gl.signals, *signal, *slice))
             }
         };
@@ -142,7 +154,7 @@ pub fn try_fuse_srcs_to_dsts(
         return FuseResult::Ok(());
     }
 
-    use FuseType as T;
+    use SiteType as T;
     let start_connections_len = connections.len();
 
     let mut src_i = 0;
@@ -170,10 +182,10 @@ pub fn try_fuse_srcs_to_dsts(
         let step_bit_length = cmp::min(src_rem_bit_length, dst_rem_bit_length);
 
         let driver = match &src.content {
-            FuseSourceContent::Constant(bits) => {
+            SourceSiteContent::Constant(bits) => {
                 Driver::Constant(bits.slicez(src_bit_offset, step_bit_length))
             }
-            FuseSourceContent::Signal { signal, slice } => {
+            SourceSiteContent::Signal { signal, slice } => {
                 let offset_slice =
                     SignalSlice::from_width(src_bit_offset, step_bit_length).unwrap();
                 let slice = slice.subslice(offset_slice).unwrap();
@@ -232,22 +244,22 @@ pub fn try_fuse_srcs_to_dsts(
     FuseResult::Ok(())
 }
 
-pub fn convert_fuse_srcs_to_dsts(
+pub fn convert_src_sites_to_dsts(
     srcs_start_length: usize,
-    fuse_dsts: &mut Vec<FuseDestination>,
-    fuse_srcs: &mut Vec<FuseSource>,
+    dst_sites: &mut Vec<DestinationSite>,
+    src_sites: &mut Vec<SourceSite>,
 ) -> FuseResult {
     let mut failed_conversion = false;
-    let dsts_start_length = fuse_dsts.len();
-    fuse_dsts.extend(fuse_srcs.drain(srcs_start_length..).map(|src| {
+    let dsts_start_length = dst_sites.len();
+    dst_sites.extend(src_sites.drain(srcs_start_length..).map(|src| {
         let Some(dst) = src.to_destination() else {
             failed_conversion = true;
 
             // Insert a dummy element.
-            return FuseDestination {
+            return DestinationSite {
                 signal: SignalKey::default(),
                 slice: SignalSlice::with_end(SCALAR_VSIZE),
-                ty: FuseType::Unsigned,
+                ty: SiteType::Unsigned,
             };
         };
 
@@ -255,139 +267,163 @@ pub fn convert_fuse_srcs_to_dsts(
     }));
 
     if failed_conversion {
-        fuse_dsts.truncate(dsts_start_length);
+        dst_sites.truncate(dsts_start_length);
         return FuseResult::Err(FuseFailure);
     }
 
     FuseResult::Ok(())
 }
 
-pub fn try_expr_to_fuse_sources<'a>(
+pub fn expr_to_src_sites<'a>(
     ctx: &LowerContext<'a, '_>,
     gl: &GlobalContext,
-    fuse_srcs: &mut Vec<FuseSource>,
+    fuse_srcs: &mut Vec<SourceSite>,
     scope: SymbolId,
+    diagnostics: &mut Diagnostics,
     expr: AstId<'a, Expr<'a>>,
-) -> FuseResult {
-    try_expr_to_fuse(
-        ctx,
-        gl,
-        fuse_srcs,
-        scope,
-        expr,
-        SignalSide::Probe,
-        RequiredFuseSignalKind::None,
-    )
-}
+    side: SiteTerminal,
+    required_signal_kind: RequiredSignalKind,
+) -> Result<(), ()> {
+    let mut error = false;
+    let mut expr_stack = Vec::new();
 
-pub enum SignalSide {
-    Probe,
-    BlockingDrive,
-}
+    expr_stack.push(expr);
 
-pub enum RequiredFuseSignalKind {
-    None,
-    Net,
-}
+    while let Some(expr) = expr_stack.pop() {
+        match &*expr {
+            Expr::Ident(ident, exprs, range_expr) => {
+                error |= ident_to_src_sites(
+                    ctx,
+                    gl,
+                    fuse_srcs,
+                    scope,
+                    diagnostics,
+                    *ident,
+                    exprs.into_constant(),
+                    *range_expr,
+                    side,
+                    required_signal_kind,
+                )
+                .is_err()
+            }
+            Expr::Sized(sized) => {
+                let sized = &ctx.arenas.sized_numbers[sized.item.at];
+                let ty = match sized.sign {
+                    Sign::Unsigned => SiteType::Unsigned,
+                    Sign::Signed => SiteType::Signed,
+                };
+                let value = sized.value.clone();
+                fuse_srcs.push(SourceSite {
+                    content: SourceSiteContent::Constant(value),
+                    ty,
+                });
+            }
+            Expr::Concatenation(exprs) => {
+                // @TODO: Handle zero-sized replications.
+                expr_stack.extend(exprs.iter());
+            }
+            Expr::Replication(Replication {
+                constant_expr,
+                exprs,
+            }) => {
+                let Ok(repetitions) = eval_constant_expr(
+                    gl,
+                    ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    diagnostics,
+                    *constant_expr,
+                    None,
+                ) else {
+                    error = true;
+                    continue;
+                };
 
-pub fn try_expr_to_fuse<'a>(
-    ctx: &LowerContext<'a, '_>,
-    gl: &GlobalContext,
-    fuse_srcs: &mut Vec<FuseSource>,
-    scope: SymbolId,
-    expr: AstId<'a, Expr<'a>>,
-    side: SignalSide,
-    required_signal_kind: RequiredFuseSignalKind,
-) -> FuseResult {
-    // @TODO: This could also allow for `Concat` and `Replication`.
+                let Some(repetitions) = repetitions.as_integer().filter(|v| *v > 0) else {
+                    diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(*constant_expr),
+                        "cannot be used for number of repetitions",
+                    );
+                    error = true;
+                    continue;
+                };
 
-    match &*expr {
-        Expr::Ident(ident, exprs, range_expr) => try_ident_to_fuse_sources(
-            ctx,
-            gl,
-            fuse_srcs,
-            scope,
-            *ident,
-            exprs.into_constant(),
-            *range_expr,
-            side,
-            required_signal_kind,
-        ),
-        Expr::Sized(sized) => {
-            let sized = &ctx.arenas.sized_numbers[sized.item.at];
-            let ty = match sized.sign {
-                Sign::Unsigned => FuseType::Unsigned,
-                Sign::Signed => FuseType::Signed,
-            };
-            let value = sized.value.clone();
-            fuse_srcs.push(FuseSource {
-                content: FuseSourceContent::Constant(value),
-                ty,
-            });
-            FuseResult::Ok(())
+                for _ in 0..repetitions {
+                    expr_stack.extend(exprs.iter());
+                }
+            }
+            _ => {
+                diagnostics.output_expr_not_allowed(ctx.arenas.get_span(expr));
+                error = true;
+            }
         }
-        _ => FuseResult::Err(FuseFailure),
     }
+
+    if error {
+        return Err(());
+    }
+    Ok(())
 }
 
-pub fn try_ident_to_fuse_sources<'a, R>(
+pub fn ident_to_src_sites<'a, R>(
     ctx: &LowerContext<'a, '_>,
     gl: &GlobalContext,
-    fuse_srcs: &mut Vec<FuseSource>,
+    fuse_srcs: &mut Vec<SourceSite>,
     scope: SymbolId,
+    diagnostics: &mut Diagnostics,
     ident: HIdent<'_>,
     exprs: AstIdRange<'a, ConstantExpr<'a>>,
     range_expr: Option<R>,
-    side: SignalSide,
-    required_signal_kind: RequiredFuseSignalKind,
-) -> FuseResult
+    side: SiteTerminal,
+    required_signal_kind: RequiredSignalKind,
+) -> Result<(), ()>
 where
     R: for<'b> Into<RangeExpr<ConstantAddressingContext<'a, 'b>>>,
 {
-    let Ok(symbol_id) = try_resolve_hident(
-        scope,
-        &ctx.table,
-        ctx.arenas,
-        ident,
-        &mut Diagnostics::default(),
-    ) else {
-        return FuseResult::Err(FuseFailure);
-    };
+    let symbol_id = try_resolve_hident(scope, &ctx.table, ctx.arenas, ident, diagnostics)?;
     let symbol = match &ctx.table[symbol_id].content {
         VSymbol::Signal(n) => n,
-        _ => return FuseResult::Err(FuseFailure),
+        _ => {
+            diagnostics
+                .not_yet_implemented(hident_span(ctx.arenas, ident), "cannot be used as signal");
+            return Err(());
+        }
     };
 
     match required_signal_kind {
-        RequiredFuseSignalKind::None => {}
-        RequiredFuseSignalKind::Net => {
+        RequiredSignalKind::None => {}
+        RequiredSignalKind::Net => {
             if symbol.kind != SignalKind::Net {
-                return FuseResult::Err(FuseFailure);
+                diagnostics.not_yet_implemented(
+                    hident_span(ctx.arenas, ident),
+                    "only nets can be used here",
+                );
+                return Err(());
             }
         }
     }
 
     let signal = match side {
-        SignalSide::Probe => symbol.terminals.probe_signal(),
-        SignalSide::BlockingDrive => symbol.terminals.blocking_drive_signal(),
+        SiteTerminal::Probe => symbol.terminals.probe_signal(),
+        SiteTerminal::BlockingDrive => symbol.terminals.blocking_drive_signal(),
     };
 
     // Fast path: no part select or array indexing.
     if exprs.is_empty() && range_expr.is_none() && symbol.dims.is_empty() {
         let (ty, bit_length) = match symbol.ty {
-            VType::SignedNet(bit_length) => (FuseType::Signed, bit_length),
-            VType::UnsignedNet(bit_length) => (FuseType::Unsigned, bit_length),
-            VType::Real => (FuseType::Real, VSIZE_64),
+            VType::SignedNet(bit_length) => (SiteType::Signed, bit_length),
+            VType::UnsignedNet(bit_length) => (SiteType::Unsigned, bit_length),
+            VType::Real => (SiteType::Real, VSIZE_64),
         };
 
-        fuse_srcs.push(FuseSource {
-            content: FuseSourceContent::Signal {
+        fuse_srcs.push(SourceSite {
+            content: SourceSiteContent::Signal {
                 signal,
                 slice: SignalSlice::with_end(bit_length),
             },
             ty,
         });
-        return FuseResult::Ok(());
+        return Ok(());
     }
 
     let mut actx = ConstantAddressingContext {
@@ -395,25 +431,38 @@ where
         arenas: ctx.arenas,
         table: &ctx.table,
         scope,
-        diagnostics: &mut Diagnostics::default(),
+        diagnostics,
         loc: 0,
         _pd: std::marker::PhantomData,
     };
 
-    let Ok(address) = lower_addressing(
+    let address = lower_addressing(
         &mut actx,
         symbol.ty.bit_length(),
         &symbol.dims,
         symbol.transform,
         exprs.iter(),
         range_expr.map(Into::into),
-    ) else {
-        return FuseResult::Err(FuseFailure);
+    )?;
+
+    let ty = if symbol.ty.is_real() {
+        SiteType::Real
+    } else if address.is_unsigned {
+        SiteType::Unsigned
+    } else if symbol.ty.is_signed_net() {
+        SiteType::Signed
+    } else {
+        SiteType::Unsigned
     };
 
     // Array element overflow.
     if matches!(address.array, Some((_, true))) {
-        return FuseResult::Err(FuseFailure);
+        // @TODO: Warn.
+        fuse_srcs.push(SourceSite {
+            content: SourceSiteContent::Constant(Bits::new_unknown(address.output_width)),
+            ty,
+        });
+        return Ok(());
     }
 
     // A bit- or part-select past the element reads x, not the neighbouring element.
@@ -422,56 +471,59 @@ where
             || elem_offset + i64::from(address.output_width.get())
                 > i64::from(symbol.ty.bit_length().get()))
     {
-        return FuseResult::Err(FuseFailure);
+        // @TODO: Warn.
+        fuse_srcs.push(SourceSite {
+            content: SourceSiteContent::Constant(Bits::new_unknown(address.output_width)),
+            ty,
+        });
+        return Ok(());
     }
 
     let Some(offset) = address.signal_offset_as_u32() else {
-        return FuseResult::Err(FuseFailure);
+        diagnostics.not_yet_implemented(hident_span(ctx.arenas, ident), "overflow");
+        return Err(());
     };
 
     let Some(output_slice) = SignalSlice::from_width(offset, address.output_width) else {
-        return FuseResult::Err(FuseFailure);
+        diagnostics.not_yet_implemented(hident_span(ctx.arenas, ident), "overflow");
+        return Err(());
     };
 
-    let ty = if symbol.ty.is_real() {
-        FuseType::Real
-    } else if address.is_unsigned {
-        FuseType::Unsigned
-    } else if symbol.ty.is_signed_net() {
-        FuseType::Signed
-    } else {
-        FuseType::Unsigned
-    };
-    fuse_srcs.push(FuseSource {
-        content: FuseSourceContent::Signal {
+    fuse_srcs.push(SourceSite {
+        content: SourceSiteContent::Signal {
             signal,
             slice: output_slice,
         },
         ty,
     });
-    FuseResult::Ok(())
+    Ok(())
 }
 
 pub fn try_net_flat_lvalue_to_dsts<'a>(
     ctx: &LowerContext<'a, '_>,
     gl: &GlobalContext,
-    fuse_dsts: &mut Vec<FuseDestination>,
-    fuse_srcs: &mut Vec<FuseSource>,
+    dst_sites: &mut Vec<DestinationSite>,
+    src_sites: &mut Vec<SourceSite>,
     scope: SymbolId,
     net_lvalue: AstId<'a, NetLValueFlat<'a>>,
 ) -> FuseResult {
-    let srcs_start_length = fuse_srcs.len();
-    try_ident_to_fuse_sources(
+    let srcs_start_length = src_sites.len();
+    if ident_to_src_sites(
         ctx,
         gl,
-        fuse_srcs,
+        src_sites,
         scope,
+        &mut Diagnostics::default(),
         net_lvalue.ident,
         net_lvalue.constant_exprs,
         net_lvalue.constant_range_expression.map(|r| *r),
-        SignalSide::BlockingDrive,
-        RequiredFuseSignalKind::Net,
-    )?;
+        SiteTerminal::BlockingDrive,
+        RequiredSignalKind::Net,
+    )
+    .is_err()
+    {
+        return Err(FuseFailure);
+    };
 
-    convert_fuse_srcs_to_dsts(srcs_start_length, fuse_dsts, fuse_srcs)
+    convert_src_sites_to_dsts(srcs_start_length, dst_sites, src_sites)
 }

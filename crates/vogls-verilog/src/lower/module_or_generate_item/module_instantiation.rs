@@ -1,7 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{
-    ConnectionDirection, ProcessBuilder, ProcessKind, SignalSlice, VariableKey, VectorSize,
-};
+use vogls_ir::{ConnectionDirection, ProcessBuilder, ProcessKind, SignalSlice, VectorSize};
 use vogls_utils::OrderedSet;
 
 use crate::ast::AstId;
@@ -10,13 +8,14 @@ use crate::ast::module::{
     ListOfPortConnections, ModuleInstance, ModuleInstantiation, NamedPortConnection,
 };
 use crate::elaborate::{SignalSymbol, VSymbol};
-use crate::lower::addressing::{Address, LValueAddressingContext, lower_addressing};
 use crate::lower::expression::{self, get_expr_type};
 use crate::lower::fuse::{
-    FuseDestination, FuseFailure, FuseResult, FuseSource, FuseSourceContent, FuseType, RequiredFuseSignalKind, SignalSide, convert_fuse_srcs_to_dsts, try_expr_to_fuse, try_expr_to_fuse_sources, try_fuse_srcs_to_dsts
+    DestinationSite, FuseFailure, FuseResult, RequiredSignalKind, SiteTerminal, SiteType,
+    SourceSite, SourceSiteContent, convert_src_sites_to_dsts, expr_to_src_sites,
+    try_fuse_srcs_to_dsts,
 };
 use crate::lower::{
-    LowerContext, MutLowerContext, VType, resolve_symbol_id, try_resolve_hident, unwrap_get_signal,
+    Diagnostics, LowerContext, MutLowerContext, VType, resolve_symbol_id, unwrap_get_signal,
 };
 
 /// Lower a Verilog module instantiation to Vogls IR.
@@ -254,17 +253,32 @@ fn try_fuse_input_port<'a>(
     mctx.fuse_dsts_scratch.clear();
 
     // Destinations
-    mctx.fuse_dsts_scratch.push(FuseDestination {
+    mctx.fuse_dsts_scratch.push(DestinationSite {
         signal: port.terminals.blocking_drive_signal(),
         slice: SignalSlice::with_end(port.ty.bit_length()),
         ty: port.ty.into(),
     });
 
     // Sources
-    try_expr_to_fuse_sources(ctx, &mctx.gl, &mut mctx.fuse_srcs_scratch, scope, expr)?;
+    if expr_to_src_sites(
+        ctx,
+        &mctx.gl,
+        &mut mctx.fuse_srcs_scratch,
+        scope,
+        &mut Diagnostics::default(),
+        expr,
+        SiteTerminal::Probe,
+        RequiredSignalKind::None,
+    )
+    .is_err()
+    {
+        return FuseResult::Err(FuseFailure);
+    };
     if let Some(expr_slice) = expr_slice {
         // If we only include a part of the expression, we slice fuse sources afterwards.
-        slice_fuse_sources(&mut mctx.fuse_srcs_scratch, expr_slice)?;
+        if slice_src_sites(&mut mctx.fuse_srcs_scratch, expr_slice).is_err() {
+            return Err(FuseFailure);
+        }
     }
 
     try_fuse_srcs_to_dsts(
@@ -285,186 +299,100 @@ fn assign_port_output<'a>(
 ) -> Result<(), ()> {
     let output = unwrap_get_signal(&ctx.table, output_net);
 
-    if try_fuse_output_port(ctx, mctx, scope, expr, output, expr_slice).is_ok() {
-        return Ok(());
+    mctx.fuse_srcs_scratch.clear();
+    mctx.fuse_dsts_scratch.clear();
+
+    // Destinations
+    expr_to_src_sites(
+        ctx,
+        &mctx.gl,
+        &mut mctx.fuse_srcs_scratch,
+        scope,
+        &mut mctx.diagnostics,
+        expr,
+        SiteTerminal::BlockingDrive,
+        RequiredSignalKind::Net,
+    )?;
+    if let Some(expr_slice) = expr_slice {
+        // If we only include a part of the expression, we slice fuse destinations afterwards.
+        if slice_src_sites(&mut mctx.fuse_srcs_scratch, expr_slice).is_err() {
+            mctx.diagnostics
+                .output_expr_not_allowed(ctx.arenas.get_span(expr));
+            return Err(());
+        }
+    }
+    if convert_src_sites_to_dsts(0, &mut mctx.fuse_dsts_scratch, &mut mctx.fuse_srcs_scratch)
+        .is_err()
+    {
+        mctx.diagnostics
+            .output_expr_not_allowed(ctx.arenas.get_span(expr));
+        return Err(());
     }
 
-    if expr_slice.is_some() {
-        mctx.diagnostics.not_yet_implemented(
-            ctx.arenas.get_span(expr),
-            "range specification with concat or repetition output port.",
-        );
-        return Err(());
+    mctx.fuse_srcs_scratch.push(SourceSite {
+        content: SourceSiteContent::Signal {
+            signal: output.terminals.probe_signal(),
+            slice: SignalSlice::with_end(output.ty.bit_length()),
+        },
+        ty: SiteType::from(output.ty),
+    });
+
+    if try_fuse_srcs_to_dsts(
+        &mctx.gl,
+        &mut mctx.connections,
+        &mctx.fuse_srcs_scratch,
+        &mctx.fuse_dsts_scratch,
+    )
+    .is_ok()
+    {
+        return Ok(());
     }
 
     let (proc_builder, mut bb_builder) =
         ProcessBuilder::new(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
     let entry_tr = proc_builder.entry();
 
-    let output_terminals = &output.terminals;
-    let probed = output.terminals.probe(mctx.gl(), &mut bb_builder);
+    let destination_size = mctx
+        .fuse_dsts_scratch
+        .iter()
+        .map(|d| d.bit_length())
+        .fold(Some(0u32), |l, r| l?.checked_add(r.get()))
+        .unwrap();
+    let destination_size = VectorSize::new(destination_size).unwrap();
 
-    let mut driving: Vec<(VariableKey, VType, AstId<Expr>)> = Vec::new();
-    driving.push((probed, output.ty, expr));
-
-    let mut sensitivity_list = OrderedSet::new();
-    sensitivity_list.insert(output_terminals.probe_signal());
-
-    let mut error = false;
-    while let Some((var, var_ty, expr)) = driving.pop() {
-        match &*expr {
-            Expr::Concatenation(exprs) => {
-                let mut shift = 0;
-                for e in exprs.iter().rev() {
-                    let e_ty = get_expr_type(
-                        &mctx.gl,
-                        ctx.arenas,
-                        &ctx.table,
-                        scope,
-                        &mut mctx.diagnostics,
-                        e,
-                    )?;
-                    let e_width = e_ty.bit_length();
-                    let subvar = bb_builder.slice_constant(mctx.gl(), var, shift, e_width);
-                    driving.push((subvar, e_ty, e));
-                    shift += e_width.get();
-                }
+    let output_signal = output.terminals.probe_signal();
+    let mut probed = bb_builder.probe(mctx.gl(), output_signal);
+    let source_size = mctx.gl.vars.size(probed);
+    if source_size != destination_size {
+        probed = match output.ty {
+            VType::SignedNet(_) | VType::UnsignedNet(_) if destination_size < source_size => {
+                bb_builder.truncate(mctx.gl(), probed, destination_size)
             }
-            Expr::Ident(ast_ident, exprs, range_expression) => {
-                let symbol_key = try_resolve_hident(
-                    scope,
-                    &ctx.table,
-                    ctx.arenas,
-                    *ast_ident,
-                    &mut mctx.diagnostics,
-                )?;
-                let VSymbol::Signal(s) = &ctx.table[symbol_key].content else {
-                    mctx.diagnostics
-                        .output_expr_not_allowed(ctx.arenas.get_span(expr));
-                    error = true;
-                    continue;
-                };
-
-                let mut actx = LValueAddressingContext {
-                    ctx,
-                    mctx,
-                    builder: &mut bb_builder,
-                    loc: expr.loc,
-                    scope,
-                };
-
-                let Address {
-                    elem_offset,
-                    output_width,
-                    array,
-                    is_unsigned: _,
-                } = lower_addressing(
-                    &mut actx,
-                    s.ty.bit_length(),
-                    &s.dims,
-                    s.transform,
-                    exprs.iter(),
-                    range_expression.map(|r| r.into()),
-                )?;
-
-                // @TODO: Use array overflow.
-                let partial = match (elem_offset, array) {
-                    (Some(elem_offset), Some((array_offset, _array_overflow))) => {
-                        Some(bb_builder.plus(mctx.gl(), elem_offset, array_offset))
-                    }
-                    (Some(elem_offset), None) => Some(elem_offset),
-                    (None, Some((array_offset, _array_overflow))) => Some(array_offset),
-                    (None, None) => None,
-                };
-                let variable = expression::coerce_to(
-                    mctx.gl(),
-                    &mut bb_builder,
-                    var,
-                    var_ty,
-                    s.ty.resize_net_to(output_width),
-                );
-                s.terminals
-                    .drive_blocking(mctx.gl(), &mut bb_builder, variable, partial);
-            }
-
-            Expr::Replication(_) => {
+            VType::SignedNet(_) => bb_builder.sign_extend(mctx.gl(), probed, destination_size),
+            VType::UnsignedNet(_) => bb_builder.zero_extend(mctx.gl(), probed, destination_size),
+            VType::Real => {
                 mctx.diagnostics
-                    .not_yet_implemented(ctx.arenas.get_span(expr), "repetition in net assign");
-                error = true;
+                    .not_yet_implemented(ctx.arenas.get_span(expr), "part-select on real");
+                return Err(());
             }
-
-            Expr::FunctionCall(..)
-            | Expr::SystemFunctionCall(..)
-            | Expr::Real(..)
-            | Expr::Decimal(..)
-            | Expr::Sized(..)
-            | Expr::Ternary(..)
-            | Expr::String(..)
-            | Expr::Unary(..)
-            | Expr::Binary(..) => {
-                mctx.diagnostics
-                    .output_expr_not_allowed(ctx.arenas.get_span(expr));
-                error = true;
-            }
-        }
+        };
     }
 
-    let sensitivity_list = sensitivity_list.items;
-    bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_tr);
+    let mut offset = 0;
+    for dst in &mctx.fuse_dsts_scratch {
+        let bitlength = dst.bit_length();
+        let probe_v = bb_builder.slice_constant(&mut mctx.gl, probed, offset, bitlength);
+        bb_builder.drive_partial_constant(&mut mctx.gl, dst.signal, probe_v, dst.slice.lsb());
+        offset += bitlength.get();
+    }
+
+    bb_builder.watch_to(mctx.gl(), [output_signal].into(), entry_tr);
     proc_builder.finalize(mctx.gl());
-
-    if error {
-        return Err(());
-    }
 
     Ok(())
 }
 
-fn try_fuse_output_port<'a>(
-    ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
-    scope: SymbolId,
-    expr: AstId<'a, Expr<'a>>,
-    port: &SignalSymbol,
-    expr_slice: Option<SignalSlice>,
-) -> FuseResult {
-    mctx.fuse_srcs_scratch.clear();
-    mctx.fuse_dsts_scratch.clear();
-
-    // Destinations
-    try_expr_to_fuse(
-        ctx,
-        &mctx.gl,
-        &mut mctx.fuse_srcs_scratch,
-        scope,
-        expr,
-        SignalSide::BlockingDrive,
-        RequiredFuseSignalKind::Net,
-    )?;
-    if let Some(expr_slice) = expr_slice {
-        // If we only include a part of the expression, we slice fuse destinations afterwards.
-        slice_fuse_sources(&mut mctx.fuse_srcs_scratch, expr_slice)?;
-    }
-    convert_fuse_srcs_to_dsts(0, &mut mctx.fuse_dsts_scratch, &mut mctx.fuse_srcs_scratch)?;
-
-    // Sources
-    mctx.fuse_srcs_scratch.push(FuseSource {
-        content: FuseSourceContent::Signal {
-            signal: port.terminals.probe_signal(),
-            slice: SignalSlice::with_end(port.ty.bit_length()),
-        },
-        ty: FuseType::from(port.ty),
-    });
-
-    try_fuse_srcs_to_dsts(
-        &mctx.gl,
-        &mut mctx.connections,
-        &mctx.fuse_srcs_scratch,
-        &mctx.fuse_dsts_scratch,
-    )
-}
-
-fn slice_fuse_sources(srcs: &mut Vec<FuseSource>, slice: SignalSlice) -> FuseResult {
+fn slice_src_sites(srcs: &mut Vec<SourceSite>, slice: SignalSlice) -> Result<(), ()> {
     // Expression slice is [lo, hi)
     let (lo, hi) = (slice.lsb(), slice.msb() + 1);
 
@@ -490,7 +418,7 @@ fn slice_fuse_sources(srcs: &mut Vec<FuseSource>, slice: SignalSlice) -> FuseRes
         }
 
         // We cannot partially slice a real.
-        failed |= src.ty == FuseType::Real;
+        failed |= src.ty == SiteType::Real;
 
         let sub = SignalSlice::from_width(
             src_lo - src_offset,
@@ -498,10 +426,10 @@ fn slice_fuse_sources(srcs: &mut Vec<FuseSource>, slice: SignalSlice) -> FuseRes
         )
         .unwrap();
         src.content = match &src.content {
-            FuseSourceContent::Constant(bits) => {
-                FuseSourceContent::Constant(bits.slicez(sub.lsb(), sub.width()))
+            SourceSiteContent::Constant(bits) => {
+                SourceSiteContent::Constant(bits.slicez(sub.lsb(), sub.width()))
             }
-            FuseSourceContent::Signal { signal, slice } => FuseSourceContent::Signal {
+            SourceSiteContent::Signal { signal, slice } => SourceSiteContent::Signal {
                 signal: *signal,
                 slice: slice.subslice(sub).unwrap(),
             },
@@ -510,8 +438,8 @@ fn slice_fuse_sources(srcs: &mut Vec<FuseSource>, slice: SignalSlice) -> FuseRes
     });
 
     if failed {
-        return FuseResult::Err(FuseFailure);
+        return Err(());
     }
 
-    FuseResult::Ok(()) 
+    Ok(())
 }

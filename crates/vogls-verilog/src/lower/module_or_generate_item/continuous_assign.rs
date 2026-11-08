@@ -10,10 +10,10 @@ use crate::ast::statement::Delay3;
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_size};
 use crate::lower::expression::{coerce_to, get_used_signals, lower_expr};
 use crate::lower::fuse::{
-    FuseResult, try_expr_to_fuse_sources, try_fuse_srcs_to_dsts, try_net_flat_lvalue_to_dsts,
+    FuseFailure, FuseResult, RequiredSignalKind, SiteTerminal, expr_to_src_sites, try_fuse_srcs_to_dsts, try_net_flat_lvalue_to_dsts
 };
 use crate::lower::statement::procedural_timing_control::lower_min_typ_max_delay;
-use crate::lower::{LowerContext, MutLowerContext, VType};
+use crate::lower::{Diagnostics, LowerContext, MutLowerContext, VType};
 
 use super::gate_instantiation::{GateDelayFn, lower_delay_value, lower_delay3, lower_gate_drive};
 
@@ -200,13 +200,20 @@ fn try_fuse_assign<'a>(
     }
 
     // Sources
-    try_expr_to_fuse_sources(
+    if expr_to_src_sites(
         ctx,
         &mctx.gl,
         &mut mctx.fuse_srcs_scratch,
         scope,
+        &mut Diagnostics::default(),
         net_assignment.expression,
-    )?;
+        SiteTerminal::Probe,
+        RequiredSignalKind::None,
+    )
+    .is_err()
+    {
+        return Err(FuseFailure);
+    };
 
     try_fuse_srcs_to_dsts(
         &mctx.gl,
