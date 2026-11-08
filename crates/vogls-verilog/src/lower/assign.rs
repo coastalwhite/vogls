@@ -4,7 +4,7 @@ use vogls_ir::{BasicBlockBuilder, VariableKey, VectorSize};
 use crate::ast::AstId;
 use crate::ast::expr::{BitSlice, BitSliceKind};
 use crate::ast::statement::{NetLValue, NetLValueFlat, VariableLValue, VariableLValueFlat};
-use crate::elaborate::{ArrayDim, SignalKind, VSymbol, VectorTransform};
+use crate::elaborate::{SignalKind, VSymbol};
 use crate::lower::addressing::{
     Address, AddressingConstantExprWidthContext, LValueAddressingContext, RangeExpr,
     lower_addressing,
@@ -293,14 +293,13 @@ pub fn net_lvalue_flat_ty<'a>(
         constant_range_expression,
     } = &*ast_lvalue;
 
-    let symbol_key =
-        try_resolve_hident(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
+    let s = try_resolve_signal(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
 
-    let (ty, dims, transform) = match &ctx.table[symbol_key].content {
-        VSymbol::Parameter(v) => (v.ty(), &[] as &[ArrayDim], VectorTransform::default()),
-        VSymbol::Signal(s) => (s.ty, s.dims.as_slice(), s.transform),
-        _ => todo!(),
-    };
+    if s.kind != SignalKind::Net {
+        mctx.diagnostics
+            .not_yet_implemented(ctx.arenas.get_span(ast_lvalue), "can only assign nets here");
+        return Err(());
+    }
 
     let mut actx = AddressingConstantExprWidthContext {
         gl: &mctx.gl,
@@ -326,9 +325,9 @@ pub fn net_lvalue_flat_ty<'a>(
         is_unsigned,
     } = lower_addressing(
         &mut actx,
-        ty.bit_length(),
-        dims,
-        transform,
+        s.ty.bit_length(),
+        s.dims.as_slice(),
+        s.transform,
         std::iter::repeat_n((), constant_exprs.len()),
         range,
     )?;
@@ -336,7 +335,7 @@ pub fn net_lvalue_flat_ty<'a>(
     Ok(if is_unsigned {
         VType::UnsignedNet(output_width)
     } else {
-        ty.truncate(output_width)
+        s.ty.truncate(output_width)
     })
 }
 
