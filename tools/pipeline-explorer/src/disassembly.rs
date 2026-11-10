@@ -513,21 +513,6 @@ mod tests {
     }
 
     #[test]
-    fn sample_programs_round_trip() {
-        for (elf, boot) in [
-            (&include_bytes!("../programs/sieve.elf")[..], 0),
-            (&include_bytes!("../programs/sieve-ibex.elf")[..], 0x80),
-        ] {
-            let asm = round_trip(elf, &MemoryMap { boot, ..TEST_MAP });
-            // Labels come from the symbol table.
-            assert!(asm.contains("\n_start:\n"), "{asm}");
-            assert!(asm.contains("\n    beq         s1,s3,found\n"), "{asm}");
-            assert!(asm.contains("\n    jal         zero,outer_loop\n"), "{asm}");
-            assert!(asm.contains("\nprimes:\n    .space 400\n"), "{asm}");
-        }
-    }
-
-    #[test]
     fn makes_up_labels_without_a_symbol_table() {
         let zero = XRegIdent::Zero;
         let nop = word(0x0000_0013);

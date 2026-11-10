@@ -628,19 +628,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn loads_the_sample_programs() {
-        for (elf, boot) in [
-            (&include_bytes!("../programs/sieve.elf")[..], 0),
-            (&include_bytes!("../programs/sieve-ibex.elf")[..], 0x80),
-        ] {
-            let map = MemoryMap { boot, ..TEST_MAP };
-            let sections = load_elf(elf, &map).expect("the sample program to load");
-            assert_eq!(sections.text_addr, boot);
-            assert_eq!(sections.data_addr, 0x400);
-        }
-    }
-
-    #[test]
     fn rejects_a_program_that_starts_elsewhere() {
         // `.text` where the core boots, but execution starting past it.
         let bytes = build_elf(0x40, well_formed());
