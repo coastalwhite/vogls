@@ -15,6 +15,7 @@ use std::hash::RandomState;
 mod cursor;
 pub mod encoding;
 pub mod error;
+mod insn;
 pub mod isa;
 pub mod labels;
 pub mod placement;
@@ -57,6 +58,8 @@ enum RelocationItem {
     PcRelJump(XRegIdent, XRegIdent, TargetLabel),
     /// A compressed branch or jump, which is 2 bytes whatever the distance.
     Compressed(CompressedJump, TargetLabel),
+    /// A branch or jump written with `.insn`, which is never relaxed either.
+    Insn(insn::InsnJump, TargetLabel),
 }
 
 #[derive(Clone, Copy)]
@@ -103,6 +106,7 @@ impl RelocationItem {
             Self::Jump(..) => (4, 8),
             Self::PcRelJump(..) => (4, 8),
             Self::Compressed(..) => (2, 2),
+            Self::Insn(jump, _) => (jump.format.size(), jump.format.size()),
         }
     }
 
@@ -378,6 +382,7 @@ impl Assembler {
                     self.current_section_mut().pad(space);
                 }
 
+                ".insn" => self.parse_insn(&mut cursor)?,
                 ".byte" => self.parse_data_directive(&mut cursor, 1)?,
                 ".half" | ".short" | ".2byte" => self.parse_data_directive(&mut cursor, 2)?,
                 ".word" | ".long" | ".4byte" => self.parse_data_directive(&mut cursor, 4)?,
@@ -679,6 +684,7 @@ impl Assembler {
                         let size = match item {
                             RelocationItem::LoadAddress(..) => 8,
                             RelocationItem::Compressed(..) => 2,
+                            RelocationItem::Insn(jump, _) => jump.format.size(),
                             RelocationItem::Branch(_, _, _, lbl) => {
                                 let lbl_offset = resolve_min_max_target_label(
                                     lbl,
@@ -879,6 +885,31 @@ impl Assembler {
                                 });
                             }
                             out.extend_from_slice(&jump.encode(distance as i16).to_le_bytes());
+                        }
+                        RelocationItem::Insn(jump, lbl) => {
+                            let lbl_offset = resolve_target_label(
+                                lbl,
+                                &section.events,
+                                local_offsets,
+                                eid,
+                                local_offset,
+                                &out_symbols,
+                            );
+                            let distance = i64::from(lbl_offset) - i64::from(offset);
+                            let (min, max) = jump.format.range();
+                            if !(i64::from(min)..=i64::from(max)).contains(&distance)
+                                || distance % 2 != 0
+                            {
+                                return Err(LayoutError::TargetOutOfRange {
+                                    mnemonic: jump.format.mnemonic(),
+                                    offset: distance,
+                                    min,
+                                    max,
+                                });
+                            }
+                            let bits = jump.template | jump.format.immediate(distance as i32);
+                            let size = jump.format.size() as usize;
+                            out.extend_from_slice(&bits.to_le_bytes()[..size]);
                         }
                         RelocationItem::PcRelJump(rd, _rt, lbl) => {
                             // @Q? Should `rt` be set anyway?
@@ -3271,5 +3302,198 @@ mod tests {
                 Err("unknown mnemonic or directive".to_owned())
             );
         }
+    }
+
+    /// `.insn` assembles to the same bytes as the instruction it spells out.
+    #[test]
+    fn insn_formats() {
+        for (insn, instruction) in [
+            // The examples of the GNU as manual.
+            (".insn r 0x33, 0, 0, a0, a1, a2", "add a0,a1,a2"),
+            (".insn 0x4, 0xc58533", "add a0,a1,a2"),
+            (".insn 0xc58533", "add a0,a1,a2"),
+            // Each 4-byte format, with opcodes by name and by number.
+            (".insn r OP, 0, 0x20, a0, a1, a2", "sub a0,a1,a2"),
+            (".insn r OP_FP, 7, 0, fa0, fa1, fa2", "fadd.s fa0,fa1,fa2"),
+            (
+                ".insn r MADD, 7, 0, fa0, fa1, fa2, fa3",
+                "fmadd.s fa0,fa1,fa2,fa3",
+            ),
+            (
+                ".insn r4 MADD, 1, 0, fa0, fa1, fa2, fa3",
+                "fmadd.s fa0,fa1,fa2,fa3,rtz",
+            ),
+            (".insn r OP_FP, 0, 0x70, a0, fa0, x0", "fmv.x.w a0,fa0"),
+            (".insn i OP_IMM, 0, a0, a1, -16", "addi a0,a1,-16"),
+            (".insn i 0x13, 7, t0, t1, 2047", "andi t0,t1,2047"),
+            (".insn i LOAD, 2, a0, -4(sp)", "lw a0,-4(sp)"),
+            (".insn i JALR, 0, ra, 8(t0)", "jalr ra,t0,8"),
+            (".insn s STORE, 2, a0, -4(sp)", "sw a0,-4(sp)"),
+            (".insn s STORE_FP, 2, fa0, 2047(a0)", "fsw fa0,2047(a0)"),
+            (".insn u LUI, a0, 0x12345", "lui a0,0x12345"),
+            (".insn u LUI, a0, 0xfffff", "lui a0,0xfffff"),
+            (".insn u AUIPC, t0, 0", "auipc t0,0"),
+            ("1:\n.insn b BRANCH, 1, a0, a1, 1b", "1:\nbne a0,a1,1b"),
+            (
+                ".insn sb BRANCH, 0, a0, a1, 1f\nnop\n1:",
+                "beq a0,a1,1f\nnop\n1:",
+            ),
+            ("1:\n.insn j JAL, ra, 1b", "1:\njal ra,1b"),
+            (
+                ".insn uj 0x6f, zero, end\nnop\nend:",
+                "jal zero,end\nnop\nend:",
+            ),
+            // Each compressed format. The immediates of `ciw`, `css`, `cl`
+            // and `cs` are the raw fields, not the offsets they encode.
+            (".insn cr C2, 9, a0, a1", "c.add a0,a1"),
+            (".insn ci C1, 0, a0, -1", "c.addi a0,-1"),
+            (".insn ciw C0, 0, a0, 2", "c.addi4spn a0,sp,4"),
+            (".insn css C2, 6, ra, 12", "c.swsp ra,12(sp)"),
+            (".insn cl C0, 2, a0, 31(a1)", "c.lw a0,124(a1)"),
+            (".insn cs C0, 6, a5, 2(s0)", "c.sw a5,4(s0)"),
+            (".insn ca C1, 35, 0, a0, a1", "c.sub a0,a1"),
+            (
+                "1:\nc.nop\n.insn cb C1, 6, a0, 1b",
+                "1:\nc.nop\nc.beqz a0,1b",
+            ),
+            (".insn cj 1, 5, 1f\nc.nop\n1:", "c.j 1f\nc.nop\n1:"),
+            // The numeric forms for 2 bytes.
+            (".insn 2, 0x952e", "c.add a0,a1"),
+            (".insn 0x952e", "c.add a0,a1"),
+        ] {
+            let isa = Isa {
+                exts: RV32IMFC.exts,
+                xlen: XLen::Rv32,
+            };
+            let expected = assemble_for(isa, instruction)
+                .unwrap_or_else(|err| panic!("{instruction:?}: {err}"));
+            let got = assemble_for(isa, insn).unwrap_or_else(|err| panic!("{insn:?}: {err}"));
+            assert_eq!(got, expected, "{insn}");
+        }
+    }
+
+    #[test]
+    fn insn_values_longer_than_4_bytes() {
+        assert_eq!(
+            *assemble_for(RV32IM, ".insn 0x123456789f").unwrap(),
+            [0x9f, 0x78, 0x56, 0x34, 0x12, 0x00]
+        );
+        assert_eq!(
+            *assemble_for(RV32IM, ".insn 8, 0xffffffffffffff3f").unwrap(),
+            [0x3f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+        );
+        // Mixed with labels after them.
+        let mut asm = assemble(
+            &SectionPositions::absolute(0, 0x400, 0x800, 0xc00),
+            ".insn 0x952e\n.insn 0x1f\nafter:\nnop",
+        );
+        assert_eq!(symbol(&mut asm, "after"), (SectionKind::Text, 8));
+    }
+
+    #[test]
+    fn insn_errors() {
+        let isa = Isa {
+            exts: RV32IMFC.exts,
+            xlen: XLen::Rv32,
+        };
+        for (source, error) in [
+            (
+                ".insn 4, 0x952e",
+                "0x952e is not a valid 4-byte instruction",
+            ),
+            (
+                ".insn 2, 0x10001",
+                "0x10001 is not a valid 2-byte instruction",
+            ),
+            (
+                ".insn 3, 0x13",
+                "instruction length 3 is not one of 2, 4, 6 and 8 bytes",
+            ),
+            (
+                ".insn 0x7f",
+                "0x7f is the encoding of an instruction longer than 8 bytes",
+            ),
+            (
+                ".insn 0x100000013",
+                "0x100000013 is wider than the 4 bytes its encoding gives it",
+            ),
+            (
+                ".insn -1",
+                "immediate -1 is out of range, expected a 64-bit unsigned value",
+            ),
+            (
+                ".insn x 1",
+                "unknown instruction format 'x', expected one of r, r4, i, s, b, sb, u, j, uj, cr, ci, ciw, css, cl, cs, ca, cb and cj",
+            ),
+            (
+                ".insn r 0x30, 0, 0, a0, a1, a2",
+                "opcode 0x30 is not the opcode of a 4-byte instruction",
+            ),
+            (
+                ".insn r C1, 0, 0, a0, a1, a2",
+                "opcode 0x01 is not the opcode of a 4-byte instruction",
+            ),
+            (".insn r FOO, 0, 0, a0, a1, a2", "unknown opcode 'FOO'"),
+            (".insn cr OP, 9, a0, a1", "opcode OP is not a 2-bit opcode"),
+            (
+                ".insn cr 3, 9, a0, a1",
+                "opcode 3 is not the opcode of a 2-byte instruction",
+            ),
+            (
+                ".insn r OP, 8, 0, a0, a1, a2",
+                "immediate 8 is out of range, expected 0..=7",
+            ),
+            (
+                ".insn r OP, 0, 128, a0, a1, a2",
+                "immediate 128 is out of range, expected 0..=127",
+            ),
+            (
+                ".insn r MADD, 0, 4, a0, a1, a2, a3",
+                "immediate 4 is out of range, expected 0..=3 for the func2 of an instruction with 4 registers",
+            ),
+            (
+                ".insn r4 MADD, 7, 0, fa0, fa1, fa2",
+                "expected a fourth register, rs3",
+            ),
+            (".insn r OP, 0, 0, a0, a1, q2", "unknown register 'q2'"),
+            (
+                ".insn i OP_IMM, 0, a0, a1, 2048",
+                "immediate 2048 is out of range, expected -2048..=2047",
+            ),
+            (
+                ".insn u LUI, a0, 0x100000",
+                "immediate 0x100000 is out of range, expected 0..=0xfffff",
+            ),
+            (
+                ".insn ci C1, 0, a0, 32",
+                "immediate 32 is out of range, expected -32..=31",
+            ),
+            (
+                ".insn ciw C0, 0, a0, 256",
+                "immediate 256 is out of range, expected 0..=255",
+            ),
+            (
+                ".insn ca C1, 35, 0, t0, a1",
+                "register t0 cannot be used here, expected one of x8-x15 and f8-f15 (s0, s1, a0-a5, fs0, fs1 and fa0-fa5)",
+            ),
+            (
+                ".section .bss\n.insn 0x13",
+                "'.bss' is zero-initialised and cannot hold instructions",
+            ),
+            (
+                ".insn b BRANCH, 0, a0, a1, 1f\n.space 4096\n1:",
+                "the target of '.insn b' is 4100 bytes away, but it can only reach an even offset in -4096..=4094",
+            ),
+            (
+                ".insn cj C1, 5, 1f\n.byte 0\n1:",
+                "the target of '.insn cj' is 3 bytes away, but it can only reach an even offset in -2048..=2046",
+            ),
+        ] {
+            assert_eq!(assemble_for(isa, source), Err(error.to_owned()), "{source}");
+        }
+        assert_eq!(
+            assemble_for(RV32IM, ".insn cr C2, 9, a0, a1"),
+            Err("'.insn cr' is a compressed format, which needs the C extension".to_owned())
+        );
     }
 }

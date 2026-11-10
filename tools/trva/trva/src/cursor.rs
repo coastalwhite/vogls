@@ -67,6 +67,11 @@ impl<'a> SourceCursor<'a> {
         }
     }
 
+    /// The source text from `start` to `end`, to quote in errors.
+    pub fn content_between(&self, start: usize, end: usize) -> &'a str {
+        &self.content[start..end]
+    }
+
     pub fn peek_byte(&self) -> Option<u8> {
         self.content.as_bytes().get(self.offset).copied()
     }
@@ -366,6 +371,31 @@ impl<'a> SourceCursor<'a> {
     /// operand is an error rather than a zero.
     pub fn take_int(&mut self) -> AssembleResult<i64> {
         let start = self.offset;
+        let value = self.take_wide_int()?;
+        i64::try_from(value).map_err(|_| {
+            self.offset = start;
+            Box::new(self.new_err("integer overflow"))
+        })
+    }
+
+    /// A value of up to 64 bits, such as the encoding of an 8-byte
+    /// instruction, which can be above `i64::MAX`.
+    pub fn take_u64(&mut self) -> AssembleResult<u64> {
+        let start = self.offset;
+        let value = self.take_wide_int()?;
+        u64::try_from(value).map_err(|_| {
+            let written = &self.content[start..self.offset];
+            self.offset = start;
+            Box::new(self.new_err(format!(
+                "immediate {written} is out of range, expected a 64-bit unsigned value"
+            )))
+        })
+    }
+
+    /// [`Self::take_int`], read into an `i128` so that every 64-bit value,
+    /// signed or not, fits.
+    fn take_wide_int(&mut self) -> AssembleResult<i128> {
+        let start = self.offset;
         let negative = self.next_byte_if_equals(b'-');
         if !self.peek_byte().is_some_and(|b| b.is_ascii_digit()) {
             self.offset = start;
@@ -383,15 +413,15 @@ impl<'a> SourceCursor<'a> {
         }
 
         let digits = self.offset;
-        let mut value = 0i64;
+        let mut value = 0i128;
         while let Some(digit) = bs
             .get(self.offset)
             .and_then(|&b| char::from(b).to_digit(radix))
         {
             // Anything this large is out of range for every caller anyway.
             let Some(next) = value
-                .checked_mul(i64::from(radix))
-                .and_then(|v| v.checked_add(i64::from(digit)))
+                .checked_mul(i128::from(radix))
+                .and_then(|v| v.checked_add(i128::from(digit)))
             else {
                 self.offset = start;
                 return Err(Box::new(self.new_err("integer overflow")));
