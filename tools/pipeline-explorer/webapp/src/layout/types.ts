@@ -8,7 +8,9 @@ export type View =
     | { type: "assembly"; primary: boolean }
     | { type: "chooser" }
     | { type: "stats" }
-    | { type: "registers" };
+    | { type: "registers" }
+    | { type: "symbols" }
+    | { type: "profile" };
 
 export type ViewType = View["type"];
 

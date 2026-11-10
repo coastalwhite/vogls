@@ -1,5 +1,7 @@
 import { dataOf } from "../types.ts";
 import type { RegistersData, Trace } from "../types.ts";
+import { Table } from "../table.ts";
+import type { Row as TableRow } from "../table.ts";
 import type {
     CycleRange,
     ViewContext,
@@ -30,7 +32,7 @@ export class RegistersView implements ViewInstance {
     readonly title = "Registers";
 
     private readonly caption: HTMLElement;
-    private readonly body: HTMLElement;
+    private readonly table: Table;
 
     private trace: Trace | null = null;
     private cycles: CycleRange;
@@ -41,8 +43,14 @@ export class RegistersView implements ViewInstance {
 
         this.root = el("div", "ws-regs");
         this.caption = el("p", "ws-regs__caption");
-        this.body = el("div", "ws-regs__rows");
-        this.root.append(this.caption, this.body);
+        // The third column stays even at a single cycle, so switching between
+        // a value and a difference does not reflow the first two.
+        this.table = new Table([
+            { header: "Register", width: "5rem" },
+            { header: "Value", align: "right", numeric: true, width: "8rem" },
+            { header: "Previous", align: "right", numeric: true, width: "9rem" },
+        ]);
+        this.root.append(this.caption, this.table.element);
         this.render();
     }
 
@@ -70,14 +78,14 @@ export class RegistersView implements ViewInstance {
             this.caption.textContent = this.trace === null
                 ? "No trace yet."
                 : "This core does not report its register file.";
-            this.body.replaceChildren();
+            this.table.setMessage("No registers.");
             return;
         }
 
         const { start, end } = this.cycles;
         const diff = end > start;
 
-        const rows: HTMLElement[] = [];
+        const rows: TableRow[] = [];
         let changed = 0;
         for (const [i, name] of regs.names.entries()) {
             const to = this.at(regs, i, end);
@@ -85,25 +93,17 @@ export class RegistersView implements ViewInstance {
             const moved = diff && from !== to;
             if (moved) changed += 1;
 
-            const row = el("div", "ws-regs__row");
-            const label = el("span", "ws-regs__name");
-            label.textContent = name;
-            const value = el("span", "ws-regs__value");
-            value.textContent = hex(to);
-            value.title = `${dec(to)} (${to >>> 0})`;
-            row.append(label, value);
-
             // Every register stays on screen; only the movers are called out.
-            if (moved) {
-                const was = el("span", "ws-regs__was");
-                was.textContent = `\u2190 ${hex(from)}`;
-                was.title = `was ${dec(from)}`;
-                row.append(was);
-                row.classList.add("is-changed");
-            } else if (to !== 0) {
-                row.classList.add("is-set");
-            }
-            rows.push(row);
+            rows.push({
+                className: moved ? "is-changed" : to !== 0 ? "is-set" : "",
+                cells: [
+                    name,
+                    { text: hex(to), title: `${dec(to)} (${to >>> 0})`, className: "ws-regs__value" },
+                    moved
+                        ? { text: `\u2190 ${hex(from)}`, title: `was ${dec(from)}`, className: "ws-regs__was" }
+                        : "",
+                ],
+            });
         }
 
         this.caption.textContent = diff
@@ -111,7 +111,7 @@ export class RegistersView implements ViewInstance {
                 changed === 0 ? "nothing changed" : `${changed} changed`
             }`
             : `Values at cycle ${start}`;
-        this.body.replaceChildren(...rows);
+        this.table.setRows(rows);
     }
 
     destroy(): void {

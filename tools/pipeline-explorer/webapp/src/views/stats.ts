@@ -124,6 +124,10 @@ export class StatsView implements ViewInstance {
         const { start, end } = this.cycles;
         const ranged = end > start;
         const total = dataOf(this.trace, "pipeline")?.cycles ?? 0;
+        // Occupancy over a single cycle is only ever 0% or 100%, so a
+        // collapsed selection is measured over the whole run instead. The
+        // boxes still show the cycle that is selected.
+        const over = ranged ? this.cycles : { start: 0, end: Math.max(0, total - 1) };
         this.label.textContent = ranged ? "Cycles" : "Cycle";
         this.cycleTotal.textContent = total.toString();
 
@@ -142,8 +146,10 @@ export class StatsView implements ViewInstance {
         // Only meaningful for a span; a single cycle already reads as one.
         this.span.textContent = ranged
             ? `${cycleCount(this.cycles)} cycles selected`
-            : "";
-        this.span.hidden = !ranged;
+            : total === 0
+            ? ""
+            : `whole program \u2014 ${total} cycle${total === 1 ? "" : "s"}`;
+        this.span.hidden = this.span.textContent === "";
 
         if (this.trace === null) {
             const hint = el("p", "ws-stats__hint");
@@ -160,7 +166,7 @@ export class StatsView implements ViewInstance {
             const name = el("span", "ws-stats__name");
             name.textContent = key;
             const pct = el("span", "ws-stats__pct");
-            pct.textContent = `${occupancy(this.trace, i, this.cycles)}%`;
+            pct.textContent = `${occupancy(this.trace, i, over)}%`;
             row.append(swatch, name, pct);
             rows.push(row);
         }

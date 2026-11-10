@@ -56,12 +56,15 @@ pub struct ReturnValue {
 pub enum ReturnData {
     Pipeline(Pipeline),
     Registers(Registers),
+    Symbols(Symbols),
 }
 
 pub struct Pipeline {
     pub traces: Vec<Vec<u32>>,
     pub keys: Vec<&'static str>,
     pub cycles: usize,
+    /// Address of slot 1, so a slot can be mapped back to a symbol.
+    pub text_addr: u32,
 }
 
 pub struct Registers {
@@ -69,6 +72,15 @@ pub struct Registers {
     pub values: Vec<Vec<u32>>,
     pub names: Vec<&'static str>,
     pub cycles: usize,
+}
+
+/// Where the assembler put every label. Parallel arrays, sorted by address.
+pub struct Symbols {
+    pub names: Vec<String>,
+    pub addresses: Vec<u32>,
+    pub sections: Vec<&'static str>,
+    /// `1` for a label a `.global` directive exported.
+    pub globals: Vec<u32>,
 }
 
 fn u32_arrays(rows: Vec<Vec<u32>>) -> Array {
@@ -85,6 +97,27 @@ impl ReturnData {
                 ("traces", u32_arrays(p.traces).into()),
                 ("keys", str_array(&p.keys).into()),
                 ("cycles", p.cycles.into()),
+                ("textAddr", p.text_addr.into()),
+            ]),
+            ReturnData::Symbols(s) => obj(&[
+                ("kind", JsValue::from_str("symbols")),
+                (
+                    "names",
+                    s.names
+                        .iter()
+                        .map(|n| JsValue::from_str(n))
+                        .collect::<Array>()
+                        .into(),
+                ),
+                (
+                    "addresses",
+                    js_sys::Uint32Array::new_from_slice(&s.addresses).into(),
+                ),
+                ("sections", str_array(&s.sections).into()),
+                (
+                    "globals",
+                    js_sys::Uint32Array::new_from_slice(&s.globals).into(),
+                ),
             ]),
             ReturnData::Registers(r) => obj(&[
                 ("kind", JsValue::from_str("registers")),
@@ -151,13 +184,14 @@ pub fn evaluate<C: Core>(
     }
 
     let cycles = cycles as usize;
-    let data = builders
+    let mut data: Vec<ReturnData> = builders
         .into_iter()
         .filter_map(|builder| match builder {
             DataBuilder::Pipeline(pt) => Some(ReturnData::Pipeline(Pipeline {
                 traces: pt.stage_pcs,
                 keys: description.pipeline_stages.clone(),
                 cycles,
+                text_addr: sections.text_addr,
             })),
             // A core that cannot read its register file never pushed a cycle,
             // so the point is dropped rather than reported as zeroes.
@@ -169,6 +203,20 @@ pub fn evaluate<C: Core>(
             })),
         })
         .collect();
+
+    // Static: it comes out of the assembler, not out of running the design.
+    if points.contains(DataPoints::SYMBOLS) && !sections.symbols.is_empty() {
+        data.push(ReturnData::Symbols(Symbols {
+            names: sections.symbols.iter().map(|s| s.name.clone()).collect(),
+            addresses: sections.symbols.iter().map(|s| s.addr).collect(),
+            sections: sections.symbols.iter().map(|s| s.section).collect(),
+            globals: sections
+                .symbols
+                .iter()
+                .map(|s| u32::from(s.global))
+                .collect(),
+        }));
+    }
 
     Ok(ReturnValue { instructions, data })
 }

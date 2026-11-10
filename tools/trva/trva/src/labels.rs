@@ -90,6 +90,16 @@ impl<T> LabelMap<T> {
         self.0[key.0.get() as usize - 1].replace(value)
     }
 
+    /// Every key that has a value, with it.
+    pub fn iter(&self) -> impl Iterator<Item = (LabelId, &T)> {
+        self.0.iter().enumerate().filter_map(|(i, slot)| {
+            let value = slot.as_ref()?;
+            // Ids are one-based; `LabelMap` stores them at `id - 1`.
+            let id = LabelId(NonZeroU64::new(i as u64 + 1)?);
+            Some((id, value))
+        })
+    }
+
     pub fn with_len(length: usize) -> Self {
         Self(std::iter::repeat_with(|| None).take(length).collect())
     }

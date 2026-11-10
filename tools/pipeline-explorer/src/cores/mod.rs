@@ -59,7 +59,8 @@ pub struct DataPoints(u32);
 impl DataPoints {
     pub const PIPELINE: Self = Self(1 << 0);
     pub const REGISTERS: Self = Self(1 << 1);
-    pub const ALL: Self = Self(Self::PIPELINE.0 | Self::REGISTERS.0);
+    pub const SYMBOLS: Self = Self(1 << 2);
+    pub const ALL: Self = Self(Self::PIPELINE.0 | Self::REGISTERS.0 | Self::SYMBOLS.0);
 
     pub const fn empty() -> Self {
         Self(0)

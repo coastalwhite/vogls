@@ -49,6 +49,8 @@ const viewCtx = {
 };
 
 const workspace = new Workspace(central, viewCtx);
+// Detached views live in popups; none of them should outlive this page.
+window.addEventListener("pagehide", () => workspace.closeDetached());
 
 function setTrace(trace: Trace) {
     currentTrace = trace;
