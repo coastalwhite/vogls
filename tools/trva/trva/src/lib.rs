@@ -948,6 +948,10 @@ fn fill_handlers(
             let rd = c.take_gp_register()?;
             c.take_comma_separator()?;
             let imm = c.take_signed_imm32()?;
+            let imm = match asm.isa.xlen {
+                XLen::Rv32 => i64::from(imm as u32 as i32),
+                XLen::Rv64 => imm,
+            };
 
             if let Some(imm) = signed_imm_to_imm12(imm) {
                 asm.text
@@ -1158,7 +1162,8 @@ fn fill_handlers(
             asm.parse_itype_instr_base(
                 c,
                 |rd, rs, imm| encoding::Sltiu::new(rd, rs, imm).encode_as_u32(),
-                |c| c.take_imm12_unsigned(),
+                // Sign-extended like any I-type immediate, only the comparison is unsigned.
+                |c| c.take_imm12().map(|imm| i32::from(imm) as u32),
             )?;
         }),
     );
@@ -1823,5 +1828,114 @@ mod tests {
                 section: SectionKind::Bss
             },
         );
+    }
+
+    /// Assembles `source` into `.text`, with any error from parsing it.
+    fn assemble_text(source: &str) -> AssembleResult<Box<[u8]>> {
+        let positions = SectionPositions::absolute(0, 0x400, 0x800, 0xc00);
+        let assembled = Assembler::new(RV32IM, positions)
+            .with_source(source)?
+            .assemble()
+            .expect("sections should lay out");
+        Ok(assembled.text)
+    }
+
+    fn words(source: &str) -> Vec<u32> {
+        let text = assemble_text(source).unwrap_or_else(|err| panic!("{source:?}: {err}"));
+        text.chunks(4)
+            .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+            .collect()
+    }
+
+    fn error(source: &str) -> String {
+        match assemble_text(source) {
+            Ok(text) => panic!("{source:?} assembled to {text:02x?}"),
+            Err(err) => err.reason.into_owned(),
+        }
+    }
+
+    #[test]
+    fn signed_immediates() {
+        // Checked against GNU as.
+        assert_eq!(words("addi sp,sp,-16"), [0xff01_0113]);
+        assert_eq!(words("addi a0,zero,-2048"), [0x8000_0513]);
+        assert_eq!(words("addi a0,zero,2047"), [0x7ff0_0513]);
+        assert_eq!(words("slti a0,a1,-1"), [0xfff5_a513]);
+        assert_eq!(words("xori a0,a1,-1"), [0xfff5_c513]);
+        assert_eq!(words("lw t0,-4(fp)"), [0xffc4_2283]);
+        assert_eq!(words("sw t0,-4(fp)"), [0xfe54_2e23]);
+        assert_eq!(words("jalr ra,t0,-8"), [0xff82_80e7]);
+        assert_eq!(words("li a0,-1"), [0xfff0_0513]);
+        // The same 32 bits as `-1` on RV32.
+        assert_eq!(words("li a0,4294967295"), [0xfff0_0513]);
+        assert_eq!(words("li a0,4294965248"), [0x8000_0513]);
+        // Just past what `addi` sign-extends to.
+        assert_eq!(words("li a0,4294965247"), [0xffff_f537, 0x7ff5_0513]);
+    }
+
+    #[test]
+    fn sltiu_takes_a_sign_extended_immediate() {
+        assert_eq!(words("sltiu a0,a1,1"), [0x0015_b513]);
+        assert_eq!(words("sltiu a0,a1,-1"), [0xfff5_b513]);
+        assert_eq!(
+            error("sltiu a0,a1,4095"),
+            "immediate 4095 is out of range, expected -2048..=2047"
+        );
+    }
+
+    #[test]
+    fn immediates_out_of_range() {
+        assert_eq!(
+            error("addi a0,a0,2048"),
+            "immediate 2048 is out of range, expected -2048..=2047"
+        );
+        assert_eq!(
+            error("lw a0,-2049(sp)"),
+            "immediate -2049 is out of range, expected -2048..=2047"
+        );
+        assert_eq!(
+            error("slli a0,a0,64"),
+            "immediate 64 is out of range, expected 0..=63"
+        );
+        assert_eq!(
+            error("slli a0,a0,-1"),
+            "immediate -1 is out of range, expected 0..=63"
+        );
+        assert_eq!(
+            error("li a0,-2147483649"),
+            "immediate -2147483649 is out of range, expected a 32-bit value"
+        );
+        assert_eq!(
+            error("li a0,4294967296"),
+            "immediate 4294967296 is out of range, expected a 32-bit value"
+        );
+        assert_eq!(error("addi a0,a0,99999999999999999999"), "integer overflow");
+    }
+
+    #[test]
+    fn immediates_need_digits() {
+        assert_eq!(error("addi a0,a0,-"), "expected an integer");
+        assert_eq!(error("addi a0,a0,x"), "expected an integer");
+        assert_eq!(error("lw a0,(sp)"), "expected an integer");
+    }
+
+    #[test]
+    fn disassembly_round_trips() {
+        for source in [
+            "addi sp,sp,-16",
+            "lw t0,-4(fp)",
+            "sw t0,-2048(fp)",
+            "sltiu a0,a1,-1",
+            "slti a0,a1,-2048",
+            "jalr ra,t0,-8",
+            "srai a0,a1,31",
+        ] {
+            let text = words(source);
+            let printed = encoding::Instruction::decode(&mut &*assemble_text(source).unwrap())
+                .unwrap()
+                .expect("a valid instruction")
+                .to_string();
+            assert_eq!(words(&printed), text, "{source:?} printed as {printed:?}");
+        }
     }
 }
