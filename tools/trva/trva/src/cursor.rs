@@ -1,4 +1,4 @@
-use crate::encoding::{CXRegIdent, XRegIdent};
+use crate::encoding::{CFRegIdent, CXRegIdent, FRegIdent, RoundingMode, XRegIdent};
 use crate::error::{AssembleError, AssembleResult};
 
 pub struct SourceCursor<'a> {
@@ -167,6 +167,61 @@ impl<'a> SourceCursor<'a> {
         })?;
         let s = parse_gp_register(s).ok_or_else(|| Box::new(self.new_err("unknown register")))?;
         Ok(s)
+    }
+
+    pub fn take_fp_register(&mut self) -> AssembleResult<FRegIdent> {
+        let start = self.offset;
+        let s = self.take_ident().map_err(|mut err| {
+            err.reason = "expected floating-point register".into();
+            err
+        })?;
+        parse_fp_register(s).ok_or_else(|| {
+            self.offset = start;
+            Box::new(self.new_err(format!("unknown floating-point register '{s}'")))
+        })
+    }
+
+    /// A floating-point register of the compressed instructions, which only
+    /// reach `fs0`, `fs1` and `fa0`-`fa5`.
+    pub fn take_c_fp_register(&mut self) -> AssembleResult<CFRegIdent> {
+        let start = self.offset;
+        let reg = self.take_fp_register()?;
+        match CFRegIdent::take((reg as u32).wrapping_sub(8)) {
+            Some(reg) => Ok(reg),
+            None => {
+                self.offset = start;
+                Err(Box::new(self.new_err(format!(
+                    "register {reg} cannot be used here, expected one of fs0, fs1 and fa0-fa5"
+                ))))
+            }
+        }
+    }
+
+    /// The optional rounding mode after the last operand, as `,rtz`. Without
+    /// one, the mode is dynamic: whatever `frm` holds.
+    pub fn take_rounding_mode(&mut self) -> AssembleResult<RoundingMode> {
+        self.take_opt_separator();
+        if self.peek_byte() != Some(b',') {
+            return Ok(RoundingMode::Dynamic);
+        }
+        self.take_comma_separator()?;
+        let start = self.offset;
+        let mode = self.take_ident()?;
+        Ok(match mode {
+            "rne" => RoundingMode::TiesToEven,
+            "rtz" => RoundingMode::ToZero,
+            "rdn" => RoundingMode::Down,
+            "rup" => RoundingMode::Up,
+            "rmm" => RoundingMode::TiesToMaxMagnitude,
+            "dyn" => RoundingMode::Dynamic,
+            _ => {
+                self.offset = start;
+                return Err(Box::new(self.new_err(format!(
+                    "unknown rounding mode '{mode}', expected one of rne, rtz, rdn, rup, rmm \
+                     and dyn"
+                ))));
+            }
+        })
     }
 
     /// A register of the compressed instructions, which only reach `s0`,
@@ -379,6 +434,26 @@ impl<'a> SourceCursor<'a> {
         self.offset += usize::from(equals);
         equals
     }
+}
+
+/// A floating-point register, by its ABI name or as `f0`-`f31`.
+pub fn parse_fp_register(s: &str) -> Option<FRegIdent> {
+    #[rustfmt::skip]
+    const ABI_NAMES: [&str; 32] = [
+        "ft0", "ft1", "ft2",  "ft3",  "ft4", "ft5", "ft6",  "ft7",
+        "fs0", "fs1", "fa0",  "fa1",  "fa2", "fa3", "fa4",  "fa5",
+        "fa6", "fa7", "fs2",  "fs3",  "fs4", "fs5", "fs6",  "fs7",
+        "fs8", "fs9", "fs10", "fs11", "ft8", "ft9", "ft10", "ft11",
+    ];
+    let index = match s.strip_prefix('f') {
+        // `f0`-`f31`, without leading zeros.
+        Some(n @ ("0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
+        | Some(n @ ("10" | "11" | "12" | "13" | "14" | "15" | "16" | "17" | "18" | "19"))
+        | Some(n @ ("20" | "21" | "22" | "23" | "24" | "25" | "26" | "27" | "28" | "29"))
+        | Some(n @ ("30" | "31")) => n.parse().ok()?,
+        _ => ABI_NAMES.iter().position(|&name| name == s)? as u32,
+    };
+    FRegIdent::take(index)
 }
 
 pub fn parse_gp_register(s: &str) -> Option<XRegIdent> {

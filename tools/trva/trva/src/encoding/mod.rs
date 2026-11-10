@@ -59,6 +59,20 @@ impl std::fmt::Display for RoundingMode {
     }
 }
 
+/// The rounding mode as the last operand of an instruction: nothing for
+/// [`RoundingMode::Dynamic`], which assemblers take when none is given, and
+/// `,rm` otherwise.
+pub struct RmSuffix(pub RoundingMode);
+
+impl std::fmt::Display for RmSuffix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            RoundingMode::Dynamic => Ok(()),
+            rm => write!(f, ",{rm}"),
+        }
+    }
+}
+
 impl RoundingMode {
     pub fn take_masked(bits: u32) -> Self {
         match bits & 0b111 {
@@ -1632,16 +1646,16 @@ asm_display! {
     Flw    ("{},{}({})", i.rd(), i.imm(), i.rs1()),
     Fsw    ("{},{}({})", i.rs2(), i.imm(), i.rs1()),
 
-    FmaddS  ("{},{},{},{},{}", i.rd(), i.rs1(), i.rs2(), i.rs3(), i.rm()),
-    FmsubS  ("{},{},{},{},{}", i.rd(), i.rs1(), i.rs2(), i.rs3(), i.rm()),
-    FnmsubS ("{},{},{},{},{}", i.rd(), i.rs1(), i.rs2(), i.rs3(), i.rm()),
-    FnmaddS ("{},{},{},{},{}", i.rd(), i.rs1(), i.rs2(), i.rs3(), i.rm()),
+    FmaddS  ("{},{},{},{}{}", i.rd(), i.rs1(), i.rs2(), i.rs3(), RmSuffix(i.rm())),
+    FmsubS  ("{},{},{},{}{}", i.rd(), i.rs1(), i.rs2(), i.rs3(), RmSuffix(i.rm())),
+    FnmsubS ("{},{},{},{}{}", i.rd(), i.rs1(), i.rs2(), i.rs3(), RmSuffix(i.rm())),
+    FnmaddS ("{},{},{},{}{}", i.rd(), i.rs1(), i.rs2(), i.rs3(), RmSuffix(i.rm())),
 
-    FaddS   ("{},{},{},{}", i.rd(), i.rs1(), i.rs2(), i.rm()),
-    FsubS   ("{},{},{},{}", i.rd(), i.rs1(), i.rs2(), i.rm()),
-    FmulS   ("{},{},{},{}", i.rd(), i.rs1(), i.rs2(), i.rm()),
-    FdivS   ("{},{},{},{}", i.rd(), i.rs1(), i.rs2(), i.rm()),
-    FsqrtS  ("{},{},{}", i.rd(), i.rs1(), i.rm()),
+    FaddS   ("{},{},{}{}", i.rd(), i.rs1(), i.rs2(), RmSuffix(i.rm())),
+    FsubS   ("{},{},{}{}", i.rd(), i.rs1(), i.rs2(), RmSuffix(i.rm())),
+    FmulS   ("{},{},{}{}", i.rd(), i.rs1(), i.rs2(), RmSuffix(i.rm())),
+    FdivS   ("{},{},{}{}", i.rd(), i.rs1(), i.rs2(), RmSuffix(i.rm())),
+    FsqrtS  ("{},{}{}", i.rd(), i.rs1(), RmSuffix(i.rm())),
 
     FsgnjS  ("{},{},{}", i.rd(), i.rs1(), i.rs2()),
     FsgnjnS ("{},{},{}", i.rd(), i.rs1(), i.rs2()),
@@ -1650,8 +1664,8 @@ asm_display! {
     FmaxS   ("{},{},{}", i.rd(), i.rs1(), i.rs2()),
     FminS   ("{},{},{}", i.rd(), i.rs1(), i.rs2()),
 
-    FcvtWS  ("{},{},{}", i.rd(), i.rs1(), i.rm()),
-    FcvtWuS ("{},{},{}", i.rd(), i.rs1(), i.rm()),
+    FcvtWS  ("{},{}{}", i.rd(), i.rs1(), RmSuffix(i.rm())),
+    FcvtWuS ("{},{}{}", i.rd(), i.rs1(), RmSuffix(i.rm())),
 
     FmvXW   ("{},{}",    i.rd(), i.rs1()),
 
@@ -1661,8 +1675,8 @@ asm_display! {
 
     FclassS ("{},{}", i.rd(), i.rs1()),
 
-    FcvtSW  ("{},{},{}", i.rd(), i.rs1(), i.rm()),
-    FcvtSWu ("{},{},{}", i.rd(), i.rs1(), i.rm()),
+    FcvtSW  ("{},{}{}", i.rd(), i.rs1(), RmSuffix(i.rm())),
+    FcvtSWu ("{},{}{}", i.rd(), i.rs1(), RmSuffix(i.rm())),
 
     FmvWX   ("{},{}", i.rd(), i.rs1()),
 
