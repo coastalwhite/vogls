@@ -6,7 +6,8 @@ export type NodeId = string;
 export type View =
     | { type: "pipeline" }
     | { type: "assembly"; primary: boolean }
-    | { type: "chooser" };
+    | { type: "chooser" }
+    | { type: "stats" };
 
 export type ViewType = View["type"];
 

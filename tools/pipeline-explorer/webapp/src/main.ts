@@ -1,6 +1,5 @@
 import "./style.css";
 import "./layout/layout.css";
-import { colors } from "./colors.ts";
 import initialAsm from "./initialAsm.S?raw";
 import type { Trace } from "./types.ts";
 import type { WorkerReply, WorkerRequest } from "./wasm/trace-worker.ts";
@@ -19,14 +18,11 @@ let timeoutId: number | null = null;
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-const pipelineStages = el<HTMLDivElement>("pipelineStages");
 const central = el<HTMLDivElement>("central");
 const scrubberContainer = el<HTMLDivElement>("scrubberContainer");
 const numCyclesInput = el<HTMLInputElement>("numCyclesInput");
 const procSelect = el<HTMLSelectElement>("procSelect");
 const simStatusElem = el<HTMLDivElement>("simStatus");
-const currentCycleElem = el<HTMLAnchorElement>("currentCycle");
-const totalCyclesElem = el<HTMLAnchorElement>("totalCycles");
 const procConfigDetail = el<HTMLDivElement>("procConfigDetail");
 const chipMenuBtn = el<HTMLButtonElement>("chipMenuBtn");
 const chipMenuPanel = el<HTMLDivElement>("chipMenuPanel");
@@ -51,15 +47,6 @@ const viewCtx = {
 
 const workspace = new Workspace(central, viewCtx);
 
-function percentForStage(trace: Trace, stageIdx: number): number {
-    const numOccurances = trace.pipeline.traces[stageIdx].reduce(
-        (a, v) => (v !== 0 ? a + 1 : a),
-        0,
-    );
-    const fraction = numOccurances / trace.pipeline.cycles;
-    return Math.round(fraction * 10000) / 100;
-}
-
 function setTrace(trace: Trace) {
     currentTrace = trace;
     viewCtx.trace = trace;
@@ -74,26 +61,12 @@ function setTrace(trace: Trace) {
     } else {
         scrubber.setTrace(trace);
     }
-
-    let s = "";
-    for (let i = 0; i < trace.pipeline.keys.length; i++) {
-        s += `
-		<div class="stage-pipeline">
-			${trace.pipeline.keys[i]}
-			<div style="background-color: ${colors[i]};"></div>
-			: ${percentForStage(trace, i)}%
-		</div>
-		`;
-    }
-    pipelineStages.innerHTML = s;
-    totalCyclesElem.innerText = trace.pipeline.cycles.toString();
     onShareTrace();
 }
 
 function setCurrentCycle(cycle: number) {
     currentCycle = cycle;
     viewCtx.currentCycle = cycle;
-    currentCycleElem.innerText = cycle.toString();
     if (scrubber !== null) scrubber.setCurrentCycle(cycle);
     workspace.broadcastCycle(cycle);
 }
