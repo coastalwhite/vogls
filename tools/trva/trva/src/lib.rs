@@ -632,8 +632,10 @@ impl Assembler {
                                 local_offset,
                                 &out_symbols,
                             );
+                            // `addi` sign-extends its immediate, so round the
+                            // upper part up when bit 11 is set.
                             out.extend_from_slice(
-                                &encoding::Lui::new(*rd, lbl_offset & !0xFFF)
+                                &encoding::Lui::new(*rd, lbl_offset.wrapping_add(0x800) & !0xFFF)
                                     .encode_as_u32()
                                     .to_le_bytes(),
                             );
@@ -888,8 +890,11 @@ fn fill_handlers(
             } else {
                 let imm = (imm as u64 & 0xFFFF_FFFF) as u32;
                 // @TODO: Better instruction dispatch.
-                asm.text
-                    .push_le_u32(encoding::Lui::new(rd, imm & !0xFFF).encode_as_u32());
+                // `addi` sign-extends its immediate, so round the upper part up
+                // when bit 11 is set.
+                asm.text.push_le_u32(
+                    encoding::Lui::new(rd, imm.wrapping_add(0x800) & !0xFFF).encode_as_u32(),
+                );
                 asm.text
                     .push_le_u32(encoding::Addi::new(rd, rd, (imm & 0xFFF) as i16).encode_as_u32());
             }

@@ -2,7 +2,7 @@
  
     .section .bss
     .align 4
-primes:     .space 400000          # room for 100000 x 4-byte integers
+primes:     .space 400             # room for 100 x 4-byte integers
  
     .section .text
     .global _start
