@@ -975,7 +975,7 @@ fn fill_handlers(
             c.take_separator()?;
             let rd = c.take_gp_register()?;
             c.take_comma_separator()?;
-            let imm = c.take_imm20()?;
+            let imm = c.take_imm20()? << 12;
             asm.text
                 .push_le_u32(encoding::Lui::new(rd, imm).encode_as_u32());
         }),
@@ -986,7 +986,7 @@ fn fill_handlers(
             c.take_separator()?;
             let rd = c.take_gp_register()?;
             c.take_comma_separator()?;
-            let imm = c.take_imm20()?;
+            let imm = c.take_imm20()? << 12;
             asm.text
                 .push_le_u32(encoding::Auipc::new(rd, imm).encode_as_u32());
         }),
@@ -1923,8 +1923,6 @@ mod tests {
         assert_eq!(words("li a0,0xffffffff"), [0xfff0_0513]);
         // Not octal: a leading zero is just a zero.
         assert_eq!(words("addi a0,zero,010"), [0x00a0_0513]);
-        // `lui` keeps taking the full value until it takes the upper 20 bits.
-        assert_eq!(words("lui a0,0x10000"), [0x0001_0537]);
         assert_eq!(
             words(".space 0x10\naddi a0,zero,1"),
             [0, 0, 0, 0, 0x0010_0513]
@@ -1958,6 +1956,23 @@ mod tests {
     }
 
     #[test]
+    fn upper_immediates_are_the_upper_20_bits() {
+        assert_eq!(words("lui a0,0x10"), [0x0001_0537]);
+        assert_eq!(words("lui a0,0xfffff"), [0xffff_f537]);
+        assert_eq!(words("lui a0,0"), [0x0000_0537]);
+        assert_eq!(words("auipc t0,0x12345"), [0x1234_5297]);
+        assert_eq!(words("auipc t0,1"), [0x0000_1297]);
+        assert_eq!(
+            error("lui a0,0x100000"),
+            "immediate 0x100000 is out of range, expected 0..=0xfffff"
+        );
+        assert_eq!(
+            error("auipc a0,-1"),
+            "immediate -1 is out of range, expected 0..=0xfffff"
+        );
+    }
+
+    #[test]
     fn local_labels_are_not_binary() {
         // `1b` is a backward reference, not a malformed binary number.
         assert_eq!(words("1:\nbeq a0,a1,1b"), [0x00b5_0063]);
@@ -1980,6 +1995,9 @@ mod tests {
             "slti a0,a1,-2048",
             "jalr ra,t0,-8",
             "srai a0,a1,31",
+            "lui a0,0x10",
+            "lui a0,0xfffff",
+            "auipc t0,0x12345",
         ] {
             let text = words(source);
             let printed = encoding::Instruction::decode(&mut &*assemble_text(source).unwrap())
