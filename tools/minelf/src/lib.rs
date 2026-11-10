@@ -145,17 +145,26 @@ fn read_string_table<'a>(
     bytes: &'_ [u8],
     section_headers: &'a Vec<ElfSectionHeader>,
 ) -> Result<Vec<(&'a ElfSectionHeader, ElfStringTable)>> {
-    Ok(section_headers
+    section_headers
         .iter()
         .filter(|sect| sect.sh_type == ElfSectionType::Strtab)
-        .map(|sect| {
-            assert!(std::mem::size_of::<usize>() >= 4);
-            let sh_size = sect.sh_size as usize;
-            let sh_offset = sect.sh_offset as usize;
+        .map(|sect| Ok((sect, read_one_string_table(bytes, sect)?)))
+        .collect()
+}
 
-            Ok((sect, ElfStringTable::new(&bytes[sh_offset..], sh_size)))
-        })
-        .collect::<Result<Vec<(&ElfSectionHeader, ElfStringTable)>>>()?)
+/// The string table `sect` holds, which must lie within `bytes`.
+fn read_one_string_table(bytes: &[u8], sect: &ElfSectionHeader) -> Result<ElfStringTable> {
+    assert!(std::mem::size_of::<usize>() >= 4);
+    let sh_size = sect.sh_size as usize;
+    let sh_offset = sect.sh_offset as usize;
+    let end = sh_offset.saturating_add(sh_size);
+    let content = bytes
+        .get(sh_offset..end)
+        .ok_or(errors::ElfError::UnsufficientBytes {
+            available_bytes: bytes.len(),
+            needed_bytes: end,
+        })?;
+    Ok(ElfStringTable::new(content, sh_size))
 }
 
 impl ElfFile {
@@ -189,22 +198,12 @@ impl ElfFile {
                 }
             }
             let shstr_table = shstr_table.expect("No section header table found");
-            let mut strtab = None;
-
-            for sect in section_headers.iter() {
-                assert!(std::mem::size_of::<usize>() >= 4);
-                if shstr_table.get_from(sect.sh_name as usize) == b".strtab" {
-                    strtab = Some(sect);
-                    break;
-                }
-            }
-            let strtab = strtab.expect("No string table found");
-
-            assert!(std::mem::size_of::<usize>() >= 4);
-            let sh_size = strtab.sh_size as usize;
-            let sh_offset = strtab.sh_offset as usize;
-
-            let strtab = ElfStringTable::new(&bytes[sh_offset..], sh_size);
+            let strtab = section_headers
+                .iter()
+                .find(|sect| shstr_table.get_from(sect.sh_name as usize) == b".strtab")
+                .map(|sect| read_one_string_table(bytes, sect))
+                .transpose()?
+                .unwrap_or_else(ElfStringTable::empty);
 
             Ok(ElfFile::Executable(ElfExecutableFile {
                 header,

@@ -22,20 +22,27 @@ impl ElfStringTable {
         true
     }
 
+    /// A table without any strings, for a file that has none.
+    pub fn empty() -> ElfStringTable {
+        ElfStringTable {
+            content: Vec::new(),
+        }
+    }
+
     pub fn new(bytes: &[u8], size: usize) -> ElfStringTable {
         ElfStringTable {
             content: bytes[..size].to_vec(),
         }
     }
 
+    /// The string at `start`, up to the next NUL byte. Empty when `start`
+    /// lies past the end of the table.
     pub fn get_from(&self, start: usize) -> &[u8] {
-        for (i, b) in self.content.iter().enumerate().skip(start) {
-            if *b == b'\0' {
-                return &self.content[start..i];
-            }
-        }
-
-        &self.content[start..self.content.len()]
+        let Some(rest) = self.content.get(start..) else {
+            return &[];
+        };
+        let end = rest.iter().position(|&b| b == b'\0').unwrap_or(rest.len());
+        &rest[..end]
     }
 
     pub fn entries<'a>(&'a self) -> ElfStringTableEntries<'a> {

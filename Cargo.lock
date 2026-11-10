@@ -633,6 +633,7 @@ name = "pipeline-explorer"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "hashbrown 0.17.1",
  "js-sys",
  "minelf",
  "trva",
