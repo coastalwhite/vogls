@@ -198,8 +198,12 @@ impl<'a> SourceCursor<'a> {
             .map(|v| v as i16)
     }
     pub fn take_imm20(&mut self) -> AssembleResult<u32> {
-        // @TODO: Many other syntaxes.
-        self.take_u32()
+        self.take_uimm32()
+    }
+    /// A non-negative 32-bit value, such as the operand of `.space`.
+    pub fn take_uimm32(&mut self) -> AssembleResult<u32> {
+        self.take_int_in(0..=i64::from(u32::MAX), "0..=4294967295")
+            .map(|v| v as u32)
     }
     /// A shift amount for either XLEN; the caller narrows it to its own.
     pub fn take_shamt(&mut self) -> AssembleResult<u8> {
@@ -215,20 +219,24 @@ impl<'a> SourceCursor<'a> {
         let start = self.offset;
         let value = self.take_int()?;
         if !range.contains(&value) {
+            // Quote it as written: `0x800` is clearer than `2048`.
+            let written = &self.content[start..self.offset];
             self.offset = start;
             return Err(Box::new(self.new_err(format!(
-                "immediate {value} is out of range, expected {expected}"
+                "immediate {written} is out of range, expected {expected}"
             ))));
         }
         Ok(value)
     }
 
-    /// A decimal integer with an optional leading `-`.
+    /// An integer with an optional leading `-`: decimal, hexadecimal after
+    /// `0x`, or binary after `0b`.
+    ///
+    /// A leading `0` does not make it octal, unlike in GNU as: `010` is ten.
     ///
     /// Unlike [`Self::take_u32`], at least one digit is required, so a missing
     /// operand is an error rather than a zero.
     pub fn take_int(&mut self) -> AssembleResult<i64> {
-        // @TODO: Hexadecimal and binary.
         let start = self.offset;
         let negative = self.next_byte_if_equals(b'-');
         if !self.peek_byte().is_some_and(|b| b.is_ascii_digit()) {
@@ -237,20 +245,39 @@ impl<'a> SourceCursor<'a> {
         }
 
         let bs = self.content.as_bytes();
+        let radix = match bs.get(self.offset..self.offset + 2) {
+            Some(b"0x" | b"0X") => 16,
+            Some(b"0b" | b"0B") => 2,
+            _ => 10,
+        };
+        if radix != 10 {
+            self.offset += 2;
+        }
+
+        let digits = self.offset;
         let mut value = 0i64;
-        while let Some(&b) = bs.get(self.offset)
-            && b.is_ascii_digit()
+        while let Some(digit) = bs
+            .get(self.offset)
+            .and_then(|&b| char::from(b).to_digit(radix))
         {
             // Anything this large is out of range for every caller anyway.
             let Some(next) = value
-                .checked_mul(10)
-                .and_then(|v| v.checked_add(i64::from(b - b'0')))
+                .checked_mul(i64::from(radix))
+                .and_then(|v| v.checked_add(i64::from(digit)))
             else {
                 self.offset = start;
                 return Err(Box::new(self.new_err("integer overflow")));
             };
             value = next;
             self.offset += 1;
+        }
+        if self.offset == digits {
+            self.offset = start;
+            let kind = if radix == 16 { "hexadecimal" } else { "binary" };
+            return Err(Box::new(self.new_err(format!(
+                "expected {kind} digits after '{}'",
+                &self.content[digits - 2..digits]
+            ))));
         }
         Ok(if negative { -value } else { value })
     }

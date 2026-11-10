@@ -323,13 +323,13 @@ impl Assembler {
                 }
                 ".align" => {
                     cursor.take_separator()?;
-                    let align = cursor.take_u32()?;
+                    let align = cursor.take_uimm32()?;
                     self.current_section_mut().align(align);
                 }
 
                 ".space" => {
                     cursor.take_separator()?;
-                    let space = cursor.take_u32()?;
+                    let space = cursor.take_uimm32()?;
                     self.current_section_mut().pad(space);
                 }
 
@@ -1910,6 +1910,57 @@ mod tests {
             "immediate 4294967296 is out of range, expected a 32-bit value"
         );
         assert_eq!(error("addi a0,a0,99999999999999999999"), "integer overflow");
+    }
+
+    #[test]
+    fn hexadecimal_and_binary_immediates() {
+        assert_eq!(words("addi a0,zero,0x7ff"), [0x7ff0_0513]);
+        assert_eq!(words("addi a0,zero,0X7FF"), [0x7ff0_0513]);
+        assert_eq!(words("addi a0,zero,-0x800"), [0x8000_0513]);
+        assert_eq!(words("andi a0,a1,0b1010"), [0x00a5_f513]);
+        assert_eq!(words("lw t0,-0x4(fp)"), [0xffc4_2283]);
+        assert_eq!(words("slli a0,a1,0x1f"), [0x01f5_9513]);
+        assert_eq!(words("li a0,0xffffffff"), [0xfff0_0513]);
+        // Not octal: a leading zero is just a zero.
+        assert_eq!(words("addi a0,zero,010"), [0x00a0_0513]);
+        // `lui` keeps taking the full value until it takes the upper 20 bits.
+        assert_eq!(words("lui a0,0x10000"), [0x0001_0537]);
+        assert_eq!(
+            words(".space 0x10\naddi a0,zero,1"),
+            [0, 0, 0, 0, 0x0010_0513]
+        );
+    }
+
+    #[test]
+    fn malformed_radix_immediates() {
+        assert_eq!(
+            error("addi a0,a0,0x"),
+            "expected hexadecimal digits after '0x'"
+        );
+        assert_eq!(
+            error("addi a0,a0,-0bx"),
+            "expected binary digits after '0b'"
+        );
+        assert_eq!(error("addi a0,a0,0b2"), "expected binary digits after '0b'");
+        assert_eq!(
+            error("addi a0,a0,0x800"),
+            "immediate 0x800 is out of range, expected -2048..=2047"
+        );
+        assert_eq!(
+            error("li a0,0x100000000"),
+            "immediate 0x100000000 is out of range, expected a 32-bit value"
+        );
+        assert_eq!(error("addi a0,a0,0x1g"), "expected end of statement");
+        assert_eq!(
+            error(".space -1"),
+            "immediate -1 is out of range, expected 0..=4294967295"
+        );
+    }
+
+    #[test]
+    fn local_labels_are_not_binary() {
+        // `1b` is a backward reference, not a malformed binary number.
+        assert_eq!(words("1:\nbeq a0,a1,1b"), [0x00b5_0063]);
     }
 
     #[test]
