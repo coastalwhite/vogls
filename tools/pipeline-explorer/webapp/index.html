@@ -46,7 +46,7 @@
 						</div>
 					</div>
 					<div id="sharePaneLink" role="tabpanel" hidden>
-						<p class="share-sub">Opens the explorer with this assembly, processor and configuration.</p>
+						<p class="share-sub">Opens the explorer with this program, processor and configuration.</p>
 						<div class="share-actions">
 							<input type="text" id="shareLinkInput" readonly />
 							<button type="button" id="shareLinkCopyBtn">Copy</button>
@@ -66,9 +66,20 @@
                                   aria-label="RISC-V assembly editor" onchange="staggerRunSim"></textarea>
                       </div>
                     </div>
+                    <div id="programBar">
+                      <button id="elfUploadBtn" type="button">Upload ELF</button>
+                      <input type="file" id="elfFileInput" accept=".elf,application/x-elf,application/x-executable" hidden />
+                      <span id="elfName" hidden></span>
+                      <button id="elfClearBtn" type="button" hidden
+                              aria-label="Remove the ELF file and edit assembly" title="Back to assembly">✕</button>
+                    </div>
 				</div>
-				<div id="pipelineContainer" />
+				<div id="workspace"></div>
 			</div>
+		</div>
+		<div id="errorBar" role="alert" hidden>
+			<span id="errorMessage"></span>
+			<button id="errorDismissBtn" type="button" aria-label="Dismiss error" title="Dismiss">✕</button>
 		</div>
 		<div id="footer">
 			<div id="scrubberContainer"></div>

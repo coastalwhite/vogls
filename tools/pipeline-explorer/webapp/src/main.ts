@@ -17,8 +17,8 @@ const pipelineStages: HTMLDivElement = document.getElementById(
     "pipelineStages",
 )!;
 
-const pipelineContainer: HTMLDivElement = document.getElementById(
-    "pipelineContainer",
+const workspace: HTMLDivElement = document.getElementById(
+    "workspace",
 )!;
 const scrubberContainer: HTMLDivElement = document.getElementById(
     "scrubberContainer",
@@ -53,6 +53,20 @@ const chipMenuPanel: HTMLDivElement = document.getElementById(
 const chipMenuName: HTMLSpanElement = document.getElementById(
     "chipMenuName",
 )!;
+const editorElem: HTMLDivElement = document.querySelector("#left .editor")!;
+const elfUploadBtn: HTMLButtonElement = document.getElementById(
+    "elfUploadBtn",
+)! as HTMLButtonElement;
+const elfFileInput: HTMLInputElement = document.getElementById(
+    "elfFileInput",
+)! as HTMLInputElement;
+const elfNameElem: HTMLSpanElement = document.getElementById("elfName")!;
+const elfClearBtn: HTMLButtonElement = document.getElementById(
+    "elfClearBtn",
+)! as HTMLButtonElement;
+const errorBar: HTMLDivElement = document.getElementById("errorBar")! as HTMLDivElement;
+const errorMessage: HTMLSpanElement = document.getElementById("errorMessage")!;
+
 let scrubber: ScrubberCanvas | null = null;
 let currentTrace: Trace | null = null;
 let pipeline: PipelineCanvas | null = null;
@@ -70,7 +84,7 @@ function setTrace(trace: Trace) {
     currentTrace = trace;
     if (pipeline === null) {
         pipeline = new PipelineCanvas(
-            pipelineContainer,
+            workspace,
             trace,
             currentCycle,
             setCurrentCycle,
@@ -118,12 +132,66 @@ const worker = new Worker(new URL("./wasm/trace-worker.ts", import.meta.url), {
     type: "module",
 });
 worker.onmessage = (e) => {
-    setTrace(e.data);
     pending -= 1;
+    if ("error" in e.data) {
+        // Keep showing the last good trace; the message says why it is stale.
+        showError(e.data.error);
+        if (pending == 0) simStatusElem.innerHTML = "";
+        return;
+    }
+
+    clearError();
+    setTrace(e.data);
     if (pending == 0) {
         simStatusElem.innerHTML = `<img src="check.svg"/>`;
     }
 };
+
+// The worker died, e.g. while loading the wasm module, and will not answer
+// the runs still pending.
+worker.onerror = (e) => {
+    e.preventDefault();
+    pending = 0;
+    simStatusElem.innerHTML = "";
+    showError(`The simulator stopped working: ${e.message || "unknown error"}`);
+};
+
+function showError(message: string) {
+    errorMessage.innerText = message;
+    errorBar.hidden = false;
+}
+function clearError() {
+    errorBar.hidden = true;
+    errorMessage.innerText = "";
+}
+document.getElementById("errorDismissBtn")!.addEventListener("click", clearError);
+
+type Elf = { name: string; bytes: Uint8Array };
+
+let elf: Elf | null = null;
+function setElf(next: Elf | null) {
+    elf = next;
+    elfNameElem.hidden = elfClearBtn.hidden = elf === null;
+    editorElem.hidden = elf !== null;
+    if (elf !== null) {
+        elfNameElem.innerText = `${elf.name} (${elf.bytes.length} bytes)`;
+        elfNameElem.title = elf.name;
+    }
+}
+
+elfUploadBtn.addEventListener("click", () => elfFileInput.click());
+elfFileInput.addEventListener("change", async () => {
+    const file = elfFileInput.files?.[0];
+    // Clear the input, or picking the same file again fires no `change`.
+    elfFileInput.value = "";
+    if (!file) return;
+    setElf({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) });
+    unstaggerRunSim();
+});
+elfClearBtn.addEventListener("click", () => {
+    setElf(null);
+    unstaggerRunSim();
+});
 
 type ConfigField = {
     id: string;
@@ -159,7 +227,7 @@ const procConfigFields: Record<string, ConfigField[]> = {
 };
 
 function runSim() {
-    const assembly = assemblyTextarea.value;
+    const program = elf !== null ? elf.bytes : assemblyTextarea.value;
     const procSelectValue = procSelect.value;
     const numCycles = numCyclesInput.value;
 
@@ -167,7 +235,7 @@ function runSim() {
 
     worker.postMessage({
         "proc": proc,
-        "asm": assembly,
+        "program": program,
         "config": readProcConfig(proc),
         "numCycles": numCycles,
     });
@@ -237,30 +305,55 @@ function onProcSelect() {
 
 /* ---------- shareable link ---------- */
 
+/** The program a link opens with: assembly, or an ELF file as base64url. */
+type SharedProgram =
+    | { kind: "asm"; text: string }
+    | { kind: "elf"; name: string; data: string };
+
 type ShareState = {
     proc: string;
-    asm: string;
+    program: SharedProgram;
     config: Record<string, boolean>;
     cycles: string;
 };
 
+function isSharedProgram(p: any): p is SharedProgram {
+    switch (p?.kind) {
+        case "asm":
+            return typeof p.text === "string";
+        case "elf":
+            return typeof p.name === "string" && typeof p.data === "string";
+        default:
+            return false;
+    }
+}
+
 const SHARE_PARAM = "share";
 
-function toBase64Url(text: string): string {
+function bytesToBase64Url(bytes: Uint8Array): string {
     let bin = "";
-    for (const b of new TextEncoder().encode(text)) bin += String.fromCharCode(b);
+    for (const b of bytes) bin += String.fromCharCode(b);
     return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
-function fromBase64Url(b64: string): string {
+function bytesFromBase64Url(b64: string): Uint8Array {
     const bin = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
-    return new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+}
+function toBase64Url(text: string): string {
+    return bytesToBase64Url(new TextEncoder().encode(text));
+}
+function fromBase64Url(b64: string): string {
+    return new TextDecoder().decode(bytesFromBase64Url(b64));
 }
 
 function shareLink(): string {
     const proc = procSelect.value;
     const state: ShareState = {
         proc,
-        asm: assemblyTextarea.value,
+        program:
+            elf !== null
+                ? { kind: "elf", name: elf.name, data: bytesToBase64Url(elf.bytes) }
+                : { kind: "asm", text: assemblyTextarea.value },
         config: readProcConfig(proc),
         cycles: numCyclesInput.value,
     };
@@ -275,7 +368,11 @@ function readShareState(): ShareState | null {
     if (!encoded) return null;
     try {
         const state = JSON.parse(fromBase64Url(encoded));
-        if (!(state.proc in procConfigFields) || typeof state.asm !== "string") {
+        // Links from before ELF uploads carry the assembly as `asm`.
+        if (state.program === undefined && typeof state.asm === "string") {
+            state.program = { kind: "asm", text: state.asm };
+        }
+        if (!(state.proc in procConfigFields) || !isSharedProgram(state.program)) {
             return null;
         }
         return state;
@@ -287,8 +384,12 @@ function readShareState(): ShareState | null {
 
 /** Loads a shared state, falling back to the defaults for anything missing. */
 function applyShareState(state: ShareState | null) {
-    assemblyTextarea.value = state?.asm ?? initialAsm;
+    const program = state?.program;
+    assemblyTextarea.value = program?.kind === "asm" ? program.text : initialAsm;
     renderEditor();
+    if (program?.kind === "elf") {
+        setElf({ name: program.name, bytes: bytesFromBase64Url(program.data) });
+    }
     numCyclesInput.value = state?.cycles ?? "500";
     if (state) procSelect.value = state.proc;
     buildProcConfig();
