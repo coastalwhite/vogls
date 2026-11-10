@@ -317,7 +317,7 @@ impl Assembler {
                         _ => return Err(Box::new(cursor.new_err("unknown section"))),
                     }
                 }
-                ".global" | "globl" => {
+                ".global" | ".globl" => {
                     cursor.take_separator()?;
                     let name = cursor.take_ident()?;
 
@@ -351,6 +351,11 @@ impl Assembler {
                     let Some(handler) = self.handlers.get(label) else {
                         return Err(Box::new(cursor.new_err("unknown mnemonic or directive")));
                     };
+                    if self.current_section == SectionKind::Bss {
+                        return Err(Box::new(cursor.new_err(
+                            "'.bss' is zero-initialised and cannot hold instructions",
+                        )));
+                    }
                     (handler)(self, &mut cursor)?;
                 }
             }
@@ -404,7 +409,7 @@ impl Assembler {
         let rs = cursor.take_gp_register()?;
         cursor.take_comma_separator()?;
         let imm = imm(cursor)?;
-        self.text.push_le_u32(new(rd, rs, imm));
+        self.current_section_mut().push_le_u32(new(rd, rs, imm));
         Ok(())
     }
     fn parse_itype_instr(
@@ -449,7 +454,7 @@ impl Assembler {
         let rs1 = cursor.take_gp_register()?;
         cursor.take_comma_separator()?;
         let rs2 = cursor.take_gp_register()?;
-        self.text.push_le_u32(new(rd, rs1, rs2));
+        self.current_section_mut().push_le_u32(new(rd, rs1, rs2));
         Ok(())
     }
 
@@ -471,7 +476,7 @@ impl Assembler {
         } else {
             (rs1, rs2)
         };
-        self.text
+        self.current_section_mut()
             .push_relocation_item(RelocationItem::Branch(rs1, rs2, kind, label));
         Ok(())
     }
@@ -491,7 +496,7 @@ impl Assembler {
         } else {
             (XRegIdent::Zero, rs)
         };
-        self.text
+        self.current_section_mut()
             .push_relocation_item(RelocationItem::Branch(rs1, rs2, kind, label));
         Ok(())
     }
@@ -512,7 +517,7 @@ impl Assembler {
         cursor.take_opt_separator();
         cursor.expect_byte(b')')?;
 
-        self.text.push_le_u32(new(rd, rs, imm));
+        self.current_section_mut().push_le_u32(new(rd, rs, imm));
         Ok(())
     }
     fn parse_store_op(
@@ -531,7 +536,7 @@ impl Assembler {
         cursor.take_opt_separator();
         cursor.expect_byte(b')')?;
 
-        self.text.push_le_u32(new(rs1, rs2, imm));
+        self.current_section_mut().push_le_u32(new(rs1, rs2, imm));
         Ok(())
     }
 
@@ -545,7 +550,7 @@ impl Assembler {
         cursor.take_comma_separator()?;
         let rs = cursor.take_gp_register()?;
 
-        self.text.push_le_u32(new(rd, rs));
+        self.current_section_mut().push_le_u32(new(rd, rs));
         Ok(())
     }
     fn parse_fence_order(&mut self, cursor: &mut SourceCursor<'_>) -> AssembleResult<FenceOrder> {
@@ -791,7 +796,7 @@ impl Assembler {
                         RelocationItem::Jump(rd, lbl) => {
                             let lbl_offset = resolve_target_label(
                                 lbl,
-                                &self.text.events,
+                                &section.events,
                                 local_offsets,
                                 eid,
                                 local_offset,
@@ -815,7 +820,7 @@ impl Assembler {
                             // @Q? Should `rt` be set anyway?
                             let lbl_offset = resolve_target_label(
                                 lbl,
-                                &self.text.events,
+                                &section.events,
                                 local_offsets,
                                 eid,
                                 local_offset,
@@ -976,7 +981,7 @@ fn fill_handlers(
             let rd = c.take_gp_register()?;
             c.take_comma_separator()?;
             let label = asm.take_target_label(c)?;
-            asm.text
+            asm.current_section_mut()
                 .push_relocation_item(RelocationItem::LoadAddress(rd, label));
         }),
     );
@@ -993,17 +998,17 @@ fn fill_handlers(
             };
 
             if let Some(imm) = signed_imm_to_imm12(imm) {
-                asm.text
+                asm.current_section_mut()
                     .push_le_u32(encoding::Addi::new(rd, XRegIdent::Zero, imm).encode_as_u32());
             } else {
                 let imm = (imm as u64 & 0xFFFF_FFFF) as u32;
                 // @TODO: Better instruction dispatch.
                 // `addi` sign-extends its immediate, so round the upper part up
                 // when bit 11 is set.
-                asm.text.push_le_u32(
+                asm.current_section_mut().push_le_u32(
                     encoding::Lui::new(rd, imm.wrapping_add(0x800) & !0xFFF).encode_as_u32(),
                 );
-                asm.text
+                asm.current_section_mut()
                     .push_le_u32(encoding::Addi::new(rd, rd, (imm & 0xFFF) as i16).encode_as_u32());
             }
         }),
@@ -1015,7 +1020,7 @@ fn fill_handlers(
             let rd = c.take_gp_register()?;
             c.take_comma_separator()?;
             let imm = c.take_imm20()? << 12;
-            asm.text
+            asm.current_section_mut()
                 .push_le_u32(encoding::Lui::new(rd, imm).encode_as_u32());
         }),
     );
@@ -1026,7 +1031,7 @@ fn fill_handlers(
             let rd = c.take_gp_register()?;
             c.take_comma_separator()?;
             let imm = c.take_imm20()? << 12;
-            asm.text
+            asm.current_section_mut()
                 .push_le_u32(encoding::Auipc::new(rd, imm).encode_as_u32());
         }),
     );
@@ -1045,7 +1050,7 @@ fn fill_handlers(
                 XRegIdent::Ra
             };
             let label = asm.take_target_label(c)?;
-            asm.text
+            asm.current_section_mut()
                 .push_relocation_item(RelocationItem::Jump(reg, label));
         }),
     );
@@ -1055,7 +1060,7 @@ fn fill_handlers(
             // j label      ~     jal x0, label
             c.take_separator()?;
             let label = asm.take_target_label(c)?;
-            asm.text
+            asm.current_section_mut()
                 .push_relocation_item(RelocationItem::Jump(XRegIdent::Zero, label));
         }),
     );
@@ -1075,7 +1080,7 @@ fn fill_handlers(
                 // jalr rs       ~     jalr x1, rs, 0
                 (XRegIdent::Ra, rd_or_rs, 0)
             };
-            asm.text
+            asm.current_section_mut()
                 .push_le_u32(encoding::Jalr::new(rd, rs, imm).encode_as_u32());
         }),
     );
@@ -1085,7 +1090,7 @@ fn fill_handlers(
             // jr rs     ~     jalr x0, rs, 0
             c.take_separator()?;
             let rs = c.take_gp_register()?;
-            asm.text
+            asm.current_section_mut()
                 .push_le_u32(encoding::Jalr::new(XRegIdent::Zero, rs, 0).encode_as_u32());
         }),
     );
@@ -1093,7 +1098,7 @@ fn fill_handlers(
         "ret",
         handler!(ret, |asm, _c| {
             // ret     ~     jalr x0, x1, 0
-            asm.text.push_le_u32(
+            asm.current_section_mut().push_le_u32(
                 encoding::Jalr::new(XRegIdent::Zero, XRegIdent::Ra, 0).encode_as_u32(),
             );
         }),
@@ -1105,11 +1110,12 @@ fn fill_handlers(
             //                       jalr  ra, ra, %lo_symbol(symbol)
             c.take_separator()?;
             let label = asm.take_target_label(c)?;
-            asm.text.push_relocation_item(RelocationItem::PcRelJump(
-                XRegIdent::Ra,
-                XRegIdent::Ra,
-                label,
-            ));
+            asm.current_section_mut()
+                .push_relocation_item(RelocationItem::PcRelJump(
+                    XRegIdent::Ra,
+                    XRegIdent::Ra,
+                    label,
+                ));
         }),
     );
     handlers.insert(
@@ -1119,11 +1125,12 @@ fn fill_handlers(
             //                       jalr  t1, x0, %lo_symbol(symbol)
             c.take_separator()?;
             let label = asm.take_target_label(c)?;
-            asm.text.push_relocation_item(RelocationItem::PcRelJump(
-                XRegIdent::T0,
-                XRegIdent::Zero,
-                label,
-            ));
+            asm.current_section_mut()
+                .push_relocation_item(RelocationItem::PcRelJump(
+                    XRegIdent::T0,
+                    XRegIdent::Zero,
+                    label,
+                ));
         }),
     );
     handlers.insert(
@@ -1135,7 +1142,7 @@ fn fill_handlers(
             let label = asm.take_target_label(c)?;
             c.take_comma_separator()?;
             let rt = c.take_gp_register()?;
-            asm.text
+            asm.current_section_mut()
                 .push_relocation_item(RelocationItem::PcRelJump(rt, XRegIdent::Zero, label));
         }),
     );
@@ -1173,7 +1180,7 @@ fn fill_handlers(
     handlers.insert(
         "nop",
         handler!(nop, |asm, _c| {
-            asm.text.push_le_u32(
+            asm.current_section_mut().push_le_u32(
                 encoding::Addi::new(XRegIdent::Zero, XRegIdent::Zero, 0).encode_as_u32(),
             );
         }),
@@ -1241,7 +1248,7 @@ fn fill_handlers(
                 (FenceOrder::ALL, FenceOrder::ALL)
             };
 
-            asm.text
+            asm.current_section_mut()
                 .push_le_u32(encoding::Fence::new(FenceMode(0b0000), pred, succ).encode_as_u32());
         }),
     );
@@ -1262,14 +1269,14 @@ fn fill_handlers(
                 (FenceOrder::ALL, FenceOrder::ALL)
             };
 
-            asm.text
+            asm.current_section_mut()
                 .push_le_u32(encoding::Fence::new(FenceMode(0b1000), pred, succ).encode_as_u32());
         }),
     );
     handlers.insert(
         "pause",
         handler!(pause, |asm, _c| {
-            asm.text.push_le_u32(
+            asm.current_section_mut().push_le_u32(
                 encoding::Fence::new(
                     FenceMode(0b0000),
                     FenceOrder::MEMORY_WRITE,
@@ -1282,13 +1289,14 @@ fn fill_handlers(
     handlers.insert(
         "ecall",
         handler!(ecall, |asm, _c| {
-            asm.text.push_le_u32(encoding::Ecall::new().encode_as_u32());
+            asm.current_section_mut()
+                .push_le_u32(encoding::Ecall::new().encode_as_u32());
         }),
     );
     handlers.insert(
         "ebreak",
         handler!(ebreak, |asm, _c| {
-            asm.text
+            asm.current_section_mut()
                 .push_le_u32(encoding::Ebreak::new().encode_as_u32());
         }),
     );
@@ -2096,6 +2104,79 @@ mod tests {
         assert_eq!(error(".word"), "missing separator");
         assert_eq!(error(".word 1,"), "expected an integer");
         assert_eq!(error(".word 1 2"), "expected end of statement");
+    }
+
+    #[test]
+    fn instructions_go_in_the_current_section() {
+        let asm = assemble(
+            &SectionPositions::absolute(0, 0x400, 0x800, 0xc00),
+            "
+            .section .text
+                addi a0,zero,1
+            .section .data
+                addi a0,zero,2
+            .section .text
+                addi a0,zero,3
+            .section .rodata
+                addi a0,zero,4
+            ",
+        );
+        assert_eq!(*asm.text, [0x13, 0x05, 0x10, 0x00, 0x13, 0x05, 0x30, 0x00]);
+        assert_eq!(*asm.data, [0x13, 0x05, 0x20, 0x00]);
+        assert_eq!(*asm.rodata, [0x13, 0x05, 0x40, 0x00]);
+    }
+
+    #[test]
+    fn jumps_resolve_outside_text() {
+        let asm = assemble(
+            &SectionPositions::absolute(0, 0x400, 0x800, 0xc00),
+            "
+            .section .text
+                .word 0
+            start:
+                ecall
+            .section .data
+            1:
+                beq a0,a1,1b
+                jal zero,1b
+                bne a0,a1,2f
+                jal ra,2f
+            2:
+                jal zero,start
+            ",
+        );
+        let words: Vec<u32> = asm
+            .data
+            .chunks(4)
+            .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+            .collect();
+        assert_eq!(
+            words,
+            [
+                0x00b5_0063, // beq a0,a1,0
+                0xffdf_f06f, // jal zero,-4
+                0x00b5_1463, // bne a0,a1,8
+                0x0040_00ef, // jal ra,4
+                0xbf5f_f06f, // jal zero,start (0x4 - 0x410)
+            ]
+        );
+    }
+
+    #[test]
+    fn instructions_are_refused_in_bss() {
+        assert_eq!(
+            error(".section .bss\naddi a0,zero,1"),
+            "'.bss' is zero-initialised and cannot hold instructions"
+        );
+    }
+
+    #[test]
+    fn globl_is_global() {
+        let mut asm = assemble(
+            &SectionPositions::absolute(0, 0x400, 0x800, 0xc00),
+            ".section .text\nnop\n.globl _start\n_start:\nnop",
+        );
+        assert_eq!(symbol(&mut asm, "_start"), (SectionKind::Text, 4));
     }
 
     #[test]
