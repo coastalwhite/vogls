@@ -342,7 +342,7 @@ export function renderPipeline(
     ) {
         const x = layout.currentCycle * cellW + paddingX - offsetX;
         ctx.fillStyle = "#ccc";
-        ctx.fillRect(x, -offsetY, cellW, height);
+        ctx.fillRect(x, 0, cellW, height);
     }
 
     // Vertical guide lines.
