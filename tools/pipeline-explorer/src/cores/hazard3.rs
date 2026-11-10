@@ -1,11 +1,11 @@
 use vogls::design::RtSignal;
 
 use super::{
-    Core, DATA_MEMORY, Description, INSTRUCTION_MEMORY, PipelineTrace, Sim, Testbench, enabled,
-    memory_map, signal,
+    Core, DATA_MEMORY, DATA_MEMORY_ADDR, Description, INSTRUCTION_MEMORY, INSTRUCTION_MEMORY_ADDR,
+    PipelineTrace, Sim, Testbench, enabled, signal,
 };
 use crate::TraceError;
-use crate::program::{MemoryMap, ProgramSections};
+use crate::program::ProgramSections;
 
 const BOOT: u32 = 0x0000_0000;
 
@@ -34,15 +34,14 @@ impl Core for Hazard3 {
     type State = Sim;
     type Params = Hazard3Config;
 
-    fn memory_map(&self) -> MemoryMap {
-        memory_map(BOOT)
-    }
-
     fn description(&self, _params: &Hazard3Config) -> Description {
         // Fetch, decode/execute, and memory/writeback.
         Description {
             pipeline_stages: vec!["F", "X", "M"],
+            boot: BOOT,
+            imem_addr: INSTRUCTION_MEMORY_ADDR,
             imem_size: INSTRUCTION_MEMORY,
+            dmem_addr: DATA_MEMORY_ADDR,
             dmem_size: DATA_MEMORY,
         }
     }
@@ -96,7 +95,7 @@ impl Core for Hazard3 {
         state: &mut Sim,
         sections: &ProgramSections,
     ) -> Result<(), TraceError> {
-        design.tb.reset(state, &self.memory_map(), sections)
+        design.tb.reset(state, sections)
     }
 
     fn iterate_cycle(

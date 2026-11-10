@@ -91,15 +91,18 @@ pub fn evaluate<C: Core>(
 ) -> Result<ReturnValue, TraceError> {
     // Convert the program first: a bad program is reported far quicker than
     // the design compiles.
-    let map = core.memory_map();
-    let sections = program.to_sections(RV32IM, &map)?;
+    let description = core.description(params);
+    let sections = program.to_sections(RV32IM, &description.memory_map())?;
     let instructions = program::disassemble(&sections.text);
 
-    let description = core.description(params);
     let (design, mut state) = core.compile(params)?;
     core.prologue(&design, &mut state, &sections)?;
 
-    let mut trace = PipelineTrace::new(map.boot, description.pipeline_stages.len(), num_cycles);
+    let mut trace = PipelineTrace::new(
+        sections.text_addr,
+        description.pipeline_stages.len(),
+        num_cycles,
+    );
     let mut cycles = num_cycles;
     for i in 0..num_cycles {
         core.iterate_cycle(&design, &mut state, &mut trace)?;

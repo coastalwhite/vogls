@@ -1,15 +1,4 @@
 //! Turning a program into the sections a core loads.
-//!
-//! A program arrives either as RISC-V assembly, which [`trva`] assembles, or as
-//! a linked ELF executable, from which the `.text`, `.data`, `.rodata` and
-//! `.bss` sections are extracted. Either way the result is a set of
-//! [`ProgramSections`], each of which goes at the start of its range in the
-//! [`MemoryMap`] of the core.
-//!
-//! The memories of the testbenches are tiny (a kilobyte of code and about four
-//! kilobytes of data), so an ELF built for a real board does not fit and would
-//! otherwise be loaded as a silently truncated or misplaced program. Every
-//! section is therefore checked against the map.
 
 use std::fmt;
 use std::ops::Range;
@@ -20,7 +9,7 @@ use minelf::errors::ElfError;
 use minelf::header::ElfHeader;
 use trva::error::{AssembleError, LayoutError};
 use trva::isa::Isa;
-use trva::{Assembler, SectionPositions};
+use trva::{Assembler, SectionKind, SectionPlacement, SectionPositions};
 
 /// `EM_RISCV`, the `e_machine` of a RISC-V program.
 const EM_RISCV: u16 = 243;
@@ -29,46 +18,54 @@ const ELFCLASS32: u8 = 1;
 /// `ET_EXEC`, the `e_type` of an executable (fully linked) ELF file.
 const ET_EXEC: u16 = 2;
 
-/// Start address and maximum allocated space for each program section for a
-/// core.
+/// Alignment of the start of each data section the assembler lays out.
+const DATA_SECTION_ALIGN: u32 = 4;
+
+/// One of the two memories of a core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Memory {
+    Instruction,
+    Data,
+}
+
+impl fmt::Display for Memory {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Memory::Instruction => "instruction memory",
+            Memory::Data => "data memory",
+        })
+    }
+}
+
+/// Where the memories of a core sit in its address space.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryMap {
-    /// Address of the instruction fetched first after reset.
     pub boot: u32,
-    pub text: Range<u32>,
-    pub data: Range<u32>,
-    pub rodata: Range<u32>,
-    pub bss: Range<u32>,
+    pub imem: Range<u32>,
+    pub dmem: Range<u32>,
 }
 
 impl MemoryMap {
-    /// Where the assembler places each section: at the start of its range.
-    ///
-    /// Each range is fixed by the core, so these are absolute rather than relative to one
-    /// another.
     pub fn to_positions(&self) -> SectionPositions {
-        SectionPositions::absolute(
-            self.text.start,
-            self.data.start,
-            self.rodata.start,
-            self.bss.start,
-        )
+        SectionPositions {
+            text: SectionPlacement::Absolute(self.boot),
+            data: SectionPlacement::Absolute(self.dmem.start),
+            rodata: SectionPlacement::after_aligned(SectionKind::Data, DATA_SECTION_ALIGN),
+            bss: SectionPlacement::after_aligned(SectionKind::ReadOnlyData, DATA_SECTION_ALIGN),
+        }
     }
 
-    /// The name and range of each section, in the order of
-    /// [`ProgramSections::lens`].
-    pub fn sections(&self) -> [(&'static str, Range<u32>); 4] {
-        [
-            (".text", self.text.clone()),
-            (".data", self.data.clone()),
-            (".rodata", self.rodata.clone()),
-            (".bss", self.bss.clone()),
-        ]
+    /// The addresses of `memory`.
+    pub fn range(&self, memory: Memory) -> &Range<u32> {
+        match memory {
+            Memory::Instruction => &self.imem,
+            Memory::Data => &self.dmem,
+        }
     }
 }
 
-/// The contents of each section of a program, each to be placed at the start
-/// of its range in the [`MemoryMap`].
+/// The contents of each section of a program, and the address it is linked
+/// at.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProgramSections {
     pub text: Box<[u8]>,
@@ -77,25 +74,46 @@ pub struct ProgramSections {
     /// Size of `.bss`. The section carries no bytes of its own: it is the
     /// zero-initialised part of memory, and only its size matters.
     pub bss: usize,
+
+    pub text_addr: u32,
+    pub data_addr: u32,
+    pub rodata_addr: u32,
+    pub bss_addr: u32,
 }
 
 impl ProgramSections {
-    /// The size of each section, in the order of [`MemoryMap::sections`].
-    pub fn lens(&self) -> [usize; 4] {
+    /// The name, memory, address and size of each section.
+    pub fn placed(&self) -> [(&'static str, Memory, u32, usize); 4] {
         [
-            self.text.len(),
-            self.data.len(),
-            self.rodata.len(),
-            self.bss,
+            (
+                ".text",
+                Memory::Instruction,
+                self.text_addr,
+                self.text.len(),
+            ),
+            (".data", Memory::Data, self.data_addr, self.data.len()),
+            (".rodata", Memory::Data, self.rodata_addr, self.rodata.len()),
+            (".bss", Memory::Data, self.bss_addr, self.bss),
         ]
     }
 
-    /// Checks that every section fits in its range of `map`.
+    /// Checks that every section lies within the memory `map` gives it.
     fn check_fits(&self, map: &MemoryMap) -> Result<(), LoadError> {
-        for ((section, range), len) in map.sections().into_iter().zip(self.lens()) {
-            let max = range.len();
-            if len > max {
-                return Err(LoadError::TooLarge { section, len, max });
+        for (section, memory, addr, len) in self.placed() {
+            // Where an empty section is linked does not matter.
+            if len == 0 {
+                continue;
+            }
+            let range = map.range(memory);
+            let end = u64::from(addr) + len as u64;
+            if addr < range.start || end > u64::from(range.end) {
+                return Err(LoadError::OutsideMemory {
+                    section,
+                    memory,
+                    addr,
+                    len,
+                    range: range.clone(),
+                });
             }
         }
         Ok(())
@@ -107,16 +125,12 @@ impl ProgramSections {
 pub enum Program {
     /// A linked ELF executable.
     Elf(Box<[u8]>),
-    /// RISC-V assembly, assembled by [`trva`].
+    /// RISC-V assembly.
     Assembly(Box<str>),
 }
 
 impl Program {
     /// Converts the program to the sections `map` places.
-    ///
-    /// Assembly is assembled at the start of each range of `map`. An ELF must
-    /// already be linked that way, and start executing at [`MemoryMap::boot`].
-    /// Either way, every section has to fit in its range.
     pub fn to_sections(&self, isa: Isa, map: &MemoryMap) -> Result<ProgramSections, LoadError> {
         let sections = match self {
             Program::Assembly(source) => {
@@ -128,6 +142,10 @@ impl Program {
                     data: assembled.data,
                     rodata: assembled.rodata,
                     bss: assembled.bss,
+                    text_addr: assembled.text_start,
+                    data_addr: assembled.data_start,
+                    rodata_addr: assembled.rodata_start,
+                    bss_addr: assembled.bss_start,
                 }
             }
             Program::Elf(bytes) => sections_from_elf(bytes, map)?,
@@ -164,17 +182,13 @@ pub enum LoadError {
         entry: u32,
         boot: u32,
     },
-    /// A section is not linked at the start of its range in the memory map.
-    Misplaced {
+    /// A section is linked, at least partly, outside the memory it belongs in.
+    OutsideMemory {
         section: &'static str,
+        memory: Memory,
         addr: u32,
-        expected: u32,
-    },
-    /// A section is larger than its range in the memory map.
-    TooLarge {
-        section: &'static str,
         len: usize,
-        max: usize,
+        range: Range<u32>,
     },
     /// A section that takes up memory at run time but is not one of the four
     /// the loader knows how to place.
@@ -214,17 +228,17 @@ impl fmt::Display for LoadError {
                 f,
                 "entry point is 0x{entry:08x} but the core starts executing at 0x{boot:08x}",
             ),
-            LoadError::Misplaced {
+            LoadError::OutsideMemory {
                 section,
+                memory,
                 addr,
-                expected,
+                len,
+                range,
             } => write!(
                 f,
-                "'{section}' is linked at 0x{addr:08x} but the core expects it at 0x{expected:08x}",
-            ),
-            LoadError::TooLarge { section, len, max } => write!(
-                f,
-                "'{section}' is {len} bytes but the core has room for only {max}",
+                "'{section}' ({len} bytes at 0x{addr:08x}) does not fit in the {memory}, \
+                 which spans 0x{:08x}..0x{:08x}",
+                range.start, range.end,
             ),
             LoadError::UnknownSection { name, addr, len } => write!(
                 f,
@@ -254,8 +268,8 @@ impl From<ElfError> for LoadError {
     }
 }
 
-/// Extracts the four sections of a linked ELF executable, checking that each
-/// is linked where `map` places it.
+/// Extracts the four sections of a linked ELF executable, with the address
+/// each is linked at. [`Program::to_sections`] checks those against `map`.
 fn sections_from_elf(bytes: &[u8], map: &MemoryMap) -> Result<ProgramSections, LoadError> {
     let elf = parse_elf(bytes)?;
 
@@ -288,10 +302,8 @@ fn sections_from_elf(bytes: &[u8], map: &MemoryMap) -> Result<ProgramSections, L
         });
     }
 
-    for (section, range) in map.sections() {
-        check_placement(&elf, section, &range)?;
-    }
-
+    // A section the file lacks is empty, and where it would go is irrelevant.
+    let addr = |name: &[u8]| elf.get_section(name).map_or(0, |sect| sect.sh_addr);
     let sections = ProgramSections {
         text: read_section(&elf, bytes, ".text")?,
         data: read_section(&elf, bytes, ".data")?,
@@ -299,6 +311,10 @@ fn sections_from_elf(bytes: &[u8], map: &MemoryMap) -> Result<ProgramSections, L
         bss: elf
             .get_section(b".bss")
             .map_or(0, |sect| sect.sh_size as usize),
+        text_addr: addr(b".text"),
+        data_addr: addr(b".data"),
+        rodata_addr: addr(b".rodata"),
+        bss_addr: addr(b".bss"),
     };
     if sections.text.is_empty() {
         return Err(LoadError::NoText);
@@ -327,25 +343,6 @@ pub fn parse_elf(bytes: &[u8]) -> Result<ElfFile, LoadError> {
     }
 
     Ok(ElfFile::read_from_bytes(bytes)?)
-}
-
-/// Checks that `section`, if the file has it and it is not empty, is linked at
-/// the start of `range`.
-fn check_placement(
-    elf: &ElfFile,
-    section: &'static str,
-    range: &Range<u32>,
-) -> Result<(), LoadError> {
-    match elf.get_section(section.as_bytes()) {
-        Some(sect) if sect.sh_size != 0 && sect.sh_addr != range.start => {
-            Err(LoadError::Misplaced {
-                section,
-                addr: sect.sh_addr,
-                expected: range.start,
-            })
-        }
-        _ => Ok(()),
-    }
 }
 
 /// Reads the contents of one section, which is empty when the file has no such
@@ -402,10 +399,8 @@ mod tests {
     /// A core shaped like the testbenches.
     const TEST_MAP: MemoryMap = MemoryMap {
         boot: 0,
-        text: 0..0x300,
-        rodata: 0x300..0x400,
-        data: 0x400..0x800,
-        bss: 0x800..0x13a4,
+        imem: 0..0x400,
+        dmem: 0x400..0x13a4,
     };
 
     struct Sect {
@@ -526,14 +521,14 @@ mod tests {
         file
     }
 
-    /// The sieve-shaped program: all four sections, each where the core wants
-    /// it.
+    /// The sieve-shaped program: all four sections, `.text` in the
+    /// instruction memory and the rest after each other in the data memory.
     fn well_formed() -> Vec<Sect> {
         vec![
             progbits(".text", 0, SHF_EXECINSTR, &[1, 2, 3, 4, 5, 6, 7, 8]),
-            progbits(".rodata", 0x300, 0, &[0xaa, 0xbb, 0xcc, 0xdd]),
+            progbits(".rodata", 0x404, 0, &[0xaa, 0xbb, 0xcc, 0xdd]),
             progbits(".data", 0x400, SHF_WRITE, &[0x11, 0x22, 0x33, 0x44]),
-            nobits(".bss", 0x800, 400),
+            nobits(".bss", 0x408, 400),
         ]
     }
 
@@ -549,6 +544,25 @@ mod tests {
         assert_eq!(*sections.rodata, [0xaa, 0xbb, 0xcc, 0xdd]);
         assert_eq!(*sections.data, [0x11, 0x22, 0x33, 0x44]);
         assert_eq!(sections.bss, 400);
+        assert_eq!(
+            [
+                sections.text_addr,
+                sections.data_addr,
+                sections.rodata_addr,
+                sections.bss_addr
+            ],
+            [0, 0x400, 0x404, 0x408]
+        );
+    }
+
+    #[test]
+    fn accepts_sections_anywhere_in_their_memory() {
+        // Gaps, and data sections in another order, are the linker's business.
+        let mut sects = well_formed();
+        sects[1].addr = 0x1000;
+        sects[2].addr = 0x480;
+        sects[3].addr = 0x1200;
+        assert!(sections(build_elf(0, sects)).is_ok());
     }
 
     #[test]
@@ -556,6 +570,21 @@ mod tests {
         let mut sects = well_formed();
         sects[1] = progbits(".rodata", 0x123, 0, &[]);
         assert!(sections(build_elf(0, sects)).is_ok());
+    }
+
+    #[test]
+    fn loads_the_sample_programs() {
+        for (elf, boot) in [
+            (&include_bytes!("../programs/sieve.elf")[..], 0),
+            (&include_bytes!("../programs/sieve-ibex.elf")[..], 0x80),
+        ] {
+            let map = MemoryMap { boot, ..TEST_MAP };
+            let sections = Program::Elf(elf.into())
+                .to_sections(crate::RV32IM, &map)
+                .expect("the sample program to load");
+            assert_eq!(sections.text_addr, boot);
+            assert_eq!(sections.data_addr, 0x400);
+        }
     }
 
     #[test]
@@ -572,28 +601,34 @@ mod tests {
     }
 
     #[test]
-    fn rejects_sections_linked_away_from_their_range() {
-        // An entry point at the reset vector, but no instructions there.
+    fn rejects_sections_outside_their_memory() {
+        // Instructions in the data memory, starting execution there too.
         let mut sects = well_formed();
-        sects[0].addr = 0x100;
+        sects[0].addr = 0x400;
+        let map = MemoryMap {
+            boot: 0x400,
+            ..TEST_MAP
+        };
         assert!(matches!(
-            sections(build_elf(0, sects)),
-            Err(LoadError::Misplaced {
+            Program::Elf(build_elf(0x400, sects).into()).to_sections(crate::RV32IM, &map),
+            Err(LoadError::OutsideMemory {
                 section: ".text",
-                addr: 0x100,
-                expected: 0
+                memory: Memory::Instruction,
+                addr: 0x400,
+                ..
             })
         ));
 
-        // Inside its range is not enough: a section starts at the start of it.
+        // Read-only data in the instruction memory.
         let mut sects = well_formed();
-        sects[2].addr = 0x480;
+        sects[1].addr = 0x300;
         assert!(matches!(
             sections(build_elf(0, sects)),
-            Err(LoadError::Misplaced {
-                section: ".data",
-                addr: 0x480,
-                expected: 0x400
+            Err(LoadError::OutsideMemory {
+                section: ".rodata",
+                memory: Memory::Data,
+                addr: 0x300,
+                ..
             })
         ));
     }
@@ -601,24 +636,36 @@ mod tests {
     #[test]
     fn rejects_sections_that_do_not_fit() {
         let mut sects = well_formed();
-        sects[3] = nobits(".bss", 0x800, 400_000);
+        sects[3] = nobits(".bss", 0x408, 400_000);
         assert!(matches!(
             sections(build_elf(0, sects)),
-            Err(LoadError::TooLarge {
+            Err(LoadError::OutsideMemory {
                 section: ".bss",
                 len: 400_000,
-                max: 0xba4,
+                ..
+            })
+        ));
+
+        // Starting inside the memory is not enough: it has to end there too.
+        let mut sects = well_formed();
+        sects[3] = nobits(".bss", 0x1300, 0x100);
+        assert!(matches!(
+            sections(build_elf(0, sects)),
+            Err(LoadError::OutsideMemory {
+                section: ".bss",
+                addr: 0x1300,
+                ..
             })
         ));
 
         let mut sects = well_formed();
-        sects[1] = progbits(".rodata", 0x300, 0, &[0; 0x104]);
+        sects[0] = progbits(".text", 0, SHF_EXECINSTR, &[0; 0x404]);
         assert!(matches!(
             sections(build_elf(0, sects)),
-            Err(LoadError::TooLarge {
-                section: ".rodata",
-                len: 0x104,
-                max: 0x100,
+            Err(LoadError::OutsideMemory {
+                section: ".text",
+                len: 0x404,
+                ..
             })
         ));
     }
@@ -686,7 +733,7 @@ mod tests {
     fn rejects_a_program_without_instructions() {
         let sects = vec![
             progbits(".text", 0, SHF_EXECINSTR, &[]),
-            nobits(".bss", 0x800, 400),
+            nobits(".bss", 0x408, 400),
         ];
         assert!(matches!(
             sections(build_elf(0, sects)),
@@ -712,17 +759,31 @@ mod tests {
     }
 
     #[test]
-    fn assembles_each_section_at_the_start_of_its_range() {
-        let source = "    .section .data\nvalue: .space 4\n    .section .bss\nbuf: .space 8\n    \
-                      .section .text\n    .global _start\n_start:\n    addi x1, x0, 7\n";
+    fn assembles_data_sections_after_each_other() {
+        let source = "    .section .data\nvalue: .space 4\n    .section .rodata\nconst: .space 3\n    \
+                      .section .bss\nbuf: .space 8\n    .section .text\n    .global _start\n\
+                      _start:\n    addi x1, x0, 7\n";
         let sections = Program::Assembly(source.into())
             .to_sections(crate::RV32IM, &TEST_MAP)
             .expect("a one-instruction program");
 
         assert_eq!(*sections.text, [0x93, 0x00, 0x70, 0x00]);
         assert_eq!(*sections.data, [0, 0, 0, 0]);
+        assert_eq!(*sections.rodata, [0, 0, 0]);
         assert_eq!(sections.bss, 8);
         assert_eq!(disassemble(&sections.text), ["addi        ra,zero,7"]);
+
+        // `.text` at the reset vector; `.rodata` straight after `.data` at the
+        // start of the data memory, and `.bss` after that, word-aligned.
+        assert_eq!(
+            [
+                sections.text_addr,
+                sections.data_addr,
+                sections.rodata_addr,
+                sections.bss_addr
+            ],
+            [0, 0x400, 0x404, 0x408]
+        );
     }
 
     #[test]
@@ -730,7 +791,7 @@ mod tests {
         let source = "    .section .bss\nbuf: .space 400000\n    .section .text\n    nop\n";
         assert!(matches!(
             Program::Assembly(source.into()).to_sections(crate::RV32IM, &TEST_MAP),
-            Err(LoadError::TooLarge {
+            Err(LoadError::OutsideMemory {
                 section: ".bss",
                 ..
             })

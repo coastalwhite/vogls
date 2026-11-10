@@ -13,7 +13,7 @@ use vogls::{
 };
 
 use crate::TraceError;
-use crate::program::{MemoryMap, ProgramSections};
+use crate::program::{Memory, MemoryMap, ProgramSections};
 
 pub mod hazard3;
 pub mod ibex;
@@ -30,23 +30,41 @@ pub struct Description {
     /// Name of each pipeline stage.
     pub pipeline_stages: Vec<&'static str>,
 
+    /// Address of the instruction fetched first after reset.
+    pub boot: u32,
+
+    pub imem_addr: u32,
     pub imem_size: u32,
+
+    pub dmem_addr: u32,
     pub dmem_size: u32,
+}
+
+impl Description {
+    /// Where the memories of the core sit in its address space.
+    pub fn memory_map(&self) -> MemoryMap {
+        MemoryMap {
+            boot: self.boot,
+            imem: self.imem_addr..self.imem_addr + self.imem_size,
+            dmem: self.dmem_addr..self.dmem_addr + self.dmem_size,
+        }
+    }
 }
 
 /// What every pipeline stage held, cycle by cycle.
 pub struct PipelineTrace {
-    boot: u32,
+    /// Address of the first instruction of `.text`.
+    text_addr: u32,
     /// One list per stage, one entry per cycle. An entry is the slot of the
     /// instruction in the stage: `0` when the stage is idle, and `n` for the
-    /// instruction at `boot + 4 * (n - 1)` otherwise.
+    /// instruction at `text_addr + 4 * (n - 1)` otherwise.
     pub stage_pcs: Vec<Vec<u32>>,
 }
 
 impl PipelineTrace {
-    pub fn new(boot: u32, num_stages: usize, num_cycles: u32) -> Self {
+    pub fn new(text_addr: u32, num_stages: usize, num_cycles: u32) -> Self {
         Self {
-            boot,
+            text_addr,
             stage_pcs: vec![Vec::with_capacity(num_cycles as usize); num_stages],
         }
     }
@@ -54,8 +72,9 @@ impl PipelineTrace {
     /// Records the program counter of the instruction `stage` holds this
     /// cycle, or `None` when the stage is idle.
     pub fn push(&mut self, stage: usize, pc: Option<u32>) {
-        // Slots are numbered from the reset vector, one per instruction word.
-        let slot = match pc.and_then(|pc| pc.checked_sub(self.boot)) {
+        // Slots are numbered from the start of `.text`, one per instruction
+        // word, as the disassembly of it is.
+        let slot = match pc.and_then(|pc| pc.checked_sub(self.text_addr)) {
             Some(offset) => offset / 4 + 1,
             None => 0,
         };
@@ -68,9 +87,6 @@ pub trait Core {
     type State;
     /// Configuration of the core.
     type Params;
-
-    /// Where the program goes in the memory of the core.
-    fn memory_map(&self) -> MemoryMap;
 
     fn description(&self, params: &Self::Params) -> Description;
 
@@ -105,24 +121,13 @@ const CYCLE: u64 = 2;
 /// How long the core is held in reset.
 const RESET_CYCLES: u64 = 10;
 
-/// The instruction memory of every testbench: `reg [31:0] memory [0:255]`.
+/// The instruction memory of every testbench: `reg [31:0] memory [0:255]` at
+/// address zero.
+const INSTRUCTION_MEMORY_ADDR: u32 = 0;
 const INSTRUCTION_MEMORY: u32 = 256 * 4;
-/// The data memory of every testbench: 1001 words.
+/// The data memory of every testbench: 1001 words, from 1 KiB upwards.
+const DATA_MEMORY_ADDR: u32 = 1024;
 const DATA_MEMORY: u32 = 1001 * 4;
-
-/// The memory map every testbench shares, for a core booting at `boot`.
-///
-/// `.text` and `.rodata` share the instruction memory; `.data` and `.bss`
-/// share the data memory.
-const fn memory_map(boot: u32) -> MemoryMap {
-    MemoryMap {
-        boot,
-        text: boot..0x300,
-        rodata: 0x300..INSTRUCTION_MEMORY,
-        data: INSTRUCTION_MEMORY..0x800,
-        bss: 0x800..INSTRUCTION_MEMORY + DATA_MEMORY,
-    }
-}
 
 /// `bytes` as a vector of exactly their size.
 fn to_bits(bytes: &[u8]) -> Bits {
@@ -145,8 +150,7 @@ pub struct Sim {
 /// A compiled testbench, with the signals every testbench has.
 pub struct Testbench {
     design: Design,
-    imem_size: u32,
-    dmem_size: u32,
+    map: MemoryMap,
     instruction_memory: RtSignal,
     data_memory: RtSignal,
     reset_n: RtSignal,
@@ -224,8 +228,7 @@ impl Testbench {
         }
 
         let testbench = Self {
-            imem_size: description.imem_size,
-            dmem_size: description.dmem_size,
+            map: description.memory_map(),
             instruction_memory,
             data_memory,
             reset_n: design.resolve_handle(reset_n),
@@ -244,30 +247,25 @@ impl Testbench {
             .map_err(|err| TraceError::Run(err.to_string()))
     }
 
-    fn reset(
-        &self,
-        sim: &mut Sim,
-        map: &MemoryMap,
-        sections: &ProgramSections,
-    ) -> Result<(), TraceError> {
-        // `to_sections` keeps every section within its range, and every range
-        // lies within one memory (see the tests), so the copies below stay in
-        // bounds.
-        let instruction_size = self.imem_size as usize;
-        let mut instruction = vec![0u8; instruction_size];
-        let mut data = vec![0u8; self.dmem_size as usize];
-        for (range, bytes) in [
-            (&map.text, &sections.text),
-            (&map.rodata, &sections.rodata),
-            (&map.data, &sections.data),
+    fn reset(&self, sim: &mut Sim, sections: &ProgramSections) -> Result<(), TraceError> {
+        // `to_sections` keeps every section within its memory, so the copies
+        // below stay in bounds.
+        let mut instruction = vec![0u8; self.map.imem.len()];
+        let mut data = vec![0u8; self.map.dmem.len()];
+        for (addr, bytes, memory) in [
+            (sections.text_addr, &sections.text, Memory::Instruction),
+            (sections.data_addr, &sections.data, Memory::Data),
+            (sections.rodata_addr, &sections.rodata, Memory::Data),
         ] {
-            let start = range.start as usize;
-            let (memory, offset) = if start < instruction_size {
-                (&mut instruction, start)
-            } else {
-                (&mut data, start - instruction_size)
+            if bytes.is_empty() {
+                continue;
+            }
+            let (buffer, base) = match memory {
+                Memory::Instruction => (&mut instruction, self.map.imem.start),
+                Memory::Data => (&mut data, self.map.dmem.start),
             };
-            memory[offset..offset + bytes.len()].copy_from_slice(bytes);
+            let offset = (addr - base) as usize;
+            buffer[offset..offset + bytes.len()].copy_from_slice(bytes);
         }
         // `.bss` is zero, as is all memory no section writes.
 
