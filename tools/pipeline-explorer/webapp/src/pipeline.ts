@@ -1,5 +1,6 @@
 import { colors } from "./colors.ts";
-import type { Trace } from "./types.ts";
+import type { PipelineData, Trace } from "./types.ts";
+import { EMPTY_PIPELINE, dataOf } from "./types.ts";
 import type { CycleRange } from "./layout/types.ts";
 
 const textPad = 8;
@@ -16,6 +17,8 @@ export class PipelineCanvas {
     ro: ResizeObserver;
 
     trace: Trace;
+    /** The pipeline data of `trace`, or an empty stand-in. */
+    pipeline: PipelineData;
     maxTextWidth: number;
 
     selection: CycleRange;
@@ -44,6 +47,7 @@ export class PipelineCanvas {
         onSelect: (range: CycleRange) => void,
     ) {
         this.trace = trace;
+        this.pipeline = dataOf(trace, "pipeline") ?? EMPTY_PIPELINE;
 
         this.wrap = document.createElement("div");
         this.wrap.style.position = "relative";
@@ -99,6 +103,7 @@ export class PipelineCanvas {
 
     setTrace(trace: Trace) {
         this.trace = trace;
+        this.pipeline = dataOf(trace, "pipeline") ?? EMPTY_PIPELINE;
         this.maxTextWidth = this.calculateMaxTextWidth();
         this.offsetX = this.clampOffsetX(this.offsetX);
         this.offsetY = this.clampOffsetY(this.offsetY);
@@ -123,7 +128,7 @@ export class PipelineCanvas {
             x,
             -5 * convertRemToPixels(2),
             Math.max(
-                (this.trace.pipeline.cycles + 5) * convertRemToPixels(2) -
+                (this.pipeline.cycles + 5) * convertRemToPixels(2) -
                     (this.width - this.maxTextWidth - 2 * textPad),
                 0,
             ),
@@ -186,7 +191,7 @@ export class PipelineCanvas {
             (this.offsetX + this.width - this.maxTextWidth - 2 * textPad) /
                 cellW,
         ) - 1;
-        const last = this.trace.pipeline.cycles - 1;
+        const last = this.pipeline.cycles - 1;
         return [clamp(lo, 0, last), clamp(hi, 0, last)];
     }
 
@@ -195,7 +200,7 @@ export class PipelineCanvas {
         const cellW = convertRemToPixels(2);
         const paddingX = this.maxTextWidth + textPad * 2;
         const cycle = Math.floor((offsetX + this.offsetX - paddingX) / cellW);
-        const last = this.trace.pipeline.cycles - 1;
+        const last = this.pipeline.cycles - 1;
         return cycle < 0 || cycle > last ? null : cycle;
     }
 
@@ -375,7 +380,8 @@ export function renderPipeline(
 ) {
     const { rows, startCycle, endCycle, offsetX, offsetY, width, height } =
         layout;
-    const numStages = trace.pipeline.keys.length;
+    const pipeline = dataOf(trace, "pipeline") ?? EMPTY_PIPELINE;
+    const numStages = pipeline.keys.length;
 
     // Trace values are 1-based instruction indices; map them to display rows.
     const rowOf = new Int32Array(trace.instructions.length).fill(-1);
@@ -435,7 +441,7 @@ export function renderPipeline(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     for (let i = 0; i < numStages; i++) {
-        const stageTrace = trace.pipeline.traces[i];
+        const stageTrace = pipeline.traces[i];
         for (let c = Math.max(startCycle, 0); c < endCycle; c++) {
             const value = stageTrace[c];
             if (!value) continue;
@@ -446,7 +452,7 @@ export function renderPipeline(
             ctx.fillStyle = colors[i % colors.length];
             ctx.fillRect(x, y, cellW, cellH);
             ctx.fillStyle = "#000";
-            ctx.fillText(trace.pipeline.keys[i], x + cellW / 2, y + cellH / 2);
+            ctx.fillText(pipeline.keys[i], x + cellW / 2, y + cellH / 2);
         }
     }
 

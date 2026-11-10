@@ -51,6 +51,107 @@ impl Description {
     }
 }
 
+/// The data the caller asks for, as a bitset. A request is a wish: a core
+/// that cannot produce a point simply leaves it out of the result.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct DataPoints(u32);
+
+impl DataPoints {
+    pub const PIPELINE: Self = Self(1 << 0);
+    pub const REGISTERS: Self = Self(1 << 1);
+    pub const ALL: Self = Self(Self::PIPELINE.0 | Self::REGISTERS.0);
+
+    pub const fn empty() -> Self {
+        Self(0)
+    }
+    /// Unknown bits are dropped, so a newer caller cannot confuse us.
+    pub const fn from_bits(bits: u32) -> Self {
+        Self(bits & Self::ALL.0)
+    }
+    pub const fn bits(self) -> u32 {
+        self.0
+    }
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+    pub const fn is_empty(self) -> bool {
+        self.0 == 0
+    }
+}
+
+/// The integer register file, cycle by cycle.
+pub struct RegisterTrace {
+    /// One list per register, one entry per cycle.
+    pub values: Vec<Vec<u32>>,
+}
+
+/// ABI names of the integer registers, in register order.
+pub const REGISTER_NAMES: [&str; 32] = [
+    "zero", "ra", "sp", "gp", "tp", "t0", "t1", "t2", "s0", "s1", "a0", "a1", "a2", "a3", "a4",
+    "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "t3", "t4",
+    "t5", "t6",
+];
+
+impl RegisterTrace {
+    pub fn new(num_cycles: u32) -> Self {
+        Self {
+            values: vec![Vec::with_capacity(num_cycles as usize); REGISTER_NAMES.len()],
+        }
+    }
+
+    /// Records every register at the end of a cycle. `x0` is hardwired to zero
+    /// and some cores do not store it at all, so it is always reported as 0.
+    pub fn push(&mut self, values: impl IntoIterator<Item = u32>) {
+        let mut n = 0;
+        for (slot, value) in self.values.iter_mut().zip(values) {
+            slot.push(value);
+            n += 1;
+        }
+        // A short iterator would desynchronise the per-register lists.
+        for slot in self.values.iter_mut().skip(n) {
+            slot.push(0);
+        }
+        // `x0` is hardwired to zero whatever the core happens to store.
+        if let Some(zero) = self.values.first_mut().and_then(|v| v.last_mut()) {
+            *zero = 0;
+        }
+    }
+}
+
+/// Accumulates one data point across the run.
+pub enum DataBuilder {
+    Pipeline(PipelineTrace),
+    Registers(RegisterTrace),
+}
+
+impl DataBuilder {
+    /// The builders for everything in `points` that this explorer knows.
+    pub fn for_points(points: DataPoints, num_stages: usize, text_addr: u32, cycles: u32) -> Vec<Self> {
+        let mut out = Vec::new();
+        if points.contains(DataPoints::PIPELINE) {
+            out.push(Self::Pipeline(PipelineTrace::new(text_addr, num_stages, cycles)));
+        }
+        if points.contains(DataPoints::REGISTERS) {
+            out.push(Self::Registers(RegisterTrace::new(cycles)));
+        }
+        out
+    }
+
+    pub fn as_pipeline(&mut self) -> Option<&mut PipelineTrace> {
+        match self {
+            Self::Pipeline(pt) => Some(pt),
+            _ => None,
+        }
+    }
+
+    pub fn as_registers(&mut self) -> Option<&mut RegisterTrace> {
+        match self {
+            Self::Registers(rt) => Some(rt),
+            _ => None,
+        }
+    }
+}
+
 /// What every pipeline stage held, cycle by cycle.
 pub struct PipelineTrace {
     /// Address of the first instruction of `.text`.
@@ -91,7 +192,14 @@ pub trait Core {
     fn description(&self, params: &Self::Params) -> Description;
 
     /// Compile the design and get handles to signals.
-    fn compile(&self, params: &Self::Params) -> Result<(Self::Design, Self::State), TraceError>;
+    ///
+    /// `points` says what will be collected, so a core only looks up the
+    /// signals it is actually going to read.
+    fn compile(
+        &self,
+        params: &Self::Params,
+        points: DataPoints,
+    ) -> Result<(Self::Design, Self::State), TraceError>;
 
     /// Run the prologue to start running.
     /// - Reset the RTL design.
@@ -103,13 +211,14 @@ pub trait Core {
         sections: &ProgramSections,
     ) -> Result<(), TraceError>;
 
-    /// Iterate a cycle and push the program counters the pipeline stages hold
-    /// at its end.
+    /// Iterate a cycle and append this cycle's value to every builder the
+    /// core can fill. Builders it cannot fill are left untouched, which drops
+    /// the data point from the result.
     fn iterate_cycle(
         &self,
         design: &Self::Design,
         state: &mut Self::State,
-        pt: &mut PipelineTrace,
+        data: &mut Vec<DataBuilder>,
     ) -> Result<(), TraceError>;
 
     /// Did the device trap?
@@ -299,6 +408,24 @@ impl Testbench {
         self.get(sim, signal).is_one()
     }
 
+    /// Reads a packed array signal as `count` 32-bit words.
+    ///
+    /// `reversed` takes element 0 from the top of the vector, which is how
+    /// Ibex lays its register file out.
+    fn words(&self, sim: &Sim, signal: RtSignal, count: usize, reversed: bool) -> Vec<u32> {
+        let bits = self.get(sim, signal);
+        let width = VectorSize::new(32).expect("non-zero");
+        (0..count)
+            .map(|i| {
+                let index = if reversed { count - 1 - i } else { i };
+                bits.slicez((index as u32) * 32, width)
+                    .extract_exact_u32()
+                    // An x during reset reads as zero rather than failing the run.
+                    .unwrap_or(0)
+            })
+            .collect()
+    }
+
     /// The program counter `pc` of a stage, when its `active` flag is set.
     fn stage_pc(&self, sim: &Sim, pc: RtSignal, active: RtSignal) -> Option<u32> {
         if self.is_one(sim, active) {
@@ -313,6 +440,31 @@ impl Testbench {
 fn signal(design: &mut ElaboratedDesign<'_>, scope: SymbolId, ident: &str) -> SignalHandle {
     let sid = lookup(design, scope, ident);
     design.get_signal_handle(sid).unwrap()
+}
+
+/// The signal at `path` below `scope`, or `None` when any step is missing.
+///
+/// Unlike [`signal`] this does not panic, so a core can probe for an optional
+/// signal -- one behind a generate block, say -- and drop the data point it
+/// feeds when the design does not have it.
+fn try_signal(
+    design: &mut ElaboratedDesign<'_>,
+    scope: SymbolId,
+    path: &[&str],
+) -> Option<SignalHandle> {
+    let (last, scopes) = path.split_last()?;
+    let mut sid = scope;
+    for step in scopes {
+        sid = try_lookup(design, sid, step)?;
+    }
+    let target = try_lookup(design, sid, last)?;
+    design.get_signal_handle(target)
+}
+
+fn try_lookup(design: &ElaboratedDesign<'_>, scope: SymbolId, ident: &str) -> Option<SymbolId> {
+    design
+        .table()
+        .resolve(scope, design.ident_table().get(ident)?)
 }
 
 /// The instance or other symbol `ident` declared in `scope`.

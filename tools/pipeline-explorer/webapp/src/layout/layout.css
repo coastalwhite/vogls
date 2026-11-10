@@ -433,6 +433,80 @@
     opacity: 0.7;
 }
 
+/* Register file: values at a cycle, or what changed across a span. */
+.ws-regs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    padding: 0.625rem 0.75rem;
+    font-size: 0.8rem;
+}
+
+.ws-regs__caption {
+    margin: 0;
+    font-family: var(--heading);
+    color: var(--text-h);
+}
+
+.ws-regs__rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+}
+
+.ws-regs__row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+}
+
+.ws-regs__name {
+    flex: 0 0 2.75rem;
+    font-family: var(--mono);
+    color: var(--text-h);
+}
+
+.ws-regs__value {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    /* Zero is the uninteresting case, so it stays quiet. */
+    opacity: 0.55;
+}
+
+.ws-regs__row.is-set .ws-regs__value,
+.ws-regs__row.is-changed .ws-regs__value {
+    opacity: 1;
+    color: var(--text-h);
+}
+
+/* The movers carry the accent and a tinted row, so they stand out of the
+   full list rather than being the only thing in it. */
+.ws-regs__row.is-changed {
+    background: var(--accent-bg);
+    border-radius: 0.1875rem;
+    margin: 0 -0.25rem;
+    padding: 0 0.25rem;
+}
+
+.ws-regs__row.is-changed .ws-regs__value {
+    color: var(--accent);
+}
+
+.ws-regs__was {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    opacity: 0.55;
+}
+
+.ws-regs__hint {
+    margin: 0;
+    opacity: 0.7;
+}
+
 /* Drag feedback --------------------------------------------------------- */
 
 /* Both of these are appended to document.body with their position: fixed

@@ -1,8 +1,9 @@
 use vogls::design::RtSignal;
 
 use super::{
+    DataBuilder, DataPoints, REGISTER_NAMES,
     Core, DATA_MEMORY, DATA_MEMORY_ADDR, Description, INSTRUCTION_MEMORY, INSTRUCTION_MEMORY_ADDR,
-    PipelineTrace, Sim, Testbench, enabled, lookup, signal,
+    Sim, Testbench, enabled, lookup, signal, try_signal,
 };
 use crate::TraceError;
 use crate::program::ProgramSections;
@@ -28,6 +29,8 @@ pub struct IbexDesign {
     trap: RtSignal,
     /// IF, ID/EX, and WB when the core has a writeback stage.
     stages: Vec<Stage>,
+    /// The flat register file, when it was asked for and the design has it.
+    rf_reg: Option<RtSignal>,
 }
 
 impl Core for Ibex {
@@ -50,8 +53,13 @@ impl Core for Ibex {
         }
     }
 
-    fn compile(&self, params: &IbexConfig) -> Result<(IbexDesign, Sim), TraceError> {
-        let (tb, sim, (trap, stages)) = Testbench::compile(
+    fn compile(
+        &self,
+        params: &IbexConfig,
+        points: DataPoints,
+    ) -> Result<(IbexDesign, Sim), TraceError> {
+        let want_regs = points.contains(DataPoints::REGISTERS);
+        let (tb, sim, (trap, stages, rf_reg)) = Testbench::compile(
             &[
                 include_str!("../../instances/ibex/ibex_fixed.v"),
                 include_str!("../../instances/ibex/tb.v"),
@@ -79,7 +87,22 @@ impl Core for Ibex {
                     // WritebackStage=1.
                     stages.push((get("pc_wb"), get("instr_done_wb")));
                 }
-                (get("csr_save_cause"), stages)
+                let trap = get("csr_save_cause");
+                // `rf_reg` is a flat vector inside the register file, which
+                // sits behind the generate block that picks its flavour.
+                // The register file is instantiated in `ibex_top`, beside
+                // the core rather than inside it, behind the generate block
+                // that picks its flavour.
+                let rf_reg = want_regs
+                    .then(|| {
+                        try_signal(
+                            design,
+                            u_top,
+                            &["gen_regfile_ff", "register_file_i", "rf_reg"],
+                        )
+                    })
+                    .flatten();
+                (trap, stages, rf_reg)
             },
         )?;
 
@@ -92,6 +115,7 @@ impl Core for Ibex {
                     valid: tb.resolve(valid),
                 })
                 .collect(),
+            rf_reg: rf_reg.map(|handle| tb.resolve(handle)),
             tb,
         };
         Ok((design, sim))
@@ -110,13 +134,22 @@ impl Core for Ibex {
         &self,
         design: &IbexDesign,
         state: &mut Sim,
-        pt: &mut PipelineTrace,
+        data: &mut Vec<DataBuilder>,
     ) -> Result<(), TraceError> {
         let tb = &design.tb;
         tb.step(state)?;
 
-        for (i, stage) in design.stages.iter().enumerate() {
-            pt.push(i, tb.stage_pc(state, stage.pc, stage.valid));
+        if let Some(pt) = data.iter_mut().find_map(DataBuilder::as_pipeline) {
+            for (i, stage) in design.stages.iter().enumerate() {
+                pt.push(i, tb.stage_pc(state, stage.pc, stage.valid));
+            }
+        }
+        if let (Some(rt), Some(rf_reg)) = (
+            data.iter_mut().find_map(DataBuilder::as_registers),
+            design.rf_reg,
+        ) {
+            // Ibex packs register 0 at the top of the vector.
+            rt.push(tb.words(state, rf_reg, REGISTER_NAMES.len(), true));
         }
         Ok(())
     }

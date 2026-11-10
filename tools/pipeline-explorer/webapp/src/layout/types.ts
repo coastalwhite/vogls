@@ -7,7 +7,8 @@ export type View =
     | { type: "pipeline" }
     | { type: "assembly"; primary: boolean }
     | { type: "chooser" }
-    | { type: "stats" };
+    | { type: "stats" }
+    | { type: "registers" };
 
 export type ViewType = View["type"];
 

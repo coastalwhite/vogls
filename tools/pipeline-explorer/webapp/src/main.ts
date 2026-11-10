@@ -2,6 +2,7 @@ import "./style.css";
 import "./layout/layout.css";
 import initialAsm from "./initialAsm.S?raw";
 import type { Trace } from "./types.ts";
+import { ALL_DATA_POINTS, dataOf } from "./types.ts";
 import type { WorkerReply, WorkerRequest } from "./wasm/trace-worker.ts";
 
 import { ScrubberCanvas } from "./scrubber.ts";
@@ -196,6 +197,8 @@ function runSim() {
         program: assemblyText(),
         config: readProcConfig(proc),
         numCycles: numCyclesInput.valueAsNumber,
+        // Every point for now; views do not yet declare what they consume.
+        dataPoints: ALL_DATA_POINTS,
     });
     pending += 1;
     simStatusElem.innerHTML = `<img src="spinner.svg" class="spinner"/>`;
@@ -399,7 +402,7 @@ registerPopover({
 /** Clamps the range to the trace, syncs every control, and redraws. */
 function updateSvg() {
     if (sharePanel.hidden || currentTrace === null) return;
-    const last = Math.max(0, currentTrace.pipeline.cycles - 1);
+    const last = Math.max(0, (dataOf(currentTrace, "pipeline")?.cycles ?? 0) - 1);
     svgStart = Math.min(Math.max(0, Math.round(svgStart) || 0), last);
     svgEnd = Math.min(Math.max(svgStart, Math.round(svgEnd) || 0), last);
     for (const range of [svgStartRange, svgEndRange]) range.max = last.toString();

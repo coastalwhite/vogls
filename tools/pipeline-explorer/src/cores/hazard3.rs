@@ -1,8 +1,9 @@
 use vogls::design::RtSignal;
 
 use super::{
+    DataBuilder, DataPoints,
     Core, DATA_MEMORY, DATA_MEMORY_ADDR, Description, INSTRUCTION_MEMORY, INSTRUCTION_MEMORY_ADDR,
-    PipelineTrace, Sim, Testbench, enabled, signal,
+    Sim, Testbench, enabled, signal,
 };
 use crate::TraceError;
 use crate::program::ProgramSections;
@@ -46,7 +47,11 @@ impl Core for Hazard3 {
         }
     }
 
-    fn compile(&self, params: &Hazard3Config) -> Result<(Hazard3Design, Sim), TraceError> {
+    fn compile(
+        &self,
+        params: &Hazard3Config,
+        _points: DataPoints,
+    ) -> Result<(Hazard3Design, Sim), TraceError> {
         let macros = enabled([
             (params.extension_m, "EXTENSION_M"),
             (params.mul_fast, "MUL_FAST"),
@@ -102,13 +107,15 @@ impl Core for Hazard3 {
         &self,
         design: &Hazard3Design,
         state: &mut Sim,
-        pt: &mut PipelineTrace,
+        data: &mut Vec<DataBuilder>,
     ) -> Result<(), TraceError> {
         let tb = &design.tb;
         tb.step(state)?;
 
-        for (i, &(pc, active)) in design.stages.iter().enumerate() {
-            pt.push(i, tb.stage_pc(state, pc, active));
+        if let Some(pt) = data.iter_mut().find_map(DataBuilder::as_pipeline) {
+            for (i, &(pc, active)) in design.stages.iter().enumerate() {
+                pt.push(i, tb.stage_pc(state, pc, active));
+            }
         }
         Ok(())
     }

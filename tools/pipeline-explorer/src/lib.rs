@@ -10,8 +10,8 @@ pub mod disassembly;
 pub mod program;
 
 pub use self::cores::{
-    Core, Description, Hazard3, Hazard3Config, Ibex, IbexConfig, Neorv32, PicoRV32Config, PicoRv32,
-    PipelineTrace,
+    Core, DataBuilder, DataPoints, Description, Hazard3, Hazard3Config, Ibex, IbexConfig, Neorv32,
+    PicoRV32Config, PicoRv32, PipelineTrace, REGISTER_NAMES,
 };
 use self::program::LoadError;
 
@@ -48,27 +48,56 @@ impl From<LoadError> for TraceError {
 
 pub struct ReturnValue {
     pub instructions: Vec<String>,
-    pub pipeline: Pipeline,
+    /// Only what the run actually collected, in no particular order.
+    pub data: Vec<ReturnData>,
 }
+
+/// One collected data point. Each arm is tagged by `kind` on the JS side.
+pub enum ReturnData {
+    Pipeline(Pipeline),
+    Registers(Registers),
+}
+
 pub struct Pipeline {
     pub traces: Vec<Vec<u32>>,
     pub keys: Vec<&'static str>,
     pub cycles: usize,
 }
 
+pub struct Registers {
+    /// One list per register, one entry per cycle.
+    pub values: Vec<Vec<u32>>,
+    pub names: Vec<&'static str>,
+    pub cycles: usize,
+}
+
+fn u32_arrays(rows: Vec<Vec<u32>>) -> Array {
+    rows.into_iter()
+        .map(|row| js_sys::Uint32Array::new_from_slice(&row))
+        .collect()
+}
+
+impl ReturnData {
+    fn into_object(self) -> Object {
+        match self {
+            ReturnData::Pipeline(p) => obj(&[
+                ("kind", JsValue::from_str("pipeline")),
+                ("traces", u32_arrays(p.traces).into()),
+                ("keys", str_array(&p.keys).into()),
+                ("cycles", p.cycles.into()),
+            ]),
+            ReturnData::Registers(r) => obj(&[
+                ("kind", JsValue::from_str("registers")),
+                ("values", u32_arrays(r.values).into()),
+                ("names", str_array(&r.names).into()),
+                ("cycles", r.cycles.into()),
+            ]),
+        }
+    }
+}
+
 impl ReturnValue {
     fn into_object(self) -> Object {
-        let traces: js_sys::Array = self
-            .pipeline
-            .traces
-            .into_iter()
-            .map(|pc| js_sys::Uint32Array::new_from_slice(&pc))
-            .collect();
-        let pipeline = obj(&[
-            ("traces", traces.into()),
-            ("keys", str_array(&self.pipeline.keys).into()),
-            ("cycles", self.pipeline.cycles.into()),
-        ]);
         obj(&[
             (
                 "instructions",
@@ -78,7 +107,14 @@ impl ReturnValue {
                     .collect::<Array>()
                     .into(),
             ),
-            ("pipeline", pipeline.into()),
+            (
+                "data",
+                self.data
+                    .into_iter()
+                    .map(|d| JsValue::from(d.into_object()))
+                    .collect::<Array>()
+                    .into(),
+            ),
         ])
     }
 }
@@ -88,6 +124,7 @@ pub fn evaluate<C: Core>(
     params: &C::Params,
     source: &str,
     num_cycles: u32,
+    points: DataPoints,
 ) -> Result<ReturnValue, TraceError> {
     // Convert the program first: a bad program is reported far quicker than
     // the design compiles.
@@ -95,31 +132,45 @@ pub fn evaluate<C: Core>(
     let sections = program::assemble(source, RV32IM, &description.memory_map())?;
     let instructions = program::disassemble(&sections.text);
 
-    let (design, mut state) = core.compile(params)?;
+    let (design, mut state) = core.compile(params, points)?;
     core.prologue(&design, &mut state, &sections)?;
 
-    let mut trace = PipelineTrace::new(
-        sections.text_addr,
+    let mut builders = DataBuilder::for_points(
+        points,
         description.pipeline_stages.len(),
+        sections.text_addr,
         num_cycles,
     );
     let mut cycles = num_cycles;
     for i in 0..num_cycles {
-        core.iterate_cycle(&design, &mut state, &mut trace)?;
+        core.iterate_cycle(&design, &mut state, &mut builders)?;
         if core.is_trapped(&design, &state) {
             cycles = i;
             break;
         }
     }
 
-    Ok(ReturnValue {
-        instructions,
-        pipeline: Pipeline {
-            traces: trace.stage_pcs,
-            keys: description.pipeline_stages,
-            cycles: cycles as usize,
-        },
-    })
+    let cycles = cycles as usize;
+    let data = builders
+        .into_iter()
+        .filter_map(|builder| match builder {
+            DataBuilder::Pipeline(pt) => Some(ReturnData::Pipeline(Pipeline {
+                traces: pt.stage_pcs,
+                keys: description.pipeline_stages.clone(),
+                cycles,
+            })),
+            // A core that cannot read its register file never pushed a cycle,
+            // so the point is dropped rather than reported as zeroes.
+            DataBuilder::Registers(rt) if rt.values.iter().all(|v| v.is_empty()) => None,
+            DataBuilder::Registers(rt) => Some(ReturnData::Registers(Registers {
+                values: rt.values,
+                names: REGISTER_NAMES.to_vec(),
+                cycles,
+            })),
+        })
+        .collect();
+
+    Ok(ReturnValue { instructions, data })
 }
 
 macro_rules! get_bool {
@@ -179,9 +230,10 @@ pub fn get_js_ibex_trace(
     program: String,
     config: Object,
     num_cycles: u32,
+    data_points: u32,
 ) -> Result<Object, JsError> {
     let config = ibex_config(&config)?;
-    let trace = evaluate(&Ibex, &config, &program, num_cycles)?;
+    let trace = evaluate(&Ibex, &config, &program, num_cycles, DataPoints::from_bits(data_points))?;
     Ok(trace.into_object())
 }
 
@@ -190,8 +242,9 @@ pub fn get_js_neorv32_trace(
     program: String,
     _config: Object,
     num_cycles: u32,
+    data_points: u32,
 ) -> Result<Object, JsError> {
-    let trace = evaluate(&Neorv32, &(), &program, num_cycles)?;
+    let trace = evaluate(&Neorv32, &(), &program, num_cycles, DataPoints::from_bits(data_points))?;
     Ok(trace.into_object())
 }
 
@@ -200,16 +253,22 @@ pub fn get_js_hazard3_trace(
     program: String,
     config: Object,
     num_cycles: u32,
+    data_points: u32,
 ) -> Result<Object, JsError> {
     let config = hazard3_config(&config)?;
-    let trace = evaluate(&Hazard3, &config, &program, num_cycles)?;
+    let trace = evaluate(&Hazard3, &config, &program, num_cycles, DataPoints::from_bits(data_points))?;
     Ok(trace.into_object())
 }
 
 #[wasm_bindgen]
-pub fn get_js_trace(program: String, config: Object, num_cycles: u32) -> Result<Object, JsError> {
+pub fn get_js_trace(
+    program: String,
+    config: Object,
+    num_cycles: u32,
+    data_points: u32,
+) -> Result<Object, JsError> {
     let config = picorv32_config(&config)?;
-    let trace = evaluate(&PicoRv32, &config, &program, num_cycles)?;
+    let trace = evaluate(&PicoRv32, &config, &program, num_cycles, DataPoints::from_bits(data_points))?;
     Ok(trace.into_object())
 }
 
