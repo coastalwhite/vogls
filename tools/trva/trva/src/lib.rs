@@ -1687,7 +1687,246 @@ fn fill_handlers(
             }
             Ext::DoublePrecisionFp => return Err(ext),
             Ext::Rv32E => return Err(ext),
-            Ext::SinglePrecisionFp => return Err(ext),
+            Ext::SinglePrecisionFp => {
+                // `name rd, rs1[, rs2[, rs3]][, rm]`: each operand read by its
+                // own cursor method, so that it is a general-purpose or a
+                // floating-point register as the instruction has it, and a
+                // rounding mode last when the instruction has one.
+                macro_rules! fp {
+                    (
+                        $mnemonic:literal, $fn_name:ident, $ty:ty,
+                        [$first:ident $(, $rest:ident)*] $($rm:ident)?
+                    ) => {
+                        handlers.insert(
+                            $mnemonic,
+                            handler!($fn_name, |asm, c| {
+                                c.take_separator()?;
+                                let instr = <$ty>::new(
+                                    c.$first()?,
+                                    $({
+                                        c.take_comma_separator()?;
+                                        c.$rest()?
+                                    },)*
+                                    $(c.$rm()?)?
+                                );
+                                asm.current_section_mut().push_le_u32(instr.encode_as_u32());
+                            }),
+                        );
+                    };
+                }
+                use encoding as e;
+
+                handlers.insert(
+                    "flw",
+                    handler!(flw, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_fp_register()?;
+                        c.take_comma_separator()?;
+                        let imm = c.take_imm12()?;
+                        let rs1 = take_base(c)?;
+                        asm.current_section_mut()
+                            .push_le_u32(e::Flw::new(rd, rs1, imm).encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "fsw",
+                    handler!(fsw, |asm, c| {
+                        c.take_separator()?;
+                        let rs2 = c.take_fp_register()?;
+                        c.take_comma_separator()?;
+                        let imm = c.take_imm12()?;
+                        let rs1 = take_base(c)?;
+                        asm.current_section_mut()
+                            .push_le_u32(e::Fsw::new(rs1, rs2, imm).encode_as_u32());
+                    }),
+                );
+
+                fp!("fmadd.s", fmadd_s, e::FmaddS,
+                    [take_fp_register, take_fp_register, take_fp_register, take_fp_register]
+                    take_rounding_mode);
+                fp!("fmsub.s", fmsub_s, e::FmsubS,
+                    [take_fp_register, take_fp_register, take_fp_register, take_fp_register]
+                    take_rounding_mode);
+                fp!("fnmsub.s", fnmsub_s, e::FnmsubS,
+                    [take_fp_register, take_fp_register, take_fp_register, take_fp_register]
+                    take_rounding_mode);
+                fp!("fnmadd.s", fnmadd_s, e::FnmaddS,
+                    [take_fp_register, take_fp_register, take_fp_register, take_fp_register]
+                    take_rounding_mode);
+
+                fp!("fadd.s", fadd_s, e::FaddS,
+                    [take_fp_register, take_fp_register, take_fp_register] take_rounding_mode);
+                fp!("fsub.s", fsub_s, e::FsubS,
+                    [take_fp_register, take_fp_register, take_fp_register] take_rounding_mode);
+                fp!("fmul.s", fmul_s, e::FmulS,
+                    [take_fp_register, take_fp_register, take_fp_register] take_rounding_mode);
+                fp!("fdiv.s", fdiv_s, e::FdivS,
+                    [take_fp_register, take_fp_register, take_fp_register] take_rounding_mode);
+                fp!("fsqrt.s", fsqrt_s, e::FsqrtS,
+                    [take_fp_register, take_fp_register] take_rounding_mode);
+
+                fp!(
+                    "fsgnj.s",
+                    fsgnj_s,
+                    e::FsgnjS,
+                    [take_fp_register, take_fp_register, take_fp_register]
+                );
+                fp!(
+                    "fsgnjn.s",
+                    fsgnjn_s,
+                    e::FsgnjnS,
+                    [take_fp_register, take_fp_register, take_fp_register]
+                );
+                fp!(
+                    "fsgnjx.s",
+                    fsgnjx_s,
+                    e::FsgnjxS,
+                    [take_fp_register, take_fp_register, take_fp_register]
+                );
+                fp!(
+                    "fmin.s",
+                    fmin_s,
+                    e::FminS,
+                    [take_fp_register, take_fp_register, take_fp_register]
+                );
+                fp!(
+                    "fmax.s",
+                    fmax_s,
+                    e::FmaxS,
+                    [take_fp_register, take_fp_register, take_fp_register]
+                );
+
+                fp!("fcvt.w.s", fcvt_w_s, e::FcvtWS,
+                    [take_gp_register, take_fp_register] take_rounding_mode);
+                fp!("fcvt.wu.s", fcvt_wu_s, e::FcvtWuS,
+                    [take_gp_register, take_fp_register] take_rounding_mode);
+                fp!("fcvt.s.w", fcvt_s_w, e::FcvtSW,
+                    [take_fp_register, take_gp_register] take_rounding_mode);
+                fp!("fcvt.s.wu", fcvt_s_wu, e::FcvtSWu,
+                    [take_fp_register, take_gp_register] take_rounding_mode);
+
+                // `fmv.x.s` and `fmv.s.x` are the names from before version
+                // 2.2 of the F extension, which assemblers still accept.
+                fp!(
+                    "fmv.x.w",
+                    fmv_x_w,
+                    e::FmvXW,
+                    [take_gp_register, take_fp_register]
+                );
+                fp!(
+                    "fmv.x.s",
+                    fmv_x_s,
+                    e::FmvXW,
+                    [take_gp_register, take_fp_register]
+                );
+                fp!(
+                    "fmv.w.x",
+                    fmv_w_x,
+                    e::FmvWX,
+                    [take_fp_register, take_gp_register]
+                );
+                fp!(
+                    "fmv.s.x",
+                    fmv_s_x,
+                    e::FmvWX,
+                    [take_fp_register, take_gp_register]
+                );
+
+                fp!(
+                    "feq.s",
+                    feq_s,
+                    e::FeqS,
+                    [take_gp_register, take_fp_register, take_fp_register]
+                );
+                fp!(
+                    "flt.s",
+                    flt_s,
+                    e::FltS,
+                    [take_gp_register, take_fp_register, take_fp_register]
+                );
+                fp!(
+                    "fle.s",
+                    fle_s,
+                    e::FleS,
+                    [take_gp_register, take_fp_register, take_fp_register]
+                );
+                fp!(
+                    "fclass.s",
+                    fclass_s,
+                    e::FclassS,
+                    [take_gp_register, take_fp_register]
+                );
+
+                // The sign-injection pseudo-instructions, with `rs` as both
+                // sources.
+                macro_rules! fp_sign {
+                    ($mnemonic:literal, $fn_name:ident, $ty:ty) => {
+                        handlers.insert(
+                            $mnemonic,
+                            handler!($fn_name, |asm, c| {
+                                c.take_separator()?;
+                                let rd = c.take_fp_register()?;
+                                c.take_comma_separator()?;
+                                let rs = c.take_fp_register()?;
+                                asm.current_section_mut()
+                                    .push_le_u32(<$ty>::new(rd, rs, rs).encode_as_u32());
+                            }),
+                        );
+                    };
+                }
+                fp_sign!("fmv.s", fmv_s, e::FsgnjS);
+                fp_sign!("fneg.s", fneg_s, e::FsgnjnS);
+                fp_sign!("fabs.s", fabs_s, e::FsgnjxS);
+
+                // On RV64, these encodings are `c.ld`, `c.sd`, `c.ldsp` and
+                // `c.sdsp`.
+                if isa.exts.contains(isa::ExtensionSet::COMPRESSED) && isa.xlen == XLen::Rv32 {
+                    handlers.insert(
+                        "c.flw",
+                        handler!(c_flw, |asm, c| {
+                            c.take_separator()?;
+                            let rd = c.take_c_fp_register()?;
+                            c.take_comma_separator()?;
+                            let imm = c.take_imm_scaled(0..=124, 4, false, "0..=124")?;
+                            let rs1 = take_c_base(c)?;
+                            push_compressed(asm, e::CFlw::new(rd, rs1, imm as u8).encode_as_u32());
+                        }),
+                    );
+                    handlers.insert(
+                        "c.fsw",
+                        handler!(c_fsw, |asm, c| {
+                            c.take_separator()?;
+                            let rs2 = c.take_c_fp_register()?;
+                            c.take_comma_separator()?;
+                            let imm = c.take_imm_scaled(0..=124, 4, false, "0..=124")?;
+                            let rs1 = take_c_base(c)?;
+                            push_compressed(asm, e::CFsw::new(rs1, rs2, imm as u8).encode_as_u32());
+                        }),
+                    );
+                    handlers.insert(
+                        "c.flwsp",
+                        handler!(c_flwsp, |asm, c| {
+                            c.take_separator()?;
+                            let rd = c.take_fp_register()?;
+                            c.take_comma_separator()?;
+                            let imm = c.take_imm_scaled(0..=252, 4, false, "0..=252")?;
+                            take_sp_base(c)?;
+                            push_compressed(asm, e::CFlwSp::new(rd, imm as u8).encode_as_u32());
+                        }),
+                    );
+                    handlers.insert(
+                        "c.fswsp",
+                        handler!(c_fswsp, |asm, c| {
+                            c.take_separator()?;
+                            let rs2 = c.take_fp_register()?;
+                            c.take_comma_separator()?;
+                            let imm = c.take_imm_scaled(0..=252, 4, false, "0..=252")?;
+                            take_sp_base(c)?;
+                            push_compressed(asm, e::CFswSp::new(rs2, imm as u8).encode_as_u32());
+                        }),
+                    );
+                }
+            }
             Ext::Hypervisor => return Err(ext),
             Ext::IntegerMuldiv => {
                 handlers.insert("mul", handler!(mul, @rtype encoding::Mul));
@@ -1713,6 +1952,17 @@ fn fill_handlers(
 fn push_compressed(asm: &mut Assembler, bits: u32) {
     asm.current_section_mut()
         .push_bytes(&(bits as u16).to_le_bytes());
+}
+
+/// The `(rs1)` base of a load or store.
+fn take_base(c: &mut SourceCursor<'_>) -> AssembleResult<XRegIdent> {
+    c.take_opt_separator();
+    c.expect_byte(b'(')?;
+    c.take_opt_separator();
+    let rs1 = c.take_gp_register()?;
+    c.take_opt_separator();
+    c.expect_byte(b')')?;
+    Ok(rs1)
 }
 
 /// The `(rs1')` base of a compressed load or store.
@@ -2831,6 +3081,194 @@ mod tests {
                 printed.split_whitespace().next(),
                 Some(mnemonic),
                 "{source}"
+            );
+        }
+    }
+
+    const RV32IMF: Isa = Isa {
+        exts: ExtensionSet::INTEGER_MULDIV.union(ExtensionSet::SINGLE_PRECISION_FP),
+        xlen: XLen::Rv32,
+    };
+    const RV32IMFC: Isa = Isa {
+        exts: RV32IMF.exts.union(ExtensionSet::COMPRESSED),
+        xlen: XLen::Rv32,
+    };
+
+    fn words_for(isa: Isa, source: &str) -> Vec<u32> {
+        let text = assemble_for(isa, source).unwrap_or_else(|err| panic!("{source:?}: {err}"));
+        text.chunks(4)
+            .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+            .collect()
+    }
+
+    /// Every F instruction, with the encodings of an encoder written
+    /// separately from the format tables of the specification.
+    const SINGLE_PRECISION: &[(&str, u32)] = &[
+        ("flw ft0,-2048(sp)", 0x8001_2007),
+        ("flw ft11,2047(t6)", 0x7fff_af87),
+        ("fsw fs11,-4(s0)", 0xffb4_2e27),
+        ("fsw f31,2047(zero)", 0x7ff0_2fa7),
+        ("fmadd.s fa0,fa1,fa2,fa3", 0x68c5_f543),
+        ("fmsub.s ft0,ft1,ft2,ft3,rne", 0x1820_8047),
+        ("fnmsub.s f31,f30,f29,f28,rmm", 0xe1df_4fcb),
+        ("fnmadd.s fs2,fs3,fs4,fs5,rup", 0xa949_b94f),
+        ("fadd.s fa0,fa1,fa2,rdn", 0x00c5_a553),
+        ("fadd.s fa0,fa0,fa1", 0x00b5_7553),
+        ("fsub.s ft8,ft9,ft10", 0x09ee_fe53),
+        ("fmul.s fa7,fa6,fa5,rtz", 0x10f8_18d3),
+        ("fdiv.s fs0,fs1,fs2", 0x1924_f453),
+        ("fsqrt.s fa0,fa1", 0x5805_f553),
+        ("fsqrt.s fa0,fa1,rne", 0x5805_8553),
+        ("fsgnj.s fa0,fa1,fa2", 0x20c5_8553),
+        ("fsgnjn.s ft0,ft1,ft2", 0x2020_9053),
+        ("fsgnjx.s f1,f2,f3", 0x2031_20d3),
+        ("fmin.s fa0,fa1,fa2", 0x28c5_8553),
+        ("fmax.s fa0,fa1,fa2", 0x28c5_9553),
+        ("fcvt.w.s a0,fa0", 0xc005_7553),
+        ("fcvt.w.s a0,fa0,rtz", 0xc005_1553),
+        ("fcvt.wu.s t6,ft11,rtz", 0xc01f_9fd3),
+        ("fcvt.s.w fa0,a0,rne", 0xd005_0553),
+        ("fcvt.s.wu f31,t6", 0xd01f_ffd3),
+        ("fmv.x.w a0,fa0", 0xe005_0553),
+        ("fmv.w.x fa0,a0", 0xf005_0553),
+        ("feq.s a0,fa0,fa1", 0xa0b5_2553),
+        ("flt.s t0,ft0,ft1", 0xa010_12d3),
+        ("fle.s a5,fs11,ft11", 0xa1fd_87d3),
+        ("fclass.s a0,fa0", 0xe005_1553),
+    ];
+
+    #[test]
+    fn single_precision_instructions() {
+        for &(source, encoding) in SINGLE_PRECISION {
+            assert_eq!(words_for(RV32IMF, source), [encoding], "{source}");
+        }
+    }
+
+    #[test]
+    fn single_precision_disassembly_round_trips() {
+        for &(source, encoding) in SINGLE_PRECISION {
+            let printed = encoding::Instruction::decode(&mut &encoding.to_le_bytes()[..])
+                .unwrap()
+                .unwrap_or_else(|| panic!("{source} does not decode"))
+                .to_string();
+            assert_eq!(
+                words_for(RV32IMF, &printed),
+                [encoding],
+                "{source} printed as {printed:?}"
+            );
+        }
+        // The default rounding mode is left out, as assemblers take it.
+        let printed = encoding::Instruction::decode(&mut &0x00b5_7553u32.to_le_bytes()[..])
+            .unwrap()
+            .unwrap()
+            .to_string();
+        assert_eq!(printed.trim_end(), "fadd.s      fa0,fa0,fa1");
+    }
+
+    #[test]
+    fn single_precision_aliases() {
+        for (alias, instruction) in [
+            ("fmv.x.s a0,fa0", "fmv.x.w a0,fa0"),
+            ("fmv.s.x fa0,a0", "fmv.w.x fa0,a0"),
+            ("fmv.s fa0,fa1", "fsgnj.s fa0,fa1,fa1"),
+            ("fneg.s fa0,fa1", "fsgnjn.s fa0,fa1,fa1"),
+            ("fabs.s fa0,fa1", "fsgnjx.s fa0,fa1,fa1"),
+            ("fadd.s fa0,fa0,fa1,dyn", "fadd.s fa0,fa0,fa1"),
+            ("fadd.s f10 , f10 , f11", "fadd.s fa0,fa0,fa1"),
+        ] {
+            assert_eq!(
+                words_for(RV32IMF, alias),
+                words_for(RV32IMF, instruction),
+                "{alias}"
+            );
+        }
+    }
+
+    #[test]
+    fn single_precision_operands_are_checked() {
+        for (source, error) in [
+            ("fadd.s fa0,fa1,a2", "unknown floating-point register 'a2'"),
+            (
+                "fadd.s fa0,fa1,f32",
+                "unknown floating-point register 'f32'",
+            ),
+            (
+                "fadd.s fa0,fa1,f01",
+                "unknown floating-point register 'f01'",
+            ),
+            ("fcvt.w.s fa0,fa0", "unknown register"),
+            (
+                "fadd.s fa0,fa1,fa2,rtn",
+                "unknown rounding mode 'rtn', expected one of rne, rtz, rdn, rup, rmm and dyn",
+            ),
+            ("fsgnj.s fa0,fa1,fa2,rtz", "expected end of statement"),
+            (
+                "flw fa0,2048(a0)",
+                "immediate 2048 is out of range, expected -2048..=2047",
+            ),
+        ] {
+            let err = assemble_for(RV32IMF, source).expect_err(source);
+            assert_eq!(err, error, "{source}");
+        }
+        assert_eq!(
+            assemble_for(RV32IM, "fadd.s fa0,fa1,fa2"),
+            Err("unknown mnemonic or directive".to_owned())
+        );
+    }
+
+    const COMPRESSED_SINGLE_PRECISION: &[(&str, u16)] = &[
+        ("c.flw fa5,124(s0)", 0x7c7c),
+        ("c.flw fa0,0(a0)", 0x6108),
+        ("c.fsw fs0,4(a5)", 0xe3c0),
+        ("c.fsw fa0,0(a0)", 0xe108),
+        ("c.flwsp ft0,252(sp)", 0x707e),
+        ("c.flwsp fa0,0(sp)", 0x6502),
+        ("c.fswsp f31,8(sp)", 0xe47e),
+        ("c.fswsp fa0,0(sp)", 0xe02a),
+    ];
+
+    #[test]
+    fn compressed_single_precision_instructions() {
+        for &(source, encoding) in COMPRESSED_SINGLE_PRECISION {
+            let bytes =
+                assemble_for(RV32IMFC, source).unwrap_or_else(|err| panic!("{source}: {err}"));
+            assert_eq!(*bytes, encoding.to_le_bytes(), "{source}");
+
+            let printed = encoding::Instruction::decode(&mut &bytes[..])
+                .unwrap()
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                *assemble_for(RV32IMFC, &printed).unwrap(),
+                encoding.to_le_bytes(),
+                "{source} printed as {printed:?}"
+            );
+        }
+        assert_eq!(
+            assemble_for(RV32IMFC, "c.flw ft0,0(a0)"),
+            Err(
+                "register ft0 cannot be used here, expected one of fs0, fs1 and fa0-fa5".to_owned()
+            )
+        );
+        assert_eq!(
+            assemble_for(RV32IMFC, "c.fswsp fa0,2(sp)"),
+            Err("immediate 2 is not a multiple of 4".to_owned())
+        );
+    }
+
+    #[test]
+    fn compressed_single_precision_needs_both_extensions_on_rv32() {
+        for isa in [
+            RV32IMF,
+            RV32IMC,
+            Isa {
+                xlen: XLen::Rv64,
+                ..RV32IMFC
+            },
+        ] {
+            assert_eq!(
+                assemble_for(isa, "c.flw fa0,0(a0)"),
+                Err("unknown mnemonic or directive".to_owned())
             );
         }
     }
