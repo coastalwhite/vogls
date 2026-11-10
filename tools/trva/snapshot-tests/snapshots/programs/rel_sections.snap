@@ -1,0 +1,23 @@
+=== Section Layout ===
+text    0x80000000-0x80000010 (16 bytes)
+data    0x80000010-0x80000015 (5 bytes)
+rodata  0x80000018-0x8000001b (3 bytes)
+bss     0x80000020-0x80000060 (64 bytes)
+
+=== Disassembly (text) ===
+Disassembly of section .data:
+
+80000000 <.data>:
+80000000:	00100513          	li	a0,1
+80000004:	00200593          	li	a1,2
+80000008:	00b50633          	add	a2,a0,a1
+8000000c:	00000073          	ecall
+
+=== Hex Dump: text ===
+80000000  13 05 10 00 93 05 20 00 33 06 b5 00 73 00 00 00
+
+=== Hex Dump: data ===
+80000010  00 00 00 00 00
+
+=== Hex Dump: rodata ===
+80000018  00 00 00

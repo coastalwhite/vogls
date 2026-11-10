@@ -14,7 +14,7 @@ use trva::{Assembled, Assembler, SectionPositions};
 ///
 /// This performs two-pass assembly with basic relaxation.
 #[derive(Parser, Debug)]
-#[command(version)]
+#[command(version, after_long_help = POSITION_HELP)]
 struct Args {
     /// Path to assembly file
     asm: PathBuf,
@@ -27,19 +27,51 @@ struct Args {
     #[arg(long, value_name = "ISA", default_value = "rv32im")]
     isa: Isa,
 
-    /// Start address of the `.text` section
-    #[arg(long, value_name = "ADDR")]
+    /// Position of the `.text` section: an address, or `after:<section>`
+    #[arg(long, value_name = "POS")]
     text: SectionPosition,
-    /// Start address of the `.data` section
-    #[arg(long, value_name = "ADDR")]
+    /// Position of the `.data` section: an address, or `after:<section>`
+    #[arg(long, value_name = "POS")]
     data: SectionPosition,
-    /// Start address of the `.rodata` section
-    #[arg(long, value_name = "ADDR")]
+    /// Position of the `.rodata` section: an address, or `after:<section>`
+    #[arg(long, value_name = "POS")]
     rodata: SectionPosition,
-    /// Start address of the `.bss` section
-    #[arg(long, value_name = "ADDR")]
+    /// Position of the `.bss` section: an address, or `after:<section>`
+    #[arg(long, value_name = "POS")]
     bss: SectionPosition,
 }
+
+const POSITION_HELP: &str = "\
+Section positions:
+  Each of --text, --data, --rodata and --bss takes either a fixed address or a
+  position relative to another section:
+
+    <address>                       0x8000_0000, 0o400, 0b1010, 4096
+    after:<section>[:<attribute>]*  after:data, after:.data:align=4
+
+  A section named by `after` may itself be placed relatively, so the sections can
+  be chained in any order, as long as the chain does not close on itself.
+
+  Sections are `text`, `data`, `rodata` and `bss`, with or without a leading dot.
+  Attributes are:
+
+    gap=<n>    leave n bytes after the preceding section
+    align=<n>  round the address up to a multiple of n bytes
+
+  `gap` is applied before `align`. Like the `.align` directive, `align` is a byte
+  count rather than a power-of-two exponent.
+
+Examples:
+  Pack every section, keeping .bss 4-byte aligned:
+
+    trva prog.s --text 0x8000_0000 --data after:text:align=4 \\
+                --rodata after:data:align=4 --bss after:rodata:align=4
+
+  Put .bss directly after .data and leave .rodata somewhere of its own:
+
+    trva prog.s --text 0x8000_0000 --data 0x8000_1000 \\
+                --rodata 0x9000_0000 --bss after:data:align=4
+";
 
 fn main() -> ExitCode {
     let Args {
@@ -51,6 +83,19 @@ fn main() -> ExitCode {
         rodata: ro_data,
         bss,
     } = Args::parse();
+
+    let positions = SectionPositions {
+        text: text.0,
+        data: data.0,
+        rodata: ro_data.0,
+        bss: bss.0,
+    };
+
+    // Catch an unresolvable layout before doing any work on the source.
+    if let Err(err) = positions.layout_order() {
+        eprintln!("Unable to lay out sections: {err}");
+        return ExitCode::FAILURE;
+    }
 
     let asm_str = match std::fs::read_to_string(&asm) {
         Ok(asm) => asm,
@@ -79,22 +124,20 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut b = Assembler::new(
-        isa,
-        SectionPositions {
-            text: text.0,
-            data: data.0,
-            rodata: ro_data.0,
-            bss: bss.0,
-        },
-    );
+    let mut b = Assembler::new(isa, positions);
 
     if let Err(err) = b.add_source(&asm_str) {
         eprintln!("Unable to assemble {}: {err}", asm.display());
         return ExitCode::FAILURE;
     };
 
-    let result = b.assemble();
+    let result = match b.assemble() {
+        Ok(result) => result,
+        Err(err) => {
+            eprintln!("Unable to lay out sections: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     let mut output: io::BufWriter<Box<dyn io::Write>> = match output {
         Some(path) => {
             let mut options = std::fs::OpenOptions::new();
