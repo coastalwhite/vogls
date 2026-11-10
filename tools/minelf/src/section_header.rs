@@ -97,9 +97,9 @@ impl ElfSectionType {
 impl ElfSectionFlags {
     fn from_u32(word: u32) -> Self {
         Self {
-            write: word & 0x1 != 0x1,
-            alloc: word & 0x2 != 0x2,
-            execinst: word & 0x4 != 0x4,
+            write: word & 0x1 == 0x1,
+            alloc: word & 0x2 == 0x2,
+            execinst: word & 0x4 == 0x4,
             maskproc: word & 0xf000_0000 == 0xf000_0000,
         }
     }

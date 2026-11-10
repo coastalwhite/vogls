@@ -9,3 +9,6 @@ proptest-regressions/
 /*.dot
 __pycache__
 *.so
+
+result
+tools/pipeline-explorer/**/*.elf

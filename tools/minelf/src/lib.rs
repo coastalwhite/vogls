@@ -230,30 +230,57 @@ impl ElfFile {
         }
     }
 
-    pub fn get_text_range(&self) -> Option<Range<usize>> {
-        for sect in self.section_headers() {
-            if self.get_section_name(sect) != Some(b".text") {
-                continue;
-            }
-
-            assert!(std::mem::size_of::<usize>() >= 4);
-            let offset = sect.sh_offset as usize;
-            let size = sect.sh_size as usize;
-
-            return Some(offset..(offset + size));
+    pub fn header(&self) -> &ElfHeader {
+        match self {
+            ElfFile::Executable(ElfExecutableFile { header, .. }) => header,
+            ElfFile::Linking(ElfLinkingFile { header, .. }) => header,
         }
-        None
+    }
+
+    pub fn program_headers(&self) -> &Vec<ElfProgramHeader> {
+        match self {
+            ElfFile::Executable(ElfExecutableFile {
+                program_headers, ..
+            }) => program_headers,
+            ElfFile::Linking(ElfLinkingFile {
+                program_headers, ..
+            }) => program_headers,
+        }
+    }
+
+    /// The section header of the section called `name`.
+    pub fn get_section(&self, name: &[u8]) -> Option<&ElfSectionHeader> {
+        self.section_headers()
+            .iter()
+            .find(|sect| self.get_section_name(sect) == Some(name))
+    }
+
+    /// The range of file bytes holding the contents of the section `name`.
+    ///
+    /// This is [`None`] for a section without any bytes in the file: `.bss` and
+    /// friends are [`ElfSectionType::Nobits`], so they take up memory at run
+    /// time but no space in the file and their `sh_offset` does not point at a
+    /// readable range.
+    pub fn get_section_range(&self, name: &[u8]) -> Option<Range<usize>> {
+        let sect = self.get_section(name)?;
+
+        if sect.sh_type == ElfSectionType::Nobits {
+            return None;
+        }
+
+        assert!(std::mem::size_of::<usize>() >= 4);
+        let offset = sect.sh_offset as usize;
+        let size = sect.sh_size as usize;
+
+        Some(offset..(offset + size))
+    }
+
+    pub fn get_text_range(&self) -> Option<Range<usize>> {
+        self.get_section_range(b".text")
     }
 
     pub fn get_text(&self) -> Option<&ElfSectionHeader> {
-        for sect in self.section_headers() {
-            if self.get_section_name(sect) != Some(b".text") {
-                continue;
-            }
-
-            return Some(sect);
-        }
-        None
+        self.get_section(b".text")
     }
 
     pub fn symbols(&self) -> &Vec<ElfSymbolTableEntry> {

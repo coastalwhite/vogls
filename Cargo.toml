@@ -51,6 +51,7 @@ vogls-world = { path = "crates/vogls-world", default-features = false }
 
 pipeline-explorer.path = "tools/pipeline-explorer"
 trva.path = "tools/trva/trva"
+minelf.path = "tools/minelf"
 
 [profile.debug-release]
 inherits = "release"

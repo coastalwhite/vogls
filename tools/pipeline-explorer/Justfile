@@ -11,3 +11,17 @@ webapp-deps:
 
 build-site: wasm-release webapp-deps
     cd webapp && npm run build
+riscv-gcc := env_var_or_default("RISCV_GCC", "riscv32-none-elf-gcc")
+cflags := "-march=rv32im -mabi=ilp32 -nostdlib -nostartfiles -Wl,--no-warn-rwx-segments"
+
+# Build the sample programs as ELF executables, to trace with
+# `cargo run -p pipeline-explorer -- [--chip <chip>] programs/<program>.elf`.
+#
+# Needs the cross compiler of the `bench` dev shell: `nix develop .#bench`, or
+# point RISCV_GCC at one.
+elf:
+    cd programs && {{riscv-gcc}} {{cflags}} -T chip.ld -o sieve.elf sieve.S
+    cd programs && {{riscv-gcc}} {{cflags}} -T chip.ld -Wl,--defsym=BOOT=0x80 -o sieve-ibex.elf sieve.S
+
+clean-elf:
+    rm -f programs/*.elf

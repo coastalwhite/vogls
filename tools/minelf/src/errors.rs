@@ -14,7 +14,7 @@ pub enum ElfError {
     },
     InvalidDataEncoding {
         found: u8,
-    }
+    },
 }
 
 impl Display for ElfError {
