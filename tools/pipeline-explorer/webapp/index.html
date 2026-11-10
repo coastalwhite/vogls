@@ -89,7 +89,15 @@
 						<div id="procConfigDetail"></div>
 					</div>
 				</div>
-				<div class="w-8 h-8" id="simStatus"></div>
+				<div class="sim-status">
+					<button id="simStatusBtn" type="button" aria-haspopup="dialog" aria-expanded="false"
+					        aria-controls="simProgressPanel" aria-label="Simulation progress">
+						<div class="w-8 h-8" id="simStatus"></div>
+					</button>
+					<div id="simProgressPanel" role="dialog" aria-label="Simulation progress" hidden>
+						<span id="simProgress"></span>
+					</div>
+				</div>
 			</div>
 		</div>
 	</main>

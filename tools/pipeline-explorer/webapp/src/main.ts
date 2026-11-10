@@ -31,6 +31,9 @@ const chipMenuPanel = el<HTMLDivElement>("chipMenuPanel");
 const chipMenuName = el<HTMLSpanElement>("chipMenuName");
 const errorBar = el<HTMLDivElement>("errorBar");
 const errorMessage = el<HTMLSpanElement>("errorMessage");
+const simProgress = el<HTMLSpanElement>("simProgress");
+const simStatusBtn = el<HTMLButtonElement>("simStatusBtn");
+const simProgressPanel = el<HTMLDivElement>("simProgressPanel");
 
 let scrubber: ScrubberCanvas | null = null;
 let currentTrace: Trace | null = null;
@@ -89,8 +92,23 @@ const worker = new Worker(new URL("./wasm/trace-worker.ts", import.meta.url), {
 function postToWorker(request: WorkerRequest) {
     worker.postMessage(request);
 }
+/** Cycles asked of the run in flight, for the progress readout. */
+let requestedCycles = 0;
+
+/** The readout behind the spinner. `null` is a message rather than a count. */
+function showProgress(cycles: number | null, note?: string) {
+    simProgress.innerText = cycles === null
+        ? (note ?? "No simulation has run yet.")
+        : `${cycles.toLocaleString()} / ${requestedCycles.toLocaleString()} cycles`;
+}
+showProgress(null);
+
 worker.onmessage = (e: MessageEvent<WorkerReply>) => {
     const reply = e.data;
+    if (reply.kind === "progress") {
+        showProgress(reply.cycles);
+        return;
+    }
     if (reply.kind === "disassemble") {
         onDisassembled(reply);
         return;
@@ -117,6 +135,7 @@ worker.onerror = (e) => {
     e.preventDefault();
     pending = 0;
     simStatusElem.innerHTML = "";
+    showProgress(null, "The simulator stopped.");
     showError(`The simulator stopped working: ${e.message || "unknown error"}`);
 };
 
@@ -202,6 +221,8 @@ function runSim() {
         // Every point for now; views do not yet declare what they consume.
         dataPoints: ALL_DATA_POINTS,
     });
+    requestedCycles = numCyclesInput.valueAsNumber;
+    showProgress(0);
     pending += 1;
     simStatusElem.innerHTML = `<img src="spinner.svg" class="spinner"/>`;
 }
@@ -356,6 +377,7 @@ numCyclesInput.addEventListener("input", staggerRunSim);
 procSelect.addEventListener("change", onProcSelect);
 
 registerPopover({ trigger: chipMenuBtn, panel: chipMenuPanel });
+registerPopover({ trigger: simStatusBtn, panel: simProgressPanel });
 
 /* ---------- share menu ---------- */
 

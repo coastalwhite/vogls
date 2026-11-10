@@ -159,6 +159,21 @@ pub fn evaluate<C: Core>(
     num_cycles: u32,
     points: DataPoints,
 ) -> Result<ReturnValue, TraceError> {
+    evaluate_with_progress(core, params, source, num_cycles, points, &mut |_| {})
+}
+
+/// Like [`evaluate`], reporting the cycle count as it goes.
+///
+/// `progress` is called about a hundred times over the run, and once more with
+/// the final count, so a long simulation can show how far along it is.
+pub fn evaluate_with_progress<C: Core>(
+    core: &C,
+    params: &C::Params,
+    source: &str,
+    num_cycles: u32,
+    points: DataPoints,
+    progress: &mut dyn FnMut(u32),
+) -> Result<ReturnValue, TraceError> {
     // Convert the program first: a bad program is reported far quicker than
     // the design compiles.
     let description = core.description(params);
@@ -174,6 +189,8 @@ pub fn evaluate<C: Core>(
         sections.text_addr,
         num_cycles,
     );
+    // Often enough to look live, rarely enough not to dominate the run.
+    let every = (num_cycles / 100).max(1);
     let mut cycles = num_cycles;
     for i in 0..num_cycles {
         core.iterate_cycle(&design, &mut state, &mut builders)?;
@@ -181,7 +198,11 @@ pub fn evaluate<C: Core>(
             cycles = i;
             break;
         }
+        if i % every == 0 {
+            progress(i);
+        }
     }
+    progress(cycles);
 
     let cycles = cycles as usize;
     let mut data: Vec<ReturnData> = builders
@@ -279,9 +300,14 @@ pub fn get_js_ibex_trace(
     config: Object,
     num_cycles: u32,
     data_points: u32,
+    on_progress: &js_sys::Function,
 ) -> Result<Object, JsError> {
     let config = ibex_config(&config)?;
-    let trace = evaluate(&Ibex, &config, &program, num_cycles, DataPoints::from_bits(data_points))?;
+    let mut report = |cycle: u32| {
+        // A failed call just means no progress is shown.
+        let _ = on_progress.call1(&JsValue::NULL, &JsValue::from(cycle));
+    };
+    let trace = evaluate_with_progress(&Ibex, &config, &program, num_cycles, DataPoints::from_bits(data_points), &mut report)?;
     Ok(trace.into_object())
 }
 
@@ -291,8 +317,13 @@ pub fn get_js_neorv32_trace(
     _config: Object,
     num_cycles: u32,
     data_points: u32,
+    on_progress: &js_sys::Function,
 ) -> Result<Object, JsError> {
-    let trace = evaluate(&Neorv32, &(), &program, num_cycles, DataPoints::from_bits(data_points))?;
+    let mut report = |cycle: u32| {
+        // A failed call just means no progress is shown.
+        let _ = on_progress.call1(&JsValue::NULL, &JsValue::from(cycle));
+    };
+    let trace = evaluate_with_progress(&Neorv32, &(), &program, num_cycles, DataPoints::from_bits(data_points), &mut report)?;
     Ok(trace.into_object())
 }
 
@@ -302,9 +333,14 @@ pub fn get_js_hazard3_trace(
     config: Object,
     num_cycles: u32,
     data_points: u32,
+    on_progress: &js_sys::Function,
 ) -> Result<Object, JsError> {
     let config = hazard3_config(&config)?;
-    let trace = evaluate(&Hazard3, &config, &program, num_cycles, DataPoints::from_bits(data_points))?;
+    let mut report = |cycle: u32| {
+        // A failed call just means no progress is shown.
+        let _ = on_progress.call1(&JsValue::NULL, &JsValue::from(cycle));
+    };
+    let trace = evaluate_with_progress(&Hazard3, &config, &program, num_cycles, DataPoints::from_bits(data_points), &mut report)?;
     Ok(trace.into_object())
 }
 
@@ -314,9 +350,14 @@ pub fn get_js_trace(
     config: Object,
     num_cycles: u32,
     data_points: u32,
+    on_progress: &js_sys::Function,
 ) -> Result<Object, JsError> {
     let config = picorv32_config(&config)?;
-    let trace = evaluate(&PicoRv32, &config, &program, num_cycles, DataPoints::from_bits(data_points))?;
+    let mut report = |cycle: u32| {
+        // A failed call just means no progress is shown.
+        let _ = on_progress.call1(&JsValue::NULL, &JsValue::from(cycle));
+    };
+    let trace = evaluate_with_progress(&PicoRv32, &config, &program, num_cycles, DataPoints::from_bits(data_points), &mut report)?;
     Ok(trace.into_object())
 }
 
