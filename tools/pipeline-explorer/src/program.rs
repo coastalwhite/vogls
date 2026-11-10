@@ -18,7 +18,7 @@ use minelf::ElfFile;
 use minelf::data_encoding::DataEncoding;
 use minelf::errors::ElfError;
 use minelf::header::ElfHeader;
-use trva::error::AssembleError;
+use trva::error::{AssembleError, LayoutError};
 use trva::isa::Isa;
 use trva::{Assembler, SectionPositions};
 
@@ -43,13 +43,16 @@ pub struct MemoryMap {
 
 impl MemoryMap {
     /// Where the assembler places each section: at the start of its range.
+    ///
+    /// Each range is fixed by the core, so these are absolute rather than relative to one
+    /// another.
     pub fn to_positions(&self) -> SectionPositions {
-        SectionPositions {
-            text: self.text.start,
-            data: self.data.start,
-            rodata: self.rodata.start,
-            bss: self.bss.start,
-        }
+        SectionPositions::absolute(
+            self.text.start,
+            self.data.start,
+            self.rodata.start,
+            self.bss.start,
+        )
     }
 
     /// The name and range of each section, in the order of
@@ -119,7 +122,7 @@ impl Program {
             Program::Assembly(source) => {
                 let assembled = Assembler::new(isa, map.to_positions())
                     .with_source(source)?
-                    .assemble();
+                    .assemble()?;
                 ProgramSections {
                     text: assembled.text,
                     data: assembled.data,
@@ -137,6 +140,8 @@ impl Program {
 #[derive(Debug)]
 pub enum LoadError {
     Assemble(Box<AssembleError>),
+    /// The sections could not be laid out in the address space.
+    Layout(LayoutError),
     /// The ELF file could not be decoded.
     Elf(ElfError),
     /// The file is not a 32-bit little-endian RISC-V executable.
@@ -184,6 +189,7 @@ impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             LoadError::Assemble(err) => write!(f, "{err}"),
+            LoadError::Layout(err) => write!(f, "{err}"),
             LoadError::Elf(err) => write!(f, "malformed ELF: {err}"),
             LoadError::NotRv32Exec {
                 class,
@@ -235,6 +241,11 @@ impl std::error::Error for LoadError {}
 impl From<Box<AssembleError>> for LoadError {
     fn from(err: Box<AssembleError>) -> Self {
         Self::Assemble(err)
+    }
+}
+impl From<LayoutError> for LoadError {
+    fn from(err: LayoutError) -> Self {
+        Self::Layout(err)
     }
 }
 impl From<ElfError> for LoadError {

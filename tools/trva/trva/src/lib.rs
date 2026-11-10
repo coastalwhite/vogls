@@ -3,7 +3,7 @@
 //! A library that performs RISC-V assembly into sections with basic relaxation.
 use self::cursor::{SourceCursor, parse_gp_register};
 use self::encoding::{FenceMode, FenceOrder, XRegIdent};
-use self::error::AssembleResult;
+use self::error::{AssembleResult, LayoutError};
 use self::isa::{Ext, Isa, XLen};
 use self::labels::{LabelId, LabelMap, LabelTable};
 
@@ -17,11 +17,17 @@ pub mod encoding;
 pub mod error;
 pub mod isa;
 pub mod labels;
+pub mod placement;
+
+pub use self::placement::{
+    ParsePlacementError, Radix, SectionKind, SectionPlacement, SectionPositions, UnknownSectionName,
+};
 
 pub struct Assembler {
     label_table: LabelTable,
 
-    symbols: LabelMap<UnresolvedOffset>,
+    /// Positions of global symbols, relative to the start of their own section.
+    symbols: LabelMap<(SectionKind, UnresolvedOffset)>,
 
     text: Section,
     data: Section,
@@ -60,7 +66,10 @@ impl RelocationItem {
         }
     }
 
-    fn min_max_size_with_symbols(&self, symbols: &LabelMap<UnresolvedOffset>) -> (u32, u32) {
+    fn min_max_size_with_symbols(
+        &self,
+        symbols: &LabelMap<(SectionKind, UnresolvedOffset)>,
+    ) -> (u32, u32) {
         _ = symbols;
         self.min_max_size()
     }
@@ -100,22 +109,56 @@ struct UnresolvedOffset {
 }
 
 impl UnresolvedOffset {
-    pub fn next_multiple_of(self, rhs: u32) -> Self {
-        Self {
-            min: self.min.next_multiple_of(rhs),
-            max: self.max.next_multiple_of(rhs),
-        }
-    }
-
     fn pad(self, space: u32) -> Self {
         Self {
             min: self.min + space,
             max: self.max + space,
         }
     }
+
+    /// An exact offset, where the minimum and maximum coincide.
+    const fn exact(offset: u32) -> Self {
+        Self {
+            min: offset,
+            max: offset,
+        }
+    }
+
+    /// Shift this offset by another, widening the range to cover both.
+    ///
+    /// Saturating, because this is used to turn section-relative symbol positions into absolute
+    /// ones for range checks, where a saturated bound just means "too far to reach".
+    fn add(self, rhs: Self) -> Self {
+        Self {
+            min: self.min.saturating_add(rhs.min),
+            max: self.max.saturating_add(rhs.max),
+        }
+    }
+
+    /// Shift this offset by another, failing if either bound leaves the address space.
+    fn checked_add(self, rhs: Self) -> Option<Self> {
+        Some(Self {
+            min: self.min.checked_add(rhs.min)?,
+            max: self.max.checked_add(rhs.max)?,
+        })
+    }
+
+    /// Round both bounds up to a multiple of `rhs`, failing if either leaves the address space.
+    ///
+    /// An `rhs` of `0` or `1` leaves the offset alone.
+    fn checked_next_multiple_of(self, rhs: u32) -> Option<Self> {
+        if rhs <= 1 {
+            return Some(self);
+        }
+        Some(Self {
+            min: self.min.checked_next_multiple_of(rhs)?,
+            max: self.max.checked_next_multiple_of(rhs)?,
+        })
+    }
 }
 
 struct Section {
+    /// Running position of the end of the section, relative to its own base.
     offset: UnresolvedOffset,
     data: Vec<u8>,
     events: Vec<Event>,
@@ -130,7 +173,7 @@ enum Event {
     Align(u32),
 }
 impl Event {
-    fn min_max_size(&self, symbols: &LabelMap<UnresolvedOffset>) -> (u32, u32) {
+    fn min_max_size(&self, symbols: &LabelMap<(SectionKind, UnresolvedOffset)>) -> (u32, u32) {
         match self {
             Event::Data(n) | Event::Pad(n) => (*n, *n),
             Event::Symbol(_) | Event::LocalLabel(_) => (0, 0),
@@ -141,12 +184,9 @@ impl Event {
 }
 
 impl Section {
-    fn new(start_offset: u32) -> Self {
+    fn new() -> Self {
         Self {
-            offset: UnresolvedOffset {
-                min: start_offset,
-                max: start_offset,
-            },
+            offset: UnresolvedOffset { min: 0, max: 0 },
             data: Vec::new(),
             events: Vec::new(),
         }
@@ -179,34 +219,12 @@ impl Section {
     }
 
     fn align(&mut self, n: u32) {
-        if self.offset.min == self.offset.max {
-            self.pad(self.offset.min.next_multiple_of(n) - self.offset.min);
+        if n <= 1 {
             return;
         }
 
         self.events.push(Event::Align(n));
-        self.offset = self.offset.next_multiple_of(n);
-    }
-}
-
-#[derive(Clone, Copy)]
-pub enum SectionKind {
-    Text,
-    Data,
-    ReadOnlyData,
-    Bss,
-}
-
-#[derive(Clone)]
-pub struct SectionPositions {
-    pub text: u32,
-    pub data: u32,
-    pub rodata: u32,
-    pub bss: u32,
-}
-impl SectionPositions {
-    fn as_array(&self) -> [u32; 4] {
-        [self.text, self.data, self.rodata, self.bss]
+        self.offset.max = self.offset.max.saturating_add(n);
     }
 }
 
@@ -231,10 +249,10 @@ impl Assembler {
             label_table: LabelTable::new(),
             symbols: LabelMap::default(),
 
-            text: Section::new(positions.text),
-            data: Section::new(positions.data),
-            rodata: Section::new(positions.rodata),
-            bss: Section::new(positions.bss),
+            text: Section::new(),
+            data: Section::new(),
+            rodata: Section::new(),
+            bss: Section::new(),
 
             positions,
             current_section: SectionKind::Text,
@@ -254,6 +272,11 @@ impl Assembler {
         while !cursor.is_empty() {
             cursor.trim_wsc();
 
+            // Whitespace at the end is fine.
+            if cursor.is_empty() {
+                break;
+            }
+
             if cursor.peek_byte().is_some_and(|b| b.is_ascii_digit()) {
                 // Local label definition
                 let label = cursor.take_u32()?;
@@ -270,8 +293,9 @@ impl Assembler {
             if cursor.next_byte_if_equals(b':') {
                 // Label definition
                 let label = self.label_table.get_or_insert(label);
+                let kind = self.current_section;
                 let position = self.current_section().offset;
-                self.symbols.set(label, position);
+                self.symbols.set(label, (kind, position));
                 self.current_section_mut().events.push(Event::Symbol(label));
                 continue;
             }
@@ -292,9 +316,10 @@ impl Assembler {
                     cursor.take_separator()?;
                     let name = cursor.take_ident()?;
 
+                    let kind = self.current_section;
                     let position = self.current_section().offset;
                     let name = self.label_table.get_or_insert(name);
-                    self.symbols.set(name, position);
+                    self.symbols.set(name, (kind, position));
                 }
                 ".align" => {
                     cursor.take_separator()?;
@@ -503,19 +528,48 @@ impl Assembler {
         Ok(order)
     }
 
-    pub fn assemble(mut self) -> Assembled {
+    /// Resolve the source into section data and addresses.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the section placements cannot be resolved into addresses; see [`LayoutError`].
+    pub fn assemble(mut self) -> Result<Assembled, LayoutError> {
         let mut out_symbols = LabelMap::with_len(self.symbols.len());
+
+        let positions = self.positions;
+        let order = positions.layout_order()?;
+
+        // Sizes as they stand after parsing: exact where nothing can be relaxed, a range
+        // otherwise. `Section::offset` is this accumulation, kept up to date as events are
+        // pushed.
+        let size_estimates: [UnresolvedOffset; 4] =
+            SectionKind::ALL.map(|kind| self.section(kind).offset);
+
+        // Conservative bases, used while relaxing for references into sections that have not
+        // been laid out yet.
+        let mut bases = resolve_bases(&positions, &order, &size_estimates)?;
 
         // Link and relax.
         let mut local_offsets = [const { Vec::<u32>::new() }; 4];
         let mut reloc_variants = [const { Vec::<u8>::new() }; 4];
         let mut offsets = [0u32; 4];
         let mut start_offsets = [0u32; 4];
-        for ((i, section), start_offset) in [&self.text, &self.data, &self.rodata, &self.bss]
-            .iter()
-            .enumerate()
-            .zip(self.positions.as_array())
-        {
+        let mut sizes = size_estimates;
+
+        // Laying sections out in placement order means every section a base is measured from has
+        // already been walked, so its size is exact by the time it is needed.
+        let sections = [&self.text, &self.data, &self.rodata, &self.bss];
+        for &kind in &order {
+            let i = kind.index();
+            let section = sections[i];
+
+            let base = resolve_base(&positions, kind, &bases, &sizes)?;
+            // Whatever this base is measured from has already been walked, so it is exact and
+            // the section lands on a single address.
+            debug_assert_eq!(base.min, base.max, "{kind} base should be exact");
+            bases[i] = base;
+
+            let start_offset = base.min;
             let mut local_offset = Vec::new();
             let mut reloc_variant = Vec::new();
             let mut offset = start_offset;
@@ -528,11 +582,10 @@ impl Assembler {
                     Event::Align(n) => offset = offset.next_multiple_of(*n),
 
                     Event::Symbol(label) => {
-                        self.symbols[*label] = Some(UnresolvedOffset {
-                            min: offset,
-                            max: offset,
-                        });
-                        out_symbols.set(*label, (SectionKind::Text, offset));
+                        let rel = offset - start_offset;
+                        self.symbols[*label] =
+                            Some((kind, UnresolvedOffset { min: rel, max: rel }));
+                        out_symbols.set(*label, (kind, offset));
                     }
                     Event::LocalLabel(_) => local_offset.push(offset),
 
@@ -546,6 +599,7 @@ impl Assembler {
                                     &section.events,
                                     eid,
                                     &self.symbols,
+                                    &bases,
                                 );
                                 let is_in_branch_range = in_imm12_range(lbl_offset.min, offset)
                                     && in_imm12_range(lbl_offset.max, offset);
@@ -559,6 +613,7 @@ impl Assembler {
                                     &section.events,
                                     eid,
                                     &self.symbols,
+                                    &bases,
                                 );
                                 let is_in_jump_range = in_imm20_range(lbl_offset.min, offset)
                                     && in_imm20_range(lbl_offset.max, offset);
@@ -572,6 +627,7 @@ impl Assembler {
                                     &section.events,
                                     eid,
                                     &self.symbols,
+                                    &bases,
                                 );
                                 let is_in_jump_range = in_imm20_range(lbl_offset.min, offset)
                                     && in_imm20_range(lbl_offset.max, offset);
@@ -587,6 +643,9 @@ impl Assembler {
             local_offsets[i] = local_offset;
             reloc_variants[i] = reloc_variant;
             offsets[i] = offset;
+            // Relaxation and alignment are settled for this section, so its size is now exact
+            // and any section placed after it lands on a single address.
+            sizes[i] = UnresolvedOffset::exact(offset - start_offset);
         }
 
         let mut outs: [Box<[u8]>; 4] = std::array::from_fn(|_| [].into());
@@ -745,7 +804,7 @@ impl Assembler {
 
         let [text, data, rodata, bss] = outs;
         let [text_start, data_start, rodata_start, bss_start] = start_offsets;
-        Assembled {
+        Ok(Assembled {
             labels: self.label_table,
             symbols: out_symbols,
 
@@ -758,24 +817,30 @@ impl Assembler {
             data,
             rodata,
             bss: bss.len(),
-        }
+        })
     }
 
-    fn current_section(&self) -> &Section {
-        match self.current_section {
+    fn section(&self, kind: SectionKind) -> &Section {
+        match kind {
             SectionKind::Text => &self.text,
             SectionKind::Data => &self.data,
             SectionKind::ReadOnlyData => &self.rodata,
             SectionKind::Bss => &self.bss,
         }
     }
-    fn current_section_mut(&mut self) -> &mut Section {
-        match self.current_section {
+    fn section_mut(&mut self, kind: SectionKind) -> &mut Section {
+        match kind {
             SectionKind::Text => &mut self.text,
             SectionKind::Data => &mut self.data,
             SectionKind::ReadOnlyData => &mut self.rodata,
             SectionKind::Bss => &mut self.bss,
         }
+    }
+    fn current_section(&self) -> &Section {
+        self.section(self.current_section)
+    }
+    fn current_section_mut(&mut self) -> &mut Section {
+        self.section_mut(self.current_section)
     }
 
     fn take_target_label(&mut self, cursor: &mut SourceCursor<'_>) -> AssembleResult<TargetLabel> {
@@ -1249,12 +1314,61 @@ fn signed_imm_to_imm12(imm: i64) -> Option<i16> {
     Some(imm as i16)
 }
 
+/// Resolve the base address of a single section.
+///
+/// `bases` and `sizes` must already hold resolved entries for whatever section this one is
+/// placed after, which is what laying sections out in [`SectionPositions::layout_order`] order
+/// guarantees.
+fn resolve_base(
+    positions: &SectionPositions,
+    kind: SectionKind,
+    bases: &[UnresolvedOffset; 4],
+    sizes: &[UnresolvedOffset; 4],
+) -> Result<UnresolvedOffset, LayoutError> {
+    match positions.placement(kind) {
+        SectionPlacement::Absolute(addr) => Ok(UnresolvedOffset::exact(addr)),
+        SectionPlacement::After {
+            section,
+            gap,
+            align,
+        } => {
+            let after = section.index();
+            bases[after]
+                .checked_add(sizes[after])
+                .and_then(|end| end.checked_add(UnresolvedOffset::exact(gap)))
+                .and_then(|end| end.checked_next_multiple_of(align))
+                .ok_or(LayoutError::AddressOverflow { section: kind })
+        }
+    }
+}
+
+/// Resolve every section's base address, given each section's size.
+///
+/// Also rejects layouts where a section's *end* leaves the address space, so that a caller which
+/// passes the widest possible sizes can afterwards walk each section without checking for
+/// overflow on every event.
+fn resolve_bases(
+    positions: &SectionPositions,
+    order: &[SectionKind; 4],
+    sizes: &[UnresolvedOffset; 4],
+) -> Result<[UnresolvedOffset; 4], LayoutError> {
+    let mut bases = [UnresolvedOffset::default(); 4];
+    for &kind in order {
+        let base = resolve_base(positions, kind, &bases, sizes)?;
+        base.checked_add(sizes[kind.index()])
+            .ok_or(LayoutError::AddressOverflow { section: kind })?;
+        bases[kind.index()] = base;
+    }
+    Ok(bases)
+}
+
 fn resolve_min_max_target_label(
     lbl: &TargetLabel,
     offset: u32,
     events: &[Event],
     eid: usize,
-    symbols: &LabelMap<UnresolvedOffset>,
+    symbols: &LabelMap<(SectionKind, UnresolvedOffset)>,
+    bases: &[UnresolvedOffset; 4],
 ) -> UnresolvedOffset {
     match lbl {
         TargetLabel::Local(lbl, dir) => {
@@ -1290,7 +1404,12 @@ fn resolve_min_max_target_label(
 
             panic!("local label not found");
         }
-        TargetLabel::Global(lbl) => *symbols[*lbl].as_ref().unwrap(),
+        TargetLabel::Global(lbl) => {
+            // Recorded positions are relative to the symbol's own section, so lift them into
+            // absolute addresses with that section's base.
+            let (kind, rel) = symbols[*lbl].expect("global label not found");
+            bases[kind.index()].add(rel)
+        }
     }
 }
 
@@ -1330,5 +1449,379 @@ fn resolve_target_label(
             panic!("local label not found");
         }
         TargetLabel::Global(lbl) => symbols[*lbl].unwrap().1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::isa::{ExtensionSet, XLen};
+
+    const RV32IM: Isa = Isa {
+        exts: ExtensionSet::INTEGER_MULDIV,
+        xlen: XLen::Rv32,
+    };
+
+    fn assemble(positions: &SectionPositions, source: &str) -> Assembled {
+        Assembler::new(RV32IM, *positions)
+            .with_source(source)
+            .expect("source should assemble")
+            .assemble()
+            .expect("sections should lay out")
+    }
+
+    /// Resolve a global symbol by name into the section it lives in and its absolute address.
+    fn symbol(asm: &mut Assembled, name: &str) -> (SectionKind, u32) {
+        let id = asm.labels.get_or_insert(name);
+        asm.symbols[id].expect("symbol should be defined")
+    }
+
+    /// A symbol reports the section it was actually defined in, not always `.text`.
+    #[test]
+    fn symbols_carry_their_own_section() {
+        let mut asm = assemble(
+            &SectionPositions::absolute(0x8000_0000, 0x8000_0100, 0x8000_0200, 0x8000_0300),
+            "
+            .section .text
+            start:
+                li a0, 1
+                ecall
+            .section .data
+            d0:
+                .space 4
+            d1:
+            .section .rodata
+            r0:
+            .section .bss
+                .space 8
+            b0:
+            ",
+        );
+
+        assert_eq!(symbol(&mut asm, "start"), (SectionKind::Text, 0x8000_0000));
+        assert_eq!(symbol(&mut asm, "d0"), (SectionKind::Data, 0x8000_0100));
+        assert_eq!(symbol(&mut asm, "d1"), (SectionKind::Data, 0x8000_0104));
+        assert_eq!(
+            symbol(&mut asm, "r0"),
+            (SectionKind::ReadOnlyData, 0x8000_0200)
+        );
+        assert_eq!(symbol(&mut asm, "b0"), (SectionKind::Bss, 0x8000_0308));
+    }
+
+    /// `.align` rounds up the *absolute* address, so it has to account for a section base that is
+    /// not itself aligned.
+    #[test]
+    fn align_rounds_the_absolute_address() {
+        let mut asm = assemble(
+            &SectionPositions::absolute(0x8000_0000, 0x8000_0101, 0x8000_0200, 0x8000_0300),
+            "
+            .section .data
+                .space 1
+                .align 4
+            aligned:
+                .space 1
+            ",
+        );
+
+        assert_eq!(
+            symbol(&mut asm, "aligned"),
+            (SectionKind::Data, 0x8000_0104)
+        );
+        // 1 byte of `.space`, 2 bytes of alignment padding, 1 byte of `.space`.
+        assert_eq!(asm.data.len(), 4);
+    }
+
+    /// `.align 0` and `.align 1` are no-ops rather than a division by zero.
+    #[test]
+    fn degenerate_aligns_are_noops() {
+        let mut asm = assemble(
+            &SectionPositions::absolute(0x8000_0000, 0x8000_0101, 0x8000_0200, 0x8000_0300),
+            "
+            .section .data
+                .space 1
+                .align 0
+                .align 1
+            here:
+            ",
+        );
+
+        assert_eq!(symbol(&mut asm, "here"), (SectionKind::Data, 0x8000_0102));
+    }
+    /// `.bss` after `.data`, aligned to 4 bytes - the motivating case.
+    #[test]
+    fn bss_follows_data_aligned() {
+        let positions = SectionPositions {
+            text: SectionPlacement::Absolute(0x8000_0000),
+            data: SectionPlacement::Absolute(0x8000_0100),
+            rodata: SectionPlacement::after(SectionKind::Text),
+            bss: SectionPlacement::after_aligned(SectionKind::Data, 4),
+        };
+
+        let asm = assemble(
+            &positions,
+            "
+            .section .text
+                li a0, 1
+                ecall
+            .section .data
+                .space 5
+            .section .bss
+                .space 8
+            ",
+        );
+
+        assert_eq!(asm.text_start, 0x8000_0000);
+        assert_eq!(asm.data_start, 0x8000_0100);
+        // `.text` is 8 bytes, so `.rodata` sits right behind it.
+        assert_eq!(asm.rodata_start, 0x8000_0008);
+        // `.data` ends at 0x80000105, rounded up to a 4-byte boundary.
+        assert_eq!(asm.bss_start, 0x8000_0108);
+        assert_eq!(asm.bss, 8);
+    }
+
+    /// A chain of relative placements resolves transitively, in one pass.
+    #[test]
+    fn placements_chain() {
+        let positions = SectionPositions {
+            text: SectionPlacement::Absolute(0x1000),
+            data: SectionPlacement::after(SectionKind::Text),
+            rodata: SectionPlacement::after_aligned(SectionKind::Data, 16),
+            bss: SectionPlacement::after_aligned(SectionKind::ReadOnlyData, 8),
+        };
+
+        let asm = assemble(
+            &positions,
+            "
+            .section .text
+                li a0, 1
+            .section .data
+                .space 1
+            .section .rodata
+                .space 1
+            ",
+        );
+
+        assert_eq!(asm.text_start, 0x1000);
+        // `li a0, 1` is one instruction here, so `.text` is 4 bytes.
+        assert_eq!(asm.data_start, 0x1004);
+        // `.data` ends at 0x1005, rounded up to 16.
+        assert_eq!(asm.rodata_start, 0x1010);
+        // `.rodata` ends at 0x1011, rounded up to 8.
+        assert_eq!(asm.bss_start, 0x1018);
+    }
+
+    /// A `gap` is inserted before the alignment is applied.
+    #[test]
+    fn gap_is_applied_before_alignment() {
+        let positions = SectionPositions {
+            text: SectionPlacement::Absolute(0x1000),
+            data: SectionPlacement::After {
+                section: SectionKind::Text,
+                gap: 5,
+                align: 8,
+            },
+            rodata: SectionPlacement::Absolute(0x4000),
+            bss: SectionPlacement::Absolute(0x5000),
+        };
+
+        let asm = assemble(&positions, ".section .text\n li a0, 1\n");
+
+        // `.text` ends at 0x1004, plus a 5-byte gap is 0x1009, rounded up to 8 is 0x1010.
+        assert_eq!(asm.data_start, 0x1010);
+    }
+
+    /// An empty section still has an address, and whatever follows it is not displaced.
+    #[test]
+    fn empty_sections_do_not_displace() {
+        let positions = SectionPositions {
+            text: SectionPlacement::Absolute(0x2000),
+            data: SectionPlacement::after(SectionKind::Text),
+            rodata: SectionPlacement::after(SectionKind::Data),
+            bss: SectionPlacement::after(SectionKind::ReadOnlyData),
+        };
+
+        let asm = assemble(&positions, ".section .text\n li a0, 1\n");
+
+        assert_eq!(asm.data_start, 0x2004);
+        assert_eq!(asm.rodata_start, 0x2004);
+        assert_eq!(asm.bss_start, 0x2004);
+    }
+
+    /// Placements are resolved in dependency order, not in the order sections are declared in.
+    #[test]
+    fn placements_resolve_against_declaration_order() {
+        let positions = SectionPositions {
+            // `.text` trails the data sections.
+            text: SectionPlacement::after_aligned(SectionKind::Bss, 4),
+            data: SectionPlacement::Absolute(0x3000),
+            rodata: SectionPlacement::after(SectionKind::Data),
+            bss: SectionPlacement::after(SectionKind::ReadOnlyData),
+        };
+
+        let asm = assemble(
+            &positions,
+            "
+            .section .data
+                .space 2
+            .section .rodata
+                .space 3
+            .section .bss
+                .space 4
+            .section .text
+                li a0, 1
+            ",
+        );
+
+        assert_eq!(asm.data_start, 0x3000);
+        assert_eq!(asm.rodata_start, 0x3002);
+        assert_eq!(asm.bss_start, 0x3005);
+        // `.bss` ends at 0x3009, rounded up to 4.
+        assert_eq!(asm.text_start, 0x300c);
+    }
+
+    /// A relative base that is not aligned is still handled correctly by `.align`.
+    #[test]
+    fn align_inside_a_relatively_placed_section() {
+        let positions = SectionPositions {
+            text: SectionPlacement::Absolute(0x1002),
+            data: SectionPlacement::after(SectionKind::Text),
+            rodata: SectionPlacement::Absolute(0x4000),
+            bss: SectionPlacement::Absolute(0x5000),
+        };
+
+        let mut asm = assemble(
+            &positions,
+            "
+            .section .text
+                li a0, 1
+            .section .data
+                .space 1
+                .align 8
+            aligned:
+            ",
+        );
+
+        // `.text` is 4 bytes from 0x1002, so `.data` starts at an unaligned 0x1006.
+        assert_eq!(asm.data_start, 0x1006);
+        assert_eq!(symbol(&mut asm, "aligned"), (SectionKind::Data, 0x1008));
+    }
+
+    #[test]
+    fn layout_order_follows_the_dependency_chain() {
+        let positions = SectionPositions {
+            text: SectionPlacement::after(SectionKind::Bss),
+            data: SectionPlacement::Absolute(0),
+            rodata: SectionPlacement::after(SectionKind::Data),
+            bss: SectionPlacement::after(SectionKind::ReadOnlyData),
+        };
+
+        assert_eq!(
+            positions.layout_order().unwrap(),
+            [
+                SectionKind::Data,
+                SectionKind::ReadOnlyData,
+                SectionKind::Bss,
+                SectionKind::Text,
+            ],
+        );
+    }
+
+    #[test]
+    fn a_section_after_itself_is_rejected() {
+        let mut positions = SectionPositions::absolute(0, 0, 0, 0);
+        positions.bss = SectionPlacement::after(SectionKind::Bss);
+
+        assert_eq!(
+            positions.layout_order(),
+            Err(LayoutError::SelfReference {
+                section: SectionKind::Bss
+            }),
+        );
+    }
+
+    #[test]
+    fn a_cycle_of_placements_is_rejected() {
+        let mut positions = SectionPositions::absolute(0, 0, 0, 0);
+        positions.data = SectionPlacement::after(SectionKind::Bss);
+        positions.bss = SectionPlacement::after(SectionKind::ReadOnlyData);
+        positions.rodata = SectionPlacement::after(SectionKind::Data);
+
+        let err = positions.layout_order().unwrap_err();
+        let LayoutError::Cycle { cycle } = &err else {
+            panic!("expected a cycle, got {err}");
+        };
+        assert_eq!(
+            cycle.sections(),
+            [
+                SectionKind::Data,
+                SectionKind::Bss,
+                SectionKind::ReadOnlyData
+            ],
+        );
+        // Displaying it closes the loop.
+        assert_eq!(
+            err.to_string(),
+            "section placements form a cycle: .data -> .bss -> .rodata -> .data"
+        );
+    }
+
+    /// A walk that reaches a cycle through a section outside it reports only the cycle.
+    #[test]
+    fn a_cycle_is_reported_from_where_it_closes() {
+        let mut positions = SectionPositions::absolute(0, 0, 0, 0);
+        // `.text` leads into a cycle between `.data` and `.bss` without being part of it.
+        positions.text = SectionPlacement::after(SectionKind::Data);
+        positions.data = SectionPlacement::after(SectionKind::Bss);
+        positions.bss = SectionPlacement::after(SectionKind::Data);
+
+        let err = positions.layout_order().unwrap_err();
+        let LayoutError::Cycle { cycle } = &err else {
+            panic!("expected a cycle, got {err}");
+        };
+        assert_eq!(cycle.sections(), [SectionKind::Data, SectionKind::Bss]);
+    }
+
+    #[test]
+    fn a_layout_past_the_address_space_is_rejected() {
+        let positions = SectionPositions {
+            text: SectionPlacement::Absolute(0xffff_fff0),
+            data: SectionPlacement::after_aligned(SectionKind::Text, 0x1000),
+            rodata: SectionPlacement::Absolute(0),
+            bss: SectionPlacement::Absolute(0),
+        };
+
+        let err = Assembler::new(RV32IM, positions)
+            .with_source(".section .text\n li a0, 1\n")
+            .unwrap()
+            .assemble()
+            .err()
+            .expect("layout should be rejected");
+
+        assert_eq!(
+            err,
+            LayoutError::AddressOverflow {
+                section: SectionKind::Data
+            },
+        );
+    }
+
+    /// A `.space` that runs off the end of the address space is caught rather than wrapping.
+    #[test]
+    fn a_section_overrunning_the_address_space_is_rejected() {
+        let positions = SectionPositions::absolute(0, 0, 0, 0xffff_fff0);
+
+        let err = Assembler::new(RV32IM, positions)
+            .with_source(".section .bss\n .space 64\n")
+            .unwrap()
+            .assemble()
+            .err()
+            .expect("layout should be rejected");
+
+        assert_eq!(
+            err,
+            LayoutError::AddressOverflow {
+                section: SectionKind::Bss
+            },
+        );
     }
 }
