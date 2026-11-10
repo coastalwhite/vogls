@@ -1433,12 +1433,12 @@ instructions! {
 
     CJr       ("c.jr",       0b10, cr,  funct4 = 0b1000, rs2 = 0b00000) (rs1: xreg_cr),
     CMv       ("c.mv",       0b10, cr,  funct4 = 0b1000) (rd: xreg, rs2: xreg_cr),
-    CEBreak   ("c.slli",     0b10, cr,  funct4 = 0b1001, rd_rs1 = 0b00000, rs2 = 0b00000) (),
-    CJalr     ("c.slli",     0b10, cr,  funct4 = 0b1001, rs2 = 0b00000) (rs1: xreg_cr),
-    CAdd      ("c.slli",     0b10, cr,  funct4 = 0b1001) (rd_rs1: xreg, rs2: xreg_cr),
+    CEBreak   ("c.ebreak",   0b10, cr,  funct4 = 0b1001, rd_rs1 = 0b00000, rs2 = 0b00000) (),
+    CJalr     ("c.jalr",     0b10, cr,  funct4 = 0b1001, rs2 = 0b00000) (rs1: xreg_cr),
+    CAdd      ("c.add",      0b10, cr,  funct4 = 0b1001) (rd_rs1: xreg, rs2: xreg_cr),
     // CFsdSp    ( "c.slli",    0b10, ci) (rd: xreg, imm: nzuimm),
-    CSwSp     ( "c.slli",    0b10, ci,  funct3 = 0b110) (rs2: xreg_cr, imm: cuimm7_2_cs),
-    CFswSp    ( "c.slli",    0b10, ci,  funct3 = 0b111) (rs2: freg_cr, imm: cuimm7_2_cs),
+    CSwSp     ( "c.swsp",    0b10, ci,  funct3 = 0b110) (rs2: xreg_cr, imm: cuimm7_2_cs),
+    CFswSp    ( "c.fswsp",   0b10, ci,  funct3 = 0b111) (rs2: freg_cr, imm: cuimm7_2_cs),
 
     // RV32F
     Flw     ("flw",       0b000_0111, i, funct3 = 0b010)                                     (rd: freg, rs1: xreg, imm: itype_signed),
@@ -1593,7 +1593,7 @@ asm_display! {
     RemU   ("{},{},{}", i.rd(), i.rs1(), i.rs2()),
 
     // RV32C
-    CAddi4SpN ("{},{}", i.rd(), i.imm()),
+    CAddi4SpN ("{},sp,{}", i.rd(), i.imm()),
     CLw       ("{},{}({})", i.rd(), i.imm(), i.rs1()),
     CFlw      ("{},{}({})", i.rd(), i.imm(), i.rs1()),
     CSw       ("{},{}({})", i.rs2(), i.imm(), i.rs1()),
@@ -1602,8 +1602,9 @@ asm_display! {
     CAddi     ("{},{}", i.rd_rs1(), i.imm()),
     CJal      ("{}", i.imm()),
     CLi       ("{},{}", i.rd(), i.imm()),
-    CAddi16Sp ("{}", i.imm()),
-    CLui      ("{},{}", i.rd(), i.imm()),
+    CAddi16Sp ("sp,{}", i.imm()),
+    // The upper 20 bits, as for `lui`: `c.lui a0,0xfffff` is `a0 = -4096`.
+    CLui      ("{},0x{:05x}", i.rd(), (i.imm() >> 12) & 0xF_FFFF),
     CSrli     ("{},{}", i.rd_rs1(), i.imm()),
     CSrai     ("{},{}", i.rd_rs1(), i.imm()),
     CAndi     ("{},{}",i.rd_rs1(), i.imm()),
@@ -1616,16 +1617,16 @@ asm_display! {
     CBnez     ("{},{}", i.rs1(), i.imm()),
     CSlli     ("{},{}", i.rd_rs1(), i.imm()),
     // CFldSp    ("{}"),
-    CLwSp     ("{},{}", i.rd(), i.imm()),
-    CFlwSp    ("{},{}", i.rd(), i.imm()),
+    CLwSp     ("{},{}(sp)", i.rd(), i.imm()),
+    CFlwSp    ("{},{}(sp)", i.rd(), i.imm()),
     CJr       ("{}", i.rs1()),
     CMv       ("{},{}", i.rd(), i.rs2()),
     CEBreak,
     CJalr     ("{}", i.rs1()),
     CAdd      ("{},{}", i.rd_rs1(), i.rs2()),
     // CFsdSp    ("{}"),
-    CSwSp     ("{},{}", i.rs2(), i.imm()),
-    CFswSp    ("{},{}", i.rs2(), i.imm()),
+    CSwSp     ("{},{}(sp)", i.rs2(), i.imm()),
+    CFswSp    ("{},{}(sp)", i.rs2(), i.imm()),
 
     // RV32F
     Flw    ("{},{}({})", i.rd(), i.imm(), i.rs1()),
