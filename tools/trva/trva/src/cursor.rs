@@ -198,7 +198,8 @@ impl<'a> SourceCursor<'a> {
             .map(|v| v as i16)
     }
     pub fn take_imm20(&mut self) -> AssembleResult<u32> {
-        self.take_uimm32()
+        self.take_int_in(0..=0xF_FFFF, "0..=0xfffff")
+            .map(|v| v as u32)
     }
     /// A non-negative 32-bit value, such as the operand of `.space`.
     pub fn take_uimm32(&mut self) -> AssembleResult<u32> {
