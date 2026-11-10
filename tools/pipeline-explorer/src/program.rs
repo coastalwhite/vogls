@@ -98,7 +98,7 @@ impl ProgramSections {
     }
 
     /// Checks that every section lies within the memory `map` gives it.
-    fn check_fits(&self, map: &MemoryMap) -> Result<(), LoadError> {
+    pub(crate) fn check_fits(&self, map: &MemoryMap) -> Result<(), LoadError> {
         for (section, memory, addr, len) in self.placed() {
             // Where an empty section is linked does not matter.
             if len == 0 {
@@ -190,6 +190,12 @@ pub enum LoadError {
         len: usize,
         range: Range<u32>,
     },
+    /// `.text` does not start where the core boots. The loader accepts that,
+    /// but assembly always places `.text` at the reset vector.
+    TextNotAtBoot {
+        text_addr: u32,
+        boot: u32,
+    },
     /// A section that takes up memory at run time but is not one of the four
     /// the loader knows how to place.
     UnknownSection {
@@ -240,6 +246,11 @@ impl fmt::Display for LoadError {
                  which spans 0x{:08x}..0x{:08x}",
                 range.start, range.end,
             ),
+            LoadError::TextNotAtBoot { text_addr, boot } => write!(
+                f,
+                "'.text' starts at 0x{text_addr:08x} but the core boots at 0x{boot:08x}, \
+                 so it cannot be turned into assembly",
+            ),
             LoadError::UnknownSection { name, addr, len } => write!(
                 f,
                 "section '{name}' ({len} bytes at 0x{addr:08x}) takes up memory but is not one of \
@@ -270,7 +281,10 @@ impl From<ElfError> for LoadError {
 
 /// Extracts the four sections of a linked ELF executable, with the address
 /// each is linked at. [`Program::to_sections`] checks those against `map`.
-fn sections_from_elf(bytes: &[u8], map: &MemoryMap) -> Result<ProgramSections, LoadError> {
+pub(crate) fn sections_from_elf(
+    bytes: &[u8],
+    map: &MemoryMap,
+) -> Result<ProgramSections, LoadError> {
     let elf = parse_elf(bytes)?;
 
     // Reset drives the program counter to the reset vector of the core, so
@@ -385,25 +399,26 @@ pub fn disassemble(text: &[u8]) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const SHT_PROGBITS: u32 = 1;
+    const SHT_SYMTAB: u32 = 2;
     const SHT_STRTAB: u32 = 3;
     const SHT_NOBITS: u32 = 8;
 
-    const SHF_WRITE: u32 = 0x1;
+    pub(crate) const SHF_WRITE: u32 = 0x1;
     const SHF_ALLOC: u32 = 0x2;
-    const SHF_EXECINSTR: u32 = 0x4;
+    pub(crate) const SHF_EXECINSTR: u32 = 0x4;
 
     /// A core shaped like the testbenches.
-    const TEST_MAP: MemoryMap = MemoryMap {
+    pub(crate) const TEST_MAP: MemoryMap = MemoryMap {
         boot: 0,
         imem: 0..0x400,
         dmem: 0x400..0x13a4,
     };
 
-    struct Sect {
+    pub(crate) struct Sect {
         name: &'static str,
         kind: u32,
         flags: u32,
@@ -414,7 +429,7 @@ mod tests {
         size: u32,
     }
 
-    fn progbits(name: &'static str, addr: u32, flags: u32, bytes: &[u8]) -> Sect {
+    pub(crate) fn progbits(name: &'static str, addr: u32, flags: u32, bytes: &[u8]) -> Sect {
         Sect {
             name,
             kind: SHT_PROGBITS,
@@ -425,7 +440,7 @@ mod tests {
         }
     }
 
-    fn nobits(name: &'static str, addr: u32, size: u32) -> Sect {
+    pub(crate) fn nobits(name: &'static str, addr: u32, size: u32) -> Sect {
         Sect {
             name,
             kind: SHT_NOBITS,
@@ -436,22 +451,63 @@ mod tests {
         }
     }
 
-    /// Builds a 32-bit little-endian RISC-V executable holding `sects`.
+    /// Builds a 32-bit little-endian RISC-V executable holding `sects`, and
+    /// nothing else: like a stripped file, it has no symbol table and no
+    /// `.strtab` for the names in one.
+    pub(crate) fn build_elf(entry: u32, sects: Vec<Sect>) -> Vec<u8> {
+        build_elf_with_symbols(entry, sects, &[])
+    }
+
+    /// [`build_elf`] with a symbol table, and a `.strtab` for its names: each
+    /// symbol is a name, its value, and the name of the section it is defined
+    /// in.
     ///
-    /// Two string tables are appended, because [`ElfFile::read_from_bytes`]
-    /// insists on a `.strtab` next to the section name table. The symbol names
-    /// in it are deliberately not dot-prefixed, so that the section name table
-    /// is the one recognised as such.
-    fn build_elf(entry: u32, sects: Vec<Sect>) -> Vec<u8> {
+    /// The names must not start with a dot. [`ElfFile::read_from_bytes`]
+    /// recognises the section name table as the string table whose names all
+    /// do.
+    pub(crate) fn build_elf_with_symbols(
+        entry: u32,
+        sects: Vec<Sect>,
+        symbols: &[(&str, u32, &str)],
+    ) -> Vec<u8> {
         let mut sects = sects;
-        sects.push(Sect {
-            name: ".strtab",
-            kind: SHT_STRTAB,
-            flags: 0,
-            addr: 0,
-            bytes: b"\0_start\0".to_vec(),
-            size: 8,
-        });
+        if !symbols.is_empty() {
+            let mut strtab = vec![0u8];
+            // The null symbol, then the given ones as global functions.
+            let mut symtab = vec![0u8; 16];
+            for &(name, value, section) in symbols {
+                let st_name = strtab.len() as u32;
+                strtab.extend_from_slice(name.as_bytes());
+                strtab.push(0);
+                // Section headers are numbered from 1, after the null one.
+                let shndx = 1 + sects
+                    .iter()
+                    .position(|sect| sect.name == section)
+                    .expect("symbol in a known section") as u16;
+                symtab.extend_from_slice(&st_name.to_le_bytes());
+                symtab.extend_from_slice(&value.to_le_bytes());
+                symtab.extend_from_slice(&0u32.to_le_bytes());
+                symtab.push(0x12); // STB_GLOBAL, STT_FUNC
+                symtab.push(0);
+                symtab.extend_from_slice(&shndx.to_le_bytes());
+            }
+            sects.push(Sect {
+                name: ".symtab",
+                kind: SHT_SYMTAB,
+                flags: 0,
+                addr: 0,
+                size: symtab.len() as u32,
+                bytes: symtab,
+            });
+            sects.push(Sect {
+                name: ".strtab",
+                kind: SHT_STRTAB,
+                flags: 0,
+                addr: 0,
+                size: strtab.len() as u32,
+                bytes: strtab,
+            });
+        }
         sects.push(Sect {
             name: ".shstrtab",
             kind: SHT_STRTAB,
@@ -500,7 +556,8 @@ mod tests {
                 0,
                 0,
                 4,
-                0,
+                // `sh_entsize`, which minelf insists on for a symbol table.
+                if sect.kind == SHT_SYMTAB { 16 } else { 0 },
             ] {
                 file.extend_from_slice(&word.to_le_bytes());
             }
@@ -553,6 +610,14 @@ mod tests {
             ],
             [0, 0x400, 0x404, 0x408]
         );
+    }
+
+    #[test]
+    fn loads_a_stripped_file() {
+        // No symbol table, and no `.strtab`, which used to be a panic.
+        let bytes = build_elf(0, well_formed());
+        assert!(!bytes.windows(8).any(|w| w == b".strtab\0"));
+        assert!(sections(bytes).is_ok());
     }
 
     #[test]

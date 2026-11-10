@@ -9,6 +9,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 bytemuck = "1.25.0"
+hashbrown = { workspace = true }
 js-sys = "=0.3.91"
 minelf = { workspace = true }
 vogls = { workspace = true }

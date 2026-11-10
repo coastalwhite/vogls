@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::wasm_bindgen;
 use wasm_bindgen::{JsCast, JsError, JsValue};
 
 pub mod cores;
+pub mod disassembly;
 pub mod program;
 
 pub use self::cores::{
