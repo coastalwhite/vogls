@@ -1,71 +1,55 @@
 import "./style.css";
-import { render as renderEditor } from "./editor.ts";
+import "./layout/layout.css";
 import { colors } from "./colors.ts";
 import initialAsm from "./initialAsm.S?raw";
 import type { Trace } from "./types.ts";
 import type { WorkerReply, WorkerRequest } from "./wasm/trace-worker.ts";
 
-import { PipelineCanvas } from "./pipeline.ts";
 import { ScrubberCanvas } from "./scrubber.ts";
 import { pipelineSvg } from "./svg.ts";
+import { Workspace } from "./layout/workspace.ts";
+import { assemblyText, setAssemblyText, setElfOpener } from "./views/assembly.ts";
+import { anyPipelineView } from "./views/pipeline.ts";
+import { registerPopover } from "./menu.ts";
 
 let pending = 0;
 let currentCycle = 0;
 
-let timeoutId = null;
+let timeoutId: number | null = null;
 
-const pipelineStages: HTMLDivElement = document.getElementById(
-    "pipelineStages",
-)!;
+const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-const workspace: HTMLDivElement = document.getElementById(
-    "workspace",
-)!;
-const scrubberContainer: HTMLDivElement = document.getElementById(
-    "scrubberContainer",
-)!;
-const assemblyTextarea: HTMLTextAreaElement = document.getElementById(
-    "assemblyTextarea",
-)!;
-const numCyclesInput: HTMLInputElement = document.getElementById(
-    "numCyclesInput",
-)!;
-const procSelect: HTMLSelectElement = document.getElementById(
-    "procSelect",
-)!;
-const simStatusElem: HTMLDivElement = document.getElementById(
-    "simStatus",
-)!;
-const currentCycleElem: HTMLAnchorElement = document.getElementById(
-    "currentCycle",
-)!;
-const totalCyclesElem: HTMLAnchorElement = document.getElementById(
-    "totalCycles",
-)!;
-const procConfigDetail: HTMLAnchorElement = document.getElementById(
-    "procConfigDetail",
-)!;
-const chipMenuBtn: HTMLButtonElement = document.getElementById(
-    "chipMenuBtn",
-)!;
-const chipMenuPanel: HTMLDivElement = document.getElementById(
-    "chipMenuPanel",
-)!;
-const chipMenuName: HTMLSpanElement = document.getElementById(
-    "chipMenuName",
-)!;
-const elfUploadBtn: HTMLButtonElement = document.getElementById(
-    "elfUploadBtn",
-)! as HTMLButtonElement;
-const elfFileInput: HTMLInputElement = document.getElementById(
-    "elfFileInput",
-)! as HTMLInputElement;
-const errorBar: HTMLDivElement = document.getElementById("errorBar")! as HTMLDivElement;
-const errorMessage: HTMLSpanElement = document.getElementById("errorMessage")!;
+const pipelineStages = el<HTMLDivElement>("pipelineStages");
+const central = el<HTMLDivElement>("central");
+const scrubberContainer = el<HTMLDivElement>("scrubberContainer");
+const numCyclesInput = el<HTMLInputElement>("numCyclesInput");
+const procSelect = el<HTMLSelectElement>("procSelect");
+const simStatusElem = el<HTMLDivElement>("simStatus");
+const currentCycleElem = el<HTMLAnchorElement>("currentCycle");
+const totalCyclesElem = el<HTMLAnchorElement>("totalCycles");
+const procConfigDetail = el<HTMLDivElement>("procConfigDetail");
+const chipMenuBtn = el<HTMLButtonElement>("chipMenuBtn");
+const chipMenuPanel = el<HTMLDivElement>("chipMenuPanel");
+const chipMenuName = el<HTMLSpanElement>("chipMenuName");
+const errorBar = el<HTMLDivElement>("errorBar");
+const errorMessage = el<HTMLSpanElement>("errorMessage");
 
 let scrubber: ScrubberCanvas | null = null;
 let currentTrace: Trace | null = null;
-let pipeline: PipelineCanvas | null = null;
+
+/**
+ * Read live by every view, so the fields are updated in place rather than
+ * replaced. `setTrace`/`setCurrentCycle` below keep them current.
+ */
+const viewCtx = {
+    trace: null as Trace | null,
+    currentCycle: 0,
+    goToCycle: (cycle: number) => setCurrentCycle(cycle),
+    requestRun: (immediate: boolean) =>
+        immediate ? unstaggerRunSim() : staggerRunSim(),
+};
+
+const workspace = new Workspace(central, viewCtx);
 
 function percentForStage(trace: Trace, stageIdx: number): number {
     const numOccurances = trace.pipeline.traces[stageIdx].reduce(
@@ -78,16 +62,8 @@ function percentForStage(trace: Trace, stageIdx: number): number {
 
 function setTrace(trace: Trace) {
     currentTrace = trace;
-    if (pipeline === null) {
-        pipeline = new PipelineCanvas(
-            workspace,
-            trace,
-            currentCycle,
-            setCurrentCycle,
-        );
-    } else {
-        pipeline.setTrace(trace);
-    }
+    viewCtx.trace = trace;
+    workspace.broadcastTrace(trace);
     if (scrubber === null) {
         scrubber = new ScrubberCanvas(
             scrubberContainer,
@@ -116,12 +92,10 @@ function setTrace(trace: Trace) {
 
 function setCurrentCycle(cycle: number) {
     currentCycle = cycle;
+    viewCtx.currentCycle = cycle;
     currentCycleElem.innerText = cycle.toString();
     if (scrubber !== null) scrubber.setCurrentCycle(cycle);
-    if (pipeline !== null) {
-        pipeline.setCurrentCycle(cycle);
-        pipeline.moveToCycle(cycle, 0.25);
-    }
+    workspace.broadcastCycle(cycle);
 }
 
 const worker = new Worker(new URL("./wasm/trace-worker.ts", import.meta.url), {
@@ -189,20 +163,11 @@ function onDisassembled(reply: Extract<WorkerReply, { kind: "disassemble" }>) {
         return;
     }
     clearError();
-    assemblyTextarea.value = reply.assembly;
-    assemblyTextarea.scrollTop = 0;
-    renderEditor();
+    setAssemblyText(reply.assembly);
     unstaggerRunSim();
 }
 
-elfUploadBtn.addEventListener("click", () => elfFileInput.click());
-elfFileInput.addEventListener("change", async () => {
-    const file = elfFileInput.files?.[0];
-    // Clear the input, or picking the same file again fires no `change`.
-    elfFileInput.value = "";
-    if (!file) return;
-    openElf(file.name, new Uint8Array(await file.arrayBuffer()));
-});
+setElfOpener(openElf);
 
 type ConfigField = {
     id: string;
@@ -246,7 +211,7 @@ function runSim() {
     postToWorker({
         kind: "trace",
         proc,
-        program: assemblyTextarea.value,
+        program: assemblyText(),
         config: readProcConfig(proc),
         numCycles: numCyclesInput.valueAsNumber,
     });
@@ -352,7 +317,7 @@ function shareLink(): string {
     const proc = procSelect.value;
     const state: ShareState = {
         proc,
-        program: { kind: "asm", text: assemblyTextarea.value },
+        program: { kind: "asm", text: assemblyText() },
         config: readProcConfig(proc),
         cycles: numCyclesInput.value,
     };
@@ -383,8 +348,7 @@ function readShareState(): ShareState | null {
 
 /** Loads a shared state, falling back to the defaults for anything missing. */
 function applyShareState(state: ShareState | null) {
-    assemblyTextarea.value = state?.program.text ?? initialAsm;
-    renderEditor();
+    setAssemblyText(state?.program.text ?? initialAsm);
     numCyclesInput.value = state?.cycles ?? "500";
     if (state) procSelect.value = state.proc;
     buildProcConfig();
@@ -401,35 +365,12 @@ setCurrentCycle(0);
 applyShareState(readShareState());
 unstaggerRunSim();
 
-assemblyTextarea.addEventListener("input", staggerRunSim);
 numCyclesInput.addEventListener("input", staggerRunSim);
 procSelect.addEventListener("change", onProcSelect);
 
-function setChipMenuOpen(open: boolean) {
-    chipMenuPanel.hidden = !open;
-    chipMenuBtn.setAttribute("aria-expanded", open ? "true" : "false");
-}
-
-chipMenuBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    setChipMenuOpen(chipMenuPanel.hidden);
-});
-
-// Clicks inside the panel must not reach the document handler below, or
-// picking a chip or typing a cycle count would close the menu.
-chipMenuPanel.addEventListener("click", (e) => e.stopPropagation());
-
-document.addEventListener("click", () => setChipMenuOpen(false));
-document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !chipMenuPanel.hidden) {
-        setChipMenuOpen(false);
-        chipMenuBtn.focus();
-    }
-});
+registerPopover({ trigger: chipMenuBtn, panel: chipMenuPanel });
 
 /* ---------- share menu ---------- */
-
-const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const shareBtn = el<HTMLButtonElement>("shareBtn");
 const sharePanel = el<HTMLDivElement>("sharePanel");
@@ -460,15 +401,18 @@ function selectShareTab(tab: keyof typeof shareTabs) {
     if (tab === "link") shareLinkInput.value = shareLink();
 }
 
-function setShareOpen(open: boolean) {
-    sharePanel.hidden = !open;
-    shareBtn.setAttribute("aria-expanded", open ? "true" : "false");
-    if (!open) return;
-    // Default to the part of the pipeline that is on screen.
-    if (pipeline !== null) [svgStart, svgEnd] = pipeline.visibleCycles();
-    shareLinkInput.value = shareLink();
-    onShareTrace();
-}
+registerPopover({
+    trigger: shareBtn,
+    panel: sharePanel,
+    onOpenChange: (open) => {
+        if (!open) return;
+        // Default to the part of the pipeline that is on screen.
+        const visible = anyPipelineView()?.visibleCycles();
+        if (visible) [svgStart, svgEnd] = visible;
+        shareLinkInput.value = shareLink();
+        onShareTrace();
+    },
+});
 
 /** Clamps the range to the trace, syncs every control, and redraws. */
 function updateSvg() {
@@ -504,12 +448,6 @@ function onShareTrace() {
     updateSvg();
 }
 
-shareBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    setChipMenuOpen(false);
-    setShareOpen(sharePanel.hidden !== false);
-});
-sharePanel.addEventListener("click", (e) => e.stopPropagation());
 shareTabs.image[0].addEventListener("click", () => selectShareTab("image"));
 shareTabs.link[0].addEventListener("click", () => selectShareTab("link"));
 
@@ -560,10 +498,4 @@ shareLinkCopyBtn.addEventListener("click", () => {
 });
 shareLinkInput.addEventListener("focus", () => shareLinkInput.select());
 
-document.addEventListener("click", () => setShareOpen(false));
-document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !sharePanel.hidden) {
-        setShareOpen(false);
-        shareBtn.focus();
-    }
-});
+

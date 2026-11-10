@@ -1,0 +1,489 @@
+/* Tiling workspace: stacks, dividers, frame chrome, drag feedback, menus.
+   Plain CSS on purpose — Tailwind is installed but never imported. */
+
+:root {
+    /* Neutral wash for a drop zone that would be refused. Everything else
+       here reuses the tokens from style.css; there is no muted translucent
+       fill among them, and --error-bg reads as a failure rather than "no". */
+    --ws-muted-bg: rgba(107, 99, 117, 0.1);
+}
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --ws-muted-bg: rgba(156, 163, 175, 0.1);
+    }
+}
+
+/* Scaffolding ----------------------------------------------------------- */
+
+.ws-root {
+    display: flex;
+    flex: 1;
+    /* Same reason as #content / #central in style.css: without these the
+       flex children refuse to shrink below their content size and push the
+       whole page taller. Every box in the tree needs them. */
+    min-width: 0;
+    min-height: 0;
+}
+
+.ws-stack {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+.ws-stack--h { flex-direction: row; }
+.ws-stack--v { flex-direction: column; }
+
+/* The renderer sets flex-grow (the ratio) and min-width/min-height (MIN_PX)
+   inline. Deliberately no `overflow: auto`: panes squish, they never scroll. */
+.ws-slot {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+/* Dividers -------------------------------------------------------------- */
+
+/* A 7px transparent grab area that looks like a 1px seam: the box stays
+   7px wide and ::after draws the single visible pixel down its centre. */
+.ws-divider {
+    position: relative;
+    flex: 0 0 auto;
+    padding: 0;
+    background: none;
+    border: none;
+    touch-action: none;
+}
+
+.ws-divider::after {
+    content: "";
+    position: absolute;
+    background: var(--border);
+}
+
+.ws-divider--h {
+    width: 7px;
+    cursor: col-resize;
+}
+.ws-divider--h::after {
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 1px;
+}
+
+.ws-divider--v {
+    height: 7px;
+    cursor: row-resize;
+}
+.ws-divider--v::after {
+    left: 0;
+    right: 0;
+    top: 3px;
+    height: 1px;
+}
+
+.ws-divider:hover::after,
+.ws-divider:focus-visible::after,
+.ws-divider.is-active::after {
+    background: var(--accent);
+}
+
+/* Widened to 3px while grabbed so the seam tracks the pointer visibly. */
+.ws-divider--h:hover::after,
+.ws-divider--h.is-active::after { left: 2px; width: 3px; }
+.ws-divider--v:hover::after,
+.ws-divider--v.is-active::after { top: 2px; height: 3px; }
+
+/* Keyboard-operable (role="separator", arrow keys), so it needs a ring. */
+.ws-divider:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+}
+
+/* Frame chrome ---------------------------------------------------------- */
+
+.ws-frame {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    /* Clips the view (and the chrome's corners) to the rounded surface. */
+    overflow: hidden;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    box-shadow: var(--shadow);
+}
+
+.ws-frame.is-dragging {
+    opacity: 0.4;
+}
+
+.ws-frame__chrome {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex: 0 0 auto;
+    height: 1.75rem;
+    padding: 0 0.25rem 0 0.5rem;
+    font-size: 0.75rem;
+    background: var(--code-bg);
+    border-bottom: 1px solid var(--border);
+    /* The whole titlebar is the drag handle. */
+    cursor: grab;
+}
+
+.ws-frame.is-dragging .ws-frame__chrome,
+.ws-frame.is-dragging .ws-tab {
+    cursor: grabbing;
+}
+
+.ws-frame__title {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--heading);
+    color: var(--text-h);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    /* The title is a handle, not content — nothing here is worth selecting. */
+    user-select: none;
+}
+
+.ws-frame__tabs {
+    display: flex;
+    align-items: stretch;
+    gap: 0.125rem;
+    /* Sized to its tabs, not stretched: the rest of the row stays chrome
+       background, which is the handle for dragging the whole group. */
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.ws-tab {
+    flex: 0 1 auto;
+    max-width: 12rem;
+    padding: 0 0.5rem;
+    font: inherit;
+    font-family: var(--heading);
+    color: var(--text);
+    background: none;
+    border: none;
+    /* Sits on the chrome's bottom border rather than above it. */
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: none;
+    cursor: grab;
+}
+
+.ws-tab:hover {
+    color: var(--text-h);
+    background: var(--accent-bg);
+}
+
+.ws-tab.is-active {
+    color: var(--text-h);
+    border-bottom-color: var(--accent);
+}
+
+.ws-tab:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+/* Low contrast until pointed at, so it never competes with the view. */
+.ws-frame__menu {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 1.25rem;
+    height: 1.25rem;
+    margin-left: auto;
+    padding: 0;
+    font: inherit;
+    font-size: 0.8rem;
+    line-height: 1;
+    color: var(--text);
+    opacity: 0.55;
+    background: none;
+    border: none;
+    border-radius: 0.25rem;
+    cursor: pointer;
+}
+
+.ws-frame__menu:hover,
+.ws-frame__menu:focus-visible,
+.ws-frame__menu[aria-expanded="true"] {
+    color: var(--text-h);
+    opacity: 1;
+    background: var(--accent-bg);
+}
+
+.ws-frame__menu:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+.ws-frame__body {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+.ws-frame__panel {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+.ws-frame__panel[hidden] {
+    display: none;
+}
+
+/* Empty workspace ------------------------------------------------------- */
+
+/* Fills a pane with no view yet, and doubles as the empty workspace. */
+.ws-chooser {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    padding: 2rem;
+    font-size: 0.9rem;
+    color: var(--text);
+    text-align: center;
+}
+.ws-chooser__hint {
+    margin: 0;
+    font-family: var(--heading);
+    color: var(--text-h);
+}
+.ws-chooser__options {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
+}
+.ws-chooser__option {
+    font: inherit;
+    color: var(--text-h);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0.375rem;
+    padding: 0.3rem 0.75rem;
+    cursor: pointer;
+}
+.ws-chooser__option:hover {
+    background: var(--accent-bg);
+    border-color: var(--accent-border);
+}
+.ws-chooser__option:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.ws-tab-add {
+    flex: 0 0 auto;
+    padding: 0 0.4rem;
+    font: inherit;
+    line-height: 1;
+    color: var(--text);
+    background: none;
+    border: none;
+    border-radius: 0.25rem;
+    opacity: 0.55;
+    cursor: pointer;
+}
+.ws-tab-add[hidden] {
+    display: none;
+}
+.ws-tab-add:hover {
+    opacity: 1;
+    background: var(--accent-bg);
+}
+.ws-tab-add:focus-visible {
+    opacity: 1;
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+}
+
+/* Drag feedback --------------------------------------------------------- */
+
+/* Both of these are appended to document.body with their position: fixed
+   geometry set inline; only the appearance belongs here. */
+.ws-dropzone {
+    z-index: 60;
+    box-sizing: border-box;
+    pointer-events: none;
+    background: var(--accent-bg);
+    border: 1px solid var(--accent-border);
+    border-radius: 0.5rem;
+}
+
+.ws-dropzone.is-invalid {
+    background: var(--ws-muted-bg);
+    border-color: var(--border);
+    border-style: dashed;
+}
+
+.ws-dragchip {
+    z-index: 70;
+    padding: 0.15rem 0.5rem;
+    pointer-events: none;
+    font-family: var(--heading);
+    font-size: 0.75rem;
+    line-height: 1.4;
+    color: var(--text-h);
+    white-space: nowrap;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    box-shadow: var(--shadow);
+}
+
+/* Menus ----------------------------------------------------------------- */
+
+/* Also body-mounted with position: fixed set inline. */
+.menu {
+    /* `place()` in menu.ts computes viewport coordinates and writes only
+       left/top; without a position here they would be ignored. */
+    position: fixed;
+    z-index: 50;
+    min-width: 11rem;
+    padding: 0.25rem;
+    font-size: 0.85rem;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    box-shadow: var(--shadow);
+}
+
+.menu[hidden] {
+    display: none;
+}
+
+.menu__item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.25rem 0.5rem;
+    font: inherit;
+    font-size: 0.85rem;
+    text-align: left;
+    color: var(--text-h);
+    background: none;
+    border: none;
+    border-radius: 0.375rem;
+    cursor: pointer;
+}
+
+.menu__item:hover,
+.menu__item.is-active {
+    background: var(--accent-bg);
+}
+
+.menu__item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+.menu__item.is-disabled {
+    color: var(--text);
+    opacity: 0.5;
+    cursor: default;
+}
+
+.menu__item.is-disabled:hover,
+.menu__item.is-disabled.is-active {
+    background: none;
+}
+
+.menu__separator {
+    height: 1px;
+    margin: 0.25rem;
+    background: var(--border);
+}
+
+.menu__submenu-marker {
+    margin-left: auto;
+    font-size: 0.7rem;
+    color: var(--text);
+}
+
+/* Assembly view --------------------------------------------------------- */
+
+/* The .editor / .editor-inner rules in style.css do the rest; this is only
+   the column that holds the editor above its program bar. The padding keeps
+   the editor off the frame's border the way #left's did. */
+.ws-assembly {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    box-sizing: border-box;
+}
+
+/* A program menubar: flat labels that fold out menus, flush under the frame
+   chrome and spanning the full width. */
+.ws-assembly__menubar {
+    display: flex;
+    align-items: stretch;
+    flex: 0 0 auto;
+    padding: 0 0.125rem;
+    font-size: 0.78rem;
+    /* Not --code-bg: that is the frame chrome, which is a drag handle. The
+       menubar belongs to the view, so it must not read as part of it. */
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+}
+
+.ws-menubar__item {
+    font: inherit;
+    font-family: var(--heading);
+    color: var(--text-h);
+    background: none;
+    border: none;
+    border-radius: 0.1875rem;
+    margin: 0.125rem 0;
+    padding: 0.15rem 0.5rem;
+    white-space: nowrap;
+    user-select: none;
+    cursor: pointer;
+}
+
+.ws-menubar__item:hover,
+.ws-menubar__item[aria-expanded="true"] {
+    background: var(--accent-bg);
+}
+
+.ws-menubar__item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+/* The frame already draws the border and clips the corners, so the editor
+   fills the rest of the pane edge to edge. */
+.ws-assembly .editor {
+    border: none;
+    border-radius: 0;
+}
