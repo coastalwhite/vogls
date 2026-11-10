@@ -1,11 +1,11 @@
 use vogls::design::RtSignal;
 
 use super::{
-    Core, DATA_MEMORY, Description, INSTRUCTION_MEMORY, PipelineTrace, Sim, Testbench, enabled,
-    lookup, memory_map, signal,
+    Core, DATA_MEMORY, DATA_MEMORY_ADDR, Description, INSTRUCTION_MEMORY, INSTRUCTION_MEMORY_ADDR,
+    PipelineTrace, Sim, Testbench, enabled, lookup, signal,
 };
 use crate::TraceError;
-use crate::program::{MemoryMap, ProgramSections};
+use crate::program::ProgramSections;
 
 /// Ibex fetches its first instruction from `boot_addr_i + 0x80`.
 const BOOT: u32 = 0x0000_0080;
@@ -35,10 +35,6 @@ impl Core for Ibex {
     type State = Sim;
     type Params = IbexConfig;
 
-    fn memory_map(&self) -> MemoryMap {
-        memory_map(BOOT)
-    }
-
     fn description(&self, params: &IbexConfig) -> Description {
         let mut pipeline_stages = vec!["IF", "ID"];
         if params.wb_stage {
@@ -46,7 +42,10 @@ impl Core for Ibex {
         }
         Description {
             pipeline_stages,
+            boot: BOOT,
+            imem_addr: INSTRUCTION_MEMORY_ADDR,
             imem_size: INSTRUCTION_MEMORY,
+            dmem_addr: DATA_MEMORY_ADDR,
             dmem_size: DATA_MEMORY,
         }
     }
@@ -104,7 +103,7 @@ impl Core for Ibex {
         state: &mut Sim,
         sections: &ProgramSections,
     ) -> Result<(), TraceError> {
-        design.tb.reset(state, &self.memory_map(), sections)
+        design.tb.reset(state, sections)
     }
 
     fn iterate_cycle(

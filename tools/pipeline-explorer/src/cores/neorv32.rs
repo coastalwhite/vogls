@@ -1,11 +1,11 @@
 use vogls::design::RtSignal;
 
 use super::{
-    Core, DATA_MEMORY, Description, INSTRUCTION_MEMORY, PipelineTrace, Sim, Testbench, memory_map,
-    signal,
+    Core, DATA_MEMORY, DATA_MEMORY_ADDR, Description, INSTRUCTION_MEMORY, INSTRUCTION_MEMORY_ADDR,
+    PipelineTrace, Sim, Testbench, signal,
 };
 use crate::TraceError;
-use crate::program::{MemoryMap, ProgramSections};
+use crate::program::ProgramSections;
 
 const BOOT: u32 = 0x0000_0000;
 
@@ -28,14 +28,13 @@ impl Core for Neorv32 {
     type State = Sim;
     type Params = ();
 
-    fn memory_map(&self) -> MemoryMap {
-        memory_map(BOOT)
-    }
-
     fn description(&self, _params: &()) -> Description {
         Description {
             pipeline_stages: vec!["IF", "IS", "EX", "ALU", "BR", "MA"],
+            boot: BOOT,
+            imem_addr: INSTRUCTION_MEMORY_ADDR,
             imem_size: INSTRUCTION_MEMORY,
+            dmem_addr: DATA_MEMORY_ADDR,
             dmem_size: DATA_MEMORY,
         }
     }
@@ -80,7 +79,7 @@ impl Core for Neorv32 {
         state: &mut Sim,
         sections: &ProgramSections,
     ) -> Result<(), TraceError> {
-        design.tb.reset(state, &self.memory_map(), sections)
+        design.tb.reset(state, sections)
     }
 
     fn iterate_cycle(
