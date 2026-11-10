@@ -193,13 +193,18 @@ impl Section {
     }
 
     pub fn push_le_u32(&mut self, value: u32) {
-        self.data.extend_from_slice(&value.to_le_bytes());
+        self.push_bytes(&value.to_le_bytes());
+    }
+
+    fn push_bytes(&mut self, bytes: &[u8]) {
+        let n = bytes.len() as u32;
+        self.data.extend_from_slice(bytes);
         match self.events.last_mut() {
-            Some(Event::Data(size)) => *size += 4,
-            _ => self.events.push(Event::Data(4)),
+            Some(Event::Data(size)) => *size += n,
+            _ => self.events.push(Event::Data(n)),
         }
-        self.offset.min += 4;
-        self.offset.max += 4;
+        self.offset.min += n;
+        self.offset.max += n;
     }
 
     pub fn push_relocation_item(&mut self, item: RelocationItem) {
@@ -333,6 +338,10 @@ impl Assembler {
                     self.current_section_mut().pad(space);
                 }
 
+                ".byte" => self.parse_data_directive(&mut cursor, 1)?,
+                ".half" | ".short" | ".2byte" => self.parse_data_directive(&mut cursor, 2)?,
+                ".word" | ".long" | ".4byte" => self.parse_data_directive(&mut cursor, 4)?,
+
                 ".text" => self.current_section = SectionKind::Text,
                 ".data" => self.current_section = SectionKind::Data,
                 ".rodata" => self.current_section = SectionKind::ReadOnlyData,
@@ -349,6 +358,38 @@ impl Assembler {
         }
 
         Ok(self)
+    }
+
+    fn parse_data_directive(
+        &mut self,
+        cursor: &mut SourceCursor<'_>,
+        width: usize,
+    ) -> AssembleResult<()> {
+        cursor.take_separator()?;
+        loop {
+            let start = cursor.offset;
+            let value = cursor.take_data_value(width)?;
+            if self.current_section == SectionKind::Bss {
+                // `.bss` holds no bytes, only its size.
+                if value != 0 {
+                    cursor.offset = start;
+                    return Err(Box::new(cursor.new_err(
+                        "'.bss' is zero-initialised and cannot hold a non-zero value; \
+                         move it to '.data' or use '.space'",
+                    )));
+                }
+                self.bss.pad(width as u32);
+            } else {
+                let bytes = value.to_le_bytes();
+                self.current_section_mut().push_bytes(&bytes[..width]);
+            }
+
+            cursor.take_opt_separator();
+            if cursor.peek_byte() != Some(b',') {
+                return Ok(());
+            }
+            cursor.take_comma_separator()?;
+        }
     }
 
     fn parse_itype_instr_base<'a, T>(
@@ -665,9 +706,7 @@ impl Assembler {
                 let offset = start_offset + out.len() as u32;
                 match &event {
                     Event::Data(size) => {
-                        out.extend_from_slice(
-                            &self.text.data[data_ptr as usize..][..*size as usize],
-                        );
+                        out.extend_from_slice(&section.data[data_ptr as usize..][..*size as usize]);
                         data_ptr += *size;
                     }
                     Event::Pad(padding) => {
@@ -1970,6 +2009,93 @@ mod tests {
             error("auipc a0,-1"),
             "immediate -1 is out of range, expected 0..=0xfffff"
         );
+    }
+
+    #[test]
+    fn data_directives_fill_their_own_section() {
+        let asm = assemble(
+            &SectionPositions::absolute(0, 0x400, 0x800, 0xc00),
+            "
+            .section .text
+                addi a0,zero,1
+                .word 0xdeadbeef
+            .section .data
+                .byte 1, 0xff, -1
+                .half 0x1234, -2
+                .word -1,0x01020304
+            .section .rodata
+                .2byte 7
+                .4byte 8
+                .short 9
+                .long 10
+            ",
+        );
+        assert_eq!(*asm.text, [0x13, 0x05, 0x10, 0x00, 0xef, 0xbe, 0xad, 0xde]);
+        assert_eq!(
+            *asm.data,
+            [
+                1, 0xff, 0xff, 0x34, 0x12, 0xfe, 0xff, 0xff, 0xff, 0xff, 0xff, 4, 3, 2, 1
+            ]
+        );
+        assert_eq!(*asm.rodata, [7, 0, 8, 0, 0, 0, 9, 0, 10, 0, 0, 0]);
+    }
+
+    #[test]
+    fn data_is_not_aligned_and_labels_follow_it() {
+        let mut asm = assemble(
+            &SectionPositions::absolute(0, 0x400, 0x800, 0xc00),
+            "
+            .section .data
+                .byte 1
+            w:
+                .word 2
+                .align 4
+            after:
+                .half 3
+            ",
+        );
+        assert_eq!(*asm.data, [1, 2, 0, 0, 0, 0, 0, 0, 3, 0]);
+        assert_eq!(symbol(&mut asm, "w"), (SectionKind::Data, 0x401));
+        assert_eq!(symbol(&mut asm, "after"), (SectionKind::Data, 0x408));
+    }
+
+    #[test]
+    fn data_directives_in_bss_must_be_zero() {
+        let asm = assemble(
+            &SectionPositions::absolute(0, 0x400, 0x800, 0xc00),
+            ".section .bss\n.word 0, 0\n.byte 0\n.half 0",
+        );
+        assert_eq!(asm.bss, 11);
+
+        assert_eq!(
+            error(".section .bss\n.word 0, 1"),
+            "'.bss' is zero-initialised and cannot hold a non-zero value; move it to '.data' or \
+             use '.space'"
+        );
+    }
+
+    #[test]
+    fn data_values_must_fit() {
+        assert_eq!(words(".byte -128, 255, 0, 0"), [0x0000_ff80]);
+        assert_eq!(
+            error(".byte 256"),
+            "immediate 256 is out of range, expected -128..=255"
+        );
+        assert_eq!(
+            error(".byte -129"),
+            "immediate -129 is out of range, expected -128..=255"
+        );
+        assert_eq!(
+            error(".half 0x10000"),
+            "immediate 0x10000 is out of range, expected -32768..=65535"
+        );
+        assert_eq!(
+            error(".word 0x100000000"),
+            "immediate 0x100000000 is out of range, expected -2147483648..=4294967295"
+        );
+        assert_eq!(error(".word"), "missing separator");
+        assert_eq!(error(".word 1,"), "expected an integer");
+        assert_eq!(error(".word 1 2"), "expected end of statement");
     }
 
     #[test]

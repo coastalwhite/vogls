@@ -211,6 +211,13 @@ impl<'a> SourceCursor<'a> {
         self.take_int_in(0..=63, "0..=63").map(|v| v as u8)
     }
 
+    pub fn take_data_value(&mut self, width: usize) -> AssembleResult<i64> {
+        let bits = 8 * width as u32;
+        let range = -(1i64 << (bits - 1))..=(1i64 << bits) - 1;
+        let expected = format!("{}..={}", range.start(), range.end());
+        self.take_int_in(range, &expected)
+    }
+
     /// An integer within `range`, which `expected` describes in the error.
     fn take_int_in(
         &mut self,
