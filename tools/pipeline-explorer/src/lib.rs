@@ -3,7 +3,7 @@ use std::fmt;
 use js_sys::{Array, Object, Reflect};
 use trva::isa::{ExtensionSet, Isa};
 use wasm_bindgen::prelude::wasm_bindgen;
-use wasm_bindgen::{JsError, JsValue};
+use wasm_bindgen::{JsCast, JsError, JsValue};
 
 pub mod cores;
 pub mod program;
@@ -128,42 +128,46 @@ macro_rules! get_bool {
     }};
 }
 
+/// The program the web app hands over: assembly as a string, or the bytes of
+/// an ELF executable as a `Uint8Array`.
+fn js_program(program: &JsValue) -> Result<Program, JsError> {
+    if let Some(assembly) = program.as_string() {
+        return Ok(Program::Assembly(assembly.into()));
+    }
+    if let Some(bytes) = program.dyn_ref::<js_sys::Uint8Array>() {
+        return Ok(Program::Elf(bytes.to_vec().into()));
+    }
+    Err(JsError::new(
+        "the program is neither assembly text nor the bytes of an ELF file",
+    ))
+}
+
 #[wasm_bindgen]
 pub fn get_js_ibex_trace(
-    assembly: &str,
+    program: JsValue,
     config: Object,
     num_cycles: u32,
 ) -> Result<Object, JsError> {
     let config = IbexConfig {
         wb_stage: get_bool!(config, "wb_stage"),
     };
-    let trace = evaluate(
-        &Ibex,
-        &config,
-        &Program::Assembly(assembly.into()),
-        num_cycles,
-    )?;
+    let trace = evaluate(&Ibex, &config, &js_program(&program)?, num_cycles)?;
     Ok(trace.into_object())
 }
 
 #[wasm_bindgen]
 pub fn get_js_neorv32_trace(
-    assembly: &str,
+    program: JsValue,
     _config: Object,
     num_cycles: u32,
 ) -> Result<Object, JsError> {
-    let trace = evaluate(
-        &Neorv32,
-        &(),
-        &Program::Assembly(assembly.into()),
-        num_cycles,
-    )?;
+    let trace = evaluate(&Neorv32, &(), &js_program(&program)?, num_cycles)?;
     Ok(trace.into_object())
 }
 
 #[wasm_bindgen]
 pub fn get_js_hazard3_trace(
-    assembly: &str,
+    program: JsValue,
     config: Object,
     num_cycles: u32,
 ) -> Result<Object, JsError> {
@@ -176,17 +180,12 @@ pub fn get_js_hazard3_trace(
         branch_predictor: get_bool!(config, "branch_predictor"),
         fast_branchcmp: get_bool!(config, "fast_branchcmp"),
     };
-    let trace = evaluate(
-        &Hazard3,
-        &config,
-        &Program::Assembly(assembly.into()),
-        num_cycles,
-    )?;
+    let trace = evaluate(&Hazard3, &config, &js_program(&program)?, num_cycles)?;
     Ok(trace.into_object())
 }
 
 #[wasm_bindgen]
-pub fn get_js_trace(assembly: &str, config: Object, num_cycles: u32) -> Result<Object, JsError> {
+pub fn get_js_trace(program: JsValue, config: Object, num_cycles: u32) -> Result<Object, JsError> {
     let config = PicoRV32Config {
         enable_mul: get_bool!(config, "enable_mul"),
         enable_div: get_bool!(config, "enable_div"),
@@ -196,12 +195,7 @@ pub fn get_js_trace(assembly: &str, config: Object, num_cycles: u32) -> Result<O
         two_cycle_alu: get_bool!(config, "two_cycle_alu"),
         enable_fast_mul: get_bool!(config, "enable_fast_mul"),
     };
-    let trace = evaluate(
-        &PicoRv32,
-        &config,
-        &Program::Assembly(assembly.into()),
-        num_cycles,
-    )?;
+    let trace = evaluate(&PicoRv32, &config, &js_program(&program)?, num_cycles)?;
     Ok(trace.into_object())
 }
 

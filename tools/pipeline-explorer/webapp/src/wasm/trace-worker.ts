@@ -7,28 +7,23 @@ import init, {
 
 const ready = init();
 
+const tracers: Record<string, (program: string | Uint8Array, config: object, numCycles: number) => object> = {
+    picorv32: get_js_trace,
+    ibex: get_js_ibex_trace,
+    neorv32: get_js_neorv32_trace,
+    hazard3: get_js_hazard3_trace,
+};
+
 self.onmessage = async (e: MessageEvent) => {
-    if (!e.data["proc"]) {
+    const tracer = tracers[e.data["proc"]];
+    if (!tracer) {
         return;
     }
 
     await ready;
-    const proc = e.data["proc"];
-    const asm = e.data["asm"];
-    const config = e.data["config"];
-    const numCycles = e.data["numCycles"];
-
-    if (proc === "picorv32") {
-        const trace = get_js_trace(asm, config, numCycles);
-        self.postMessage(trace);
-    } else if (proc === "ibex") {
-        const trace = get_js_ibex_trace(asm, config, numCycles);
-        self.postMessage(trace);
-    } else if (proc === "neorv32") {
-        const trace = get_js_neorv32_trace(asm, config, numCycles);
-        self.postMessage(trace);
-    } else if (proc === "hazard3") {
-        const trace = get_js_hazard3_trace(asm, config, numCycles);
-        self.postMessage(trace);
+    try {
+        self.postMessage(tracer(e.data["program"], e.data["config"], e.data["numCycles"]));
+    } catch (err) {
+        self.postMessage({ error: err instanceof Error ? err.message : String(err) });
     }
 };
