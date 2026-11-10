@@ -1,4 +1,4 @@
-use crate::encoding::XRegIdent;
+use crate::encoding::{CXRegIdent, XRegIdent};
 use crate::error::{AssembleError, AssembleResult};
 
 pub struct SourceCursor<'a> {
@@ -169,6 +169,71 @@ impl<'a> SourceCursor<'a> {
         Ok(s)
     }
 
+    /// A register of the compressed instructions, which only reach `s0`,
+    /// `s1` and `a0`-`a5`.
+    pub fn take_c_register(&mut self) -> AssembleResult<CXRegIdent> {
+        let start = self.offset;
+        let reg = self.take_gp_register()?;
+        match CXRegIdent::take((reg as u32).wrapping_sub(8)) {
+            Some(reg) => Ok(reg),
+            None => {
+                self.offset = start;
+                Err(Box::new(self.new_err(format!(
+                    "register {reg} cannot be used here, expected one of s0, s1 and a0-a5"
+                ))))
+            }
+        }
+    }
+
+    /// A register other than `zero`, and other than any of `excluded`.
+    pub fn take_gp_register_except(&mut self, excluded: &[XRegIdent]) -> AssembleResult<XRegIdent> {
+        let start = self.offset;
+        let reg = self.take_gp_register()?;
+        if reg == XRegIdent::Zero || excluded.contains(&reg) {
+            self.offset = start;
+            return Err(Box::new(
+                self.new_err(format!("register {reg} cannot be used here")),
+            ));
+        }
+        Ok(reg)
+    }
+
+    /// The register `expected`, which an instruction names but does not
+    /// encode, such as the `sp` of `c.lwsp`.
+    pub fn expect_gp_register(&mut self, expected: XRegIdent) -> AssembleResult<()> {
+        let start = self.offset;
+        let reg = self.take_gp_register()?;
+        if reg != expected {
+            self.offset = start;
+            return Err(Box::new(
+                self.new_err(format!("expected register {expected}, got {reg}")),
+            ));
+        }
+        Ok(())
+    }
+
+    /// An immediate within `range` that is a multiple of `step`, and that is
+    /// not zero if `nonzero`. `expected` describes `range` in errors.
+    pub fn take_imm_scaled(
+        &mut self,
+        range: std::ops::RangeInclusive<i64>,
+        step: i64,
+        nonzero: bool,
+        expected: &str,
+    ) -> AssembleResult<i64> {
+        let start = self.offset;
+        let value = self.take_int_in(range, expected)?;
+        let reason = if nonzero && value == 0 {
+            "immediate must not be zero".to_owned()
+        } else if value % step != 0 {
+            format!("immediate {value} is not a multiple of {step}")
+        } else {
+            return Ok(value);
+        };
+        self.offset = start;
+        Err(Box::new(self.new_err(reason)))
+    }
+
     pub fn take_stmt_end(&mut self) -> AssembleResult<()> {
         let start_line = self.line;
         self.trim_wsc();
@@ -219,7 +284,7 @@ impl<'a> SourceCursor<'a> {
     }
 
     /// An integer within `range`, which `expected` describes in the error.
-    fn take_int_in(
+    pub(crate) fn take_int_in(
         &mut self,
         range: std::ops::RangeInclusive<i64>,
         expected: &str,

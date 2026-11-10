@@ -2,7 +2,7 @@
 //!
 //! A library that performs RISC-V assembly into sections with basic relaxation.
 use self::cursor::{SourceCursor, parse_gp_register};
-use self::encoding::{FenceMode, FenceOrder, XRegIdent};
+use self::encoding::{CXRegIdent, FenceMode, FenceOrder, XRegIdent};
 use self::error::{AssembleResult, LayoutError};
 use self::isa::{Ext, Isa, XLen};
 use self::labels::{LabelId, LabelMap, LabelTable};
@@ -55,6 +55,45 @@ enum RelocationItem {
     Branch(XRegIdent, XRegIdent, BranchKind, TargetLabel),
     Jump(XRegIdent, TargetLabel),
     PcRelJump(XRegIdent, XRegIdent, TargetLabel),
+    /// A compressed branch or jump, which is 2 bytes whatever the distance.
+    Compressed(CompressedJump, TargetLabel),
+}
+
+#[derive(Clone, Copy)]
+enum CompressedJump {
+    Beqz(CXRegIdent),
+    Bnez(CXRegIdent),
+    J,
+    Jal,
+}
+
+impl CompressedJump {
+    fn mnemonic(self) -> &'static str {
+        match self {
+            Self::Beqz(_) => encoding::CBeqz::MNEMONIC,
+            Self::Bnez(_) => encoding::CBnez::MNEMONIC,
+            Self::J => encoding::CJ::MNEMONIC,
+            Self::Jal => encoding::CJal::MNEMONIC,
+        }
+    }
+
+    /// The offsets the instruction encodes.
+    fn range(self) -> (i32, i32) {
+        match self {
+            Self::Beqz(_) | Self::Bnez(_) => (-256, 254),
+            Self::J | Self::Jal => (-2048, 2046),
+        }
+    }
+
+    fn encode(self, offset: i16) -> u16 {
+        let bits = match self {
+            Self::Beqz(rs1) => encoding::CBeqz::new(rs1, offset).encode_as_u32(),
+            Self::Bnez(rs1) => encoding::CBnez::new(rs1, offset).encode_as_u32(),
+            Self::J => encoding::CJ::new(offset).encode_as_u32(),
+            Self::Jal => encoding::CJal::new(offset).encode_as_u32(),
+        };
+        bits as u16
+    }
 }
 impl RelocationItem {
     fn min_max_size(&self) -> (u32, u32) {
@@ -63,6 +102,7 @@ impl RelocationItem {
             Self::Branch(..) => (4, 12),
             Self::Jump(..) => (4, 8),
             Self::PcRelJump(..) => (4, 8),
+            Self::Compressed(..) => (2, 2),
         }
     }
 
@@ -638,6 +678,7 @@ impl Assembler {
                     Event::Resolve(item) => {
                         let size = match item {
                             RelocationItem::LoadAddress(..) => 8,
+                            RelocationItem::Compressed(..) => 2,
                             RelocationItem::Branch(_, _, _, lbl) => {
                                 let lbl_offset = resolve_min_max_target_label(
                                     lbl,
@@ -815,6 +856,29 @@ impl Assembler {
                             } else {
                                 todo!();
                             }
+                        }
+                        RelocationItem::Compressed(jump, lbl) => {
+                            let lbl_offset = resolve_target_label(
+                                lbl,
+                                &section.events,
+                                local_offsets,
+                                eid,
+                                local_offset,
+                                &out_symbols,
+                            );
+                            let distance = i64::from(lbl_offset) - i64::from(offset);
+                            let (min, max) = jump.range();
+                            if !(i64::from(min)..=i64::from(max)).contains(&distance)
+                                || distance % 2 != 0
+                            {
+                                return Err(LayoutError::TargetOutOfRange {
+                                    mnemonic: jump.mnemonic(),
+                                    offset: distance,
+                                    min,
+                                    max,
+                                });
+                            }
+                            out.extend_from_slice(&jump.encode(distance as i16).to_le_bytes());
                         }
                         RelocationItem::PcRelJump(rd, _rt, lbl) => {
                             // @Q? Should `rt` be set anyway?
@@ -1334,7 +1398,293 @@ fn fill_handlers(
         match ext {
             Ext::Atomic => return Err(ext),
             Ext::BitManipulation => return Err(ext),
-            Ext::Compressed => return Err(ext),
+            Ext::Compressed => {
+                // Only the instructions as written: plain instructions are
+                // never compressed behind the programmer's back. The
+                // floating-point ones (`c.flw`, ...) need F, which is not
+                // supported.
+                handlers.insert(
+                    "c.addi4spn",
+                    handler!(c_addi4spn, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_c_register()?;
+                        c.take_comma_separator()?;
+                        c.expect_gp_register(XRegIdent::Sp)?;
+                        c.take_comma_separator()?;
+                        let imm = c.take_imm_scaled(0..=1020, 4, true, "4..=1020")?;
+                        push_compressed(
+                            asm,
+                            encoding::CAddi4SpN::new(rd, imm as u32).encode_as_u32(),
+                        );
+                    }),
+                );
+                handlers.insert(
+                    "c.lw",
+                    handler!(c_lw, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_c_register()?;
+                        c.take_comma_separator()?;
+                        let imm = c.take_imm_scaled(0..=124, 4, false, "0..=124")?;
+                        let rs1 = take_c_base(c)?;
+                        push_compressed(
+                            asm,
+                            encoding::CLw::new(rd, rs1, imm as u8).encode_as_u32(),
+                        );
+                    }),
+                );
+                handlers.insert(
+                    "c.sw",
+                    handler!(c_sw, |asm, c| {
+                        c.take_separator()?;
+                        let rs2 = c.take_c_register()?;
+                        c.take_comma_separator()?;
+                        let imm = c.take_imm_scaled(0..=124, 4, false, "0..=124")?;
+                        let rs1 = take_c_base(c)?;
+                        push_compressed(
+                            asm,
+                            encoding::CSw::new(rs1, rs2, imm as u8).encode_as_u32(),
+                        );
+                    }),
+                );
+                handlers.insert(
+                    "c.nop",
+                    handler!(c_nop, |asm, _c| {
+                        push_compressed(asm, encoding::CNop::new().encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "c.addi",
+                    handler!(c_addi, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_gp_register_except(&[])?;
+                        c.take_comma_separator()?;
+                        let imm = c.take_imm_scaled(-32..=31, 1, true, "-32..=31")?;
+                        push_compressed(asm, encoding::CAddi::new(rd, imm as i8).encode_as_u32());
+                    }),
+                );
+                if isa.xlen == XLen::Rv32 {
+                    // On RV64, this encoding is `c.addiw`.
+                    handlers.insert(
+                        "c.jal",
+                        handler!(c_jal, |asm, c| {
+                            c.take_separator()?;
+                            let label = asm.take_target_label(c)?;
+                            asm.current_section_mut().push_relocation_item(
+                                RelocationItem::Compressed(CompressedJump::Jal, label),
+                            );
+                        }),
+                    );
+                }
+                handlers.insert(
+                    "c.li",
+                    handler!(c_li, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_gp_register_except(&[])?;
+                        c.take_comma_separator()?;
+                        let imm = c.take_imm_scaled(-32..=31, 1, false, "-32..=31")?;
+                        push_compressed(asm, encoding::CLi::new(rd, imm as i8).encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "c.addi16sp",
+                    handler!(c_addi16sp, |asm, c| {
+                        c.take_separator()?;
+                        c.expect_gp_register(XRegIdent::Sp)?;
+                        c.take_comma_separator()?;
+                        let imm = c.take_imm_scaled(-512..=496, 16, true, "-512..=496")?;
+                        push_compressed(asm, encoding::CAddi16Sp::new(imm as i16).encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "c.lui",
+                    handler!(c_lui, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_gp_register_except(&[XRegIdent::Sp])?;
+                        c.take_comma_separator()?;
+                        // The upper 20 bits, as for `lui`, of which only the
+                        // sign-extended lowest 6 are encoded.
+                        let start = c.offset;
+                        let upper = c.take_int_in(0..=0xF_FFFF, "1..=31 or 0xfffe0..=0xfffff")?;
+                        let upper = match upper {
+                            1..=31 => upper,
+                            0xF_FFE0..=0xF_FFFF => upper - 0x10_0000,
+                            _ => {
+                                c.offset = start;
+                                return Err(Box::new(c.new_err(format!(
+                                    "immediate {upper} is out of range, expected 1..=31 or \
+                                     0xfffe0..=0xfffff"
+                                ))));
+                            }
+                        };
+                        push_compressed(
+                            asm,
+                            encoding::CLui::new(rd, (upper as i32) << 12).encode_as_u32(),
+                        );
+                    }),
+                );
+                handlers.insert(
+                    "c.srli",
+                    handler!(c_srli, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_c_register()?;
+                        c.take_comma_separator()?;
+                        let shamt = take_c_shamt(asm, c)?;
+                        push_compressed(asm, encoding::CSrli::new(rd, shamt).encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "c.srai",
+                    handler!(c_srai, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_c_register()?;
+                        c.take_comma_separator()?;
+                        let shamt = take_c_shamt(asm, c)?;
+                        push_compressed(asm, encoding::CSrai::new(rd, shamt).encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "c.andi",
+                    handler!(c_andi, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_c_register()?;
+                        c.take_comma_separator()?;
+                        let imm = c.take_imm_scaled(-32..=31, 1, false, "-32..=31")?;
+                        push_compressed(asm, encoding::CAndi::new(rd, imm as i8).encode_as_u32());
+                    }),
+                );
+                macro_rules! c_arith {
+                    ($mnemonic:literal, $fn_name:ident, $ty:ty) => {
+                        handlers.insert(
+                            $mnemonic,
+                            handler!($fn_name, |asm, c| {
+                                c.take_separator()?;
+                                let rd = c.take_c_register()?;
+                                c.take_comma_separator()?;
+                                let rs2 = c.take_c_register()?;
+                                push_compressed(asm, <$ty>::new(rd, rs2).encode_as_u32());
+                            }),
+                        );
+                    };
+                }
+                c_arith!("c.sub", c_sub, encoding::CSub);
+                c_arith!("c.xor", c_xor, encoding::CXor);
+                c_arith!("c.or", c_or, encoding::COr);
+                c_arith!("c.and", c_and, encoding::CAnd);
+                handlers.insert(
+                    "c.j",
+                    handler!(c_j, |asm, c| {
+                        c.take_separator()?;
+                        let label = asm.take_target_label(c)?;
+                        asm.current_section_mut()
+                            .push_relocation_item(RelocationItem::Compressed(
+                                CompressedJump::J,
+                                label,
+                            ));
+                    }),
+                );
+                handlers.insert(
+                    "c.beqz",
+                    handler!(c_beqz, |asm, c| {
+                        c.take_separator()?;
+                        let rs1 = c.take_c_register()?;
+                        c.take_comma_separator()?;
+                        let label = asm.take_target_label(c)?;
+                        asm.current_section_mut()
+                            .push_relocation_item(RelocationItem::Compressed(
+                                CompressedJump::Beqz(rs1),
+                                label,
+                            ));
+                    }),
+                );
+                handlers.insert(
+                    "c.bnez",
+                    handler!(c_bnez, |asm, c| {
+                        c.take_separator()?;
+                        let rs1 = c.take_c_register()?;
+                        c.take_comma_separator()?;
+                        let label = asm.take_target_label(c)?;
+                        asm.current_section_mut()
+                            .push_relocation_item(RelocationItem::Compressed(
+                                CompressedJump::Bnez(rs1),
+                                label,
+                            ));
+                    }),
+                );
+                handlers.insert(
+                    "c.slli",
+                    handler!(c_slli, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_gp_register_except(&[])?;
+                        c.take_comma_separator()?;
+                        let shamt = take_c_shamt(asm, c)?;
+                        push_compressed(asm, encoding::CSlli::new(rd, shamt).encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "c.lwsp",
+                    handler!(c_lwsp, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_gp_register_except(&[])?;
+                        c.take_comma_separator()?;
+                        let imm = c.take_imm_scaled(0..=252, 4, false, "0..=252")?;
+                        take_sp_base(c)?;
+                        push_compressed(asm, encoding::CLwSp::new(rd, imm as u8).encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "c.swsp",
+                    handler!(c_swsp, |asm, c| {
+                        c.take_separator()?;
+                        let rs2 = c.take_gp_register()?;
+                        c.take_comma_separator()?;
+                        let imm = c.take_imm_scaled(0..=252, 4, false, "0..=252")?;
+                        take_sp_base(c)?;
+                        push_compressed(asm, encoding::CSwSp::new(rs2, imm as u8).encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "c.jr",
+                    handler!(c_jr, |asm, c| {
+                        c.take_separator()?;
+                        let rs1 = c.take_gp_register_except(&[])?;
+                        push_compressed(asm, encoding::CJr::new(rs1).encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "c.jalr",
+                    handler!(c_jalr, |asm, c| {
+                        c.take_separator()?;
+                        let rs1 = c.take_gp_register_except(&[])?;
+                        push_compressed(asm, encoding::CJalr::new(rs1).encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "c.mv",
+                    handler!(c_mv, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_gp_register_except(&[])?;
+                        c.take_comma_separator()?;
+                        let rs2 = c.take_gp_register_except(&[])?;
+                        push_compressed(asm, encoding::CMv::new(rd, rs2).encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "c.add",
+                    handler!(c_add, |asm, c| {
+                        c.take_separator()?;
+                        let rd = c.take_gp_register_except(&[])?;
+                        c.take_comma_separator()?;
+                        let rs2 = c.take_gp_register_except(&[])?;
+                        push_compressed(asm, encoding::CAdd::new(rd, rs2).encode_as_u32());
+                    }),
+                );
+                handlers.insert(
+                    "c.ebreak",
+                    handler!(c_ebreak, |asm, _c| {
+                        push_compressed(asm, encoding::CEBreak::new().encode_as_u32());
+                    }),
+                );
+            }
             Ext::DoublePrecisionFp => return Err(ext),
             Ext::Rv32E => return Err(ext),
             Ext::SinglePrecisionFp => return Err(ext),
@@ -1357,6 +1707,43 @@ fn fill_handlers(
         }
     }
     Ok(())
+}
+
+/// Appends a 2-byte compressed instruction to the current section.
+fn push_compressed(asm: &mut Assembler, bits: u32) {
+    asm.current_section_mut()
+        .push_bytes(&(bits as u16).to_le_bytes());
+}
+
+/// The `(rs1')` base of a compressed load or store.
+fn take_c_base(c: &mut SourceCursor<'_>) -> AssembleResult<CXRegIdent> {
+    c.take_opt_separator();
+    c.expect_byte(b'(')?;
+    c.take_opt_separator();
+    let rs1 = c.take_c_register()?;
+    c.take_opt_separator();
+    c.expect_byte(b')')?;
+    Ok(rs1)
+}
+
+/// The `(sp)` base of a compressed stack-pointer load or store.
+fn take_sp_base(c: &mut SourceCursor<'_>) -> AssembleResult<()> {
+    c.take_opt_separator();
+    c.expect_byte(b'(')?;
+    c.take_opt_separator();
+    c.expect_gp_register(XRegIdent::Sp)?;
+    c.take_opt_separator();
+    c.expect_byte(b')')
+}
+
+/// A shift amount of a compressed shift. Zero is a hint, not a shift, and on
+/// RV32 the amount has to fit in 5 bits.
+fn take_c_shamt(asm: &Assembler, c: &mut SourceCursor<'_>) -> AssembleResult<u8> {
+    let (max, expected) = match asm.isa.xlen {
+        XLen::Rv32 => (31, "1..=31"),
+        XLen::Rv64 => (63, "1..=63"),
+    };
+    Ok(c.take_imm_scaled(0..=max, 1, true, expected)? as u8)
 }
 
 fn signed_imm_to_imm12(imm: i64) -> Option<i16> {
@@ -2212,6 +2599,239 @@ mod tests {
                 .expect("a valid instruction")
                 .to_string();
             assert_eq!(words(&printed), text, "{source:?} printed as {printed:?}");
+        }
+    }
+
+    const RV32IMC: Isa = Isa {
+        exts: ExtensionSet::INTEGER_MULDIV.union(ExtensionSet::COMPRESSED),
+        xlen: XLen::Rv32,
+    };
+
+    /// Assembles `source` for `isa` into `.text`, with any error, from parsing
+    /// or from laying it out, as text.
+    fn assemble_for(isa: Isa, source: &str) -> Result<Box<[u8]>, String> {
+        let positions = SectionPositions::absolute(0, 0x400, 0x800, 0xc00);
+        let asm = Assembler::new(isa, positions)
+            .with_source(source)
+            .map_err(|err| err.reason.into_owned())?;
+        asm.assemble()
+            .map(|asm| asm.text)
+            .map_err(|err| err.to_string())
+    }
+
+    fn halves(source: &str) -> Vec<u16> {
+        let text = assemble_for(RV32IMC, source).unwrap_or_else(|err| panic!("{source:?}: {err}"));
+        text.chunks(2)
+            .map(|h| u16::from_le_bytes(h.try_into().unwrap()))
+            .collect()
+    }
+
+    fn c_error(source: &str) -> String {
+        match assemble_for(RV32IMC, source) {
+            Ok(text) => panic!("{source:?} assembled to {text:02x?}"),
+            Err(err) => err,
+        }
+    }
+
+    /// Every compressed integer instruction, with the encodings of an encoder
+    /// written separately from the format tables of the specification.
+    const COMPRESSED: &[(&str, u16)] = &[
+        ("c.addi4spn a0,sp,4", 0x0048),
+        ("c.addi4spn a5,sp,1020", 0x1ffc),
+        ("c.lw a0,124(a1)", 0x5de8),
+        ("c.sw a5,4(s0)", 0xc05c),
+        ("c.nop", 0x0001),
+        ("c.addi t0,-32", 0x1281),
+        ("c.addi t6,31", 0x0ffd),
+        ("c.addi sp,-16", 0x1141),
+        ("c.li a0,0", 0x4501),
+        ("c.li s11,-1", 0x5dfd),
+        ("c.addi16sp sp,-512", 0x7101),
+        ("c.addi16sp sp,496", 0x617d),
+        ("c.addi16sp sp,-64", 0x7139),
+        ("c.lui a0,1", 0x6505),
+        ("c.lui t0,31", 0x62fd),
+        ("c.lui a0,0xfffe0", 0x7501),
+        ("c.lui a0,0xfffff", 0x757d),
+        ("c.srli a0,1", 0x8105),
+        ("c.srai a5,31", 0x87fd),
+        ("c.andi s1,-32", 0x9881),
+        ("c.andi a0,31", 0x897d),
+        ("c.sub a0,a1", 0x8d0d),
+        ("c.xor s0,a5", 0x8c3d),
+        ("c.or a2,a3", 0x8e55),
+        ("c.and s1,s0", 0x8ce1),
+        ("c.slli t6,31", 0x0ffe),
+        ("c.lwsp ra,252(sp)", 0x50fe),
+        ("c.lwsp ra,12(sp)", 0x40b2),
+        ("c.lwsp a0,0(sp)", 0x4502),
+        ("c.swsp zero,252(sp)", 0xdf82),
+        ("c.swsp ra,12(sp)", 0xc606),
+        ("c.jr ra", 0x8082),
+        ("c.jr t0", 0x8282),
+        ("c.mv t6,ra", 0x8f86),
+        ("c.mv a0,a1", 0x852e),
+        ("c.ebreak", 0x9002),
+        ("c.jalr a0", 0x9502),
+        ("c.add sp,t6", 0x917e),
+    ];
+
+    #[test]
+    fn compressed_instructions() {
+        for &(source, encoding) in COMPRESSED {
+            assert_eq!(halves(source), [encoding], "{source}");
+        }
+    }
+
+    #[test]
+    fn compressed_disassembly_round_trips() {
+        for &(source, encoding) in COMPRESSED {
+            let printed = encoding::Instruction::decode(&mut &encoding.to_le_bytes()[..])
+                .unwrap()
+                .unwrap_or_else(|| panic!("{source} does not decode"))
+                .to_string();
+            assert_eq!(
+                halves(&printed),
+                [encoding],
+                "{source} printed as {printed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn compressed_branches_and_jumps() {
+        // Out to the furthest offset each one reaches, both ways.
+        let far = |n: usize| ".space 2\n".repeat(n);
+        assert_eq!(
+            halves(&format!("1:\n{}c.j 1b", far(1024)))[1024],
+            0xb001 // c.j -2048
+        );
+        assert_eq!(halves(&format!("c.j 1f\n{}1:", far(1022)))[0], 0xaffd); // c.j 2046
+        assert_eq!(halves("1:\nc.nop\nc.jal 1b"), [0x0001, 0x3ffd]); // c.jal -2
+        assert_eq!(
+            halves(&format!("1:\n{}c.beqz a0,1b", far(128)))[128],
+            0xd101 // c.beqz a0,-256
+        );
+        assert_eq!(
+            halves(&format!("c.bnez a5,1f\n{}1:", far(126)))[0],
+            0xeffd // c.bnez a5,254
+        );
+        // Mixed with full-size instructions, to a global label.
+        assert_eq!(
+            halves("c.beqz s0,end\naddi a0,zero,1\nend:\nc.nop"),
+            [0xc019, 0x0513, 0x0010, 0x0001] // c.beqz s0,6
+        );
+    }
+
+    #[test]
+    fn compressed_targets_out_of_reach() {
+        let far = |n: usize| ".space 2\n".repeat(n);
+        assert_eq!(
+            c_error(&format!("c.beqz a0,1f\n{}1:", far(127))),
+            "the target of 'c.beqz' is 256 bytes away, but it can only reach an even offset in \
+             -256..=254"
+        );
+        assert_eq!(
+            c_error(&format!("1:\n{}c.j 1b", far(1025))),
+            "the target of 'c.j' is -2050 bytes away, but it can only reach an even offset in \
+             -2048..=2046"
+        );
+        assert_eq!(
+            c_error("c.j 1f\n.byte 0\n1:"),
+            "the target of 'c.j' is 3 bytes away, but it can only reach an even offset in \
+             -2048..=2046"
+        );
+    }
+
+    #[test]
+    fn compressed_operands_are_checked() {
+        for (source, error) in [
+            (
+                "c.lw a6,0(a0)",
+                "register a6 cannot be used here, expected one of s0, s1 and a0-a5",
+            ),
+            (
+                "c.sub a0,t0",
+                "register t0 cannot be used here, expected one of s0, s1 and a0-a5",
+            ),
+            ("c.lw a0,2(a0)", "immediate 2 is not a multiple of 4"),
+            (
+                "c.lw a0,128(a0)",
+                "immediate 128 is out of range, expected 0..=124",
+            ),
+            ("c.addi4spn a0,sp,0", "immediate must not be zero"),
+            ("c.addi4spn a0,a1,4", "expected register sp, got a1"),
+            ("c.addi zero,1", "register zero cannot be used here"),
+            ("c.addi a0,0", "immediate must not be zero"),
+            (
+                "c.addi a0,32",
+                "immediate 32 is out of range, expected -32..=31",
+            ),
+            ("c.li zero,1", "register zero cannot be used here"),
+            ("c.addi16sp sp,8", "immediate 8 is not a multiple of 16"),
+            ("c.lui sp,1", "register sp cannot be used here"),
+            (
+                "c.lui a0,0",
+                "immediate 0 is out of range, expected 1..=31 or 0xfffe0..=0xfffff",
+            ),
+            (
+                "c.lui a0,32",
+                "immediate 32 is out of range, expected 1..=31 or 0xfffe0..=0xfffff",
+            ),
+            (
+                "c.slli a0,32",
+                "immediate 32 is out of range, expected 1..=31",
+            ),
+            ("c.srli a0,0", "immediate must not be zero"),
+            ("c.lwsp zero,0(sp)", "register zero cannot be used here"),
+            ("c.lwsp ra,0(a0)", "expected register sp, got a0"),
+            ("c.jr zero", "register zero cannot be used here"),
+            ("c.mv a0,zero", "register zero cannot be used here"),
+            ("c.add zero,a0", "register zero cannot be used here"),
+        ] {
+            assert_eq!(c_error(source), error, "{source}");
+        }
+    }
+
+    #[test]
+    fn compressed_instructions_need_the_extension() {
+        assert_eq!(
+            assemble_for(RV32IM, "c.nop"),
+            Err("unknown mnemonic or directive".to_owned())
+        );
+        let rv64ic = Isa {
+            exts: ExtensionSet::COMPRESSED,
+            xlen: XLen::Rv64,
+        };
+        // `c.jal` is RV32-only; on RV64 its encoding is `c.addiw`.
+        assert_eq!(
+            assemble_for(rv64ic, "1:\nc.jal 1b"),
+            Err("unknown mnemonic or directive".to_owned())
+        );
+        assert_eq!(
+            assemble_for(rv64ic, "c.slli a0,63").unwrap()[..],
+            [0x7e, 0x15]
+        );
+    }
+
+    #[test]
+    fn compressed_mnemonics_are_their_own() {
+        for (source, mnemonic) in [
+            ("c.ebreak", "c.ebreak"),
+            ("c.jalr a0", "c.jalr"),
+            ("c.add a0,a1", "c.add"),
+            ("c.swsp ra,12(sp)", "c.swsp"),
+        ] {
+            let bytes = assemble_for(RV32IMC, source).unwrap();
+            let printed = encoding::Instruction::decode(&mut &bytes[..])
+                .unwrap()
+                .unwrap()
+                .to_string();
+            assert_eq!(
+                printed.split_whitespace().next(),
+                Some(mnemonic),
+                "{source}"
+            );
         }
     }
 }

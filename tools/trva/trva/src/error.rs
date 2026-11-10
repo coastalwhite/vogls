@@ -81,6 +81,15 @@ pub enum LayoutError {
     Cycle { cycle: SectionCycle },
     /// A section starts or ends beyond the end of the 32-bit address space.
     AddressOverflow { section: crate::SectionKind },
+    /// A compressed branch or jump cannot reach its target: it is further
+    /// away than the instruction encodes, or not 2-byte aligned. Unlike the
+    /// full-size instructions, these are never turned into longer sequences.
+    TargetOutOfRange {
+        mnemonic: &'static str,
+        offset: i64,
+        min: i32,
+        max: i32,
+    },
 }
 
 impl fmt::Display for LayoutError {
@@ -96,6 +105,16 @@ impl fmt::Display for LayoutError {
                 f,
                 "{section} does not fit in the 32-bit address space \
                  (the highest address is 0xffff_ffff)",
+            ),
+            Self::TargetOutOfRange {
+                mnemonic,
+                offset,
+                min,
+                max,
+            } => write!(
+                f,
+                "the target of '{mnemonic}' is {offset} bytes away, but it can only reach an even \
+                 offset in {min}..={max}",
             ),
         }
     }
