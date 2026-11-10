@@ -1,4 +1,5 @@
 import type {
+    CycleRange,
     View,
     ViewContext,
     ViewInstance,
@@ -37,10 +38,12 @@ export class PipelineView implements ViewInstance {
         liveViews.add(this);
     }
 
-    onCycleChange(cycle: number) {
+    onCycleChange(cycles: CycleRange) {
         if (this.canvas === null) return;
-        this.canvas.setCurrentCycle(cycle);
-        this.canvas.moveToCycle(cycle, 0.25);
+        this.canvas.setSelection(cycles);
+        // Scrolling to the selection while the user is dragging it out on this
+        // very canvas would fight the gesture.
+        if (!this.canvas.selecting) this.canvas.moveToCycle(cycles.start, 0.25);
     }
 
     onTraceChange(trace: Trace) {
@@ -48,8 +51,8 @@ export class PipelineView implements ViewInstance {
             this.canvas = new PipelineCanvas(
                 this.root,
                 trace,
-                this.ctx.currentCycle,
-                (cycle) => this.ctx.goToCycle(cycle),
+                this.ctx.cycles,
+                (range) => this.ctx.selectCycles(range),
             );
         } else {
             this.canvas.setTrace(trace);

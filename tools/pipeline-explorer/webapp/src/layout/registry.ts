@@ -4,6 +4,7 @@ import { pipelineSpec } from "../views/pipeline.ts";
 import { statsSpec } from "../views/stats.ts";
 import type { Trace } from "../types.ts";
 import type {
+    CycleRange,
     NodeId,
     View,
     ViewContext,
@@ -96,11 +97,11 @@ export class ViewRegistry {
         return entry === undefined ? "" : entry.instance.title;
     }
 
-    broadcastCycle(cycle: number) {
+    broadcastCycle(cycles: CycleRange) {
         for (const { instance } of this.entries.values()) {
             const hook = instance.onCycleChange;
             if (hook === undefined) continue;
-            guard("onCycleChange", () => hook.call(instance, cycle));
+            guard("onCycleChange", () => hook.call(instance, cycles));
         }
     }
 

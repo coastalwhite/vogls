@@ -1,5 +1,6 @@
 import { colors } from "./colors.ts";
 import type { Trace } from "./types.ts";
+import type { CycleRange } from "./layout/types.ts";
 
 const textPad = 8;
 
@@ -17,8 +18,13 @@ export class PipelineCanvas {
     trace: Trace;
     maxTextWidth: number;
 
-    currentCycle: number;
-    goToCycle: (cycle: number) => void;
+    selection: CycleRange;
+    onSelect: (range: CycleRange) => void;
+    /** Set while the user is dragging a selection out on this canvas. */
+    selecting: boolean = false;
+
+    /** Cycle the current drag started from. */
+    anchor: number | null = null;
 
     activeTouchId: number | null = null;
     lastTouchX: number | null = null;
@@ -34,8 +40,8 @@ export class PipelineCanvas {
     constructor(
         elem: HTMLElement,
         trace: Trace,
-        currentCycle: number,
-        goToCycle: (cycle: number) => void,
+        selection: CycleRange,
+        onSelect: (range: CycleRange) => void,
     ) {
         this.trace = trace;
 
@@ -54,8 +60,8 @@ export class PipelineCanvas {
 
         this.maxTextWidth = this.calculateMaxTextWidth();
 
-        this.currentCycle = currentCycle;
-        this.goToCycle = goToCycle;
+        this.selection = selection;
+        this.onSelect = onSelect;
 
         this.ro = new ResizeObserver((entries) => {
             const r = entries[0].contentRect;
@@ -83,7 +89,10 @@ export class PipelineCanvas {
         this.canvas.addEventListener("touchend", (e) => this.onTouchEnd(e));
         this.canvas.addEventListener("touchcancel", (e) => this.onTouchEnd(e));
 
-        this.canvas.addEventListener("click", (e) => this.onClick(e));
+        this.canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e));
+        this.canvas.addEventListener("pointermove", (e) => this.onPointerMove(e));
+        this.canvas.addEventListener("pointerup", (e) => this.onPointerUp(e));
+        this.canvas.addEventListener("pointercancel", (e) => this.onPointerUp(e));
 
         this.draw();
     }
@@ -95,8 +104,8 @@ export class PipelineCanvas {
         this.offsetY = this.clampOffsetY(this.offsetY);
         this.draw();
     }
-    setCurrentCycle(cycle: number) {
-        this.currentCycle = cycle;
+    setSelection(selection: CycleRange) {
+        this.selection = selection;
         this.draw();
     }
 
@@ -165,7 +174,7 @@ export class PipelineCanvas {
             width: this.width,
             height: this.height,
             maxTextWidth: this.maxTextWidth,
-            currentCycle: this.currentCycle,
+            selection: this.selection,
         });
     }
 
@@ -181,8 +190,53 @@ export class PipelineCanvas {
         return [clamp(lo, 0, last), clamp(hi, 0, last)];
     }
 
-    onClick(e: MouseEvent) {
-        console.log(e.offsetX, e.offsetY)
+    /** The cycle under a canvas-relative x, or null when past the trace. */
+    cycleAt(offsetX: number): number | null {
+        const cellW = convertRemToPixels(2);
+        const paddingX = this.maxTextWidth + textPad * 2;
+        const cycle = Math.floor((offsetX + this.offsetX - paddingX) / cellW);
+        const last = this.trace.pipeline.cycles - 1;
+        return cycle < 0 || cycle > last ? null : cycle;
+    }
+
+    /**
+     * Press picks one cycle, drag extends to a span. Mouse only: touch is
+     * already the pan gesture, and stealing it would make the view unusable.
+     */
+    onPointerDown(e: PointerEvent) {
+        if (e.pointerType !== "mouse" || e.button !== 0) return;
+        const cycle = this.cycleAt(e.offsetX);
+        if (cycle === null) return;
+        e.preventDefault();
+        this.anchor = cycle;
+        this.selecting = true;
+        this.canvas.setPointerCapture(e.pointerId);
+        this.emit(cycle, cycle);
+    }
+
+    onPointerMove(e: PointerEvent) {
+        if (!this.selecting || this.anchor === null) return;
+        const cycle = this.cycleAt(e.offsetX);
+        if (cycle === null) return;
+        this.emit(
+            Math.min(this.anchor, cycle),
+            Math.max(this.anchor, cycle),
+        );
+    }
+
+    onPointerUp(e: PointerEvent) {
+        if (!this.selecting) return;
+        this.selecting = false;
+        this.anchor = null;
+        if (this.canvas.hasPointerCapture(e.pointerId)) {
+            this.canvas.releasePointerCapture(e.pointerId);
+        }
+    }
+
+    private emit(start: number, end: number) {
+        if (this.selection.start === start && this.selection.end === end) return;
+        this.setSelection({ start, end });
+        this.onSelect({ start, end });
     }
 
     onWheel(e: WheelEvent) {
@@ -294,7 +348,7 @@ export type PipelineLayout = {
     width: number;
     height: number;
     maxTextWidth: number;
-    currentCycle: number | null;
+    selection: CycleRange | null;
 };
 
 /** The subset of `CanvasRenderingContext2D` that `renderPipeline` uses, so
@@ -335,14 +389,17 @@ export function renderPipeline(
     const pxHeight = (rows.length + 1) * cellH;
     const paddingX = layout.maxTextWidth + textPad * 2;
 
+    // The selection: one cell when collapsed, a band across the span.
     if (
-        layout.currentCycle !== null &&
-        layout.currentCycle >= startCycle &&
-        layout.currentCycle <= endCycle
+        layout.selection !== null &&
+        layout.selection.end >= startCycle &&
+        layout.selection.start <= endCycle
     ) {
-        const x = layout.currentCycle * cellW + paddingX - offsetX;
+        const from = Math.max(layout.selection.start, startCycle);
+        const to = Math.min(layout.selection.end, endCycle);
+        const x = from * cellW + paddingX - offsetX;
         ctx.fillStyle = "#ccc";
-        ctx.fillRect(x, 0, cellW, height);
+        ctx.fillRect(x, 0, (to - from + 1) * cellW, height);
     }
 
     // Vertical guide lines.

@@ -24,6 +24,7 @@ import {
 } from "./tree.ts";
 import { MIN_PX } from "./types.ts";
 import type {
+    CycleRange,
     DropPosition,
     LayoutNode,
     NodeId,
@@ -69,8 +70,8 @@ export class Workspace {
         this.sync();
     }
 
-    broadcastCycle(cycle: number) {
-        this.registry.broadcastCycle(cycle);
+    broadcastCycle(cycles: CycleRange) {
+        this.registry.broadcastCycle(cycles);
     }
 
     broadcastTrace(trace: Trace) {

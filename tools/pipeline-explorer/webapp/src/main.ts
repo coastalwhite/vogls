@@ -7,12 +7,13 @@ import type { WorkerReply, WorkerRequest } from "./wasm/trace-worker.ts";
 import { ScrubberCanvas } from "./scrubber.ts";
 import { pipelineSvg } from "./svg.ts";
 import { Workspace } from "./layout/workspace.ts";
+import type { CycleRange } from "./layout/types.ts";
 import { assemblyText, setAssemblyText, setElfOpener } from "./views/assembly.ts";
 import { anyPipelineView } from "./views/pipeline.ts";
 import { registerPopover } from "./menu.ts";
 
 let pending = 0;
-let currentCycle = 0;
+let cycles: CycleRange = { start: 0, end: 0 };
 
 let timeoutId: number | null = null;
 
@@ -39,8 +40,9 @@ let currentTrace: Trace | null = null;
  */
 const viewCtx = {
     trace: null as Trace | null,
-    currentCycle: 0,
+    cycles,
     goToCycle: (cycle: number) => setCurrentCycle(cycle),
+    selectCycles: (range: CycleRange) => setCycleRange(range),
     requestRun: (immediate: boolean) =>
         immediate ? unstaggerRunSim() : staggerRunSim(),
 };
@@ -55,7 +57,7 @@ function setTrace(trace: Trace) {
         scrubber = new ScrubberCanvas(
             scrubberContainer,
             trace,
-            currentCycle,
+            cycles,
             setCurrentCycle,
         );
     } else {
@@ -65,10 +67,17 @@ function setTrace(trace: Trace) {
 }
 
 function setCurrentCycle(cycle: number) {
-    currentCycle = cycle;
-    viewCtx.currentCycle = cycle;
-    if (scrubber !== null) scrubber.setCurrentCycle(cycle);
-    workspace.broadcastCycle(cycle);
+    setCycleRange({ start: cycle, end: cycle });
+}
+
+/** The selected cycles. Collapsed (`start === end`) is a single cycle. */
+function setCycleRange(next: CycleRange) {
+    const start = Math.min(next.start, next.end);
+    const end = Math.max(next.start, next.end);
+    cycles = { start, end };
+    viewCtx.cycles = cycles;
+    if (scrubber !== null) scrubber.setSelection(cycles);
+    workspace.broadcastCycle(cycles);
 }
 
 const worker = new Worker(new URL("./wasm/trace-worker.ts", import.meta.url), {
