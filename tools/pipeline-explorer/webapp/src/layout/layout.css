@@ -350,18 +350,47 @@
     color: var(--text-h);
 }
 
-.ws-stats__now {
+.ws-stats__input {
+    width: 4.25rem;
+    font: inherit;
     font-family: var(--mono);
-    font-size: 1.15rem;
+    color: var(--text-h);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0.25rem;
+    padding: 0.1rem 0.25rem;
+}
+
+.ws-stats__input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+}
+
+.ws-stats__input:disabled {
+    opacity: 0.5;
+}
+
+.ws-stats__dash {
     color: var(--text-h);
 }
 
 .ws-stats__sep {
-    color: var(--border);
+    /* Readable, but quieter than the numbers it separates. */
+    color: var(--text);
+    opacity: 0.55;
 }
 
 .ws-stats__total {
     font-family: var(--mono);
+}
+
+.ws-stats__span {
+    color: var(--text-h);
+    opacity: 0.75;
+}
+
+.ws-stats__span[hidden] {
+    display: none;
 }
 
 .ws-stats__stages {

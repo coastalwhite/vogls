@@ -28,6 +28,16 @@ export type WorkspaceLayout = LayoutNode | null;
 
 export type Axis = "horizontal" | "vertical";
 
+/**
+ * The selected cycles, inclusive at both ends. `start === end` is a single
+ * cycle, which is how the explorer behaves when nothing is dragged out.
+ */
+export type CycleRange = { start: number; end: number };
+
+export function cycleCount(range: CycleRange): number {
+    return range.end - range.start + 1;
+}
+
 /** Where a node lands relative to a target. "center" merges into a tab group. */
 export type DropPosition = "left" | "right" | "top" | "bottom" | "center";
 
@@ -46,7 +56,7 @@ export interface ViewInstance {
     readonly root: HTMLElement;
     /** Shown in the titlebar or tab. May change over the view's life. */
     readonly title: string;
-    onCycleChange?(cycle: number): void;
+    onCycleChange?(cycles: CycleRange): void;
     onTraceChange?(trace: Trace): void;
     destroy(): void;
 }
@@ -54,8 +64,11 @@ export interface ViewInstance {
 /** What the app gives a view at construction. */
 export interface ViewContext {
     readonly trace: Trace | null;
-    readonly currentCycle: number;
+    readonly cycles: CycleRange;
+    /** Collapses the selection onto one cycle. */
     goToCycle(cycle: number): void;
+    /** Selects a span; `start === end` is the same as `goToCycle`. */
+    selectCycles(range: CycleRange): void;
     /** Re-run the simulation; `immediate` skips the debounce. */
     requestRun(immediate: boolean): void;
 }

@@ -1,12 +1,13 @@
 import { colors } from "./colors.ts";
 import type { Trace } from "./types.ts";
+import type { CycleRange } from "./layout/types.ts";
 
 export class ScrubberCanvas {
     width: number = 0;
     height: number = 0;
 
     dragging: boolean = false;
-    currentCycle: number;
+    selection: CycleRange;
 
     wrap: HTMLDivElement;
     canvas: HTMLCanvasElement;
@@ -19,7 +20,7 @@ export class ScrubberCanvas {
     constructor(
         elem: HTMLElement,
         trace: Trace,
-        currentCycle: number,
+        selection: CycleRange,
         goToCycle: (cycle: number, secs: number) => void,
     ) {
         this.trace = trace;
@@ -37,7 +38,7 @@ export class ScrubberCanvas {
         this.wrap.appendChild(this.canvas);
         elem.appendChild(this.wrap);
 
-        this.currentCycle = currentCycle;
+        this.selection = selection;
         this.goToCycle = goToCycle;
 
         this.ro = new ResizeObserver((entries) => {
@@ -70,8 +71,8 @@ export class ScrubberCanvas {
         this.trace = trace;
         this.draw();
     }
-    setCurrentCycle(currentCycle: number) {
-        this.currentCycle = currentCycle;
+    setSelection(selection: CycleRange) {
+        this.selection = selection;
         this.draw();
     }
 
@@ -105,11 +106,16 @@ export class ScrubberCanvas {
             }
         }
 
-        // Playhead
-        const playX = (this.currentCycle / Math.max(1, cycles - 1)) *
-            this.width;
+        // The selected span, then the playhead at its start.
+        const span = Math.max(1, cycles - 1);
+        const startX = (this.selection.start / span) * this.width;
+        if (this.selection.end > this.selection.start) {
+            const endX = (this.selection.end / span) * this.width;
+            ctx.fillStyle = "rgba(0, 0, 0, 0.14)";
+            ctx.fillRect(startX, 0, Math.max(1, endX - startX), this.height);
+        }
         ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
-        ctx.fillRect(playX - 1, 0, 2, this.height);
+        ctx.fillRect(startX - 1, 0, 2, this.height);
     }
     seek(e: PointerEvent) {
         const rect = this.canvas.getBoundingClientRect();
