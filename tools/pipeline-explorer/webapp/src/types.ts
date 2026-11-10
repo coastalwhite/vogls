@@ -2,15 +2,19 @@
 export const DATA_POINTS = {
 	pipeline: 1 << 0,
 	registers: 1 << 1,
+	symbols: 1 << 2,
 } as const;
 
-export const ALL_DATA_POINTS = DATA_POINTS.pipeline | DATA_POINTS.registers;
+export const ALL_DATA_POINTS =
+	DATA_POINTS.pipeline | DATA_POINTS.registers | DATA_POINTS.symbols;
 
 export type PipelineData = {
 	kind: "pipeline";
 	traces: Uint32Array[];
 	keys: string[];
 	cycles: number;
+	/** Address of slot 1, so a slot maps back to a symbol's address. */
+	textAddr: number;
 };
 
 export type RegistersData = {
@@ -21,7 +25,17 @@ export type RegistersData = {
 	cycles: number;
 };
 
-export type ReturnData = PipelineData | RegistersData;
+/** Where the assembler put every label. Parallel arrays, sorted by address. */
+export type SymbolsData = {
+	kind: "symbols";
+	names: string[];
+	addresses: Uint32Array;
+	sections: string[];
+	/** 1 when a `.global` directive exported the label. */
+	globals: Uint32Array;
+};
+
+export type ReturnData = PipelineData | RegistersData | SymbolsData;
 
 export type Trace = {
 	instructions: string[];
@@ -47,4 +61,5 @@ export const EMPTY_PIPELINE: PipelineData = {
 	traces: [],
 	keys: [],
 	cycles: 0,
+	textAddr: 0,
 };

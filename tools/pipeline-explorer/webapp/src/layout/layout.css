@@ -452,59 +452,185 @@
     color: var(--text-h);
 }
 
-.ws-regs__rows {
-    display: flex;
-    flex-direction: column;
-    gap: 0.125rem;
-}
-
-.ws-regs__row {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
-}
-
-.ws-regs__name {
-    flex: 0 0 2.75rem;
+.ws-regs .ws-table__cell {
     font-family: var(--mono);
-    color: var(--text-h);
 }
 
-.ws-regs__value {
-    font-family: var(--mono);
-    font-variant-numeric: tabular-nums;
-    /* Zero is the uninteresting case, so it stays quiet. */
+/* Zero is the uninteresting case, so it stays quiet. */
+.ws-regs__value,
+.ws-regs__was {
     opacity: 0.55;
 }
 
-.ws-regs__row.is-set .ws-regs__value,
-.ws-regs__row.is-changed .ws-regs__value {
+.ws-regs .is-set .ws-regs__value,
+.ws-regs .is-changed .ws-regs__value {
     opacity: 1;
     color: var(--text-h);
 }
 
-/* The movers carry the accent and a tinted row, so they stand out of the
-   full list rather than being the only thing in it. */
-.ws-regs__row.is-changed {
+/* The movers carry the accent and a tinted row. */
+.ws-regs .is-changed {
     background: var(--accent-bg);
-    border-radius: 0.1875rem;
-    margin: 0 -0.25rem;
-    padding: 0 0.25rem;
 }
 
-.ws-regs__row.is-changed .ws-regs__value {
+.ws-regs .is-changed .ws-regs__value {
     color: var(--accent);
 }
 
-.ws-regs__was {
-    font-family: var(--mono);
-    font-variant-numeric: tabular-nums;
-    opacity: 0.55;
+/* Symbols: every label the assembler placed, globals called out. */
+.ws-syms {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    padding: 0.625rem 0.75rem;
+    font-size: 0.8rem;
 }
 
-.ws-regs__hint {
+.ws-syms__caption {
     margin: 0;
+    font-family: var(--heading);
+    color: var(--text-h);
+}
+
+.ws-syms .ws-table__cell {
+    font-family: var(--mono);
+}
+
+.ws-syms__addr {
+    opacity: 0.6;
+}
+
+.ws-syms .is-global .ws-syms__name {
+    color: var(--accent);
+}
+
+.ws-syms__section {
+    color: var(--text-h);
     opacity: 0.7;
+}
+
+/* The body of a popped-out view's own window. */
+.ws-detached {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    color: var(--text);
+    background: var(--bg);
+    font-family: var(--sans);
+}
+
+/* Shared data table. Columns are fixed so a changing value never resizes a
+   column; the pane scrolls sideways instead of squeezing them. */
+.ws-table {
+    /* Sized to its columns so the whole view scrolls, caption and all,
+       rather than the table scrolling inside a frame that stays put. */
+    width: max-content;
+    min-width: 100%;
+}
+
+.ws-table table {
+    table-layout: fixed;
+    /* Exactly the sum of the column widths. Stretching to the pane would make
+       the columns as wide as there happens to be room for. */
+    width: max-content;
+    border-collapse: collapse;
+}
+
+.ws-table th {
+    padding: 0 0.5rem 0.25rem 0;
+    font-family: var(--heading);
+    font-weight: normal;
+    color: var(--text-h);
+    text-align: left;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--border);
+}
+
+.ws-table td {
+    padding: 0.1rem 0.5rem 0.1rem 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ws-table__cell.is-right {
+    text-align: right;
+}
+
+.ws-table__cell.is-numeric {
+    font-family: var(--mono);
+    /* Equal-width digits: the other half of not shuffling about. */
+    font-variant-numeric: tabular-nums;
+}
+
+.ws-table__message td {
+    padding-top: 0.5rem;
+    opacity: 0.7;
+}
+
+.ws-table__fold {
+    font: inherit;
+    color: var(--text-h);
+    background: none;
+    border: none;
+    border-radius: 0.15rem;
+    padding: 0 0.15rem;
+    margin-right: 0.25rem;
+    cursor: pointer;
+}
+
+.ws-table__fold:hover {
+    background: var(--accent-bg);
+}
+
+.ws-table__fold:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+}
+
+/* Symbol profile: cycles per stage per symbol, labels folded under globals. */
+.ws-prof {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    padding: 0.625rem 0.75rem;
+    font-size: 0.8rem;
+}
+
+.ws-prof__caption {
+    margin: 0;
+    font-family: var(--heading);
+    color: var(--text-h);
+}
+
+.ws-prof .ws-table__cell {
+    font-family: var(--mono);
+}
+
+.ws-prof .is-global .ws-prof__name {
+    color: var(--accent);
+}
+
+.ws-prof .is-child .ws-prof__name {
+    opacity: 0.85;
+}
+
+/* The roll-up across stages reads as the headline number. */
+.ws-prof__total {
+    color: var(--text-h);
+}
+
+.ws-prof .is-zero {
+    opacity: 0.4;
 }
 
 /* Drag feedback --------------------------------------------------------- */

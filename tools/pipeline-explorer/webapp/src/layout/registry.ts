@@ -3,6 +3,8 @@ import { chooserSpec } from "../views/chooser.ts";
 import { pipelineSpec } from "../views/pipeline.ts";
 import { registersSpec } from "../views/registers.ts";
 import { statsSpec } from "../views/stats.ts";
+import { profileSpec } from "../views/profile.ts";
+import { symbolsSpec } from "../views/symbols.ts";
 import type { Trace } from "../types.ts";
 import type {
     CycleRange,
@@ -20,6 +22,8 @@ const specs: ViewSpec[] = [
     assemblySpec,
     statsSpec,
     registersSpec,
+    symbolsSpec,
+    profileSpec,
     chooserSpec,
 ];
 

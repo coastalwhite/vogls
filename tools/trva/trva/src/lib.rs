@@ -27,8 +27,12 @@ pub use self::placement::{
 pub struct Assembler {
     label_table: LabelTable,
 
-    /// Positions of global symbols, relative to the start of their own section.
+    /// Positions of defined symbols, relative to the start of their own
+    /// section.
     symbols: LabelMap<(SectionKind, UnresolvedOffset)>,
+    /// Symbols a `.global` directive exported. Visibility only: a symbol is
+    /// positioned by its definition, which may come after the directive.
+    globals: LabelMap<()>,
 
     text: Section,
     data: Section,
@@ -134,6 +138,8 @@ const fn in_imm20_range(value: u32, center: u32) -> bool {
 pub struct Assembled {
     pub labels: LabelTable,
     pub symbols: LabelMap<(SectionKind, u32)>,
+    /// The subset of `symbols` a `.global` directive exported.
+    pub globals: LabelMap<()>,
 
     pub text_start: u32,
     pub data_start: u32,
@@ -297,6 +303,7 @@ impl Assembler {
         Self {
             label_table: LabelTable::new(),
             symbols: LabelMap::default(),
+            globals: LabelMap::default(),
 
             text: Section::new(),
             data: Section::new(),
@@ -364,11 +371,10 @@ impl Assembler {
                 ".global" | ".globl" => {
                     cursor.take_separator()?;
                     let name = cursor.take_ident()?;
-
-                    let kind = self.current_section;
-                    let position = self.current_section().offset;
+                    // Only a visibility marker: the definition of the label
+                    // sets where it actually is, whichever comes first.
                     let name = self.label_table.get_or_insert(name);
-                    self.symbols.set(name, (kind, position));
+                    self.globals.set(name, ());
                 }
                 ".align" => {
                     cursor.take_separator()?;
@@ -946,6 +952,7 @@ impl Assembler {
         Ok(Assembled {
             labels: self.label_table,
             symbols: out_symbols,
+            globals: self.globals,
 
             text_start,
             data_start,

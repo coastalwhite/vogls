@@ -1,5 +1,6 @@
 import type { Trace } from "../types.ts";
 import type { MenuItem } from "../menu.ts";
+import { DetachedWindow } from "./detached.ts";
 import { beginDrag } from "./dnd.ts";
 import { Frame } from "./frame.ts";
 import type { FrameContext } from "./frame.ts";
@@ -13,6 +14,7 @@ import {
     countViews,
     defaultLayout,
     findNode,
+    insertAtRoot,
     insertView,
     moveNode,
     moveToRoot,
@@ -55,6 +57,8 @@ export class Workspace {
     /** Reverse lookup for hit-testing during a drag. */
     private frameNodes = new WeakMap<HTMLElement, NodeId>();
     private placeholder: HTMLElement | null = null;
+    /** Views living in a window of their own, keyed by their node id. */
+    private detached = new Map<NodeId, { window: DetachedWindow; node: ViewNode }>();
 
     constructor(container: HTMLElement, ctx: ViewContext) {
         this.container = container;
@@ -88,6 +92,7 @@ export class Workspace {
     /** Drops views and frames whose nodes are gone, then redraws. */
     private sync() {
         const live = new Set(collectViewIds(this.layout));
+        for (const id of this.detached.keys()) live.add(id);
         this.registry.retain(live);
         for (const id of [...this.frames.keys()]) {
             if (findNode(this.layout, id) === null) this.frames.delete(id);
@@ -192,6 +197,14 @@ export class Workspace {
             { kind: "separator" },
             {
                 kind: "item",
+                label: "Detach to Window",
+                disabled: child === undefined,
+                onSelect: () => {
+                    if (child !== undefined) this.detachView(child);
+                },
+            },
+            {
+                kind: "item",
                 label: "Close",
                 onSelect: () => this.commit(removeNode(this.layout, closeTarget)),
             },
@@ -200,6 +213,43 @@ export class Workspace {
 
     private addView(targetId: NodeId | null, position: DropPosition, type: ViewType) {
         this.commit(insertView(this.layout, targetId, newView(type), position));
+    }
+
+    /** Moves a view into a window of its own, and back when that closes. */
+    private detachView(node: ViewNode) {
+        if (this.detached.has(node.id)) return;
+        const instance = this.registry.instance(node.id, node.view);
+        let window: DetachedWindow;
+        try {
+            window = new DetachedWindow({
+                title: instance.title,
+                root: instance.root,
+                onClose: () => this.reattach(node.id),
+            });
+        } catch (e) {
+            console.error("could not detach the view", e);
+            return;
+        }
+        this.detached.set(node.id, { window, node });
+        // Out of the tree, but `sync` keeps the instance alive.
+        this.commit(removeNode(this.layout, node.id));
+    }
+
+    /** Puts a detached view back, keeping its node id so the instance is reused. */
+    private reattach(id: NodeId) {
+        const entry = this.detached.get(id);
+        if (entry === undefined) return;
+        this.detached.delete(id);
+        this.commit(
+            this.layout === null
+                ? entry.node
+                : insertAtRoot(this.layout, entry.node, "right"),
+        );
+    }
+
+    /** Closes every detached window, so none outlive the workspace. */
+    closeDetached() {
+        for (const { window } of [...this.detached.values()]) window.close();
     }
 
     /** A split or a new tab lands empty; the chooser asks what goes in it. */

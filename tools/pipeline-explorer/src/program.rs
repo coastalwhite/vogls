@@ -67,6 +67,16 @@ impl MemoryMap {
 /// The contents of each section of a program, and the address it is linked
 /// at.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// A label the assembler placed, at its absolute address.
+pub struct ProgramSymbol {
+    pub name: String,
+    pub addr: u32,
+    /// `.text`, `.data`, `.rodata` or `.bss`.
+    pub section: &'static str,
+    /// Whether a `.global` directive exported it.
+    pub global: bool,
+}
+
 pub struct ProgramSections {
     pub text: Box<[u8]>,
     pub data: Box<[u8]>,
@@ -79,6 +89,9 @@ pub struct ProgramSections {
     pub data_addr: u32,
     pub rodata_addr: u32,
     pub bss_addr: u32,
+
+    /// Every label, sorted by address. Empty for a program loaded from ELF.
+    pub symbols: Vec<ProgramSymbol>,
 }
 
 impl ProgramSections {
@@ -126,6 +139,26 @@ pub fn assemble(source: &str, isa: Isa, map: &MemoryMap) -> Result<ProgramSectio
     let assembled = Assembler::new(isa, map.to_positions())
         .with_source(source)?
         .assemble()?;
+    let name_of = |kind: SectionKind| match kind {
+        SectionKind::Text => ".text",
+        SectionKind::Data => ".data",
+        SectionKind::ReadOnlyData => ".rodata",
+        SectionKind::Bss => ".bss",
+    };
+    let mut symbols: Vec<ProgramSymbol> = assembled
+        .symbols
+        .iter()
+        // `Assembled::symbols` already holds absolute addresses, not offsets
+        // into their section.
+        .map(|(id, &(kind, addr))| ProgramSymbol {
+            name: assembled.labels[id].to_string(),
+            addr,
+            section: name_of(kind),
+            global: assembled.globals[id].is_some(),
+        })
+        .collect();
+    symbols.sort_by(|a, b| a.addr.cmp(&b.addr).then_with(|| a.name.cmp(&b.name)));
+
     let sections = ProgramSections {
         text: assembled.text,
         data: assembled.data,
@@ -135,6 +168,7 @@ pub fn assemble(source: &str, isa: Isa, map: &MemoryMap) -> Result<ProgramSectio
         data_addr: assembled.data_start,
         rodata_addr: assembled.rodata_start,
         bss_addr: assembled.bss_start,
+        symbols,
     };
     sections.check_fits(map)?;
     Ok(sections)
@@ -319,6 +353,8 @@ fn sections_from_elf(bytes: &[u8], map: &MemoryMap) -> Result<ProgramSections, L
         data_addr: addr(b".data"),
         rodata_addr: addr(b".rodata"),
         bss_addr: addr(b".bss"),
+        // The ELF symbol table is not read; the explorer works off assembly.
+        symbols: Vec::new(),
     };
     if sections.text.is_empty() {
         return Err(LoadError::NoText);
