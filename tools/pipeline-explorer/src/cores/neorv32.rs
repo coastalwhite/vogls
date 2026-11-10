@@ -1,8 +1,9 @@
 use vogls::design::RtSignal;
 
 use super::{
+    DataBuilder, DataPoints,
     Core, DATA_MEMORY, DATA_MEMORY_ADDR, Description, INSTRUCTION_MEMORY, INSTRUCTION_MEMORY_ADDR,
-    PipelineTrace, Sim, Testbench, signal,
+    Sim, Testbench, signal,
 };
 use crate::TraceError;
 use crate::program::ProgramSections;
@@ -39,7 +40,11 @@ impl Core for Neorv32 {
         }
     }
 
-    fn compile(&self, params: &()) -> Result<(Neorv32Design, Sim), TraceError> {
+    fn compile(
+        &self,
+        params: &(),
+        _points: DataPoints,
+    ) -> Result<(Neorv32Design, Sim), TraceError> {
         let (tb, sim, handles) = Testbench::compile(
             &[
                 include_str!("../../instances/neorv32/neorv32_verilog_wrapper.v"),
@@ -86,14 +91,16 @@ impl Core for Neorv32 {
         &self,
         design: &Neorv32Design,
         state: &mut Sim,
-        pt: &mut PipelineTrace,
+        data: &mut Vec<DataBuilder>,
     ) -> Result<(), TraceError> {
         let tb = &design.tb;
         tb.step(state)?;
 
-        pt.push(0, tb.stage_pc(state, design.if_pc_q, design.if_q));
-        for (i, &active) in design.stages.iter().enumerate() {
-            pt.push(i + 1, tb.stage_pc(state, design.pc_q, active));
+        if let Some(pt) = data.iter_mut().find_map(DataBuilder::as_pipeline) {
+            pt.push(0, tb.stage_pc(state, design.if_pc_q, design.if_q));
+            for (i, &active) in design.stages.iter().enumerate() {
+                pt.push(i + 1, tb.stage_pc(state, design.pc_q, active));
+            }
         }
         Ok(())
     }

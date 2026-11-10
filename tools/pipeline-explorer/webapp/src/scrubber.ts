@@ -1,5 +1,6 @@
 import { colors } from "./colors.ts";
-import type { Trace } from "./types.ts";
+import type { PipelineData, Trace } from "./types.ts";
+import { EMPTY_PIPELINE, dataOf } from "./types.ts";
 import type { CycleRange } from "./layout/types.ts";
 
 export class ScrubberCanvas {
@@ -14,6 +15,8 @@ export class ScrubberCanvas {
     ro: ResizeObserver;
 
     trace: Trace;
+    /** The pipeline data of `trace`, or an empty stand-in. */
+    pipeline: PipelineData;
 
     goToCycle: (cycle: number, secs: number) => void;
 
@@ -24,6 +27,7 @@ export class ScrubberCanvas {
         goToCycle: (cycle: number, secs: number) => void,
     ) {
         this.trace = trace;
+        this.pipeline = dataOf(trace, "pipeline") ?? EMPTY_PIPELINE;
 
         this.wrap = document.createElement("div");
         this.wrap.style.position = "relative";
@@ -69,6 +73,7 @@ export class ScrubberCanvas {
 
     setTrace(trace: Trace) {
         this.trace = trace;
+        this.pipeline = dataOf(trace, "pipeline") ?? EMPTY_PIPELINE;
         this.draw();
     }
     setSelection(selection: CycleRange) {
@@ -81,8 +86,8 @@ export class ScrubberCanvas {
         this.canvas.width = this.width * dpr;
         this.canvas.height = this.height * dpr;
 
-        const numStages = this.trace.pipeline.keys.length;
-        const cycles = this.trace.pipeline.cycles;
+        const numStages = this.pipeline.keys.length;
+        const cycles = this.pipeline.cycles;
         const numInstructions = this.trace.instructions.length;
 
         const ctx = this.canvas.getContext("2d")!;
@@ -95,7 +100,7 @@ export class ScrubberCanvas {
         // Draw all stage cells. Iterate by stage so we batch fillStyle changes.
         for (let i = 0; i < numStages; i++) {
             ctx.fillStyle = colors[i % colors.length];
-            const stageTrace = this.trace.pipeline.traces[i];
+            const stageTrace = this.pipeline.traces[i];
             for (let c = 0; c < cycles; c++) {
                 const value = stageTrace[c];
                 if (value === 0) continue;
@@ -123,7 +128,7 @@ export class ScrubberCanvas {
             0,
             Math.min(1, (e.clientX - rect.left) / rect.width),
         );
-        const cycle = Math.round(fraction * (this.trace.pipeline.cycles - 1));
+        const cycle = Math.round(fraction * (this.pipeline.cycles - 1));
         this.goToCycle(cycle, 0.25);
     }
 

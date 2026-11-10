@@ -8,7 +8,7 @@ import init, {
 
 const ready = init();
 
-const tracers: Record<string, (program: string, config: object, numCycles: number) => object> = {
+const tracers: Record<string, (program: string, config: object, numCycles: number, dataPoints: number) => object> = {
     picorv32: get_js_trace,
     ibex: get_js_ibex_trace,
     neorv32: get_js_neorv32_trace,
@@ -20,7 +20,14 @@ const tracers: Record<string, (program: string, config: object, numCycles: numbe
  * result (`trace` or `assembly`) or an `error`.
  */
 export type WorkerRequest =
-    | { kind: "trace"; proc: string; program: string; config: object; numCycles: number }
+    | {
+          kind: "trace";
+          proc: string;
+          program: string;
+          config: object;
+          numCycles: number;
+          dataPoints: number;
+      }
     | { kind: "disassemble"; proc: string; config: object; elf: Uint8Array; name: string };
 
 export type WorkerReply =
@@ -39,7 +46,12 @@ function handle(request: WorkerRequest): WorkerReply {
             const tracer = tracers[request.proc];
             if (!tracer) return { kind: "trace", error: `unknown core '${request.proc}'` };
             try {
-                return { kind: "trace", trace: tracer(request.program, request.config, request.numCycles) };
+                return { kind: "trace", trace: tracer(
+                        request.program,
+                        request.config,
+                        request.numCycles,
+                        request.dataPoints,
+                    ) };
             } catch (err) {
                 return { kind: "trace", error: errorMessage(err) };
             }

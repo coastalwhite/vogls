@@ -1,4 +1,5 @@
 import type { Trace } from "./types.ts";
+import { EMPTY_PIPELINE, dataOf } from "./types.ts";
 import {
     type Ctx2D,
     measureRows,
@@ -99,7 +100,7 @@ function fontPx(font: string): number {
 /** Instruction indices that occupy any stage in cycles [start, end]. */
 function usedInstructions(trace: Trace, start: number, end: number): number[] {
     const used = new Set<number>();
-    for (const stageTrace of trace.pipeline.traces) {
+    for (const stageTrace of (dataOf(trace, "pipeline") ?? EMPTY_PIPELINE).traces) {
         for (let c = start; c <= end && c < stageTrace.length; c++) {
             if (stageTrace[c]) used.add(stageTrace[c] - 1);
         }

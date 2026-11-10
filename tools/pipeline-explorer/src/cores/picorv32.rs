@@ -1,8 +1,9 @@
 use vogls::design::RtSignal;
 
 use super::{
+    DataBuilder, DataPoints, REGISTER_NAMES,
     Core, DATA_MEMORY, DATA_MEMORY_ADDR, Description, INSTRUCTION_MEMORY, INSTRUCTION_MEMORY_ADDR,
-    PipelineTrace, Sim, Testbench, enabled, lookup, signal,
+    Sim, Testbench, enabled, lookup, signal,
 };
 use crate::TraceError;
 use crate::program::ProgramSections;
@@ -30,6 +31,8 @@ pub struct PicoRv32Design {
     trap: RtSignal,
     reg_pc: RtSignal,
     cpu_state: RtSignal,
+    /// `cpuregs`, looked up only when registers were asked for.
+    cpuregs: Option<RtSignal>,
 }
 
 impl Core for PicoRv32 {
@@ -48,7 +51,11 @@ impl Core for PicoRv32 {
         }
     }
 
-    fn compile(&self, params: &PicoRV32Config) -> Result<(PicoRv32Design, Sim), TraceError> {
+    fn compile(
+        &self,
+        params: &PicoRV32Config,
+        points: DataPoints,
+    ) -> Result<(PicoRv32Design, Sim), TraceError> {
         let macros = enabled([
             (params.enable_mul, "ENABLE_MUL"),
             (params.enable_div, "ENABLE_DIV"),
@@ -58,7 +65,8 @@ impl Core for PicoRv32 {
             (params.two_cycle_alu, "TWO_CYCLE_ALU"),
             (params.enable_fast_mul, "ENABLE_FAST_MUL"),
         ]);
-        let (tb, sim, (trap, reg_pc, cpu_state)) = Testbench::compile(
+        let want_regs = points.contains(DataPoints::REGISTERS);
+        let (tb, sim, (trap, reg_pc, cpu_state, cpuregs)) = Testbench::compile(
             &[
                 include_str!("../../../../submodules/picorv32/picorv32.v"),
                 include_str!("../../instances/picorv32/tb.v"),
@@ -74,6 +82,7 @@ impl Core for PicoRv32 {
                     trap,
                     signal(design, proc, "reg_pc"),
                     signal(design, proc, "cpu_state"),
+                    want_regs.then(|| signal(design, proc, "cpuregs")),
                 )
             },
         )?;
@@ -82,6 +91,7 @@ impl Core for PicoRv32 {
             trap: tb.resolve(trap),
             reg_pc: tb.resolve(reg_pc),
             cpu_state: tb.resolve(cpu_state),
+            cpuregs: cpuregs.map(|handle| tb.resolve(handle)),
             tb,
         };
         Ok((design, sim))
@@ -100,7 +110,7 @@ impl Core for PicoRv32 {
         &self,
         design: &PicoRv32Design,
         state: &mut Sim,
-        pt: &mut PipelineTrace,
+        data: &mut Vec<DataBuilder>,
     ) -> Result<(), TraceError> {
         let tb = &design.tb;
         tb.step(state)?;
@@ -112,8 +122,16 @@ impl Core for PicoRv32 {
             .extract_u32()
             .and_then(|bits| 7u32.checked_sub(bits.trailing_zeros()));
 
-        for i in 0..STATES.len() {
-            pt.push(i, pc.filter(|_| current == Some(i as u32)));
+        if let Some(pt) = data.iter_mut().find_map(DataBuilder::as_pipeline) {
+            for i in 0..STATES.len() {
+                pt.push(i, pc.filter(|_| current == Some(i as u32)));
+            }
+        }
+        if let (Some(rt), Some(cpuregs)) = (
+            data.iter_mut().find_map(DataBuilder::as_registers),
+            design.cpuregs,
+        ) {
+            rt.push(tb.words(state, cpuregs, REGISTER_NAMES.len(), false));
         }
         Ok(())
     }

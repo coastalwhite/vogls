@@ -1,5 +1,6 @@
 import { colors } from "../colors.ts";
 import type { Trace } from "../types.ts";
+import { EMPTY_PIPELINE, dataOf } from "../types.ts";
 import type {
     CycleRange,
     ViewContext,
@@ -10,10 +11,11 @@ import { cycleCount } from "../layout/types.ts";
 
 /** Percentage of the selected cycles a stage held an instruction. */
 function occupancy(trace: Trace, stage: number, range: CycleRange): number {
-    const last = trace.pipeline.cycles - 1;
+    const pipeline = dataOf(trace, "pipeline") ?? EMPTY_PIPELINE;
+    const last = pipeline.cycles - 1;
     const from = Math.max(0, Math.min(range.start, last));
     const to = Math.max(from, Math.min(range.end, last));
-    const cells = trace.pipeline.traces[stage];
+    const cells = pipeline.traces[stage];
     let busy = 0;
     for (let c = from; c <= to; c++) {
         if (cells[c] !== 0) busy += 1;
@@ -102,7 +104,7 @@ export class StatsView implements ViewInstance {
     /** Reads both boxes back, clamped to the trace, and selects the result. */
     private commit(edited: HTMLInputElement): void {
         if (this.trace === null) return;
-        const last = this.trace.pipeline.cycles - 1;
+        const last = (dataOf(this.trace, "pipeline")?.cycles ?? 0) - 1;
         const read = (input: HTMLInputElement, fallback: number): number => {
             const v = input.valueAsNumber;
             return Number.isFinite(v)
@@ -121,7 +123,7 @@ export class StatsView implements ViewInstance {
     private render(): void {
         const { start, end } = this.cycles;
         const ranged = end > start;
-        const total = this.trace?.pipeline.cycles ?? 0;
+        const total = dataOf(this.trace, "pipeline")?.cycles ?? 0;
         this.label.textContent = ranged ? "Cycles" : "Cycle";
         this.cycleTotal.textContent = total.toString();
 
@@ -151,7 +153,7 @@ export class StatsView implements ViewInstance {
         }
 
         const rows: HTMLElement[] = [];
-        for (const [i, key] of this.trace.pipeline.keys.entries()) {
+        for (const [i, key] of (dataOf(this.trace, "pipeline") ?? EMPTY_PIPELINE).keys.entries()) {
             const row = el("div", "ws-stats__stage");
             const swatch = el("span", "ws-stats__swatch");
             swatch.style.backgroundColor = colors[i];
