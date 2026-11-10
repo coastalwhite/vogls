@@ -1,0 +1,306 @@
+//! This is basic implementation which decodes ELF binaries.
+#![allow(unused)]
+
+pub mod data_encoding;
+pub mod errors;
+pub mod header;
+pub mod ident;
+pub mod program_header;
+pub mod section_header;
+pub mod string_table;
+pub mod symbol_table;
+
+use std::ops::Range;
+
+use self::data_encoding::DataEncoding;
+use self::errors::Result;
+use self::header::ElfHeader;
+use self::program_header::ElfProgramHeader;
+use self::section_header::{ElfSectionHeader, ElfSectionType};
+use self::string_table::ElfStringTable;
+use self::symbol_table::ElfSymbolTableEntry;
+
+#[derive(Debug, Clone)]
+pub enum ElfFile {
+    Linking(ElfLinkingFile),
+    Executable(ElfExecutableFile),
+}
+
+#[derive(Debug, Clone)]
+pub struct ElfExecutableFile {
+    header: ElfHeader,
+    program_headers: Vec<ElfProgramHeader>,
+    section_headers: Vec<ElfSectionHeader>,
+    symbols: Vec<ElfSymbolTableEntry>,
+    section_string_table: ElfStringTable,
+    string_table: ElfStringTable,
+}
+
+#[derive(Debug, Clone)]
+pub struct ElfLinkingFile {
+    header: ElfHeader,
+    program_headers: Vec<ElfProgramHeader>,
+    section_headers: Vec<ElfSectionHeader>,
+    symbols: Vec<ElfSymbolTableEntry>,
+    section_string_table: ElfStringTable,
+    string_table: ElfStringTable,
+    // ... TODO
+}
+
+fn read_program_headers(
+    buffer: &[u8],
+    data_encoding: DataEncoding,
+    table_offset: u32,
+    num_entries: u16,
+    entry_size: u16,
+) -> Result<Vec<ElfProgramHeader>> {
+    assert!(std::mem::size_of::<usize>() >= 4);
+    let table_offset = table_offset as usize;
+    let num_entries = num_entries as usize;
+    let entry_size = entry_size as usize;
+
+    let mut program_headers = Vec::with_capacity(num_entries);
+
+    if table_offset == 0 || num_entries == 0 {
+        return Ok(program_headers);
+    }
+
+    for entry_offset in
+        (table_offset..(table_offset + (num_entries * entry_size))).step_by(entry_size)
+    {
+        program_headers.push(ElfProgramHeader::read_from_bytes(
+            &buffer[entry_offset..],
+            data_encoding,
+        )?);
+    }
+
+    Ok(program_headers)
+}
+
+fn read_section_headers(
+    buffer: &[u8],
+    data_encoding: DataEncoding,
+    table_offset: u32,
+    num_entries: u16,
+    entry_size: u16,
+) -> Result<Vec<ElfSectionHeader>> {
+    assert!(std::mem::size_of::<usize>() >= 4);
+    let table_offset = table_offset as usize;
+    let num_entries = num_entries as usize;
+    let entry_size = entry_size as usize;
+
+    let mut section_headers = Vec::with_capacity(num_entries);
+
+    if table_offset == 0 || num_entries == 0 {
+        return Ok(section_headers);
+    }
+
+    for entry_offset in
+        (table_offset..(table_offset + (num_entries * entry_size))).step_by(entry_size)
+    {
+        section_headers.push(ElfSectionHeader::read_from_bytes(
+            &buffer[entry_offset..],
+            data_encoding,
+        )?);
+    }
+
+    Ok(section_headers)
+}
+
+fn read_symbols(
+    bytes: &[u8],
+    data_encoding: DataEncoding,
+    section_headers: &Vec<ElfSectionHeader>,
+) -> Result<Vec<ElfSymbolTableEntry>> {
+    Ok(section_headers
+        .iter()
+        .filter(|sect| sect.sh_type == ElfSectionType::Symtab)
+        .map(|sect| {
+            assert!(sect.sh_entsize != 0);
+
+            assert!(std::mem::size_of::<usize>() >= 4);
+            let sh_size = sect.sh_size as usize;
+            let sh_offset = sect.sh_offset as usize;
+            let sh_entsize = sect.sh_entsize as usize;
+
+            let num_entries = sh_size / sh_entsize;
+            let mut symbols = Vec::with_capacity(num_entries);
+            for i in 0..num_entries {
+                let glob_offset = sh_offset + (i * sh_entsize);
+                symbols.push(ElfSymbolTableEntry::read_from_bytes(
+                    &bytes[glob_offset..],
+                    data_encoding,
+                )?);
+            }
+
+            Ok(symbols)
+        })
+        .collect::<Result<Vec<Vec<ElfSymbolTableEntry>>>>()?
+        .into_iter()
+        .flatten()
+        .collect())
+}
+
+fn read_string_table<'a>(
+    bytes: &'_ [u8],
+    section_headers: &'a Vec<ElfSectionHeader>,
+) -> Result<Vec<(&'a ElfSectionHeader, ElfStringTable)>> {
+    Ok(section_headers
+        .iter()
+        .filter(|sect| sect.sh_type == ElfSectionType::Strtab)
+        .map(|sect| {
+            assert!(std::mem::size_of::<usize>() >= 4);
+            let sh_size = sect.sh_size as usize;
+            let sh_offset = sect.sh_offset as usize;
+
+            Ok((sect, ElfStringTable::new(&bytes[sh_offset..], sh_size)))
+        })
+        .collect::<Result<Vec<(&ElfSectionHeader, ElfStringTable)>>>()?)
+}
+
+impl ElfFile {
+    pub fn read_from_bytes(bytes: &[u8]) -> Result<Self> {
+        let header = ElfHeader::read_from_bytes(bytes)?;
+
+        let data_encoding = header.e_ident.data_encoding;
+
+        let phoff = header.e_phoff;
+        let phnum = header.e_phnum;
+        let phentsize = header.e_phentsize;
+
+        let shoff = header.e_shoff;
+        let shnum = header.e_shnum;
+        let shentsize = header.e_shentsize;
+
+        if header.e_type == 2 {
+            let program_headers =
+                read_program_headers(bytes, data_encoding, phoff, phnum, phentsize)?;
+            let section_headers =
+                read_section_headers(bytes, data_encoding, shoff, shnum, shentsize)?;
+            let symbols = read_symbols(bytes, data_encoding, &section_headers)?;
+            let string_tables = read_string_table(bytes, &section_headers)?;
+
+            let mut shstr_table = None;
+
+            for (_, str_table) in string_tables.iter() {
+                if str_table.contains_section_headers() {
+                    shstr_table = Some(str_table.clone());
+                    break;
+                }
+            }
+            let shstr_table = shstr_table.expect("No section header table found");
+            let mut strtab = None;
+
+            for sect in section_headers.iter() {
+                assert!(std::mem::size_of::<usize>() >= 4);
+                if shstr_table.get_from(sect.sh_name as usize) == b".strtab" {
+                    strtab = Some(sect);
+                    break;
+                }
+            }
+            let strtab = strtab.expect("No string table found");
+
+            assert!(std::mem::size_of::<usize>() >= 4);
+            let sh_size = strtab.sh_size as usize;
+            let sh_offset = strtab.sh_offset as usize;
+
+            let strtab = ElfStringTable::new(&bytes[sh_offset..], sh_size);
+
+            Ok(ElfFile::Executable(ElfExecutableFile {
+                header,
+                program_headers,
+                section_headers,
+                symbols,
+                string_table: strtab,
+                section_string_table: shstr_table,
+            }))
+        } else {
+            unimplemented!("Non executable files are not yet implemented");
+        }
+    }
+
+    pub fn section_headers(&self) -> &Vec<ElfSectionHeader> {
+        match self {
+            ElfFile::Executable(ElfExecutableFile {
+                section_headers, ..
+            }) => section_headers,
+            ElfFile::Linking(ElfLinkingFile {
+                section_headers, ..
+            }) => section_headers,
+        }
+    }
+
+    pub fn get_text_range(&self) -> Option<Range<usize>> {
+        for sect in self.section_headers() {
+            if self.get_section_name(sect) != Some(b".text") {
+                continue;
+            }
+
+            assert!(std::mem::size_of::<usize>() >= 4);
+            let offset = sect.sh_offset as usize;
+            let size = sect.sh_size as usize;
+
+            return Some(offset..(offset + size));
+        }
+        None
+    }
+
+    pub fn get_text(&self) -> Option<&ElfSectionHeader> {
+        for sect in self.section_headers() {
+            if self.get_section_name(sect) != Some(b".text") {
+                continue;
+            }
+
+            return Some(sect);
+        }
+        None
+    }
+
+    pub fn symbols(&self) -> &Vec<ElfSymbolTableEntry> {
+        match self {
+            ElfFile::Executable(ElfExecutableFile { symbols, .. }) => symbols,
+            ElfFile::Linking(ElfLinkingFile { symbols, .. }) => symbols,
+        }
+    }
+
+    pub fn string_table(&self) -> &ElfStringTable {
+        match self {
+            ElfFile::Executable(ElfExecutableFile { string_table, .. }) => string_table,
+            ElfFile::Linking(ElfLinkingFile { string_table, .. }) => string_table,
+        }
+    }
+
+    pub fn section_string_table(&self) -> &ElfStringTable {
+        match self {
+            ElfFile::Executable(ElfExecutableFile {
+                section_string_table,
+                ..
+            }) => section_string_table,
+            ElfFile::Linking(ElfLinkingFile {
+                section_string_table,
+                ..
+            }) => section_string_table,
+        }
+    }
+
+    pub fn get_section_name(&self, section: &ElfSectionHeader) -> Option<&[u8]> {
+        if section.sh_name == 0 {
+            return None;
+        }
+
+        assert!(std::mem::size_of::<usize>() >= 4);
+        Some(
+            self.section_string_table()
+                .get_from(section.sh_name as usize),
+        )
+    }
+
+    pub fn get_symbol_string(&self, symbol: &ElfSymbolTableEntry) -> Option<&[u8]> {
+        if symbol.st_name == 0 {
+            return None;
+        }
+
+        assert!(std::mem::size_of::<usize>() >= 4);
+        Some(self.string_table().get_from(symbol.st_name as usize))
+    }
+}
