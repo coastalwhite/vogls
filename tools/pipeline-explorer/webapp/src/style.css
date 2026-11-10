@@ -486,7 +486,7 @@ main #central {
     text-align: right;
 }
 
-/* Program bar: upload an ELF in place of the assembly */
+/* Program bar: open an ELF as assembly in the editor */
 #programBar {
     display: flex;
     flex-wrap: wrap;
@@ -504,15 +504,6 @@ main #central {
     cursor: pointer;
 }
 #programBar button:hover { background: var(--accent-bg); border-color: var(--accent-border); }
-#elfName {
-    font-family: var(--mono);
-    color: var(--text-h);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-}
-#elfClearBtn { padding: 0.2rem 0.45rem; line-height: 1; }
 /* Error bar: at the bottom of the view, above the footer, until dismissed. */
 #errorBar {
     display: flex;

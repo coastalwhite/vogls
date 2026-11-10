@@ -98,7 +98,7 @@ impl ProgramSections {
     }
 
     /// Checks that every section lies within the memory `map` gives it.
-    pub(crate) fn check_fits(&self, map: &MemoryMap) -> Result<(), LoadError> {
+    fn check_fits(&self, map: &MemoryMap) -> Result<(), LoadError> {
         for (section, memory, addr, len) in self.placed() {
             // Where an empty section is linked does not matter.
             if len == 0 {
@@ -120,39 +120,32 @@ impl ProgramSections {
     }
 }
 
-/// A program, as the user hands it over.
-#[derive(Debug, Clone)]
-pub enum Program {
-    /// A linked ELF executable.
-    Elf(Box<[u8]>),
-    /// RISC-V assembly.
-    Assembly(Box<str>),
+/// Assembles RISC-V `source` into the sections `map` places, and checks that
+/// they fit the memories of `map`.
+pub fn assemble(source: &str, isa: Isa, map: &MemoryMap) -> Result<ProgramSections, LoadError> {
+    let assembled = Assembler::new(isa, map.to_positions())
+        .with_source(source)?
+        .assemble()?;
+    let sections = ProgramSections {
+        text: assembled.text,
+        data: assembled.data,
+        rodata: assembled.rodata,
+        bss: assembled.bss,
+        text_addr: assembled.text_start,
+        data_addr: assembled.data_start,
+        rodata_addr: assembled.rodata_start,
+        bss_addr: assembled.bss_start,
+    };
+    sections.check_fits(map)?;
+    Ok(sections)
 }
 
-impl Program {
-    /// Converts the program to the sections `map` places.
-    pub fn to_sections(&self, isa: Isa, map: &MemoryMap) -> Result<ProgramSections, LoadError> {
-        let sections = match self {
-            Program::Assembly(source) => {
-                let assembled = Assembler::new(isa, map.to_positions())
-                    .with_source(source)?
-                    .assemble()?;
-                ProgramSections {
-                    text: assembled.text,
-                    data: assembled.data,
-                    rodata: assembled.rodata,
-                    bss: assembled.bss,
-                    text_addr: assembled.text_start,
-                    data_addr: assembled.data_start,
-                    rodata_addr: assembled.rodata_start,
-                    bss_addr: assembled.bss_start,
-                }
-            }
-            Program::Elf(bytes) => sections_from_elf(bytes, map)?,
-        };
-        sections.check_fits(map)?;
-        Ok(sections)
-    }
+/// Reads the sections of the linked ELF executable `bytes`, and checks that
+/// they fit the memories of `map`, as a core would load them.
+pub fn load_elf(bytes: &[u8], map: &MemoryMap) -> Result<ProgramSections, LoadError> {
+    let sections = sections_from_elf(bytes, map)?;
+    sections.check_fits(map)?;
+    Ok(sections)
 }
 
 #[derive(Debug)]
@@ -280,11 +273,8 @@ impl From<ElfError> for LoadError {
 }
 
 /// Extracts the four sections of a linked ELF executable, with the address
-/// each is linked at. [`Program::to_sections`] checks those against `map`.
-pub(crate) fn sections_from_elf(
-    bytes: &[u8],
-    map: &MemoryMap,
-) -> Result<ProgramSections, LoadError> {
+/// each is linked at. [`load_elf`] checks those against `map`.
+fn sections_from_elf(bytes: &[u8], map: &MemoryMap) -> Result<ProgramSections, LoadError> {
     let elf = parse_elf(bytes)?;
 
     // Reset drives the program counter to the reset vector of the core, so
@@ -590,7 +580,7 @@ pub(crate) mod tests {
     }
 
     fn sections(bytes: Vec<u8>) -> Result<ProgramSections, LoadError> {
-        Program::Elf(bytes.into()).to_sections(crate::RV32IM, &TEST_MAP)
+        load_elf(&bytes, &TEST_MAP)
     }
 
     #[test]
@@ -644,9 +634,7 @@ pub(crate) mod tests {
             (&include_bytes!("../programs/sieve-ibex.elf")[..], 0x80),
         ] {
             let map = MemoryMap { boot, ..TEST_MAP };
-            let sections = Program::Elf(elf.into())
-                .to_sections(crate::RV32IM, &map)
-                .expect("the sample program to load");
+            let sections = load_elf(elf, &map).expect("the sample program to load");
             assert_eq!(sections.text_addr, boot);
             assert_eq!(sections.data_addr, 0x400);
         }
@@ -675,7 +663,7 @@ pub(crate) mod tests {
             ..TEST_MAP
         };
         assert!(matches!(
-            Program::Elf(build_elf(0x400, sects).into()).to_sections(crate::RV32IM, &map),
+            load_elf(&build_elf(0x400, sects), &map),
             Err(LoadError::OutsideMemory {
                 section: ".text",
                 memory: Memory::Instruction,
@@ -828,9 +816,8 @@ pub(crate) mod tests {
         let source = "    .section .data\nvalue: .space 4\n    .section .rodata\nconst: .space 3\n    \
                       .section .bss\nbuf: .space 8\n    .section .text\n    .global _start\n\
                       _start:\n    addi x1, x0, 7\n";
-        let sections = Program::Assembly(source.into())
-            .to_sections(crate::RV32IM, &TEST_MAP)
-            .expect("a one-instruction program");
+        let sections =
+            assemble(source, crate::RV32IM, &TEST_MAP).expect("a one-instruction program");
 
         assert_eq!(*sections.text, [0x93, 0x00, 0x70, 0x00]);
         assert_eq!(*sections.data, [0, 0, 0, 0]);
@@ -855,7 +842,7 @@ pub(crate) mod tests {
     fn rejects_assembly_that_does_not_fit() {
         let source = "    .section .bss\nbuf: .space 400000\n    .section .text\n    nop\n";
         assert!(matches!(
-            Program::Assembly(source.into()).to_sections(crate::RV32IM, &TEST_MAP),
+            assemble(source, crate::RV32IM, &TEST_MAP),
             Err(LoadError::OutsideMemory {
                 section: ".bss",
                 ..

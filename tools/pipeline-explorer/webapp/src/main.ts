@@ -3,6 +3,7 @@ import { render as renderEditor } from "./editor.ts";
 import { colors } from "./colors.ts";
 import initialAsm from "./initialAsm.S?raw";
 import type { Trace } from "./types.ts";
+import type { WorkerReply, WorkerRequest } from "./wasm/trace-worker.ts";
 
 import { PipelineCanvas } from "./pipeline.ts";
 import { ScrubberCanvas } from "./scrubber.ts";
@@ -53,17 +54,12 @@ const chipMenuPanel: HTMLDivElement = document.getElementById(
 const chipMenuName: HTMLSpanElement = document.getElementById(
     "chipMenuName",
 )!;
-const editorElem: HTMLDivElement = document.querySelector("#left .editor")!;
 const elfUploadBtn: HTMLButtonElement = document.getElementById(
     "elfUploadBtn",
 )! as HTMLButtonElement;
 const elfFileInput: HTMLInputElement = document.getElementById(
     "elfFileInput",
 )! as HTMLInputElement;
-const elfNameElem: HTMLSpanElement = document.getElementById("elfName")!;
-const elfClearBtn: HTMLButtonElement = document.getElementById(
-    "elfClearBtn",
-)! as HTMLButtonElement;
 const errorBar: HTMLDivElement = document.getElementById("errorBar")! as HTMLDivElement;
 const errorMessage: HTMLSpanElement = document.getElementById("errorMessage")!;
 
@@ -131,17 +127,26 @@ function setCurrentCycle(cycle: number) {
 const worker = new Worker(new URL("./wasm/trace-worker.ts", import.meta.url), {
     type: "module",
 });
-worker.onmessage = (e) => {
+function postToWorker(request: WorkerRequest) {
+    worker.postMessage(request);
+}
+worker.onmessage = (e: MessageEvent<WorkerReply>) => {
+    const reply = e.data;
+    if (reply.kind === "disassemble") {
+        onDisassembled(reply);
+        return;
+    }
+
     pending -= 1;
-    if ("error" in e.data) {
+    if ("error" in reply) {
         // Keep showing the last good trace; the message says why it is stale.
-        showError(e.data.error);
+        showError(reply.error);
         if (pending == 0) simStatusElem.innerHTML = "";
         return;
     }
 
     clearError();
-    setTrace(e.data);
+    setTrace(reply.trace as Trace);
     if (pending == 0) {
         simStatusElem.innerHTML = `<img src="check.svg"/>`;
     }
@@ -166,17 +171,28 @@ function clearError() {
 }
 document.getElementById("errorDismissBtn")!.addEventListener("click", clearError);
 
-type Elf = { name: string; bytes: Uint8Array };
+/**
+ * Turns an ELF executable into assembly in the editor, laid out for the
+ * selected core. The result arrives in `onDisassembled`.
+ */
+function openElf(name: string, elf: Uint8Array) {
+    const proc = selectedProc();
+    postToWorker({ kind: "disassemble", proc, config: readProcConfig(proc), elf, name });
+    simStatusElem.innerHTML = `<img src="spinner.svg" class="spinner"/>`;
+}
 
-let elf: Elf | null = null;
-function setElf(next: Elf | null) {
-    elf = next;
-    elfNameElem.hidden = elfClearBtn.hidden = elf === null;
-    editorElem.hidden = elf !== null;
-    if (elf !== null) {
-        elfNameElem.innerText = `${elf.name} (${elf.bytes.length} bytes)`;
-        elfNameElem.title = elf.name;
+function onDisassembled(reply: Extract<WorkerReply, { kind: "disassemble" }>) {
+    if ("error" in reply) {
+        // The editor keeps what it had.
+        showError(`Cannot open ${reply.name}: ${reply.error}`);
+        if (pending == 0) simStatusElem.innerHTML = "";
+        return;
     }
+    clearError();
+    assemblyTextarea.value = reply.assembly;
+    assemblyTextarea.scrollTop = 0;
+    renderEditor();
+    unstaggerRunSim();
 }
 
 elfUploadBtn.addEventListener("click", () => elfFileInput.click());
@@ -185,12 +201,7 @@ elfFileInput.addEventListener("change", async () => {
     // Clear the input, or picking the same file again fires no `change`.
     elfFileInput.value = "";
     if (!file) return;
-    setElf({ name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) });
-    unstaggerRunSim();
-});
-elfClearBtn.addEventListener("click", () => {
-    setElf(null);
-    unstaggerRunSim();
+    openElf(file.name, new Uint8Array(await file.arrayBuffer()));
 });
 
 type ConfigField = {
@@ -226,18 +237,18 @@ const procConfigFields: Record<string, ConfigField[]> = {
     ],
 };
 
+function selectedProc(): string {
+    return procSelect.value in procConfigFields ? procSelect.value : "ibex";
+}
+
 function runSim() {
-    const program = elf !== null ? elf.bytes : assemblyTextarea.value;
-    const procSelectValue = procSelect.value;
-    const numCycles = numCyclesInput.value;
-
-    const proc = procSelectValue in procConfigFields ? procSelectValue : "ibex";
-
-    worker.postMessage({
-        "proc": proc,
-        "program": program,
-        "config": readProcConfig(proc),
-        "numCycles": numCycles,
+    const proc = selectedProc();
+    postToWorker({
+        kind: "trace",
+        proc,
+        program: assemblyTextarea.value,
+        config: readProcConfig(proc),
+        numCycles: numCyclesInput.valueAsNumber,
     });
     pending += 1;
     simStatusElem.innerHTML = `<img src="spinner.svg" class="spinner"/>`;
@@ -305,10 +316,8 @@ function onProcSelect() {
 
 /* ---------- shareable link ---------- */
 
-/** The program a link opens with: assembly, or an ELF file as base64url. */
-type SharedProgram =
-    | { kind: "asm"; text: string }
-    | { kind: "elf"; name: string; data: string };
+/** The program a link opens with, as assembly. */
+type SharedProgram = { kind: "asm"; text: string };
 
 type ShareState = {
     proc: string;
@@ -318,14 +327,7 @@ type ShareState = {
 };
 
 function isSharedProgram(p: any): p is SharedProgram {
-    switch (p?.kind) {
-        case "asm":
-            return typeof p.text === "string";
-        case "elf":
-            return typeof p.name === "string" && typeof p.data === "string";
-        default:
-            return false;
-    }
+    return p?.kind === "asm" && typeof p.text === "string";
 }
 
 const SHARE_PARAM = "share";
@@ -350,10 +352,7 @@ function shareLink(): string {
     const proc = procSelect.value;
     const state: ShareState = {
         proc,
-        program:
-            elf !== null
-                ? { kind: "elf", name: elf.name, data: bytesToBase64Url(elf.bytes) }
-                : { kind: "asm", text: assemblyTextarea.value },
+        program: { kind: "asm", text: assemblyTextarea.value },
         config: readProcConfig(proc),
         cycles: numCyclesInput.value,
     };
@@ -384,12 +383,8 @@ function readShareState(): ShareState | null {
 
 /** Loads a shared state, falling back to the defaults for anything missing. */
 function applyShareState(state: ShareState | null) {
-    const program = state?.program;
-    assemblyTextarea.value = program?.kind === "asm" ? program.text : initialAsm;
+    assemblyTextarea.value = state?.program.text ?? initialAsm;
     renderEditor();
-    if (program?.kind === "elf") {
-        setElf({ name: program.name, bytes: bytesFromBase64Url(program.data) });
-    }
     numCyclesInput.value = state?.cycles ?? "500";
     if (state) procSelect.value = state.proc;
     buildProcConfig();
