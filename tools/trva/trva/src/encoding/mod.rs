@@ -1536,7 +1536,7 @@ asm_display! {
 
     Addi  ("{},{},{}", i.rd(), i.rs1(), i.imm()),
     Slti  ("{},{},{}", i.rd(), i.rs1(), i.imm()),
-    Sltiu ("{},{},{}", i.rd(), i.rs1(), i.imm()),
+    Sltiu ("{},{},{}", i.rd(), i.rs1(), i.imm() as i32),
     Xori  ("{},{},{}", i.rd(), i.rs1(), i.imm()),
     Ori   ("{},{},{}", i.rd(), i.rs1(), i.imm()),
     Andi  ("{},{},{}", i.rd(), i.rs1(), i.imm()),

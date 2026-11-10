@@ -183,28 +183,76 @@ impl<'a> SourceCursor<'a> {
         Ok(())
     }
 
+    /// A 32-bit value, either signed or unsigned: `-1` and `4294967295` are
+    /// the same bit pattern.
     pub fn take_signed_imm32(&mut self) -> AssembleResult<i64> {
-        // @TODO: Many other syntaxes.
-        self.take_u32().map(|v| v as i64)
+        self.take_int_in(-(1 << 31)..=i64::from(u32::MAX), "a 32-bit value")
     }
     pub fn _take_imm32(&mut self) -> AssembleResult<u32> {
         // @TODO: Many other syntaxes.
         self.take_u32()
     }
+    /// The sign-extended 12-bit immediate of an I- or S-type instruction.
     pub fn take_imm12(&mut self) -> AssembleResult<i16> {
-        // @TODO: Many other syntaxes.
-        self.take_u32().map(|v| v as i16)
+        self.take_int_in(-2048..=2047, "-2048..=2047")
+            .map(|v| v as i16)
     }
     pub fn take_imm20(&mut self) -> AssembleResult<u32> {
         // @TODO: Many other syntaxes.
         self.take_u32()
     }
-    pub fn take_imm12_unsigned(&mut self) -> AssembleResult<u32> {
-        todo!()
-    }
+    /// A shift amount for either XLEN; the caller narrows it to its own.
     pub fn take_shamt(&mut self) -> AssembleResult<u8> {
-        // @TODO: Many other syntaxes.
-        self.take_u32().map(|v| v as u8)
+        self.take_int_in(0..=63, "0..=63").map(|v| v as u8)
+    }
+
+    /// An integer within `range`, which `expected` describes in the error.
+    fn take_int_in(
+        &mut self,
+        range: std::ops::RangeInclusive<i64>,
+        expected: &str,
+    ) -> AssembleResult<i64> {
+        let start = self.offset;
+        let value = self.take_int()?;
+        if !range.contains(&value) {
+            self.offset = start;
+            return Err(Box::new(self.new_err(format!(
+                "immediate {value} is out of range, expected {expected}"
+            ))));
+        }
+        Ok(value)
+    }
+
+    /// A decimal integer with an optional leading `-`.
+    ///
+    /// Unlike [`Self::take_u32`], at least one digit is required, so a missing
+    /// operand is an error rather than a zero.
+    pub fn take_int(&mut self) -> AssembleResult<i64> {
+        // @TODO: Hexadecimal and binary.
+        let start = self.offset;
+        let negative = self.next_byte_if_equals(b'-');
+        if !self.peek_byte().is_some_and(|b| b.is_ascii_digit()) {
+            self.offset = start;
+            return Err(Box::new(self.new_err("expected an integer")));
+        }
+
+        let bs = self.content.as_bytes();
+        let mut value = 0i64;
+        while let Some(&b) = bs.get(self.offset)
+            && b.is_ascii_digit()
+        {
+            // Anything this large is out of range for every caller anyway.
+            let Some(next) = value
+                .checked_mul(10)
+                .and_then(|v| v.checked_add(i64::from(b - b'0')))
+            else {
+                self.offset = start;
+                return Err(Box::new(self.new_err("integer overflow")));
+            };
+            value = next;
+            self.offset += 1;
+        }
+        Ok(if negative { -value } else { value })
     }
 
     pub fn take_u32(&mut self) -> AssembleResult<u32> {
