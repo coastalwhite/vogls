@@ -1,6 +1,7 @@
 import { assemblySpec, primaryAssembly } from "../views/assembly.ts";
 import { chooserSpec } from "../views/chooser.ts";
 import { pipelineSpec } from "../views/pipeline.ts";
+import { statsSpec } from "../views/stats.ts";
 import type { Trace } from "../types.ts";
 import type {
     NodeId,
@@ -12,7 +13,7 @@ import type {
 } from "./types.ts";
 
 /** Every view type the app offers. A new one is one import and one entry. */
-const specs: ViewSpec[] = [pipelineSpec, assemblySpec, chooserSpec];
+const specs: ViewSpec[] = [pipelineSpec, assemblySpec, statsSpec, chooserSpec];
 
 export function viewSpecs(): ViewSpec[] {
     return specs.slice();
