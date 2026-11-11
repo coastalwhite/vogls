@@ -2,6 +2,7 @@ use std::cmp;
 use std::fmt::{self};
 use std::hash::Hash;
 use std::num::NonZeroU32;
+use std::ops::{Bound, RangeBounds};
 use std::ptr::NonNull;
 
 use self::arithmetic::{
@@ -133,11 +134,6 @@ pub enum BitsDataRef<'a> {
 pub enum BitsDataOwned {
     Inline(u64),
     Boxed(Box<[u64]>),
-}
-
-pub enum BitsDataRefMut<'a> {
-    Inline(&'a mut u64),
-    Separate(&'a mut [u64]),
 }
 
 pub fn get_disjoint_dst_s1_s2<T>(
@@ -2050,6 +2046,231 @@ impl Bits {
             let spc = spc.map(|spc| (spc[word] >> shift) as u8 | !mask);
             (val, spc)
         })
+    }
+
+    fn range_reduce<TVS: Default, FVS: Default>(
+        &self,
+        range: impl RangeBounds<u32>,
+        tv_op: impl Fn(&mut TVS, u64, VectorSize),
+        tv_finalize: impl Fn(TVS) -> FvLogicValue,
+        fv_op: impl Fn(&mut FVS, u64, u64, VectorSize),
+        fv_finalize: impl Fn(FVS) -> FvLogicValue,
+    ) -> FvLogicValue {
+        let start = match range.start_bound() {
+            Bound::Included(v) => *v,
+            Bound::Excluded(v) => *v + 1,
+            Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(v) => *v + 1,
+            Bound::Excluded(v) => *v,
+            Bound::Unbounded => self.size.get(),
+        };
+
+        let end = end.min(self.size.get());
+        let Some(range_size) = VectorSize::new(end.saturating_sub(start)) else {
+            return FvLogicValue::L0;
+        };
+
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(v) => {
+                let mut state = TVS::default();
+                tv_op(&mut state, v >> start, range_size);
+                tv_finalize(state)
+            }
+            BitsDataRef::SeparateTv(items) => {
+                let fst_word_size = VectorSize::new(64 - (start % 64)).unwrap().min(range_size);
+                let mut woff = (start / 64) as usize;
+                let boff = start % 64;
+
+                let mut state = TVS::default();
+                tv_op(&mut state, items[woff] >> boff, fst_word_size);
+                woff += 1;
+                let mut rem_bits = range_size.get() - fst_word_size.get();
+
+                const VSIZE_64: VectorSize = VectorSize::new(64).unwrap();
+
+                while rem_bits > 64 {
+                    tv_op(&mut state, items[woff], VSIZE_64);
+                    woff += 1;
+                    rem_bits -= 64;
+                }
+
+                if let Some(lst_word_size) = VectorSize::new(rem_bits) {
+                    tv_op(&mut state, items[woff], lst_word_size);
+                }
+
+                tv_finalize(state)
+            }
+            BitsDataRef::InlineFv(spc, val) => {
+                let mut state = FVS::default();
+                fv_op(&mut state, spc >> start, val >> start, range_size);
+                fv_finalize(state)
+            }
+            BitsDataRef::SeparateFv(items) => {
+                let fst_word_size = VectorSize::new(64 - (start % 64)).unwrap().min(range_size);
+                let mut woff = (start / 64) as usize;
+                let boff = start % 64;
+                let nwords = items.len() / 2;
+
+                let mut state = FVS::default();
+                fv_op(
+                    &mut state,
+                    items[woff] >> boff,
+                    items[nwords + woff] >> boff,
+                    fst_word_size,
+                );
+                woff += 1;
+                let mut rem_bits = range_size.get() - fst_word_size.get();
+
+                const VSIZE_64: VectorSize = VectorSize::new(64).unwrap();
+
+                while rem_bits > 64 {
+                    fv_op(&mut state, items[woff], items[nwords + woff], VSIZE_64);
+                    woff += 1;
+                    rem_bits -= 64;
+                }
+
+                if let Some(lst_word_size) = VectorSize::new(rem_bits) {
+                    fv_op(&mut state, items[woff], items[nwords + woff], lst_word_size);
+                }
+
+                fv_finalize(state)
+            }
+        }
+    }
+
+    pub fn range_reduce_or(&self, range: impl RangeBounds<u32>) -> FvLogicValue {
+        struct FvState {
+            spc_and_reduce: bool,
+            val_or_reduce: u64,
+        }
+
+        impl Default for FvState {
+            fn default() -> Self {
+                Self {
+                    spc_and_reduce: true,
+                    val_or_reduce: 0,
+                }
+            }
+        }
+
+        self.range_reduce::<u64, FvState>(
+            range,
+            |state, w, size| *state |= w & mask_size_1to64(size.get()),
+            |state| FvLogicValue::from_bool(state != 0),
+            |state, spc, val, size| {
+                let mask = mask_size_1to64(size.get());
+                state.spc_and_reduce &= spc & mask == mask;
+                state.val_or_reduce |= val & spc & mask;
+            },
+            |state| {
+                if state.val_or_reduce != 0 {
+                    FvLogicValue::L1
+                } else if state.spc_and_reduce {
+                    FvLogicValue::L0
+                } else {
+                    FvLogicValue::X
+                }
+            },
+        )
+    }
+
+    /// Fill the `range` of bits with the given `value`.
+    ///
+    /// Any index in `range` outside outside `0..bitlength(self)` are ignored.
+    pub fn fill_range(&mut self, range: impl RangeBounds<u32>, value: FvLogicValue) {
+        let start = match range.start_bound() {
+            Bound::Included(v) => *v,
+            Bound::Excluded(v) => *v + 1,
+            Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(v) => *v + 1,
+            Bound::Excluded(v) => *v,
+            Bound::Unbounded => self.size.get(),
+        };
+
+        let end = end.min(self.size.get());
+        let Some(range_size) = VectorSize::new(end.saturating_sub(start)) else {
+            return;
+        };
+
+        if value.is_special() {
+            let slf = std::mem::replace(self, Bits::new_u64(0));
+            *self = slf.into_four_value();
+        }
+
+        let (spc_fill, val_fill) = match value {
+            FvLogicValue::X => (0, 0),
+            FvLogicValue::Z => (0, u64::MAX),
+            FvLogicValue::L0 => (u64::MAX, 0),
+            FvLogicValue::L1 => (u64::MAX, u64::MAX),
+        };
+
+        #[inline(always)]
+        fn fill_masked(word: &mut u64, mask: u64, fill: u64) {
+            *word = (*word & !mask) | (fill & mask);
+        }
+
+        fn fill_plane(plane: &mut [u64], start: u32, end: u32, fill: u64) {
+            let fst_word = (start / 64) as usize;
+            let lst_word = ((end - 1) / 64) as usize;
+            for (w, word) in plane[fst_word..=lst_word].iter_mut().enumerate() {
+                let w = fst_word + w;
+                let lo = if w == fst_word { start % 64 } else { 0 };
+                let hi = if w == lst_word { (end - 1) % 64 + 1 } else { 64 };
+                fill_masked(word, mask_size_1to64(hi - lo) << lo, fill);
+            }
+        }
+
+        // @NOTE: Only valid for inline data, where `range_size <= 64`.
+        let inline_mask = || mask_size_1to64(range_size.get()) << start;
+        let is_inline = self.size <= self.mode.max_inline_size();
+        let mode = self.mode;
+        let data = self.as_mut_u64_slice();
+
+        match (mode, is_inline) {
+            (Mode::TwoValue, true) => fill_masked(&mut data[0], inline_mask(), val_fill),
+            (Mode::FourValue, true) => {
+                let mask = inline_mask();
+                fill_masked(&mut data[0], mask, spc_fill);
+                fill_masked(&mut data[0], mask << 32, val_fill);
+            }
+
+            (Mode::TwoValue, false) => fill_plane(data, start, end, val_fill),
+            (Mode::FourValue, false) => {
+                let (spc, val) = data.split_at_mut(data.len() / 2);
+                fill_plane(spc, start, end, spc_fill);
+                fill_plane(val, start, end, val_fill);
+            }
+        }
+    }
+
+    fn into_four_value(self) -> Bits {
+        match self.as_data_ref() {
+            BitsDataRef::InlineTv(val) if self.size <= Mode::FourValue.max_inline_size() => {
+                Bits::from_four_value_u64(
+                    self.size,
+                    mask_size_1to64(self.size.get()) as u32,
+                    val as u32,
+                )
+            }
+            BitsDataRef::InlineTv(val) => Bits::from_boxed_slice(
+                Mode::FourValue,
+                self.size,
+                [mask_size_1to64(self.size.get()), val].into(),
+            ),
+            BitsDataRef::SeparateTv(items) => {
+                // @NOTE: Final masking of the spc plane is done by from_boxed_slice.
+                let data = std::iter::repeat_n(u64::MAX, items.len())
+                    .chain(items.iter().copied())
+                    .collect();
+                Bits::from_boxed_slice(Mode::FourValue, self.size, data)
+            }
+            BitsDataRef::InlineFv(_, _) => self,
+            BitsDataRef::SeparateFv(_) => self,
+        }
     }
 }
 

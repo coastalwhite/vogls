@@ -9,7 +9,8 @@ use crate::ast::statement::Delay3;
 use crate::elaborate::{SignalSymbol, VSymbol};
 use crate::lower::expression::{self, get_used_signals, lower_expr};
 use crate::lower::fuse::{
-    DestinationSite, FuseFailure, FuseResult, RequiredSignalKind, SiteTerminal, expr_to_src_sites, try_fuse_srcs_to_dsts
+    DestinationSite, DestinationSiteContent, FuseFailure, FuseResult, RequiredSignalKind,
+    SiteTerminal, expr_to_src_sites, try_fuse_srcs_to_dsts,
 };
 use crate::lower::{Diagnostics, resolve_hident};
 use crate::lower::{LowerContext, MutLowerContext};
@@ -182,8 +183,10 @@ pub fn try_fuse_net_assignment<'a>(
 
     // Destinations
     mctx.fuse_dsts_scratch.push(DestinationSite {
-        signal: symbol.terminals.blocking_drive_signal(),
-        slice: SignalSlice::with_end(symbol.ty.bit_length()),
+        content: DestinationSiteContent::Signal {
+            signal: symbol.terminals.blocking_drive_signal(),
+            slice: SignalSlice::with_end(symbol.ty.bit_length()),
+        },
         ty: symbol.ty.into(),
     });
 
@@ -193,11 +196,13 @@ pub fn try_fuse_net_assignment<'a>(
         &mctx.gl,
         &mut mctx.fuse_srcs_scratch,
         scope,
-        &mut Diagnostics::default(), 
+        &mut Diagnostics::default(),
         rvalue,
         SiteTerminal::Probe,
         RequiredSignalKind::None,
-    ).is_err() {
+    )
+    .is_err()
+    {
         return Err(FuseFailure);
     };
 

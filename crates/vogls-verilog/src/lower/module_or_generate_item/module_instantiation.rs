@@ -10,10 +10,11 @@ use crate::ast::module::{
 use crate::elaborate::{SignalSymbol, VSymbol};
 use crate::lower::expression::{self, get_expr_type};
 use crate::lower::fuse::{
-    DestinationSite, FuseFailure, FuseResult, RequiredSignalKind, SiteTerminal, SiteType,
-    SourceSite, SourceSiteContent, convert_src_sites_to_dsts, expr_to_src_sites,
-    try_fuse_srcs_to_dsts,
+    DestinationSite, DestinationSiteContent, FuseFailure, FuseResult, RequiredSignalKind,
+    SiteTerminal, SiteType, SourceSite, SourceSiteContent, convert_src_sites_to_dsts,
+    expr_to_src_sites, try_fuse_srcs_to_dsts,
 };
+use crate::lower::multidriver::MultiDriverResult;
 use crate::lower::{
     Diagnostics, LowerContext, MutLowerContext, VType, resolve_symbol_id, unwrap_get_signal,
 };
@@ -206,6 +207,7 @@ fn assign_input_port<'a>(
     port: SymbolId,
     expr_slice: Option<SignalSlice>,
 ) -> Result<(), ()> {
+    // @NOTE: Input ports cannot have multiple drivers, so they don't have be tracked.
     let port = unwrap_get_signal(&ctx.table, port);
 
     if try_fuse_input_port(ctx, mctx, scope, expr, port, expr_slice).is_ok() {
@@ -254,8 +256,10 @@ fn try_fuse_input_port<'a>(
 
     // Destinations
     mctx.fuse_dsts_scratch.push(DestinationSite {
-        signal: port.terminals.blocking_drive_signal(),
-        slice: SignalSlice::with_end(port.ty.bit_length()),
+        content: DestinationSiteContent::Signal {
+            signal: port.terminals.blocking_drive_signal(),
+            slice: SignalSlice::with_end(port.ty.bit_length()),
+        },
         ty: port.ty.into(),
     });
 
@@ -281,6 +285,7 @@ fn try_fuse_input_port<'a>(
         }
     }
 
+    // @NOTE: Input ports cannot have multiple drivers, so they don't have be tracked.
     try_fuse_srcs_to_dsts(
         &mctx.gl,
         &mut mctx.connections,
@@ -337,6 +342,18 @@ fn assign_port_output<'a>(
         ty: SiteType::from(output.ty),
     });
 
+    for dst in mctx.fuse_dsts_scratch.iter_mut() {
+        if let DestinationSiteContent::Signal { signal, slice } = &mut dst.content {
+            match mctx
+                .multidriver
+                .push_new_driver(&mut mctx.gl, *signal, *slice)
+            {
+                MultiDriverResult::Keep => {}
+                MultiDriverResult::NeedsRemap(proxy) => *signal = proxy,
+            };
+        }
+    }
+
     if try_fuse_srcs_to_dsts(
         &mctx.gl,
         &mut mctx.connections,
@@ -381,8 +398,10 @@ fn assign_port_output<'a>(
     let mut offset = 0;
     for dst in &mctx.fuse_dsts_scratch {
         let bitlength = dst.bit_length();
-        let probe_v = bb_builder.slice_constant(&mut mctx.gl, probed, offset, bitlength);
-        bb_builder.drive_partial_constant(&mut mctx.gl, dst.signal, probe_v, dst.slice.lsb());
+        if let DestinationSiteContent::Signal { signal, slice } = dst.content {
+            let probe_v = bb_builder.slice_constant(&mut mctx.gl, probed, offset, bitlength);
+            bb_builder.drive_partial_constant(&mut mctx.gl, signal, probe_v, slice.lsb());
+        }
         offset += bitlength.get();
     }
 
@@ -432,6 +451,13 @@ fn slice_src_sites(srcs: &mut Vec<SourceSite>, slice: SignalSlice) -> Result<(),
             SourceSiteContent::Signal { signal, slice } => SourceSiteContent::Signal {
                 signal: *signal,
                 slice: slice.subslice(sub).unwrap(),
+            },
+            SourceSiteContent::OutOfBounds {
+                signal,
+                bit_length: _,
+            } => SourceSiteContent::OutOfBounds {
+                signal: *signal,
+                bit_length: sub.width(),
             },
         };
         true

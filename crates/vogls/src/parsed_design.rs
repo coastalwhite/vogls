@@ -13,6 +13,7 @@ use vogls_verilog::ast::module::{
     NonPortModuleItem, TimeScale,
 };
 use vogls_verilog::elaborate::{SymbolAstRefs, VSymbolTable};
+use vogls_verilog::lower::multidriver::MultidriverResolution;
 use vogls_verilog::lower::{Diagnostics, LowerContext};
 use vogls_verilog::parser::{Ast, AstArenas, Diagnostics as ParseDiagnostics};
 use vogls_verilog::tokenizer::Tokenized;
@@ -228,6 +229,7 @@ impl<'a> ParsedDesign<'a> {
             udps,
             gl,
             nbas: IndexMap::default(),
+            multidriver: MultidriverResolution::default(),
 
             warnings: diagnostics.warnings,
 

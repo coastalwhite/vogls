@@ -32,6 +32,7 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::elaborate::{FunctionSymbol, TaskSymbol};
+use crate::lower::multidriver::MultidriverResolution;
 use crate::lower::{
     Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr, resolve_hident,
     try_resolve_hident, unwrap_get_module, unwrap_get_module_mut, unwrap_get_param_mut,
@@ -2542,6 +2543,7 @@ pub fn finalize_symbol<'a>(
                 fuse_dsts_scratch: Vec::new(),
                 has_vcd: false,
                 monitor: None,
+                multidriver: MultidriverResolution::default(),
             };
             // @TODO: This should ignore errors with unresolved symbols.
             let res =
