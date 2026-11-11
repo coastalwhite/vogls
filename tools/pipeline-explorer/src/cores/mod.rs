@@ -127,10 +127,17 @@ pub enum DataBuilder {
 
 impl DataBuilder {
     /// The builders for everything in `points` that this explorer knows.
-    pub fn for_points(points: DataPoints, num_stages: usize, text_addr: u32, cycles: u32) -> Vec<Self> {
+    pub fn for_points(
+        points: DataPoints,
+        num_stages: usize,
+        text_addr: u32,
+        cycles: u32,
+    ) -> Vec<Self> {
         let mut out = Vec::new();
         if points.contains(DataPoints::PIPELINE) {
-            out.push(Self::Pipeline(PipelineTrace::new(text_addr, num_stages, cycles)));
+            out.push(Self::Pipeline(PipelineTrace::new(
+                text_addr, num_stages, cycles,
+            )));
         }
         if points.contains(DataPoints::REGISTERS) {
             out.push(Self::Registers(RegisterTrace::new(cycles)));

@@ -307,7 +307,14 @@ pub fn get_js_ibex_trace(
         // A failed call just means no progress is shown.
         let _ = on_progress.call1(&JsValue::NULL, &JsValue::from(cycle));
     };
-    let trace = evaluate_with_progress(&Ibex, &config, &program, num_cycles, DataPoints::from_bits(data_points), &mut report)?;
+    let trace = evaluate_with_progress(
+        &Ibex,
+        &config,
+        &program,
+        num_cycles,
+        DataPoints::from_bits(data_points),
+        &mut report,
+    )?;
     Ok(trace.into_object())
 }
 
@@ -323,7 +330,14 @@ pub fn get_js_neorv32_trace(
         // A failed call just means no progress is shown.
         let _ = on_progress.call1(&JsValue::NULL, &JsValue::from(cycle));
     };
-    let trace = evaluate_with_progress(&Neorv32, &(), &program, num_cycles, DataPoints::from_bits(data_points), &mut report)?;
+    let trace = evaluate_with_progress(
+        &Neorv32,
+        &(),
+        &program,
+        num_cycles,
+        DataPoints::from_bits(data_points),
+        &mut report,
+    )?;
     Ok(trace.into_object())
 }
 
@@ -340,7 +354,14 @@ pub fn get_js_hazard3_trace(
         // A failed call just means no progress is shown.
         let _ = on_progress.call1(&JsValue::NULL, &JsValue::from(cycle));
     };
-    let trace = evaluate_with_progress(&Hazard3, &config, &program, num_cycles, DataPoints::from_bits(data_points), &mut report)?;
+    let trace = evaluate_with_progress(
+        &Hazard3,
+        &config,
+        &program,
+        num_cycles,
+        DataPoints::from_bits(data_points),
+        &mut report,
+    )?;
     Ok(trace.into_object())
 }
 
@@ -357,7 +378,14 @@ pub fn get_js_trace(
         // A failed call just means no progress is shown.
         let _ = on_progress.call1(&JsValue::NULL, &JsValue::from(cycle));
     };
-    let trace = evaluate_with_progress(&PicoRv32, &config, &program, num_cycles, DataPoints::from_bits(data_points), &mut report)?;
+    let trace = evaluate_with_progress(
+        &PicoRv32,
+        &config,
+        &program,
+        num_cycles,
+        DataPoints::from_bits(data_points),
+        &mut report,
+    )?;
     Ok(trace.into_object())
 }
 

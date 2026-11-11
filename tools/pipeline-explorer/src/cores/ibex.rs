@@ -1,9 +1,8 @@
 use vogls::design::RtSignal;
 
 use super::{
-    DataBuilder, DataPoints, REGISTER_NAMES,
-    Core, DATA_MEMORY, DATA_MEMORY_ADDR, Description, INSTRUCTION_MEMORY, INSTRUCTION_MEMORY_ADDR,
-    Sim, Testbench, enabled, lookup, signal, try_signal,
+    Core, DATA_MEMORY, DATA_MEMORY_ADDR, DataBuilder, DataPoints, Description, INSTRUCTION_MEMORY,
+    INSTRUCTION_MEMORY_ADDR, REGISTER_NAMES, Sim, Testbench, enabled, lookup, signal, try_signal,
 };
 use crate::TraceError;
 use crate::program::ProgramSections;

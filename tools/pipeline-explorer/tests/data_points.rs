@@ -158,9 +158,15 @@ fn symbol_addresses_line_up_with_the_pipeline() {
         ),
         (
             "ibex",
-            evaluate(&Ibex, &IbexConfig { wb_stage: false }, LABELLED, 60, DataPoints::ALL)
-                .expect("ibex")
-                .data,
+            evaluate(
+                &Ibex,
+                &IbexConfig { wb_stage: false },
+                LABELLED,
+                60,
+                DataPoints::ALL,
+            )
+            .expect("ibex")
+            .data,
         ),
     ];
 
@@ -186,13 +192,19 @@ fn symbol_addresses_line_up_with_the_pipeline() {
         for trace in &pipeline.traces {
             for slot in trace.iter().copied().filter(|s| *s != 0) {
                 let addr = pipeline.text_addr + 4 * (slot - 1);
-                assert!(addr >= start && addr < text_end, "{name}: slot {slot} out of range");
+                assert!(
+                    addr >= start && addr < text_end,
+                    "{name}: slot {slot} out of range"
+                );
             }
         }
 
         // `.data` sits at its own base, not at twice it.
         let value = at("value").unwrap_or_else(|| panic!("{name}: value"));
         assert!(value >= 1024, "{name}: value 0x{value:x} is in data memory");
-        assert!(value < 1024 + 1001 * 4, "{name}: value 0x{value:x} within data memory");
+        assert!(
+            value < 1024 + 1001 * 4,
+            "{name}: value 0x{value:x} within data memory"
+        );
     }
 }
