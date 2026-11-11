@@ -156,6 +156,7 @@ fn main() -> ExitCode {
     let Assembled {
         labels: _,
         symbols: _,
+        globals: _,
         text_start,
         data_start,
         rodata_start,

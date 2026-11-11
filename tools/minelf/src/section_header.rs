@@ -45,7 +45,7 @@ pub struct ElfSectionHeader {
 }
 
 impl ElfSectionType {
-    fn to_u32(&self) -> u32 {
+    fn to_u32(self) -> u32 {
         use ElfSectionType::*;
 
         match self {
@@ -65,7 +65,7 @@ impl ElfSectionType {
             Hiproc => 0x7fffffff,
             Louser => 0x80000000,
             Hiuser => 0xffffffff,
-            Other(v) => *v,
+            Other(v) => v,
         }
     }
 
