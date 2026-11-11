@@ -373,7 +373,7 @@ fn assign_port_output<'a>(
         .fuse_dsts_scratch
         .iter()
         .map(|d| d.bit_length())
-        .fold(Some(0u32), |l, r| l?.checked_add(r.get()))
+        .try_fold(0u32, |l, r| l.checked_add(r.get()))
         .unwrap();
     let destination_size = VectorSize::new(destination_size).unwrap();
 
