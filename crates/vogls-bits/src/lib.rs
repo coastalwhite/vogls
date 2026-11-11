@@ -2219,7 +2219,11 @@ impl Bits {
             for (w, word) in plane[fst_word..=lst_word].iter_mut().enumerate() {
                 let w = fst_word + w;
                 let lo = if w == fst_word { start % 64 } else { 0 };
-                let hi = if w == lst_word { (end - 1) % 64 + 1 } else { 64 };
+                let hi = if w == lst_word {
+                    (end - 1) % 64 + 1
+                } else {
+                    64
+                };
                 fill_masked(word, mask_size_1to64(hi - lo) << lo, fill);
             }
         }
