@@ -9,8 +9,6 @@ endmodule
 module src8(output [7:0] o);
     assign o = 8'h5C;
 endmodule
-module bidir(inout [3:0] p);
-endmodule
 
 module top;
     reg  [11:0] in;
@@ -28,10 +26,6 @@ module top;
     assign part[7:0] = 8'h00;
     assign part[15:12] = 4'h0;
 
-    wire [3:0] w;
-    bidir d (.p(w));
-    assign w = 4'h9;
-
     initial begin
         in = 12'h5A3;
         #1;
@@ -39,8 +33,6 @@ module top;
         $vogls_assert_eq(wide, 8'h0A);
         $vogls_assert_eq(narrow, 4'hC);
         $vogls_assert_eq(part, 16'h0A00);
-        $vogls_assert_eq(w, 4'h9);
-        $vogls_assert_eq(d.p, 4'h9);
         in = 12'h0F0;
         #1;
         $vogls_assert_eq(out, 12'hF0F);

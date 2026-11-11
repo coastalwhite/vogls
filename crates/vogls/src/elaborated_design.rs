@@ -13,6 +13,7 @@ use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, NonPortModuleItem, TimeScale};
 use vogls_verilog::ast::udp::UdpDeclaration;
 use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable, determine_module_context};
+use vogls_verilog::lower::multidriver::MultidriverResolution;
 use vogls_verilog::lower::{
     Diagnostics, LowerContext, LowerErrorReason, MutLowerContext, WarningsReport,
     lower_module_to_ir,
@@ -38,6 +39,7 @@ pub struct ElaboratedDesign<'a> {
     pub(crate) udps: VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
     pub(crate) gl: GlobalContext,
     pub(crate) nbas: IndexMap<SignalKey, (ProcessKey, SignalKey, Option<SignalKey>)>,
+    pub(crate) multidriver: MultidriverResolution,
 
     pub(crate) warnings: Vec<(TokenRange, String)>,
 
@@ -247,6 +249,7 @@ impl<'a> ElaboratedDesign<'a> {
             fuse_srcs_scratch: Vec::new(),
             has_vcd: false,
             monitor: None,
+            multidriver: std::mem::take(&mut self.multidriver),
         };
 
         let result = f(&mut ctx, &mut mctx, &self.module_lut);
@@ -256,6 +259,7 @@ impl<'a> ElaboratedDesign<'a> {
         self.gl = mctx.gl;
         self.nbas = mctx.nbas;
         self.warnings = mctx.diagnostics.warnings;
+        self.multidriver = mctx.multidriver;
         result
     }
 
@@ -372,6 +376,7 @@ impl<'a> ElaboratedDesign<'a> {
             udps,
             gl,
             nbas,
+            multidriver,
 
             logic_mode,
 
@@ -407,6 +412,7 @@ impl<'a> ElaboratedDesign<'a> {
             fuse_srcs_scratch: Vec::new(),
             has_vcd: false,
             monitor: None,
+            multidriver,
         };
 
         // @TODO: Iterate over the modules instead.
@@ -477,6 +483,7 @@ impl<'a> ElaboratedDesign<'a> {
                     udps,
                     gl: mctx.gl,
                     nbas: mctx.nbas,
+                    multidriver: mctx.multidriver,
 
                     unoptimized_fgs,
                     optimized_fgs,
@@ -524,6 +531,7 @@ impl<'a> ElaboratedDesign<'a> {
                     udps,
                     gl: mctx.gl,
                     nbas: mctx.nbas,
+                    multidriver: mctx.multidriver,
 
                     unoptimized_fgs,
                     optimized_fgs,
@@ -537,6 +545,8 @@ impl<'a> ElaboratedDesign<'a> {
                 stage: LowerErrorStage::Modules,
             }));
         }
+
+        std::mem::take(&mut mctx.multidriver).finalize(&mut mctx.gl, &mut mctx.connections);
 
         let mut opt = FuseGraphOptimizer::new(FuseGraph::from_connections(
             max_fuse_signals_rounds,

@@ -436,20 +436,6 @@ impl<'a, 'b> From<ConstantBitSlice<'a>> for RangeExpr<ConstantAddressingContext<
     }
 }
 
-impl<'a, 'b> Address<ConstantAddressingContext<'a, 'b>> {
-    pub fn signal_offset_as_u32(&self) -> Option<u32> {
-        let offset = match (self.elem_offset, self.array) {
-            (Some(elem_offset), Some((array_offset, _array_overflow))) => {
-                elem_offset.checked_add(array_offset)?
-            }
-            (Some(elem_offset), None) => elem_offset,
-            (None, Some((array_offset, _array_overflow))) => array_offset,
-            (None, None) => 0,
-        };
-        u32::try_from(offset).ok()
-    }
-}
-
 impl<'a, 'b> AddressingContext for ConstantAddressingContext<'a, 'b> {
     type ConstantExpr = AstId<'a, ConstantExpr<'a>>;
     type Expr = AstId<'a, ConstantExpr<'a>>;

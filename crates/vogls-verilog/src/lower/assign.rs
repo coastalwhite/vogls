@@ -1,5 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, VariableKey, VectorSize};
+use vogls_ir::{BasicBlockBuilder, SignalSlice, VariableKey, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::expr::{BitSlice, BitSliceKind};
@@ -13,6 +13,7 @@ use crate::lower::expression::{self, truncate_or_extend};
 use crate::lower::try_resolve_hident;
 
 use super::addressing::ConstantAddressingContext;
+use super::multidriver::MultiDriverResult;
 use super::{LowerContext, try_resolve_signal};
 use super::{MutLowerContext, VType};
 
@@ -399,16 +400,11 @@ fn assign_net_lvalue_flat<'a>(
         (None, Some((array_offset, _array_overflow))) => Some(array_offset),
         (None, None) => None,
     };
-    let partial = match partial {
-        None => None,
-        Some(partial) => Some(builder.constant_u32(
-            &mut mctx.gl,
-            u32::try_from(partial).map_err(|_| {
-                mctx.diagnostics
-                    .not_yet_implemented(ctx.arenas.get_span(lvalue), "overflow");
-            })?,
-        )),
-    };
+    let partial = partial.unwrap_or(0);
+    let partial = u32::try_from(partial).map_err(|_| {
+        mctx.diagnostics
+            .not_yet_implemented(ctx.arenas.get_span(lvalue), "overflow");
+    })?;
     let var = expression::coerce_to(
         mctx.gl(),
         builder,
@@ -416,7 +412,23 @@ fn assign_net_lvalue_flat<'a>(
         variable_ty,
         s.ty.resize_net_to(output_width),
     );
-    s.terminals.drive_blocking(mctx.gl(), builder, var, partial);
+
+    let Some(slice) = SignalSlice::from_width(partial, output_width) else {
+        mctx.diagnostics
+            .not_yet_implemented(ctx.arenas.get_span(lvalue), "overflow");
+        return Err(());
+    };
+    let dst_signal = s.terminals.blocking_drive_signal();
+    let dst_signal = match mctx.multidriver.push_new_driver(
+        &mut mctx.gl,
+        s.terminals.blocking_drive_signal(),
+        slice,
+    ) {
+        MultiDriverResult::Keep => dst_signal,
+        MultiDriverResult::NeedsRemap(s) => s,
+    };
+
+    builder.drive_partial_constant(mctx.gl(), dst_signal, var, partial);
     Ok(())
 }
 

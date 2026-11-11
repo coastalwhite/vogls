@@ -1117,6 +1117,26 @@ impl Instruction {
             | Instruction::LastUpdateTime(..) => {}
         }
     }
+
+    pub fn map_drive_signals(&mut self, mut f: impl FnMut(SignalKey) -> SignalKey) {
+        match self {
+            Self::Constant(..)
+            | Self::Unary(..)
+            | Self::Resize(..)
+            | Self::Binary(..)
+            | Self::BinaryImm(..)
+            | Self::Slice(..)
+            | Self::SliceImm(..)
+            | Self::ShiftImm(..)
+            | Self::Select(..)
+            | Self::Intrinsic(..)
+            | Self::LastUpdateTime(..)
+            | Self::Probe(..)
+            | Self::ProbeSlice(..)
+            | Self::Phi(..) => {}
+            Self::Drive(_, s, _, _) | Self::DriveSlice(_, s, _, _) => *s = f(*s),
+        }
+    }
 }
 
 impl UnaryOp {

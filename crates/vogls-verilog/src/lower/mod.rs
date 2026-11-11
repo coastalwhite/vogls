@@ -6,6 +6,7 @@ mod diagnostics;
 pub mod expression;
 mod fuse;
 pub mod module_or_generate_item;
+pub mod multidriver;
 pub mod specify;
 mod statement;
 pub mod udp;
@@ -43,6 +44,8 @@ pub struct MutLowerContext {
 
     pub has_vcd: bool,
     pub monitor: Option<MonitorSignals>,
+
+    pub multidriver: MultidriverResolution,
 }
 
 pub struct MonitorSignals {
@@ -468,6 +471,7 @@ use self::addressing::{Address, LValueAddressingContext, lower_addressing};
 pub use self::expression::eval_constant_expr;
 use self::expression::lower_expr;
 use self::fuse::{DestinationSite, SourceSite};
+use self::multidriver::MultidriverResolution;
 pub use self::vtype::VType;
 pub use self::vvalue::VValue;
 pub use diagnostics::{Diagnostics, LowerErrorReason, WarningsReport};

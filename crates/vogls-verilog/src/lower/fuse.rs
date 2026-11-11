@@ -36,6 +36,24 @@ pub enum SourceSiteContent {
         signal: SignalKey,
         slice: SignalSlice,
     },
+    /// A read from out-of-bounds bits of a signal.
+    OutOfBounds {
+        signal: SignalKey,
+        bit_length: VectorSize,
+    },
+}
+
+pub enum DestinationSiteContent {
+    Signal {
+        signal: SignalKey,
+        slice: SignalSlice,
+    },
+
+    /// A drive on out-of-bounds bits of a signal.
+    OutOfBounds {
+        signal: SignalKey,
+        bit_length: VectorSize,
+    },
 }
 
 pub struct SourceSite {
@@ -44,8 +62,7 @@ pub struct SourceSite {
 }
 
 pub struct DestinationSite {
-    pub signal: SignalKey,
-    pub slice: SignalSlice,
+    pub content: DestinationSiteContent,
     pub ty: SiteType,
 }
 
@@ -66,6 +83,10 @@ impl SourceSite {
         match &self.content {
             SourceSiteContent::Constant(bits) => bits.size(),
             SourceSiteContent::Signal { signal: _, slice } => slice.width(),
+            SourceSiteContent::OutOfBounds {
+                signal: _,
+                bit_length,
+            } => *bit_length,
         }
     }
 
@@ -73,8 +94,11 @@ impl SourceSite {
         match self.content {
             SourceSiteContent::Constant(_) => None,
             SourceSiteContent::Signal { signal, slice } => Some(DestinationSite {
-                signal,
-                slice,
+                content: DestinationSiteContent::Signal { signal, slice },
+                ty: self.ty,
+            }),
+            SourceSiteContent::OutOfBounds { signal, bit_length } => Some(DestinationSite {
+                content: DestinationSiteContent::OutOfBounds { signal, bit_length },
                 ty: self.ty,
             }),
         }
@@ -93,7 +117,13 @@ impl From<VType> for SiteType {
 
 impl DestinationSite {
     pub fn bit_length(&self) -> VectorSize {
-        self.slice.width()
+        match &self.content {
+            DestinationSiteContent::Signal { signal: _, slice } => slice.width(),
+            DestinationSiteContent::OutOfBounds {
+                signal: _,
+                bit_length,
+            } => *bit_length,
+        }
     }
 }
 
@@ -116,21 +146,20 @@ pub fn try_fuse_srcs_to_dsts(
     // Destination sites from least significant bits to most significant bits.
     dsts: &[DestinationSite],
 ) -> FuseResult {
-    // Prevent the fuse if any source or destination reads a signal out of bounds.
-    if srcs.iter().any(|src| {
-        let SourceSiteContent::Signal { signal, slice } = src.content else {
-            return false;
-        };
+    if cfg!(debug_assertions) {
+        for src in srcs {
+            let SourceSiteContent::Signal { signal, slice } = src.content else {
+                continue;
+            };
 
-        slice.msb() >= gl.signals[signal].size.get()
-    }) {
-        return FuseResult::Err(FuseFailure);
-    }
-    if dsts
-        .iter()
-        .any(|dst| dst.slice.msb() >= gl.signals[dst.signal].size.get())
-    {
-        return FuseResult::Err(FuseFailure);
+            assert!(slice.msb() < gl.signals[signal].size.get());
+        }
+        for dst in dsts {
+            let DestinationSiteContent::Signal { signal, slice } = dst.content else {
+                continue;
+            };
+            assert!(slice.msb() < gl.signals[signal].size.get());
+        }
     }
 
     // Fast path and base case: both sides consist of 1 signal that has the same bit length and
@@ -145,12 +174,22 @@ pub fn try_fuse_srcs_to_dsts(
             SourceSiteContent::Signal { signal, slice } => {
                 Driver::Signal(*signal, signal_slice_to_opt(&gl.signals, *signal, *slice))
             }
+            SourceSiteContent::OutOfBounds {
+                signal: _,
+                bit_length,
+            } => Driver::Constant(Bits::new_unknown(*bit_length)),
         };
-        connections.push(InputEdge {
-            driver,
-            drivee: dst.signal,
-            drivee_slice: signal_slice_to_opt(&gl.signals, dst.signal, dst.slice),
-        });
+        match dst.content {
+            DestinationSiteContent::Signal { signal, slice } => connections.push(InputEdge {
+                driver,
+                drivee: signal,
+                drivee_slice: signal_slice_to_opt(&gl.signals, signal, slice),
+            }),
+            DestinationSiteContent::OutOfBounds { .. } => {
+                // No-op
+            }
+        }
+
         return FuseResult::Ok(());
     }
 
@@ -191,14 +230,25 @@ pub fn try_fuse_srcs_to_dsts(
                 let slice = slice.subslice(offset_slice).unwrap();
                 Driver::Signal(*signal, signal_slice_to_opt(&gl.signals, *signal, slice))
             }
+            SourceSiteContent::OutOfBounds { .. } => {
+                Driver::Constant(Bits::new_unknown(step_bit_length))
+            }
         };
-        let offset_slice = SignalSlice::from_width(dst_bit_offset, step_bit_length).unwrap();
-        let dst_slice = dst.slice.subslice(offset_slice).unwrap();
-        connections.push(InputEdge {
-            driver,
-            drivee: dst.signal,
-            drivee_slice: signal_slice_to_opt(&gl.signals, dst.signal, dst_slice),
-        });
+        match dst.content {
+            DestinationSiteContent::Signal { signal, slice } => {
+                let offset_slice =
+                    SignalSlice::from_width(dst_bit_offset, step_bit_length).unwrap();
+                let dst_slice = slice.subslice(offset_slice).unwrap();
+                connections.push(InputEdge {
+                    driver,
+                    drivee: signal,
+                    drivee_slice: signal_slice_to_opt(&gl.signals, signal, dst_slice),
+                });
+            }
+            DestinationSiteContent::OutOfBounds { .. } => {
+                // No-op
+            }
+        }
 
         src_bit_offset += step_bit_length.get();
         dst_bit_offset += step_bit_length.get();
@@ -227,15 +277,19 @@ pub fn try_fuse_srcs_to_dsts(
 
     // Zero-extend the destination.
     for dst in &dsts[dst_i..] {
+        let DestinationSiteContent::Signal { signal, slice } = dst.content else {
+            continue;
+        };
+
         let dst_bit_length = dst.bit_length();
         let dst_rem_bit_length = VectorSize::new(dst_bit_length.get() - dst_bit_offset).unwrap();
         let offset_slice = SignalSlice::from_width(dst_bit_offset, dst_rem_bit_length).unwrap();
-        let dst_slice = dst.slice.subslice(offset_slice).unwrap();
+        let dst_slice = slice.subslice(offset_slice).unwrap();
 
         connections.push(InputEdge {
             driver: Driver::Constant(Bits::new_zeroed(dst_rem_bit_length)),
-            drivee: dst.signal,
-            drivee_slice: signal_slice_to_opt(&gl.signals, dst.signal, dst_slice),
+            drivee: signal,
+            drivee_slice: signal_slice_to_opt(&gl.signals, signal, dst_slice),
         });
 
         dst_bit_offset = 0;
@@ -257,8 +311,10 @@ pub fn convert_src_sites_to_dsts(
 
             // Insert a dummy element.
             return DestinationSite {
-                signal: SignalKey::default(),
-                slice: SignalSlice::with_end(SCALAR_VSIZE),
+                content: DestinationSiteContent::OutOfBounds {
+                    signal: SignalKey::default(),
+                    bit_length: SCALAR_VSIZE,
+                },
                 ty: SiteType::Unsigned,
             };
         };
@@ -455,47 +511,86 @@ where
         SiteType::Unsigned
     };
 
-    // Array element overflow.
-    if matches!(address.array, Some((_, true))) {
-        // @TODO: Warn.
-        fuse_srcs.push(SourceSite {
-            content: SourceSiteContent::Constant(Bits::new_unknown(address.output_width)),
-            ty,
-        });
-        return Ok(());
-    }
+    let elem_start = match address.array {
+        // Array element overflow.
+        Some((_, true)) => {
+            // @TODO: Warn.
+            fuse_srcs.push(SourceSite {
+                content: SourceSiteContent::OutOfBounds {
+                    signal,
+                    bit_length: address.output_width,
+                },
+                ty,
+            });
+            return Ok(());
+        }
 
-    // A bit- or part-select past the element reads x, not the neighbouring element.
-    if let Some(elem_offset) = address.elem_offset
-        && (elem_offset < 0
-            || elem_offset + i64::from(address.output_width.get())
-                > i64::from(symbol.ty.bit_length().get()))
-    {
-        // @TODO: Warn.
-        fuse_srcs.push(SourceSite {
-            content: SourceSiteContent::Constant(Bits::new_unknown(address.output_width)),
-            ty,
-        });
-        return Ok(());
-    }
-
-    let Some(offset) = address.signal_offset_as_u32() else {
-        diagnostics.not_yet_implemented(hident_span(ctx.arenas, ident), "overflow");
-        return Err(());
+        None => 0,
+        // Unwrap here should never panic since the overflow is checked.
+        Some((array_offset, _)) => u32::try_from(array_offset).unwrap(),
     };
 
-    let Some(output_slice) = SignalSlice::from_width(offset, address.output_width) else {
-        diagnostics.not_yet_implemented(hident_span(ctx.arenas, ident), "overflow");
-        return Err(());
+    let mut elem_offset = address.elem_offset.unwrap_or(0);
+    let mut rem_bit_length = address.output_width;
+
+    // A bit- or part-select past the element reads x, not the neighbouring element.
+    if elem_offset < 0 {
+        // @TODO: Warn.
+        let out_of_bounds_bit_length = VectorSize::new(
+            elem_offset
+                .abs_diff(0)
+                .min(address.output_width.get() as u64) as u32,
+        )
+        .unwrap();
+        fuse_srcs.push(SourceSite {
+            content: SourceSiteContent::OutOfBounds {
+                signal,
+                bit_length: out_of_bounds_bit_length,
+            },
+            ty,
+        });
+
+        let Some(bit_length) =
+            VectorSize::new(rem_bit_length.get() - out_of_bounds_bit_length.get())
+        else {
+            return Ok(());
+        };
+
+        elem_offset = 0;
+        rem_bit_length = bit_length;
+    };
+
+    // Check that at-least 1 bit is in the signal's bounds.
+    let elem_size = symbol.ty.bit_length();
+    let Some(slice) = u32::try_from(elem_offset).ok().and_then(|e| {
+        let abs_elem_offset = elem_start.checked_add(e)?;
+        let rem_elem_size = VectorSize::new(elem_size.get().saturating_sub(e))?;
+        let in_bounds_size = rem_bit_length.min(rem_elem_size);
+        SignalSlice::from_width(abs_elem_offset, in_bounds_size)
+    }) else {
+        fuse_srcs.push(SourceSite {
+            content: SourceSiteContent::OutOfBounds {
+                signal,
+                bit_length: rem_bit_length,
+            },
+            ty,
+        });
+        return Ok(());
     };
 
     fuse_srcs.push(SourceSite {
-        content: SourceSiteContent::Signal {
-            signal,
-            slice: output_slice,
-        },
+        content: SourceSiteContent::Signal { signal, slice },
         ty,
     });
+
+    if let Some(bit_length) = VectorSize::new(rem_bit_length.get() - slice.width().get()) {
+        // @TODO: Warn.
+        fuse_srcs.push(SourceSite {
+            content: SourceSiteContent::OutOfBounds { signal, bit_length },
+            ty,
+        });
+    }
+
     Ok(())
 }
 

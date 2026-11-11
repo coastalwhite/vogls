@@ -10,7 +10,8 @@ use crate::ast::statement::Delay3;
 use crate::lower::assign::{assign_net_lvalue, net_lvalue_size};
 use crate::lower::expression::{coerce_to, get_used_signals, lower_expr};
 use crate::lower::fuse::{
-    FuseFailure, FuseResult, RequiredSignalKind, SiteTerminal, expr_to_src_sites, try_fuse_srcs_to_dsts, try_net_flat_lvalue_to_dsts
+    FuseFailure, FuseResult, RequiredSignalKind, SiteTerminal, expr_to_src_sites,
+    try_fuse_srcs_to_dsts, try_net_flat_lvalue_to_dsts,
 };
 use crate::lower::statement::procedural_timing_control::lower_min_typ_max_delay;
 use crate::lower::{Diagnostics, LowerContext, MutLowerContext, VType};
@@ -215,10 +216,15 @@ fn try_fuse_assign<'a>(
         return Err(FuseFailure);
     };
 
+    let connections_start = mctx.connections.len();
     try_fuse_srcs_to_dsts(
         &mctx.gl,
         &mut mctx.connections,
         &mctx.fuse_srcs_scratch,
         &mctx.fuse_dsts_scratch,
-    )
+    )?;
+
+    mctx.multidriver
+        .push_connections(&mut mctx.gl, &mut mctx.connections[connections_start..]);
+    Ok(())
 }

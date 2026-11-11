@@ -380,6 +380,12 @@ pub fn linear_scan_register_allocation(
                             .expect("should be inserted before")
                             .add_range(phi_interval);
 
+                        // Constants already have their slot. Giving them an interval would
+                        // reassign them to a register that is never written.
+                        if assignment.contains_key(src) {
+                            continue;
+                        }
+
                         // Make sure the source interval is still alive here and we can use it.
                         intervals
                             .entry(*src)
