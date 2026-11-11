@@ -110,7 +110,7 @@ fn read_section_headers(
 fn read_symbols(
     bytes: &[u8],
     data_encoding: DataEncoding,
-    section_headers: &Vec<ElfSectionHeader>,
+    section_headers: &[ElfSectionHeader],
 ) -> Result<Vec<ElfSymbolTableEntry>> {
     Ok(section_headers
         .iter()
@@ -143,7 +143,7 @@ fn read_symbols(
 
 fn read_string_table<'a>(
     bytes: &'_ [u8],
-    section_headers: &'a Vec<ElfSectionHeader>,
+    section_headers: &'a [ElfSectionHeader],
 ) -> Result<Vec<(&'a ElfSectionHeader, ElfStringTable)>> {
     section_headers
         .iter()
