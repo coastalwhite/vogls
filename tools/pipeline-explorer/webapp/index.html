@@ -4,14 +4,47 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pipeline Visualizer</title>
+    <title>Pipeline Explorer</title>
   </head>
   <body>
     <main id="app">
 		<div id="statsbar">
-			<div class="mx-4"></div>
-			<div id="pipelineStages"></div>
-			<div class="share-menu mx-4">
+			<div class="brand"><span>Pipeline</span><span class="brand-accent">Explorer</span></div>
+			<div id="simControls">
+				<div class="chip-menu">
+					<button id="chipMenuBtn" type="button" aria-haspopup="dialog" aria-expanded="false"
+					        aria-controls="chipMenuPanel">
+						<span id="chipMenuName">Ibex</span>
+						<span class="chip-menu-caret" aria-hidden="true">▾</span>
+					</button>
+					<div id="chipMenuPanel" role="dialog" aria-label="Simulation settings" hidden>
+						<label class="chip-menu-row" for="procSelect">
+							<span>Processor</span>
+							<select id="procSelect">
+								<option value="picorv32">PicoRV32</option>
+								<option value="ibex">Ibex</option>
+								<option value="neorv32">NeoRV32</option>
+								<option value="hazard3">Hazard3</option>
+							</select>
+						</label>
+						<label class="chip-menu-row" for="numCyclesInput">
+							<span>Cycles</span>
+							<input type="number" id="numCyclesInput" />
+						</label>
+						<div id="procConfigDetail"></div>
+					</div>
+				</div>
+				<div class="sim-status">
+					<button id="simStatusBtn" type="button" aria-haspopup="dialog" aria-expanded="false"
+					        aria-controls="simProgressPanel" aria-label="Simulation progress">
+						<div class="w-8 h-8" id="simStatus"></div>
+					</button>
+					<div id="simProgressPanel" role="dialog" aria-label="Simulation progress" hidden>
+						<span id="simProgress"></span>
+					</div>
+				</div>
+			</div>
+			<div class="share-menu">
 				<button id="shareBtn" type="button" aria-haspopup="dialog" aria-expanded="false"
 				        aria-controls="sharePanel">Share <img src="/arrow-rightup.svg" alt="" /></button>
 				<div id="sharePanel" role="dialog" aria-label="Share" hidden>
@@ -65,40 +98,6 @@
 		</div>
 		<div id="footer">
 			<div id="scrubberContainer"></div>
-			<div id="simControls">
-				<div class="chip-menu">
-					<button id="chipMenuBtn" type="button" aria-haspopup="dialog" aria-expanded="false"
-					        aria-controls="chipMenuPanel">
-						<span id="chipMenuName">Ibex</span>
-						<span class="chip-menu-caret" aria-hidden="true">▾</span>
-					</button>
-					<div id="chipMenuPanel" role="dialog" aria-label="Simulation settings" hidden>
-						<label class="chip-menu-row" for="procSelect">
-							<span>Processor</span>
-							<select id="procSelect">
-								<option value="picorv32">PicoRV32</option>
-								<option value="ibex">Ibex</option>
-								<option value="neorv32">NeoRV32</option>
-								<option value="hazard3">Hazard3</option>
-							</select>
-						</label>
-						<label class="chip-menu-row" for="numCyclesInput">
-							<span>Cycles</span>
-							<input type="number" id="numCyclesInput" />
-						</label>
-						<div id="procConfigDetail"></div>
-					</div>
-				</div>
-				<div class="sim-status">
-					<button id="simStatusBtn" type="button" aria-haspopup="dialog" aria-expanded="false"
-					        aria-controls="simProgressPanel" aria-label="Simulation progress">
-						<div class="w-8 h-8" id="simStatus"></div>
-					</button>
-					<div id="simProgressPanel" role="dialog" aria-label="Simulation progress" hidden>
-						<span id="simProgress"></span>
-					</div>
-				</div>
-			</div>
 		</div>
 	</main>
     <script type="module" src="/src/main.ts"></script>
