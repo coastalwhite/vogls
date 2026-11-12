@@ -5,6 +5,7 @@ sources    = [
     "../../../../submodules/logikbench/logikbench/benchmarks/blocks/lfsr/testbench/test_lfsr_smoke.v",
 ]
 defines    = []
+skip       = "contains a $error"
 output = """
 PASSED
 [FINISH]

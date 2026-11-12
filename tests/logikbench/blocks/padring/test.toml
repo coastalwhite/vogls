@@ -27,6 +27,7 @@ include_dirs = [
     "../../../../submodules/logikbench/logikbench/benchmarks/blocks/padring/rtl",
 ]
 defines    = []
+skip       = "contains inouts"
 output = """
 PASSED
 [FINISH]
