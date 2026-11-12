@@ -7,7 +7,6 @@ import type { Trace } from "./types.ts";
 import { ALL_DATA_POINTS, dataOf } from "./types.ts";
 import type { WorkerReply, WorkerRequest } from "./wasm/trace-worker.ts";
 
-import { ScrubberCanvas } from "./scrubber.ts";
 import { pipelineSvg } from "./svg.ts";
 import { Workspace } from "./layout/workspace.ts";
 import type { CycleRange } from "./layout/types.ts";
@@ -23,7 +22,6 @@ let timeoutId: number | null = null;
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const central = el<HTMLDivElement>("central");
-const scrubberContainer = el<HTMLDivElement>("scrubberContainer");
 const numCyclesInput = el<HTMLInputElement>("numCyclesInput");
 const procSelect = el<HTMLSelectElement>("procSelect");
 const simStatusElem = el<HTMLDivElement>("simStatus");
@@ -37,7 +35,6 @@ const simProgress = el<HTMLSpanElement>("simProgress");
 const simStatusBtn = el<HTMLButtonElement>("simStatusBtn");
 const simProgressPanel = el<HTMLDivElement>("simProgressPanel");
 
-let scrubber: ScrubberCanvas | null = null;
 let currentTrace: Trace | null = null;
 
 /**
@@ -61,16 +58,6 @@ function setTrace(trace: Trace) {
     currentTrace = trace;
     viewCtx.trace = trace;
     workspace.broadcastTrace(trace);
-    if (scrubber === null) {
-        scrubber = new ScrubberCanvas(
-            scrubberContainer,
-            trace,
-            cycles,
-            setCurrentCycle,
-        );
-    } else {
-        scrubber.setTrace(trace);
-    }
     onShareTrace();
 }
 
@@ -84,7 +71,6 @@ function setCycleRange(next: CycleRange) {
     const end = Math.max(next.start, next.end);
     cycles = { start, end };
     viewCtx.cycles = cycles;
-    if (scrubber !== null) scrubber.setSelection(cycles);
     workspace.broadcastCycle(cycles);
 }
 

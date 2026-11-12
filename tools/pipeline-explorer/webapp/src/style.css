@@ -103,17 +103,6 @@ main #content {
     flex-direction: column;
 }
 
-main #footer {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 2rem;
-    height: 5rem;
-    border-top: 1px solid var(--border);
-    padding: 0px 2rem;
-    background-color: #f6f5f1;
-}
-
 /* Centre column of the top bar; anchors the chip panel so it centres on the
    whole group (and so the screen), not just on the chip button. */
 #simControls {
@@ -207,17 +196,6 @@ main #central {
 }
 .mx-4 {
 	margin: 0px 1rem;
-}
-
-#scrubberContainer {
-	margin-top: auto;
-	margin-bottom: auto;
-	height: 2.5rem;
-	cursor: pointer;
-	border-radius: 0.5rem;
-	border: 1px solid #000;
-	background-color: #fff;
-	flex: 1;
 }
 
 /* Three columns with equal outer tracks, so the sim controls sit in the
@@ -470,7 +448,7 @@ main #central {
     text-align: right;
 }
 
-/* Error bar: at the bottom of the view, above the footer, until dismissed. */
+/* Error bar: at the bottom of the view until dismissed. */
 #errorBar {
     display: flex;
     align-items: flex-start;

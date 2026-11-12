@@ -513,6 +513,68 @@
     opacity: 0.7;
 }
 
+/* Pipeline view: the canvas over a foldable scrubber dock. */
+.pipeline-view {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+}
+
+.pipeline-view__body {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+}
+
+.pipeline-view__dock {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    border-top: 1px solid var(--border);
+    background: #f6f5f1;
+}
+
+/* A small tab centred on the dock's top edge. */
+.pipeline-view__fold {
+    align-self: center;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 3rem;
+    height: 1rem;
+    padding: 0;
+    color: var(--text);
+    background: none;
+    border: none;
+    border-radius: 0.25rem;
+    cursor: pointer;
+}
+.pipeline-view__fold svg {
+    width: 0.75rem;
+    height: 0.5rem;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.pipeline-view__fold[aria-expanded="false"] svg { transform: rotate(180deg); }
+.pipeline-view__fold:hover { color: var(--text-h); background: var(--accent-bg); }
+.pipeline-view__fold:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+.pipeline-view__scrubber {
+    height: 2.5rem;
+    margin: 0 0.5rem 0.5rem;
+    cursor: pointer;
+    border-radius: 0.5rem;
+    border: 1px solid #000;
+    background-color: #fff;
+    overflow: hidden;
+}
+.pipeline-view__scrubber[hidden] { display: none; }
+
 /* How far the simulation has got, in a popover on the spinner. */
 .sim-status {
     position: relative;
