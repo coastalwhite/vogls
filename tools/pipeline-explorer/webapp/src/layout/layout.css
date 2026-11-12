@@ -47,6 +47,18 @@
 
 /* Dividers -------------------------------------------------------------- */
 
+/* A 7px seam is too thin to hit with a finger, so on touch screens an
+   invisible ::before widens the grab area to 19px over the neighbours. */
+@media (pointer: coarse) {
+    .ws-divider { z-index: 1; }
+    .ws-divider::before {
+        content: "";
+        position: absolute;
+    }
+    .ws-divider--h::before { top: 0; bottom: 0; left: -6px; right: -6px; }
+    .ws-divider--v::before { left: 0; right: 0; top: -6px; bottom: -6px; }
+}
+
 /* A 7px transparent grab area that looks like a 1px seam: the box stays
    7px wide and ::after draws the single visible pixel down its centre. */
 .ws-divider {
@@ -134,8 +146,11 @@
     font-size: 0.75rem;
     background: var(--code-bg);
     border-bottom: 1px solid var(--border);
-    /* The whole titlebar is the drag handle. */
+    /* The whole titlebar is the drag handle. Without `touch-action: none` a
+       touch drag here is taken as a scroll and cancelled after a few px; it
+       covers the title and tabs too, as touch-action intersects downwards. */
     cursor: grab;
+    touch-action: none;
 }
 
 .ws-frame.is-dragging .ws-frame__chrome,
