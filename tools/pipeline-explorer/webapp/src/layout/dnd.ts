@@ -1,7 +1,9 @@
 import type { DropPosition, NodeId } from "./types.ts";
 
-/** Pointer travel that turns a press into a drag. Below it, clicks still work. */
+/** Pointer travel that turns a press into a drag. Below it, clicks still work.
+ *  A fingertip wobbles more than a mouse, so a tap gets more slack. */
 const THRESHOLD_PX = 4;
+const TOUCH_THRESHOLD_PX = 10;
 /** Fraction of a frame taken by each of its four edge bands. */
 const EDGE_FRACTION = 0.25;
 /** Inset of the workspace's root-level edge zones. */
@@ -9,6 +11,8 @@ const ROOT_ZONE_PX = 24;
 /** Keeps the chip out from under the cursor. */
 const CHIP_OFFSET_X = 14;
 const CHIP_OFFSET_Y = 18;
+/** Under a finger the chip would be hidden, so on touch it rides above it. */
+const TOUCH_CHIP_OFFSET_Y = -40;
 
 export interface DragContext {
     /** The workspace container. Drop geometry is computed within its rect. */
@@ -53,6 +57,7 @@ interface Feedback {
 interface Drag {
     ctx: DragContext;
     pointerId: number;
+    touch: boolean;
     captureEl: HTMLElement;
     startX: number;
     startY: number;
@@ -83,6 +88,7 @@ export function beginDrag(e: PointerEvent, ctx: DragContext): void {
     const drag: Drag = {
         ctx,
         pointerId: e.pointerId,
+        touch: e.pointerType === "touch",
         captureEl,
         startX: e.clientX,
         startY: e.clientY,
@@ -161,7 +167,7 @@ export function beginDrag(e: PointerEvent, ctx: DragContext): void {
 /** Starts the drag if the pointer has travelled far enough, else null. */
 function maybeStart(drag: Drag, e: PointerEvent): Feedback | null {
     const travel = Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY);
-    if (travel < THRESHOLD_PX) return null;
+    if (travel < (drag.touch ? TOUCH_THRESHOLD_PX : THRESHOLD_PX)) return null;
 
     if (drag.captureEl.isConnected) {
         try {
@@ -186,7 +192,7 @@ function update(drag: Drag, feedback: Feedback, x: number, y: number) {
     drag.resolution = resolution;
 
     feedback.chip.style.left = `${x + CHIP_OFFSET_X}px`;
-    feedback.chip.style.top = `${y + CHIP_OFFSET_Y}px`;
+    feedback.chip.style.top = `${y + (drag.touch ? TOUCH_CHIP_OFFSET_Y : CHIP_OFFSET_Y)}px`;
 
     const zone = feedback.zone;
     if (resolution === null) {
