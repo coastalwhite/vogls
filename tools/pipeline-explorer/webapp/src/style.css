@@ -215,6 +215,32 @@ main #central {
 }
 #statsbar > .share-menu { justify-self: end; }
 
+/* Small screens: brand and share on one row, the sim controls centred under
+   them. Matches COLUMN_QUERY in src/layout/workspace.ts. */
+@media (max-width: 700px) {
+	#statsbar {
+		grid-template-columns: 1fr auto;
+		grid-template-areas:
+			"brand share"
+			"sim   sim";
+		gap: 0.25rem 1rem;
+		height: auto;
+		padding: 0.5rem 1rem;
+	}
+	#statsbar > .brand { grid-area: brand; }
+	#statsbar > .share-menu { grid-area: share; }
+	#statsbar > #simControls { grid-area: sim; justify-self: center; }
+
+	/* Nothing is pinned: the whole page, top bar included, scrolls as one
+	   instead of the workspace scrolling inside a full-height frame. */
+	#app { height: auto; min-height: 100vh; }
+	main #content,
+	main #central { flex: none; overflow: visible; }
+	/* Off the bottom of a long page an error would go unseen, so this one
+	   thing does stay in view. */
+	#errorBar { position: sticky; bottom: 0; }
+}
+
 .brand {
 	justify-self: start;
 	font-family: var(--brand);

@@ -4,7 +4,7 @@ import { DetachedWindow } from "./detached.ts";
 import { beginDrag } from "./dnd.ts";
 import { Frame } from "./frame.ts";
 import type { FrameContext } from "./frame.ts";
-import { renderLayout } from "./render.ts";
+import { renderColumn, renderLayout } from "./render.ts";
 import type { RenderContext } from "./render.ts";
 import { ViewRegistry, newView, pickableSpecs } from "./registry.ts";
 import { renderPicker, setChooserHandler } from "../views/chooser.ts";
@@ -44,6 +44,16 @@ function isFrameNode(node: LayoutNode): node is FrameNode {
     return node.kind === "view" || node.kind === "tabs";
 }
 
+/** The frames of a tree in reading order: depth first, stacks flattened. */
+function frameNodesOf(node: LayoutNode, out: FrameNode[] = []): FrameNode[] {
+    if (isFrameNode(node)) out.push(node);
+    else for (const el of node.elements) frameNodesOf(el.element, out);
+    return out;
+}
+
+/** Too narrow to tile: views are stacked in one scrolling column instead. */
+const COLUMN_QUERY = "(max-width: 700px)";
+
 /**
  * Owns the layout tree and wires the tree operations, the reconciler, the frame
  * chrome, the drag subsystem and the view registry together. `main.ts` talks
@@ -59,6 +69,8 @@ export class Workspace {
     private placeholder: HTMLElement | null = null;
     /** Views living in a window of their own, keyed by their node id. */
     private detached = new Map<NodeId, { window: DetachedWindow; node: ViewNode }>();
+    private columnQuery = window.matchMedia(COLUMN_QUERY);
+    private addButton: HTMLButtonElement | null = null;
 
     constructor(container: HTMLElement, ctx: ViewContext) {
         this.container = container;
@@ -71,7 +83,13 @@ export class Workspace {
                 this.commit(setView(this.layout, nodeId, newView(type))),
         });
         this.layout = normalize(defaultLayout());
+        this.columnQuery.addEventListener("change", () => this.render());
         this.sync();
+    }
+
+    /** Stacked in a column rather than tiled; see `COLUMN_QUERY`. */
+    private get columnMode(): boolean {
+        return this.columnQuery.matches;
     }
 
     broadcastCycle(cycles: CycleRange) {
@@ -101,6 +119,18 @@ export class Workspace {
     }
 
     private render() {
+        if (this.columnMode) {
+            renderColumn(
+                this.container,
+                this.layout === null
+                    ? [this.emptyPlaceholder()]
+                    : [
+                        ...frameNodesOf(this.layout).map((n) => this.frameFor(n)),
+                        this.columnAddButton(),
+                    ],
+            );
+            return;
+        }
         const ctx: RenderContext = {
             frameFor: (node) => this.frameFor(node),
             onDividerResize: (stackId, index, delta) => {
@@ -168,7 +198,8 @@ export class Workspace {
             onGrab: (index, e) => this.grab(children[index], e),
             onGrabFrame: (e) => this.grabFrame(node, e),
             onAddTab: () => this.addChooser(node.id, "center"),
-            draggable: countViews(this.layout) > 1,
+            // The column's order is the tree's, so there is nothing to drag to.
+            draggable: !this.columnMode && countViews(this.layout) > 1,
         };
     }
 
@@ -255,6 +286,21 @@ export class Workspace {
     /** A split or a new tab lands empty; the chooser asks what goes in it. */
     private addChooser(targetId: NodeId | null, position: DropPosition) {
         this.addView(targetId, position, "chooser");
+    }
+
+    /** Ends the column: appends a chooser below everything else. */
+    private columnAddButton(): HTMLButtonElement {
+        if (this.addButton === null) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "ws-column-add";
+            button.textContent = "+";
+            button.title = "Add view";
+            button.setAttribute("aria-label", "Add view");
+            button.addEventListener("click", () => this.addChooser(null, "bottom"));
+            this.addButton = button;
+        }
+        return this.addButton;
     }
 
     /* ---------- empty workspace ---------- */

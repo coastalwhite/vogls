@@ -76,12 +76,24 @@ export function renderLayout(
     const seen = new Set<string>();
 
     container.classList.add("ws-root");
+    container.classList.remove("ws-root--column");
     reconcile(container, [
         layout === null
             ? ctx.emptyPlaceholder()
             : renderNode(cache, seen, layout, ctx),
     ]);
     prune(cache, seen);
+}
+
+/**
+ * The small-screen rendering: `items` (frames in tree order, then whatever
+ * trails them) one under the other in a scrolling column. The tree's stacks
+ * and ratios are ignored but untouched, so `renderLayout` can take over again
+ * as soon as the screen is wide enough. Frames are re-parented, as there.
+ */
+export function renderColumn(container: HTMLElement, items: HTMLElement[]): void {
+    container.classList.add("ws-root", "ws-root--column");
+    reconcile(container, items);
 }
 
 function cacheFor(container: HTMLElement): Cache {

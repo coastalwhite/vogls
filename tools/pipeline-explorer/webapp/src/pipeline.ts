@@ -5,6 +5,27 @@ import type { CycleRange } from "./layout/types.ts";
 
 const textPad = 8;
 
+/** Finger travel that turns a touch from a tap into a pan. */
+const TAP_SLOP_PX = 10;
+/** Holding this long without moving starts a selection instead of a pan. */
+const LONG_PRESS_MS = 400;
+
+/** The finger currently driving the canvas. */
+interface TouchGesture {
+    pointerId: number;
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
+    /** Canvas-relative x at the press, for picking the cycle. */
+    startOffsetX: number;
+    /** Past `TAP_SLOP_PX`: a pan, so no longer a tap or a long press. */
+    panning: boolean;
+    /** Held for `LONG_PRESS_MS`: the finger now drags out a selection. */
+    selecting: boolean;
+    timer: number | null;
+}
+
 export class PipelineCanvas {
     width: number = 0;
     height: number = 0;
@@ -29,9 +50,7 @@ export class PipelineCanvas {
     /** Cycle the current drag started from. */
     anchor: number | null = null;
 
-    activeTouchId: number | null = null;
-    lastTouchX: number | null = null;
-    lastTouchY: number | null = null;
+    touch: TouchGesture | null = null;
 
     keyFrame: {
         startTime: number;
@@ -59,6 +78,11 @@ export class PipelineCanvas {
         this.canvas.style.inset = "0";
         this.canvas.style.display = "block";
         this.canvas.style.position = "absolute";
+        // Every touch gesture here is the canvas's own (pan, tap, long-press
+        // select); without this the browser takes a swipe as a page scroll.
+        this.canvas.style.touchAction = "none";
+        this.canvas.style.userSelect = "none";
+        this.canvas.style.setProperty("-webkit-touch-callout", "none");
         this.wrap.appendChild(this.canvas);
         elem.appendChild(this.wrap);
 
@@ -80,23 +104,14 @@ export class PipelineCanvas {
         this.canvas.addEventListener("wheel", (e) => this.onWheel(e), {
             passive: false,
         });
-        this.canvas.addEventListener(
-            "touchstart",
-            (e) => this.onTouchStart(e),
-            {
-                passive: false,
-            },
-        );
-        this.canvas.addEventListener("touchmove", (e) => this.onTouchMove(e), {
-            passive: false,
-        });
-        this.canvas.addEventListener("touchend", (e) => this.onTouchEnd(e));
-        this.canvas.addEventListener("touchcancel", (e) => this.onTouchEnd(e));
-
         this.canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e));
         this.canvas.addEventListener("pointermove", (e) => this.onPointerMove(e));
         this.canvas.addEventListener("pointerup", (e) => this.onPointerUp(e));
-        this.canvas.addEventListener("pointercancel", (e) => this.onPointerUp(e));
+        this.canvas.addEventListener("pointercancel", (e) => this.onPointerUp(e, true));
+        // A long press would otherwise open the context menu on some phones.
+        this.canvas.addEventListener("contextmenu", (e) => {
+            if (this.touch !== null) e.preventDefault();
+        });
 
         this.draw();
     }
@@ -205,11 +220,16 @@ export class PipelineCanvas {
     }
 
     /**
-     * Press picks one cycle, drag extends to a span. Mouse only: touch is
-     * already the pan gesture, and stealing it would make the view unusable.
+     * Mouse: press picks one cycle, drag extends to a span. Touch (and pen):
+     * a drag pans, a tap picks one cycle, and a long press then drag selects
+     * a span -- the drag itself has to stay the pan.
      */
     onPointerDown(e: PointerEvent) {
-        if (e.pointerType !== "mouse" || e.button !== 0) return;
+        if (e.pointerType !== "mouse") {
+            this.onTouchDown(e);
+            return;
+        }
+        if (e.button !== 0) return;
         const cycle = this.cycleAt(e.offsetX);
         if (cycle === null) return;
         e.preventDefault();
@@ -220,6 +240,10 @@ export class PipelineCanvas {
     }
 
     onPointerMove(e: PointerEvent) {
+        if (e.pointerType !== "mouse") {
+            this.onTouchMove(e);
+            return;
+        }
         if (!this.selecting || this.anchor === null) return;
         const cycle = this.cycleAt(e.offsetX);
         if (cycle === null) return;
@@ -229,7 +253,11 @@ export class PipelineCanvas {
         );
     }
 
-    onPointerUp(e: PointerEvent) {
+    onPointerUp(e: PointerEvent, cancelled = false) {
+        if (e.pointerType !== "mouse") {
+            this.onTouchUp(e, cancelled);
+            return;
+        }
         if (!this.selecting) return;
         this.selecting = false;
         this.anchor = null;
@@ -272,45 +300,104 @@ export class PipelineCanvas {
         }
     }
 
-    onTouchStart(e: TouchEvent) {
-        const t = e.changedTouches[0];
-        this.activeTouchId = t.identifier;
-        this.lastTouchX = t.clientX;
-        this.lastTouchY = t.clientY;
-    }
-    onTouchMove(e: TouchEvent) {
-        e.preventDefault(); // works because of touch-action:none + passive:false
-        // find the touch we're tracking
-        let t = null;
-        for (const touch of e.changedTouches) {
-            if (touch.identifier === this.activeTouchId) {
-                t = touch;
-                break;
-            }
+    /** One finger drives the canvas; a second one is ignored. */
+    private onTouchDown(e: PointerEvent) {
+        if (this.touch !== null || !e.isPrimary) return;
+        // A finger on the canvas stops any scroll-to-selection under way.
+        this.keyFrame = null;
+        const gesture: TouchGesture = {
+            pointerId: e.pointerId,
+            startX: e.clientX,
+            startY: e.clientY,
+            lastX: e.clientX,
+            lastY: e.clientY,
+            startOffsetX: e.offsetX,
+            panning: false,
+            selecting: false,
+            timer: null,
+        };
+        gesture.timer = window.setTimeout(() => {
+            gesture.timer = null;
+            if (this.touch !== gesture || gesture.panning) return;
+            const cycle = this.cycleAt(gesture.startOffsetX);
+            if (cycle === null) return;
+            gesture.selecting = true;
+            this.selecting = true;
+            this.anchor = cycle;
+            this.emit(cycle, cycle);
+        }, LONG_PRESS_MS);
+        this.touch = gesture;
+        try {
+            this.canvas.setPointerCapture(e.pointerId);
+        } catch {
+            // The pointer is already gone; its pointerup/cancel ends this.
         }
-        if (!t || this.lastTouchX === null || this.lastTouchY === null) return;
-        // dragging right should feel like scrolling content left -> negate
-        const dx = -(t.clientX - this.lastTouchX);
-        const dy = -(t.clientY - this.lastTouchY);
-        this.lastTouchX = t.clientX;
-        this.lastTouchY = t.clientY;
+    }
+
+    private onTouchMove(e: PointerEvent) {
+        const gesture = this.touch;
+        if (gesture === null || gesture.pointerId !== e.pointerId) return;
+
+        if (gesture.selecting) {
+            const cycle = this.cycleAt(e.offsetX);
+            if (cycle === null || this.anchor === null) return;
+            this.emit(Math.min(this.anchor, cycle), Math.max(this.anchor, cycle));
+            return;
+        }
+
+        if (!gesture.panning) {
+            const travel = Math.hypot(
+                e.clientX - gesture.startX,
+                e.clientY - gesture.startY,
+            );
+            if (travel < TAP_SLOP_PX) return;
+            gesture.panning = true;
+            this.clearLongPress(gesture);
+        }
+        // Dragging right should feel like scrolling content left -> negate.
+        const dx = -(e.clientX - gesture.lastX);
+        const dy = -(e.clientY - gesture.lastY);
+        gesture.lastX = e.clientX;
+        gesture.lastY = e.clientY;
         if (dx !== 0 || dy !== 0) this.applyDxDy(dx, dy);
     }
-    onTouchEnd(e: TouchEvent) {
-        for (const touch of e.changedTouches) {
-            if (touch.identifier === this.activeTouchId) {
-                this.activeTouchId = null;
-                this.lastTouchX = null;
-                this.lastTouchY = null;
-                break;
-            }
+
+    private onTouchUp(e: PointerEvent, cancelled: boolean) {
+        const gesture = this.touch;
+        if (gesture === null || gesture.pointerId !== e.pointerId) return;
+        this.touch = null;
+        this.clearLongPress(gesture);
+        if (this.canvas.hasPointerCapture(e.pointerId)) {
+            this.canvas.releasePointerCapture(e.pointerId);
         }
+
+        if (gesture.selecting) {
+            this.selecting = false;
+            this.anchor = null;
+            return;
+        }
+        if (cancelled || gesture.panning) return;
+
+        // A tap: pick that cycle. Flagged as selecting while it is announced
+        // so the view does not scroll away from the cycle just tapped.
+        const cycle = this.cycleAt(gesture.startOffsetX);
+        if (cycle === null) return;
+        this.selecting = true;
+        this.emit(cycle, cycle);
+        this.selecting = false;
+    }
+
+    private clearLongPress(gesture: TouchGesture) {
+        if (gesture.timer === null) return;
+        window.clearTimeout(gesture.timer);
+        gesture.timer = null;
     }
 
     moveToCycle(cycle: number, seconds: number) {
         const targetOffsetX = cycle * convertRemToPixels(2) -
             ((this.width - this.maxTextWidth - textPad * 2) / 2);
         if (seconds === 0.0) {
+            this.keyFrame = null;
             this.offsetX = this.clampOffsetX(targetOffsetX);
             return;
         }
@@ -323,9 +410,12 @@ export class PipelineCanvas {
             endOffset: targetOffsetX,
         };
 
-        const { startTime, startOffset, endTime, endOffset } = this.keyFrame;
+        const frame = this.keyFrame;
+        const { startTime, startOffset, endTime, endOffset } = frame;
         const dur = endTime - startTime;
         const tick = () => {
+            // Superseded by a newer scroll, or interrupted by a touch.
+            if (this.keyFrame !== frame) return;
             const now = performance.now();
             const t = dur <= 0
                 ? 1

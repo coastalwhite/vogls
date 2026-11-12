@@ -26,6 +26,41 @@
     min-height: 0;
 }
 
+/* Small screens (see COLUMN_QUERY in workspace.ts): the frames are listed
+   one under the other at a fixed height, and the page scrolls instead. */
+.ws-root--column {
+    flex-direction: column;
+    gap: 0.75rem;
+}
+.ws-root--column > .ws-frame {
+    flex: none;
+    height: max(20rem, 65vh);
+}
+/* Not a drag handle here, so a swipe on it can scroll the column. */
+.ws-root--column .ws-frame__chrome {
+    cursor: default;
+    touch-action: auto;
+}
+
+.ws-column-add {
+    flex: none;
+    height: 2.75rem;
+    font: inherit;
+    font-size: 1.5rem;
+    line-height: 1;
+    color: var(--text);
+    background: none;
+    border: 1px dashed var(--border);
+    border-radius: 0.5rem;
+    cursor: pointer;
+}
+.ws-column-add:hover {
+    color: var(--text-h);
+    background: var(--accent-bg);
+    border-color: var(--accent-border);
+}
+.ws-column-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
 .ws-stack {
     display: flex;
     flex: 1;

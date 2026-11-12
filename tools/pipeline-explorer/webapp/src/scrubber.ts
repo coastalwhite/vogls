@@ -39,6 +39,8 @@ export class ScrubberCanvas {
         this.canvas.style.inset = "0";
         this.canvas.style.display = "block";
         this.canvas.style.position = "absolute";
+        // Seeking is a horizontal drag; the browser must not take it as a pan.
+        this.canvas.style.touchAction = "none";
         this.wrap.appendChild(this.canvas);
         elem.appendChild(this.wrap);
 
@@ -63,6 +65,7 @@ export class ScrubberCanvas {
         this.canvas.addEventListener("pointerup", (e) => this.onPointerUp(e), {
             passive: false,
         });
+        this.canvas.addEventListener("pointercancel", (e) => this.onPointerUp(e));
         this.canvas.addEventListener(
             "pointermove",
             (e) => this.onPointerMove(e),
@@ -133,6 +136,7 @@ export class ScrubberCanvas {
     }
 
     onPointerDown(e: PointerEvent) {
+        if (!e.isPrimary || e.button !== 0) return;
         this.dragging = true;
         this.canvas.setPointerCapture(e.pointerId);
         this.seek(e);
@@ -142,6 +146,8 @@ export class ScrubberCanvas {
     }
     onPointerUp(e: PointerEvent) {
         this.dragging = false;
-        this.canvas.releasePointerCapture(e.pointerId);
+        if (this.canvas.hasPointerCapture(e.pointerId)) {
+            this.canvas.releasePointerCapture(e.pointerId);
+        }
     }
 }
