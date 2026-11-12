@@ -866,14 +866,21 @@ pub fn eval_constant(
     match &arenas.ident_table[ident.item.0] {
         "signed" => {
             ensure_num_args_equal!(1);
-            diagnostics.not_yet_implemented(arenas.get_span(expr), "signed is not yet implemented");
-            Err(())
+            let v = arguments[0].as_ref().ok_or(())?.clone();
+            if v.is_real() {
+                diagnostics.not_yet_implemented(arenas.get_span(expr), "real is not allowed here");
+                return Err(());
+            }
+            Ok(VValue::SignedNet(v.into_bits()))
         }
         "unsigned" => {
             ensure_num_args_equal!(1);
-            diagnostics
-                .not_yet_implemented(arenas.get_span(expr), "unsigned is not yet implemented");
-            Err(())
+            let v = arguments[0].as_ref().ok_or(())?.clone();
+            if v.is_real() {
+                diagnostics.not_yet_implemented(arenas.get_span(expr), "real is not allowed here");
+                return Err(());
+            }
+            Ok(VValue::UnsignedNet(v.into_bits()))
         }
         "time" => {
             ensure_num_args_equal!(0);
