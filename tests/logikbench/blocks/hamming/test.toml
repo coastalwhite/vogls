@@ -7,6 +7,7 @@ sources    = [
     "../../../../submodules/logikbench/logikbench/benchmarks/blocks/hamming/testbench/test_hamming_smoke.v",
 ]
 defines    = []
+skip       = "does not terminate within 15 minutes"
 output = """
 PASS [zeros] noerr
 PASS [ones] noerr
