@@ -11,6 +11,7 @@ use self::arithmetic::{
 use self::format::{BitsDisplay, BitsFormatOptions};
 use self::leading_trailing::{tv_leading_ones, tv_leading_zeros};
 use self::parse::BitsParseError;
+use self::set_subslice::set_with_mask;
 use self::truncate::{fv_l_truncate, tv_l_truncate};
 use self::util::{last_word_mask, mask_size_1to64, saturating_rem, wrapping_u64_pow};
 
@@ -1994,33 +1995,76 @@ impl Bits {
     }
 
     pub fn set_slice(&self, offset: u32, src: &Bits) -> Bits {
-        let Some(middle_size) = self
-            .size()
-            .get()
-            .checked_sub(offset)
-            .and_then(VectorSize::new)
-        else {
-            return self.clone();
+        use std::borrow::Cow;
+
+        // Ensure that both are using the same mode.
+        let (slf, src) = match (self.mode, src.mode) {
+            (Mode::TwoValue, Mode::TwoValue) => (Cow::Borrowed(self), Cow::Borrowed(src)),
+            (Mode::TwoValue, Mode::FourValue) => (
+                Cow::Owned(self.clone().into_four_value()),
+                Cow::Borrowed(src),
+            ),
+            (Mode::FourValue, Mode::TwoValue) => (
+                Cow::Borrowed(self),
+                Cow::Owned(src.clone().into_four_value()),
+            ),
+            (Mode::FourValue, Mode::FourValue) => (Cow::Borrowed(self), Cow::Borrowed(src)),
         };
 
-        let lsbs = VectorSize::new(offset).map(|size| self.slicez(0, size));
-        let msbs_start = offset + src.size().get();
-        let msbs = self
-            .size()
-            .get()
-            .checked_sub(msbs_start)
-            .and_then(VectorSize::new)
-            .map(|size| self.slicez(msbs_start, size));
-
-        let mut middle = src.slicez(0, middle_size);
-
-        if let Some(lsbs) = lsbs {
-            middle = Bits::concatenate(&middle, &lsbs);
+        let mut nwords = slf.size().get().div_ceil(64) as usize;
+        let mut spc_nwords = 0;
+        if src.mode == Mode::FourValue {
+            spc_nwords = nwords;
+            nwords *= 2;
         }
-        if let Some(msbs) = msbs {
-            middle = Bits::concatenate(&msbs, &middle);
+
+        // @Performance. This is not 100% efficient as there could be arms without allocations, but
+        // it is fine for now.
+        let mut mask = vec![0u64; src.size().get().div_ceil(64) as usize];
+        let mut dst = vec![0u64; nwords];
+
+        // Fill with the old value.
+        let slf_data = slf.as_data_ref();
+        let (slf_val, slf_spc) = slf_data.to_u64_slices();
+        dst[spc_nwords..].copy_from_slice(slf_val);
+        if let Some(spc) = slf_spc {
+            dst[..spc_nwords].copy_from_slice(spc);
         }
-        middle
+
+        // Update with the new value.
+        let src_data = src.as_data_ref();
+        let (src_val, src_spc) = src_data.to_u64_slices();
+        set_with_mask(
+            &mut mask,
+            &mut dst[spc_nwords..],
+            src_val,
+            offset as u64,
+            src.size(),
+            0,
+            slf.size(),
+        );
+        if let Some(spc) = src_spc {
+            set_with_mask(
+                &mut mask,
+                &mut dst[..spc_nwords],
+                spc,
+                offset as u64,
+                src.size(),
+                0,
+                slf.size(),
+            );
+        }
+
+        if slf.size() <= slf.mode.max_inline_size() {
+            match slf.mode {
+                Mode::TwoValue => Self::from_u64(slf.size(), dst[0]),
+                Mode::FourValue => {
+                    Self::from_four_value_u64(slf.size(), dst[0] as u32, dst[1] as u32)
+                }
+            }
+        } else {
+            Self::from_boxed_slice(slf.mode, slf.size(), dst.into_boxed_slice())
+        }
     }
 
     pub fn be_bytes_iter(&self) -> impl ExactSizeIterator<Item = Option<u8>> {

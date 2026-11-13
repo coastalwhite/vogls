@@ -104,6 +104,8 @@ fn evaluate_impl(
                 _ = variables.insert(*dst, bits);
             }
             I::Drive(dst, dst_signal, src, offset) => {
+                // @Performance. Use the kernels directly to calculate the mask and the result at
+                // the same time.
                 let old_value = signals.entry(*dst_signal).or_insert_with(|| {
                     let signal = &gl.signals[*dst_signal];
                     match &signal.initialize {
@@ -120,8 +122,33 @@ fn evaluate_impl(
                 variables.insert(*dst, update_mask);
                 signals.insert(*dst_signal, new_value);
             }
-            I::DriveSlice(..) => {
-                todo!()
+            I::DriveSlice(dst, dst_signal, src, offset) => {
+                let src_size = gl.vars.size(*src);
+                let src = variables[src].clone();
+                let offset = variables[offset].clone();
+
+                if offset.contains_special() {
+                    _ = variables.insert(*dst, Bits::new_zeroed(src_size));
+                    continue;
+                }
+
+                // @Performance. Use the kernels directly to calculate the mask and the result at
+                // the same time.
+                let offset = offset.extract_exact_u32().unwrap();
+                let old_value = signals.entry(*dst_signal).or_insert_with(|| {
+                    let signal = &gl.signals[*dst_signal];
+                    match &signal.initialize {
+                        Some(v) => v.clone(),
+                        None if signal.mode.is_two_value() => Bits::new_zeroed(signal.size),
+                        None => Bits::new_unknown(signal.size),
+                    }
+                });
+
+                let old_value_slice = old_value.slicex(offset, src_size);
+                let update_mask = Bits::bitwise_case_equality(&old_value_slice, &src);
+                let new_value = old_value.set_slice(offset, &src);
+                variables.insert(*dst, update_mask);
+                signals.insert(*dst_signal, new_value);
             }
             I::Phi(dst, items) => {
                 let prev_bb = prev_bb.unwrap();
