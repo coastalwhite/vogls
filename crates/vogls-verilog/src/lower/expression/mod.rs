@@ -782,6 +782,13 @@ pub fn lower_expr<'a>(
                         self.mctx.diagnostics.not_yet_implemented(tr, reason);
                     }
 
+                    fn zero_width_part_select(&mut self) -> Self::Error {
+                        let tr = self.ctx.arenas.get_span(self.expr);
+                        self.mctx
+                            .diagnostics
+                            .not_yet_implemented(tr, "zero-width selection");
+                    }
+
                     fn eval_constant(
                         &mut self,
                         operand: Self::ConstantExpr,

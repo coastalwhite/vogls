@@ -45,6 +45,7 @@ pub trait AddressingContext {
     fn too_many_selects(&mut self) -> Self::Error;
     fn stride_overflow(&mut self) -> Self::Error;
     fn not_yet_implemented(&mut self, reason: &'static str) -> Self::Error;
+    fn zero_width_part_select(&mut self) -> Self::Error;
 
     fn eval_constant(&mut self, operand: Self::ConstantExpr) -> Result<i64, Self::Error>;
     fn eval_var(&mut self, operand: Self::Expr) -> Result<Self::Var, Self::Error>;
@@ -168,15 +169,17 @@ pub fn lower_addressing<C: AddressingContext>(
         RangeExpr::PlusWidth(offset, width) => {
             let offset = C::eval_var(ctx, offset)?;
             let width = C::eval_constant(ctx, width)?;
-            let range_width = u32::try_from(width).unwrap();
-            let range_width = VectorSize::new(range_width).unwrap();
+            let Some(range_width) = u32::try_from(width).ok().and_then(VectorSize::new) else {
+                return Err(C::zero_width_part_select(ctx));
+            };
             (offset, range_width)
         }
         RangeExpr::MinusWidth(offset, width) => {
             let offset = C::eval_var(ctx, offset)?;
             let width = C::eval_constant(ctx, width)?;
-            let range_width = u32::try_from(width).unwrap();
-            let range_width = VectorSize::new(range_width).unwrap();
+            let Some(range_width) = u32::try_from(width).ok().and_then(VectorSize::new) else {
+                return Err(C::zero_width_part_select(ctx));
+            };
             let range_lsb = C::var_sub_i64(ctx, offset, i64::from(range_width.get() - 1))?;
             (range_lsb, range_width)
         }
@@ -223,6 +226,11 @@ impl<'a, 'b> AddressingContext for AddressingConstantExprWidthContext<'a, 'b> {
     fn not_yet_implemented(&mut self, reason: &'static str) -> Self::Error {
         let tr = self.arenas.spans[self.loc];
         self.diagnostics.not_yet_implemented(tr, reason);
+    }
+    fn zero_width_part_select(&mut self) -> Self::Error {
+        let tr = self.arenas.spans[self.loc];
+        self.diagnostics
+            .not_yet_implemented(tr, "zero-width selection");
     }
 
     fn eval_constant(&mut self, operand: Self::ConstantExpr) -> Result<i64, Self::Error> {
@@ -323,10 +331,15 @@ impl<'a, 'b> AddressingContext for LValueAddressingContext<'a, 'b> {
             .diagnostics
             .not_yet_implemented(tr, "stride overflow");
     }
-
     fn not_yet_implemented(&mut self, reason: &'static str) -> Self::Error {
         let tr = self.ctx.arenas.spans[self.loc];
         self.mctx.diagnostics.not_yet_implemented(tr, reason);
+    }
+    fn zero_width_part_select(&mut self) -> Self::Error {
+        let tr = self.ctx.arenas.spans[self.loc];
+        self.mctx
+            .diagnostics
+            .not_yet_implemented(tr, "zero-width selection");
     }
 
     fn eval_constant(&mut self, operand: Self::ConstantExpr) -> Result<i64, Self::Error> {
@@ -460,6 +473,12 @@ impl<'a, 'b> AddressingContext for ConstantAddressingContext<'a, 'b> {
         self.diagnostics.not_yet_implemented(tr, reason);
     }
 
+    fn zero_width_part_select(&mut self) -> Self::Error {
+        let tr = self.arenas.spans[self.loc];
+        self.diagnostics
+            .not_yet_implemented(tr, "zero-width selection");
+    }
+
     fn eval_constant(&mut self, operand: Self::ConstantExpr) -> Result<i64, Self::Error> {
         let value = eval_constant_expr(
             self.gl,
@@ -540,6 +559,7 @@ fn test() {
         fn too_many_selects(&mut self) -> Self::Error {}
         fn stride_overflow(&mut self) -> Self::Error {}
         fn not_yet_implemented(&mut self, _: &'static str) -> Self::Error {}
+        fn zero_width_part_select(&mut self) -> Self::Error {}
 
         fn eval_constant(&mut self, operand: Self::ConstantExpr) -> Result<i64, Self::Error> {
             Ok(operand)
