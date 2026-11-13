@@ -1,0 +1,7 @@
+error: not yet implemented or no specialized error: zero-width selection
+  --> {path}:7
+ 5 | module top;
+ 6 |   reg [7:0] r;
+ 7 >   initial r[0+:0] = 1'b0;
+               ^^^^^^^
+ 8 | endmodule

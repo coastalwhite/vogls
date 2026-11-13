@@ -276,6 +276,12 @@ pub fn eval_constant_expr<'a>(
                         self.diagnostics.not_yet_implemented(tr, reason);
                     }
 
+                    fn zero_width_part_select(&mut self) -> Self::Error {
+                        let tr = self.arenas.spans[self.loc];
+                        self.diagnostics
+                            .not_yet_implemented(tr, "zero-width selection");
+                    }
+
                     fn eval_constant(
                         &mut self,
                         operand: Self::ConstantExpr,
