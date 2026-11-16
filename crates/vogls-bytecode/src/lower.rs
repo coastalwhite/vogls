@@ -2529,21 +2529,18 @@ fn lower_instruction(
                     range_offset += slice.len();
 
                     let (condition, _) = slice[0];
-                    if condition.edge.is_directed() || !condition.slice().overlaps(drive_slice) {
+                    if condition.edge.is_directed() {
                         continue;
                     }
-
-                    let rel_offset = condition.offset.saturating_sub(*partial);
-                    let rel_size = cmp::min(
-                        src_size,
-                        VectorSize::new(condition.bit_length().get() - rel_offset).unwrap(),
-                    );
+                    let Some(rel_slice) = condition.slice().overlapping_slice(drive_slice) else {
+                        continue;
+                    };
 
                     match SixBitSize::from_vector_size(src_size) {
                         Some(_) => bce.wake(
                             rd,
-                            rel_offset as u8,
-                            SixBitSize::from_vector_size(rel_size).unwrap(),
+                            (rel_slice.lsb() - *partial) as u8,
+                            SixBitSize::from_vector_size(rel_slice.width()).unwrap(),
                             start,
                             end,
                         ),
@@ -2551,7 +2548,12 @@ fn lower_instruction(
                             bce.wake(mask_any, 0, SixBitSize::N64, start, end)
                         }
                         None => {
-                            bce.heap_shift_reduce_or(SCRATCH2, rd, src_size, condition.offset);
+                            bce.heap_shift_reduce_or(
+                                SCRATCH2,
+                                rd,
+                                src_size,
+                                rel_slice.lsb() - *partial,
+                            );
                             bce.wake(SCRATCH2, 0, SixBitSize::N64, start, end);
                         }
                     }
