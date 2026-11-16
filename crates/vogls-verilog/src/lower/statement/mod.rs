@@ -24,7 +24,7 @@ mod wait;
 /// Lower several Verilog statements to Vogls IR.
 pub fn lower_stmts<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     proc_builder: &mut ProcessBuilder,
     mut builder: BasicBlockBuilder,

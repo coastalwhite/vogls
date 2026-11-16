@@ -8,7 +8,7 @@ use crate::lower::{LowerContext, MutLowerContext, assign, expression};
 /// Lower Verilog blocking assignment statements (normal `=`) to Vogls IR.
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     mut builder: BasicBlockBuilder,
     ba: AstId<'a, BlockingAssignment<'a>>,

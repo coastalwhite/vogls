@@ -21,7 +21,7 @@ use super::gate_instantiation::{GateDelayFn, lower_delay_value, lower_delay3, lo
 /// Lower a Verilog `assign` construct to Vogls IR.
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     assign: AstId<'a, ContinousAssign<'a>>,
 ) -> Result<(), ()> {
@@ -89,7 +89,7 @@ pub fn lower<'a>(
                     rvalue_ty,
                     VType::UnsignedNet(context_width),
                 );
-                let delay = move |mctx: &mut MutLowerContext,
+                let delay = move |mctx: &mut MutLowerContext<'a>,
                                   builder: &mut BasicBlockBuilder,
                                   new_value: VariableKey,
                                   driven_value: VariableKey| {
@@ -127,7 +127,7 @@ pub fn lower<'a>(
 
 pub(crate) fn lower_assign_delay3<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     delay3: AstId<'a, Delay3<'a>>,
@@ -180,7 +180,7 @@ pub(crate) fn lower_assign_delay3<'a>(
 
 fn try_fuse_assign<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     net_assignment: AstId<'a, NetAssignment<'a>>,
 ) -> FuseResult {

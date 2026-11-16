@@ -33,7 +33,7 @@ pub struct LowerContext<'a, 'b> {
     pub time_resolution: TimeResolution,
 }
 
-pub struct MutLowerContext {
+pub struct MutLowerContext<'a> {
     pub gl: GlobalContext,
     pub nbas: IndexMap<SignalKey, (ProcessKey, SignalKey, Option<SignalKey>)>,
     pub diagnostics: Diagnostics,
@@ -46,6 +46,9 @@ pub struct MutLowerContext {
     pub monitor: Option<MonitorSignals>,
 
     pub multidriver: MultidriverResolution,
+
+    /// The lifetime of the AST that is lowered.
+    pub _marker: PhantomData<&'a ()>,
 }
 
 pub struct MonitorSignals {
@@ -83,7 +86,7 @@ impl MonitorSignals {
     }
 }
 
-impl MutLowerContext {
+impl MutLowerContext<'_> {
     pub fn gl(&mut self) -> &mut GlobalContext {
         &mut self.gl
     }
@@ -440,6 +443,8 @@ pub fn try_resolve_constant<'a, 's>(
     Ok(value)
 }
 
+use std::marker::PhantomData;
+
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::bits::arithmetic::FvLogicValue;
@@ -479,7 +484,7 @@ pub use diagnostics::{Diagnostics, LowerErrorReason, WarningsReport};
 pub fn lower_module_to_ir<'a>(
     root: AstId<'a, Module<'a>>,
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
 ) -> Result<(), ()> {
     let Module {
@@ -545,7 +550,7 @@ enum WatchCondition {
 
 fn assign_task_output<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     variable: VariableKey,

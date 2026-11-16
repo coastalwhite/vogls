@@ -45,7 +45,7 @@ fn lower_level(
 
 pub fn lower_udp<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, UdpDeclaration<'a>>,
     output_terminal: AstId<'a, NetLValue<'a>>,
@@ -70,7 +70,7 @@ pub fn lower_udp<'a>(
 
 pub fn lower_combinational_udp<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, UdpDeclaration<'a>>,
     entries: AstIdRange<'a, UdpCombinationalEntry<'a>>,
@@ -162,7 +162,7 @@ pub fn lower_combinational_udp<'a>(
 
 pub fn lower_sequential_udp<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, UdpDeclaration<'a>>,
     initial: Option<AstId<'a, UdpInitialStatement>>,

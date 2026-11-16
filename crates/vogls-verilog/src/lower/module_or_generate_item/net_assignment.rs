@@ -24,7 +24,7 @@ use super::gate_instantiation::{AssignOutputFn, GateDelayFn, lower_delayed_drive
 /// elaboration.
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     item_decl: AstId<'a, ModuleOrGenerateItemDeclaration<'a>>,
 ) -> Result<(), ()> {
@@ -82,7 +82,7 @@ pub fn lower<'a>(
 
 fn assign_net<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     net: SymbolId,
     rvalue: AstId<'a, Expr<'a>>,
@@ -133,7 +133,7 @@ fn assign_net<'a>(
     // assignment and is not a net delay.
     // """
     let delay = delay3.map(|delay3| {
-        move |mctx: &mut MutLowerContext,
+        move |mctx: &mut MutLowerContext<'a>,
               builder: &mut BasicBlockBuilder,
               new_value: VariableKey,
               driven_value: VariableKey| {
@@ -149,7 +149,7 @@ fn assign_net<'a>(
             )
         }
     });
-    let assign = |mctx: &mut MutLowerContext, builder: &mut BasicBlockBuilder, value| {
+    let assign = |mctx: &mut MutLowerContext<'a>, builder: &mut BasicBlockBuilder, value| {
         net_symbol
             .terminals
             .drive_blocking(mctx.gl(), builder, value, None);
@@ -173,7 +173,7 @@ fn assign_net<'a>(
 
 pub fn try_fuse_net_assignment<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     symbol: &SignalSymbol,
     rvalue: AstId<'a, Expr<'a>>,

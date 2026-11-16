@@ -294,7 +294,7 @@ impl<'a, 'b> AddressingContext for AddressingConstantExprWidthContext<'a, 'b> {
 
 pub struct LValueAddressingContext<'a, 'b> {
     pub ctx: &'b LowerContext<'a, 'b>,
-    pub mctx: &'b mut MutLowerContext,
+    pub mctx: &'b mut MutLowerContext<'a>,
     pub builder: &'b mut BasicBlockBuilder,
     pub loc: usize,
     pub scope: SymbolId,

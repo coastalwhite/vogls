@@ -16,7 +16,7 @@ use crate::lower::{MutLowerContext, VType, hident_span, try_resolve_hident};
 
 pub fn lower_function_call<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     expr: AstId<Expr>,
@@ -117,7 +117,7 @@ pub fn lower_function_call<'a>(
 
 pub fn lower_task_enable<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     proc_builder: &mut ProcessBuilder,
     mut builder: BasicBlockBuilder,

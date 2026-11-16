@@ -56,8 +56,8 @@ impl VValue {
 }
 
 /// Convert a delay variable of type `delay_ty` to simulation ticks.
-pub fn typed_var_delay_to_ticks(
-    mctx: &mut MutLowerContext,
+pub fn typed_var_delay_to_ticks<'a>(
+    mctx: &mut MutLowerContext<'a>,
     builder: &mut BasicBlockBuilder,
     delay: VariableKey,
     delay_ty: VType,
@@ -96,8 +96,8 @@ pub fn f64_delay_to_ticks(
 }
 
 /// Convert an integer delay variable of `TIME_VSIZE` bits to simulation ticks.
-pub fn var_int_delay_to_ticks(
-    mctx: &mut MutLowerContext,
+pub fn var_int_delay_to_ticks<'a>(
+    mctx: &mut MutLowerContext<'a>,
     builder: &mut BasicBlockBuilder,
     delay: VariableKey,
     time_scale: TimeScale,
@@ -109,8 +109,8 @@ pub fn var_int_delay_to_ticks(
 }
 
 /// Convert a real delay variable to simulation ticks, rounded to the time precision.
-pub fn var_real_delay_to_ticks(
-    mctx: &mut MutLowerContext,
+pub fn var_real_delay_to_ticks<'a>(
+    mctx: &mut MutLowerContext<'a>,
     builder: &mut BasicBlockBuilder,
     delay: VariableKey,
     time_scale: TimeScale,

@@ -22,7 +22,7 @@ use super::MutLowerContext;
 
 pub fn get_used_signals<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     stmt: AstId<'a, Statement<'a>>,
@@ -236,7 +236,7 @@ pub fn get_used_signals<'a>(
 
 pub fn get_used_signals_stmt_or_null<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     stmt: AstId<'a, StatementOrNull<'a>>,
@@ -249,7 +249,7 @@ pub fn get_used_signals_stmt_or_null<'a>(
 
 pub fn get_variable_lvalue_used_signals<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     lvalue: AstId<'a, VariableLValue<'a>>,
@@ -279,7 +279,7 @@ pub fn get_variable_lvalue_used_signals<'a>(
 
 pub fn get_delay_or_event_control_used_signals<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     delay_or_event_control: AstId<'a, DelayOrEventControl<'a>>,
@@ -296,7 +296,7 @@ pub fn get_delay_or_event_control_used_signals<'a>(
 
 pub fn get_delay_control_used_signals<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     delay_control: AstId<'a, DelayControl<'a>>,
@@ -333,7 +333,7 @@ pub fn get_delay_control_used_signals<'a>(
 
 pub fn get_event_control_used_signals<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     signals: &mut OrderedSet<SignalKey>,
     event_control: AstId<'a, EventControl<'a>>,
