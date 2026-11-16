@@ -17,7 +17,7 @@ use crate::lower::{LowerContext, MutLowerContext, try_resolve_signal};
 /// This construct keeps rerunning the associated statement.
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, AlwaysConstruct<'a>>,
 ) -> Result<(), ()> {
@@ -89,7 +89,7 @@ pub fn lower<'a>(
 /// containing `AnyEdge` signals.
 fn extract_standing_signals<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     statement: AstId<'a, Statement<'a>>,
 ) -> Result<

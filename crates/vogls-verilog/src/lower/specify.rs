@@ -87,7 +87,7 @@ pub struct LowerIoPathScratches {
 
 fn eval_delay_to_ticks<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, ConstantExpr<'a>>,
 ) -> Result<u64, ()> {
@@ -118,7 +118,7 @@ fn eval_delay_to_ticks<'a>(
 /// Evaluate one path delay and append it to the delay store.
 fn push_delay<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, ConstantMinTypMaxExpression<'a>>,
     delays: &mut Vec<Time>,
@@ -141,7 +141,7 @@ fn push_delay<'a>(
 
 pub fn lower_specify<'a>(
     ctx: &mut LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
 
     items: AstIdRange<'a, SpecifyBlockItem<'a>>,
@@ -333,10 +333,10 @@ pub fn lower_specify<'a>(
 
 pub fn lower_iopath<'a>(
     ctx: &mut LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     output: SignalKey,
-    specify: SpecifyOutput,
+    specify: SpecifyOutput<'a>,
     delays: &[Time],
     scratches: &mut LowerIoPathScratches,
 ) -> Result<(), ()> {

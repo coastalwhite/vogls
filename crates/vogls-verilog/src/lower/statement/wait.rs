@@ -10,7 +10,7 @@ use super::lower_stmts;
 
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     proc_builder: &mut ProcessBuilder,
     mut builder: BasicBlockBuilder,

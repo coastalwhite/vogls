@@ -18,7 +18,7 @@ mod udp;
 /// Lower a Verilog module or generate item to Vogls IR.
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, ModuleOrGenerateItem<'a>>,
 ) -> Result<(), ()> {

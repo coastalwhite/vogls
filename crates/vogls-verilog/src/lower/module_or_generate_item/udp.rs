@@ -6,7 +6,7 @@ use crate::lower::{LowerContext, MutLowerContext};
 
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, UdpInstantiation<'a>>,
 ) -> Result<(), ()> {

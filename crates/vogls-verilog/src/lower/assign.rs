@@ -19,7 +19,7 @@ use super::{MutLowerContext, VType};
 
 pub fn assign_variable_lvalue<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     ast_lvalue: AstId<'a, VariableLValue<'a>>,
@@ -67,7 +67,7 @@ pub fn assign_variable_lvalue<'a>(
 
 pub fn variable_lvalue_size<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     ast_lvalue: AstId<'a, VariableLValue<'a>>,
 ) -> Result<VectorSize, ()> {
@@ -83,7 +83,7 @@ pub fn variable_lvalue_size<'a>(
 
 pub fn variable_lvalue_flat_ty<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     ast_lvalue: AstId<'a, VariableLValueFlat<'a>>,
 ) -> Result<VType, ()> {
@@ -134,7 +134,7 @@ pub fn variable_lvalue_flat_ty<'a>(
 
 pub fn assign_variable_lvalue_flat<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     ast_lvalue: AstId<'a, VariableLValueFlat<'a>>,
@@ -221,7 +221,7 @@ pub fn assign_variable_lvalue_flat<'a>(
 
 pub fn assign_net_lvalue<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     ast_lvalue: AstId<'a, NetLValue<'a>>,
@@ -268,7 +268,7 @@ pub fn assign_net_lvalue<'a>(
 
 pub fn net_lvalue_size<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     ast_lvalue: AstId<'a, NetLValue<'a>>,
 ) -> Result<VectorSize, ()> {
@@ -284,7 +284,7 @@ pub fn net_lvalue_size<'a>(
 
 pub fn net_lvalue_flat_ty<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     ast_lvalue: AstId<'a, NetLValueFlat<'a>>,
 ) -> Result<VType, ()> {
@@ -342,7 +342,7 @@ pub fn net_lvalue_flat_ty<'a>(
 
 fn assign_net_lvalue_flat<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     lvalue: AstId<'a, NetLValueFlat<'a>>,
@@ -434,7 +434,7 @@ fn assign_net_lvalue_flat<'a>(
 
 pub fn net_lvalue_bit_length<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     output_terminal: AstId<'a, NetLValue<'a>>,
 ) -> Result<VectorSize, ()> {

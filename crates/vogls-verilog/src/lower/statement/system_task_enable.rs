@@ -20,7 +20,7 @@ use crate::lower::{expression, hident_span, try_resolve_signal};
 
 pub fn lower_system_task_enable<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     mut builder: BasicBlockBuilder,
     system_task_enable: AstId<'a, SystemTaskEnable<'a>>,
@@ -704,7 +704,7 @@ pub fn lower_system_task_enable<'a>(
 #[expect(clippy::type_complexity)]
 pub fn lower_write_arguments<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     system_task_enable: AstId<'a, SystemTaskEnable<'a>>,
     builder: &mut BasicBlockBuilder,

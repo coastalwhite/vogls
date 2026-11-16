@@ -9,7 +9,7 @@ use crate::lower::{unwrap_get_fn_mut, unwrap_get_task_mut};
 
 pub fn lower<'a>(
     ctx: &mut LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, FunctionDeclaration<'a>>,
 ) -> Result<(), ()> {
@@ -48,7 +48,7 @@ pub fn lower<'a>(
 
 pub fn lower_task<'a>(
     ctx: &mut LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, TaskDeclaration<'a>>,
 ) -> Result<(), ()> {

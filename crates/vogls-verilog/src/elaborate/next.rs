@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
@@ -2544,6 +2545,7 @@ pub fn finalize_symbol<'a>(
                 has_vcd: false,
                 monitor: None,
                 multidriver: MultidriverResolution::default(),
+                _marker: PhantomData,
             };
             // @TODO: This should ignore errors with unresolved symbols.
             let res =

@@ -8,7 +8,7 @@ use crate::lower::{LowerContext, MutLowerContext, try_resolve_hident};
 
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     proc_builder: &mut ProcessBuilder,
     mut builder: BasicBlockBuilder,

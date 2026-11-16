@@ -22,7 +22,7 @@ use super::Region;
 
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     proc_builder: &mut ProcessBuilder,
     mut builder: BasicBlockBuilder,
@@ -220,7 +220,7 @@ pub fn lower<'a>(
 
 pub fn evaluate_delay_value_as_ticks<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     ast_delay_value: AstId<'a, DelayValue>,
 ) -> Result<u64, ()> {
@@ -245,7 +245,7 @@ pub fn evaluate_delay_value_as_ticks<'a>(
 
 pub fn lower_min_typ_max_delay<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     min_typ_max: AstId<'a, MinTypMaxExpression<'a>>,

@@ -24,7 +24,7 @@ use crate::lower::{
 /// This creates marshalling processes for port assignments.
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, ModuleInstantiation<'a>>,
 ) -> Result<(), ()> {
@@ -124,7 +124,7 @@ pub fn lower<'a>(
 /// Assign a port to an expression.
 fn assign_port<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     range_specification: Option<SymbolId>,
     direction: ConnectionDirection,
@@ -201,7 +201,7 @@ fn assign_port<'a>(
 
 fn assign_input_port<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
     port: SymbolId,
@@ -245,7 +245,7 @@ fn assign_input_port<'a>(
 
 fn try_fuse_input_port<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
     port: &SignalSymbol,
@@ -296,7 +296,7 @@ fn try_fuse_input_port<'a>(
 
 fn assign_port_output<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
     output_net: SymbolId,

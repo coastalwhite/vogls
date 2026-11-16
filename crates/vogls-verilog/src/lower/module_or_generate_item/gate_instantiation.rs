@@ -22,7 +22,7 @@ use crate::lower::{LowerContext, MutLowerContext, VType};
 
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, GateInstantiation<'a>>,
 ) -> Result<(), ()> {
@@ -82,7 +82,7 @@ pub fn lower<'a>(
                 };
 
                 let delay = enable_switch.delay.map(|delay3| {
-                    move |mctx: &mut MutLowerContext,
+                    move |mctx: &mut MutLowerContext<'a>,
                           builder: &mut BasicBlockBuilder,
                           new_value: VariableKey,
                           _driven_value: VariableKey| {
@@ -157,7 +157,7 @@ pub fn lower<'a>(
                 let out = bb_builder.select(mctx.gl(), data_is_z, z, out);
 
                 let delay = mos_switch.delay.map(|delay3| {
-                    move |mctx: &mut MutLowerContext,
+                    move |mctx: &mut MutLowerContext<'a>,
                           builder: &mut BasicBlockBuilder,
                           new_value: VariableKey,
                           _driven_value: VariableKey| {
@@ -242,7 +242,7 @@ pub fn lower<'a>(
                 let out = bb_builder.select(mctx.gl(), data_is_z, z, out);
 
                 let delay = cmos_switch.delay.map(|delay3| {
-                    move |mctx: &mut MutLowerContext,
+                    move |mctx: &mut MutLowerContext<'a>,
                           builder: &mut BasicBlockBuilder,
                           new_value: VariableKey,
                           _driven_value: VariableKey| {
@@ -388,7 +388,7 @@ pub fn lower<'a>(
                 }
 
                 let delay = delay2.map(|delay2| {
-                    move |mctx: &mut MutLowerContext,
+                    move |mctx: &mut MutLowerContext<'a>,
                           builder: &mut BasicBlockBuilder,
                           new_value: VariableKey,
                           _driven_value: VariableKey| {
@@ -475,7 +475,7 @@ pub fn lower<'a>(
                     }
 
                     let delay = delay2.map(|delay2| {
-                        move |mctx: &mut MutLowerContext,
+                        move |mctx: &mut MutLowerContext<'a>,
                               builder: &mut BasicBlockBuilder,
                               new_value: VariableKey,
                               _driven_value: VariableKey| {
@@ -513,8 +513,8 @@ pub fn lower<'a>(
 }
 
 /// Called with the new output value and the output value that is currently driven.
-pub(crate) type GateDelayFn<'f> = dyn Fn(
-        &mut MutLowerContext,
+pub(crate) type GateDelayFn<'a, 'f> = dyn Fn(
+        &mut MutLowerContext<'a>,
         &mut BasicBlockBuilder,
         VariableKey,
         VariableKey,
@@ -523,7 +523,7 @@ pub(crate) type GateDelayFn<'f> = dyn Fn(
 
 fn lower_delay2<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     delay2: AstId<'a, Delay2<'a>>,
@@ -555,7 +555,7 @@ fn lower_delay2<'a>(
 
 pub(crate) fn lower_delay3<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     delay3: AstId<'a, Delay3<'a>>,
@@ -589,7 +589,7 @@ pub(crate) fn lower_delay3<'a>(
 
 pub(crate) fn lower_delay_value<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     value: AstId<'a, DelayValue>,
@@ -609,7 +609,7 @@ impl<'a> TransitionDelays<'a> {
     fn lower(
         self,
         ctx: &LowerContext<'a, '_>,
-        mctx: &mut MutLowerContext,
+        mctx: &mut MutLowerContext<'a>,
         scope: SymbolId,
         builder: &mut BasicBlockBuilder,
         span: TokenRange,
@@ -655,16 +655,16 @@ impl<'a> TransitionDelays<'a> {
 
 pub(crate) fn lower_gate_drive<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     bb_builder: &mut BasicBlockBuilder,
     span: TokenRange,
-    delay: Option<&GateDelayFn<'_>>,
+    delay: Option<&GateDelayFn<'a, '_>>,
     output_terminal: AstId<'a, NetLValue<'a>>,
     value: VariableKey,
     output_bit_length: VectorSize,
 ) -> Result<(), ()> {
-    let assign = |mctx: &mut MutLowerContext, builder: &mut BasicBlockBuilder, value| {
+    let assign = |mctx: &mut MutLowerContext<'a>, builder: &mut BasicBlockBuilder, value| {
         assign_net_lvalue(
             ctx,
             mctx,
@@ -687,16 +687,16 @@ pub(crate) fn lower_gate_drive<'a>(
 }
 
 /// Assigns a value to the output of a [`lower_delayed_drive`].
-pub(crate) type AssignOutputFn<'f> =
-    dyn Fn(&mut MutLowerContext, &mut BasicBlockBuilder, VariableKey) -> Result<(), ()> + 'f;
+pub(crate) type AssignOutputFn<'a, 'f> =
+    dyn Fn(&mut MutLowerContext<'a>, &mut BasicBlockBuilder, VariableKey) -> Result<(), ()> + 'f;
 
 /// Assign `value` to an output with `assign`, after the delay that `delay` gives.
-pub(crate) fn lower_delayed_drive(
-    mctx: &mut MutLowerContext,
+pub(crate) fn lower_delayed_drive<'a>(
+    mctx: &mut MutLowerContext<'a>,
     bb_builder: &mut BasicBlockBuilder,
     span: TokenRange,
-    delay: Option<&GateDelayFn<'_>>,
-    assign: &AssignOutputFn<'_>,
+    delay: Option<&GateDelayFn<'a, '_>>,
+    assign: &AssignOutputFn<'a, '_>,
     value: VariableKey,
     output_bit_length: VectorSize,
 ) -> Result<(), ()> {

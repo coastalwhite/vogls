@@ -22,7 +22,7 @@ use super::get_expr_type;
 
 pub fn lower_system_function_call<'a, 'b>(
     ctx: &LowerContext<'a, 'b>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     builder: &mut BasicBlockBuilder,
     expr: AstId<Expr>,
     ident: AstItem<SystemTaskIdentifier>,
@@ -466,7 +466,7 @@ pub fn get_system_function_call_output_ty(
 
 pub fn lower_unevaluated_system_function_call<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     builder: &mut BasicBlockBuilder,
     ident: AstItem<SystemTaskIdentifier>,
@@ -985,7 +985,7 @@ pub fn eval_constant(
 
 fn get_prob_dist_fn_seed<'a>(
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     ident: AstItem<SystemTaskIdentifier>,
     arguments: Option<AstIdRange<'a, Expr<'a>>>,
@@ -1012,7 +1012,7 @@ fn get_prob_dist_fn_seed<'a>(
 
 fn get_prob_dist_fn_seed_signals<'a, 'b>(
     ctx: &LowerContext<'a, 'b>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     ident: AstItem<SystemTaskIdentifier>,
     expr: AstId<'a, Expr<'a>>,

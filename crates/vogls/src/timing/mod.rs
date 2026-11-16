@@ -241,7 +241,7 @@ fn parse_delvallist(
 
 pub fn lower_sdf<'a>(
     ctx: &mut LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext,
+    mctx: &mut MutLowerContext<'a>,
     sdf: &DelayFile<'_>,
 ) -> Result<(), ()> {
     let timescale = match &sdf.header.timescale {

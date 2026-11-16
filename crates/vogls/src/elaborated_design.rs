@@ -1,4 +1,5 @@
 use std::fmt;
+use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -224,7 +225,7 @@ impl<'a> ElaboratedDesign<'a> {
         &mut self,
         mut f: impl FnMut(
             &mut LowerContext<'a, '_>,
-            &mut MutLowerContext,
+            &mut MutLowerContext<'a>,
             &VgHashMap<IdentId, AstId<'a, Module<'a>>>,
         ) -> T,
     ) -> T {
@@ -250,6 +251,7 @@ impl<'a> ElaboratedDesign<'a> {
             has_vcd: false,
             monitor: None,
             multidriver: std::mem::take(&mut self.multidriver),
+            _marker: PhantomData,
         };
 
         let result = f(&mut ctx, &mut mctx, &self.module_lut);
@@ -413,6 +415,7 @@ impl<'a> ElaboratedDesign<'a> {
             has_vcd: false,
             monitor: None,
             multidriver,
+            _marker: PhantomData,
         };
 
         // @TODO: Iterate over the modules instead.
