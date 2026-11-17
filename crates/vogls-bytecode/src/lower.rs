@@ -2551,7 +2551,7 @@ fn lower_instruction(
                             bce.heap_shift_reduce_or(
                                 SCRATCH2,
                                 rd,
-                                src_size,
+                                rel_slice.width(),
                                 rel_slice.lsb() - *partial,
                             );
                             bce.wake(SCRATCH2, 0, SixBitSize::N64, start, end);
