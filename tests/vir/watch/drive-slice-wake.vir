@@ -1,0 +1,60 @@
+// vogls: mode=two-value-logic
+// vogls: verify-stdout[sort-lines]
+//
+// A drive of at most 64 bits at a dynamic offset wakes the processes watching any of the driven
+// bits, also when the watched slice does not start at the first bit of the signal.
+signal[tv] r: 128
+signal[tv] armed: 3
+
+// Watched slice starting within the first 64 bits.
+proc other {
+*TR0:
+    %v = prb[8] $r, 8
+    %_1 = vogls.display "a = {}\n", %v
+    %one = tv.const 1'h1
+    %_2 = drv $armed, %one, 0
+    watch [$r[15:8]], <TR0>
+}
+
+// Only the bits of the source beyond the width of the watched slice change.
+proc other {
+*TR0:
+    %v = prb[8] $r, 24
+    %_3 = vogls.display "b = {}\n", %v
+    %one = tv.const 1'h1
+    %_4 = drv $armed, %one, 1
+    watch [$r[31:24]], <TR0>
+}
+
+// Watched slice beyond the first 64 bits.
+proc other {
+*TR0:
+    %v = prb[8] $r, 72
+    %_5 = vogls.display "c = {}\n", %v
+    %one = tv.const 1'h1
+    %_6 = drv $armed, %one, 2
+    watch [$r[79:72]], <TR0>
+}
+
+proc other {
+*TR0:
+    %armed = prb $armed
+    %all = ugei %armed, 3'h7
+    branch %all, <L1>, <L2>
+.L1:
+    %off_a = tv.const 32'h8
+    %off_a_bb = vogls.black_box %off_a
+    %a = tv.const 8'hAA
+    %_7 = drv $r, %a, %off_a_bb
+    %off_b = tv.const 32'h14
+    %off_b_bb = vogls.black_box %off_b
+    %b = tv.const 16'h0F00
+    %_8 = drv $r, %b, %off_b_bb
+    %off_c = tv.const 32'h48
+    %off_c_bb = vogls.black_box %off_c
+    %c = tv.const 8'h55
+    %_9 = drv $r, %c, %off_c_bb
+    halt
+.L2:
+    watch [$armed], <TR0>
+}

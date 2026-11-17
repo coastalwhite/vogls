@@ -632,12 +632,9 @@ impl BytecodeInstruction for ShiftReduceOr {
             upper_bound6,
         } = self;
 
-        // Lower bound to upper bound is an inclusive range.
-        let size = SixBitSize::new(upper_bound6 - lower_bound6 + 1).unwrap();
-
         // Exclusive range.
         let src_start = (regs[roff] & 0xFFFF_FFFF) as u32;
-        let src_end = src_start.wrapping_add(size as u32);
+        let src_end = src_start.wrapping_add(64);
 
         let clamped_start = cmp::max(lower_bound6 as u32, src_start);
         let clamped_end = cmp::min(upper_bound6.wrapping_add(1) as u32, src_end);
@@ -738,11 +735,10 @@ impl BytecodeInstruction for ShiftReduceOrOutlined {
         // Inclusive range.
         let lower_bound = additional_slots[0].0;
         let upper_bound = additional_slots[1].0;
-        let size = VectorSize::new(upper_bound - lower_bound + 1).unwrap();
 
         // Exclusive range.
         let src_start = (regs[roff] & 0xFFFF_FFFF) as u32;
-        let src_end = src_start.wrapping_add(size.get());
+        let src_end = src_start.wrapping_add(64);
 
         let clamped_start = cmp::max(lower_bound, src_start);
         let clamped_end = cmp::min(upper_bound.wrapping_add(1), src_end);

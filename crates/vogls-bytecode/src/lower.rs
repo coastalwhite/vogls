@@ -2789,13 +2789,7 @@ fn lower_instruction(
                                 rpartial,
                                 condition.slice().to_range_inclusive(),
                             );
-                            bce.wake(
-                                SCRATCH2,
-                                condition.offset as u8,
-                                SixBitSize::from_vector_size(condition.bit_length()).unwrap(),
-                                start,
-                                end,
-                            );
+                            bce.wake(SCRATCH2, 0, SixBitSize::N64, start, end);
                         }
                         None => {
                             bce.heap_shift_reduce_or_rel(
