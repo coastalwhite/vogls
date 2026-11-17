@@ -2591,6 +2591,7 @@ fn lower_instruction(
             let src_size = gl.vars.size(*src);
 
             let signal_addr = signal_address(*signal, signals, io_signals);
+            let watchers = watch_map.map().get(signal);
 
             let base_addr = signal_addr;
             let base_size = signal_size;
@@ -2622,6 +2623,13 @@ fn lower_instruction(
 
                     rpartial = rpartialval;
                 }
+            }
+
+            // The `rd` may clobber the `rpartial`, but we still need the `rpartial` if we have
+            // watchers.
+            if rd == rpartial && watchers.is_some() {
+                bce.copy(T3, rpartial);
+                rpartial = T3;
             }
 
             // @NOTE: `rpartial` is handed over as the bit within the signal, with the signal's
@@ -2754,7 +2762,7 @@ fn lower_instruction(
             if let Some(rt_signal) = plugin_rt_index {
                 bce.plugin_poke(mask_any, rt_signal);
             }
-            if let Some(watcher_range) = watch_map.map().get(signal) {
+            if let Some(watcher_range) = watchers {
                 let watchers = watch_map.watchers();
                 let mut range_offset = 0;
                 for slice in vogls_utils::IterSliceContinguous::new(

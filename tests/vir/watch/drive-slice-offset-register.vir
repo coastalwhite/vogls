@@ -1,0 +1,31 @@
+// vogls: mode=two-value-logic
+// vogls: verify-stdout
+//
+// The update mask of a drive at a dynamic offset can be allocated to the register of the offset,
+// when this is the last use of the offset. The offset is still needed after the drive to check
+// which watchers to wake.
+signal[tv] r: 32
+signal[tv] armed: 1
+
+proc other {
+*TR0:
+    %v = prb[8] $r, 0
+    %_0 = vogls.display "r = {}\n", %v
+    %one = tv.const 1'h1
+    %_1 = drv $armed, %one
+    watch [$r[7:0]], <TR0>
+}
+
+proc other {
+*TR0:
+    %armed = prb $armed
+    branch %armed, <L1>, <L2>
+.L1:
+    %off = tv.const 32'h0
+    %off_bb = vogls.black_box %off
+    %v = tv.const 8'hAA
+    %_0 = drv $r, %v, %off_bb
+    halt
+.L2:
+    watch [$armed], <TR0>
+}
