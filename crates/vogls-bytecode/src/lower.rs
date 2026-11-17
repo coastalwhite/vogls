@@ -1,5 +1,3 @@
-use std::cmp;
-
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_codegen::lsra::{Slot, StackOffsets, StackTracker};
 use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef, SixBitSize, insert_bb_phis};
@@ -8,7 +6,7 @@ use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
     GlobalContext, Instruction, IntrinsicOp, LabelDisplay, LogicMode, ProcessKey, ResizeOp,
     SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalFlags, SignalKey, SignalSlice, UnaryOp, VSIZE_64,
-    VariableKey, VariableMap, VectorSize, WatchEdge,
+    VariableKey, VariableMap, WatchEdge,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
