@@ -874,7 +874,20 @@ fn parse_instr<'a>(
 
             c.trim_cursor();
             let src = parse_var(c, symbols, gl)?;
-            Instruction::Drive(dst, signal, src, 0)
+
+            c.trim_cursor();
+            if c.next_if_equals(',') {
+                c.trim_cursor();
+                if c.is_next_equal_to('%') {
+                    let offset = parse_var(c, symbols, gl)?;
+                    Instruction::DriveSlice(dst, signal, src, offset)
+                } else {
+                    let offset = parse_u32(c)?;
+                    Instruction::Drive(dst, signal, src, offset)
+                }
+            } else {
+                Instruction::Drive(dst, signal, src, 0)
+            }
         }
 
         "vogls.black_box" => {
