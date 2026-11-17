@@ -1,0 +1,29 @@
+// vogls: mode=two-value-logic
+// vogls: verify-stdout
+//
+// A drive of more than 64 bits only checks the bits that overlap with a watched slice. Reading the
+// whole width of the drive from the start of the overlap runs past the end of the update mask.
+signal[tv] r: 1024
+signal[tv] armed: 1
+
+proc other {
+*TR0:
+    %hi = prb[4] $r, 1020
+    %_0 = vogls.display "hi = {}\n", %hi
+    %one = tv.const 1'h1
+    %_1 = drv $armed, %one
+    watch [$r[1023:1020]], <TR0>
+}
+
+// Drive only once the watcher above is armed, so the drive has to wake it.
+proc other {
+*TR0:
+    %armed = prb $armed
+    branch %armed, <L1>, <L2>
+.L1:
+    %ones = tv.const 924'hFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF
+    %_0 = drv $r, %ones, 100
+    halt
+.L2:
+    watch [$armed], <TR0>
+}
