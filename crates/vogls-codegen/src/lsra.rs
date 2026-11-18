@@ -463,9 +463,13 @@ pub fn linear_scan_register_allocation(
         }
 
         // Expire stack intervals.
+        //
+        // @NOTE: Unlike registers, a stack slot is not freed by its last use. Values on the stack
+        // are operated on in-place in heap memory, and a destination that partially overlaps a
+        // source of the same instruction would overwrite that source while it is being read.
         while let Some(&(active_i, mode, offset)) = active_stack.front() {
             let active_interval = intervals[active_i].1;
-            if active_interval.end > interval.start {
+            if active_interval.end >= interval.start {
                 break;
             }
             let num_slots = num_bitset_slots(active_interval.size, mode);

@@ -1,0 +1,19 @@
+// vogls: verify-stdout
+//
+// The stack slot of a wide destination could partially overlap that of a source whose last use is
+// the same instruction. The in-place four-valued heap `or` then overwrote the source while reading it.
+signal[tv] o: 1
+
+proc other {
+*TR0:
+  %p = tv.const 65'h1_0000_0000_0000_0001
+  %pb = vogls.black_box %p
+  %a = fv.const 150'h0_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0001
+  %ab = vogls.black_box %a
+  %b = fv.const 150'h0_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0002
+  %bb = vogls.black_box %b
+  %d0 = vogls.display "p={}\n", %pb
+  %c = or %ab, %bb
+  %d1 = vogls.display "c={}\n", %c
+  halt
+}
