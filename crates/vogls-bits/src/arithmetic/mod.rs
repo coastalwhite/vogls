@@ -265,8 +265,9 @@ pub fn fv_bin_u64_cell_bitwise_op_output_tv(
     op: impl Fn(u64, u64, u64, u64) -> u64,
     size: VectorSize,
 ) {
-    assert!(dst.len() == lhs.len() && dst.len() == rhs.len());
-    let nwords = dst.len() / 2;
+    // The two-valued output has one plane, the four-valued inputs two.
+    assert!(dst.len() * 2 == lhs.len() && dst.len() * 2 == rhs.len());
+    let nwords = dst.len();
     for i in 0..nwords {
         dst[i].set(op(
             lhs[i].get(),

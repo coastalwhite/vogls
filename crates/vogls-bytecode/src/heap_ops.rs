@@ -286,11 +286,11 @@ impl BytecodeInstruction for HeapCmov {
         } else {
             LogicMode::TwoValue
         };
-        operands.push(RegInfo::heap(
+        operands.push(RegInfo::register(
             "rcond",
             self.rcond,
             LogicMode::TwoValue,
-            SCALAR_VSIZE,
+            Some(SCALAR_VSIZE),
         ));
         operands.push(RegInfo::heap("rs2", self.rs, mode, size));
     }
