@@ -217,7 +217,7 @@ fn peephole_instruction(
     instrs: &mut Vec<Instruction>,
     i: usize,
     vars: &mut VariableMap,
-    _signals: &SlotMap<SignalKey, Signal>,
+    signals: &SlotMap<SignalKey, Signal>,
     exprs: &Table<ExprKey, (VariableKey, CSExpr)>,
     var_lookup: &VgHashMap<VariableKey, ExprKey>,
 ) -> PeepholeResult {
@@ -441,11 +441,7 @@ fn peephole_instruction(
             if let Some(csexpr) = var_lookup.get(src) {
                 let (_, expr) = &exprs[*csexpr];
                 match expr {
-                    CSExpr::Resize(ResizeOp::Truncate, _, src) => {
-                        *instr = I::Slice(*dst, exprs[*src].0, *offset);
-                        return PeepholeResult::Changed;
-                    }
-                    CSExpr::Probe(signal, _, 0) => {
+                    CSExpr::Probe(signal, width, 0) if *width == signals[*signal].size => {
                         *instr = I::ProbeSlice(*dst, *signal, *offset);
                         return PeepholeResult::Changed;
                     }
