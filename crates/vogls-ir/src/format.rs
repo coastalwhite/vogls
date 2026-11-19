@@ -238,6 +238,7 @@ impl BinaryOp {
             Self::CopyZ => "copyz",
             Self::ResolveWire => "resolvewire",
             Self::ResolveWand => "resolvewand",
+            Self::ResolveWor => "resolvewor",
 
             Self::Min => "min",
             Self::Max => "max",

@@ -981,6 +981,14 @@ fn lower_instruction(
                     bce.heap_fv_resolve_wand(rd, rs1, rs2, dst_size)
                 }
 
+                // Two-valued drivers can never be `z`, so `wor` resolves to `or`.
+                (O::ResolveWor, M::TwoValue, Some(_), _, _) => bce.or(rd, rs1, rs2),
+                (O::ResolveWor, M::TwoValue, None, _, _) => bce.heap_tv_or(rd, rs1, rs2, dst_size),
+                (O::ResolveWor, M::FourValue, Some(_), _, _) => bce.fv_resolve_wor(rd, rs1, rs2),
+                (O::ResolveWor, M::FourValue, None, _, _) => {
+                    bce.heap_fv_resolve_wor(rd, rs1, rs2, dst_size)
+                }
+
                 (O::Min, _, Some(_), M::TwoValue, _) => bce.min(rd, rs1, rs2),
                 (O::Min, _, None, M::TwoValue, _) => bce.heap_tv_min(rd, rs1, rs2, lhs_size),
                 (O::Min, _, Some(size), M::FourValue, _) => bce.fv_min(rd, rs1, rs2, size),

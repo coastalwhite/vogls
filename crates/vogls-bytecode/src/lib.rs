@@ -403,6 +403,7 @@ opcodes![
     FvCopyZ,
     FvResolveWire,
     FvResolveWand,
+    FvResolveWor,
     FvNot,
     FvReduceAnd,
     FvReduceOr,
