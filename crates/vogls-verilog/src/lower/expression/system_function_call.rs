@@ -581,7 +581,9 @@ pub fn lower_unevaluated_system_function_call<'a>(
             let seed = truncate_or_extend(mctx.gl(), builder, seed, signal_ty, VSIZE_32);
             let mut args = Vec::with_capacity(num_args);
             for arg in arguments.iter().skip(1) {
-                args.push(lower_expr(ctx, mctx, scope, builder, arg, Some(VSIZE_32))?.0);
+                let (arg, arg_ty) = lower_expr(ctx, mctx, scope, builder, arg, Some(VSIZE_32))?;
+                let arg = truncate_or_extend(mctx.gl(), builder, arg, arg_ty, VSIZE_32);
+                args.push(arg);
             }
             let packed = builder.random(mctx.gl(), kind, seed, &args);
             let new_seed = builder.slice_constant(mctx.gl(), packed, 32, VSIZE_32);
