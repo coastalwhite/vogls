@@ -11,6 +11,13 @@ pub fn num_digits(s: &str) -> Option<VectorSize> {
     VectorSize::new(count)
 }
 
+fn extension(last: u8) -> u8 {
+    match last {
+        b'x' | b'X' | b'z' | b'Z' | b'?' => last,
+        _ => b'0',
+    }
+}
+
 fn take_bits<const NBITS_PER_VALUE: usize>(
     s: &str,
     size: VectorSize,
@@ -80,7 +87,7 @@ fn take_bits<const NBITS_PER_VALUE: usize>(
                 j += 1;
                 s.as_bytes()[idx]
             } else {
-                last
+                extension(last)
             };
             if b == b'_' {
                 continue;
@@ -110,7 +117,7 @@ fn take_bits<const NBITS_PER_VALUE: usize>(
             j += 1;
             s.as_bytes()[idx]
         } else {
-            last
+            extension(last)
         };
         if b == b'_' {
             continue;
@@ -251,7 +258,7 @@ pub fn parse_bits_octal(s: &str, size: VectorSize) -> Result<Bits, BitsParseErro
             j += 1;
             s.as_bytes()[idx]
         } else {
-            last
+            extension(last)
         };
         if b == b'_' {
             continue;

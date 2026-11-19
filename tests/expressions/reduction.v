@@ -89,7 +89,7 @@ module tb();
         $vogls_assert_eq(&8'b010x_0000, 1'b0);
         $vogls_assert_eq(&9'b0000_000x, 1'b0);
         $vogls_assert_eq(&9'b0z0x_0010, 1'b0);
-        $vogls_assert_eq(&9'b1111_111x, 1'bx);
+        $vogls_assert_eq(&9'b1_1111_111x, 1'bx);
         $vogls_assert_eq(&128'h00000000_00000000_00000000_0000x000, 1'b0);
         $vogls_assert_eq(&128'h01000000_00000000_00000000_0000x000, 1'b0);
         $vogls_assert_eq(&128'hFFFFFFFF_FFFFFFFF_FFFFFFFF_FFFFzFFF, 1'bx);
