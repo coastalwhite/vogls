@@ -968,13 +968,7 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                     nets,
                 } = &**id;
 
-                let Some(resolution) = NetResolution::from_net_type(net_type.item) else {
-                    diagnostics.not_yet_implemented(
-                        ctx.arenas.get_item_span(*net_type),
-                        "this kind of net is not yet implemented",
-                    );
-                    return Err(());
-                };
+                let resolution = NetResolution::from_net_type(net_type.item);
 
                 let mut error = false;
                 match nets {
@@ -2371,8 +2365,7 @@ pub fn finalize_symbol<'a>(
                     *dims,
                 )?,
             };
-            let resolution = NetResolution::from_net_type(net_type.item)
-                .expect("unsupported net types are rejected when the net is declared");
+            let resolution = NetResolution::from_net_type(net_type.item);
             let symbol = unwrap_get_signal_mut(&mut ctx.table, sid);
             symbol.kind = SignalKind::Net(resolution);
             symbol.terminals = super::new_terminals(

@@ -227,6 +227,9 @@ pub enum ExprSource<'a> {
         /// The state of a sequential UDP, see [`crate::lower::udp::sequential_udp_state`].
         state: Option<SignalKey>,
     },
+    /// The bits of a `tri0` or `tri1` net that its drivers drive: the drivers are resolved into
+    /// `input`, whose bits that are `z` are pulled to `pull`.
+    Pull { input: SignalKey, pull: bool },
 }
 
 impl ExprSource<'_> {
@@ -237,7 +240,7 @@ impl ExprSource<'_> {
             Self::Assign { assignment, .. } | Self::SignExtend { assignment, .. } => {
                 Some(*assignment)
             }
-            Self::Gate { .. } | Self::Udp { .. } => None,
+            Self::Gate { .. } | Self::Udp { .. } | Self::Pull { .. } => None,
         }
     }
 }
@@ -449,6 +452,10 @@ pub struct DriverResolution<'a> {
     write_fuse: WriteFuseMap,
     /// The drive proxies of the members of bidirectional closures.
     drive_proxies: Vec<SignalKey>,
+    /// The proxies that resolve the drivers of `tri0` and `tri1` nets.
+    pull_proxies: Vec<SignalKey>,
+    /// Whether a node is a `uwire`, so that its drivers need to be checked.
+    has_uwires: bool,
     /// Nodes whose remaining incoming edges are resolved by a process.
     lower: Vec<DriveNodeKey>,
     /// Edges whose source process drives the drivee directly.
@@ -681,6 +688,155 @@ impl<'a> DriverResolution<'a> {
         }
     }
 
+    /// How a member of a bidirectional closure resolves its drivers: a `uwire` is a `wire` with a
+    /// single driver.
+    fn closure_resolution(&self, signal: SignalKey) -> NetResolution {
+        match self.resolution(self.signal_lut[&signal]) {
+            NetResolution::Uwire => NetResolution::Wire,
+            resolution => resolution,
+        }
+    }
+
+    /// Errors for every bit of a `uwire` that has more than one driver.
+    fn check_uwires(&self, gl: &GlobalContext, diagnostics: &mut Diagnostics) -> Result<(), ()> {
+        let mut error = false;
+        let mut ins = Vec::new();
+        for node in self.nodes.table_key_iter() {
+            if self.resolution(node) != NetResolution::Uwire {
+                continue;
+            }
+            self.collect_in(node, &mut ins);
+            let mut slices = ins.iter().map(|&e| self.dst_slice(e)).collect::<Vec<_>>();
+            slices.sort_unstable_by_key(|s| s.lsb());
+            if slices.windows(2).any(|w| w[0].overlaps(w[1])) {
+                let signal = match &self.nodes[node] {
+                    DriveNode::Delay {
+                        kind: DelayKind::Specify(specify),
+                        ..
+                    } => specify.output,
+                    node => node.drivee_signal().unwrap(),
+                };
+                diagnostics.uwire_multiple_drivers(gl.signals[signal].origin);
+                error = true;
+            }
+        }
+        if error { Err(()) } else { Ok(()) }
+    }
+
+    /// Rewrites the nets whose value is not only resolved from their drivers:
+    ///
+    /// - A `supply0` or `supply1` net is driven by its constant only, which wins against every
+    ///   other driver.
+    /// - The drivers of a `tri0` or `tri1` net are resolved into a proxy instead, which a pull
+    ///   process drives into the net with its bits that are `z` pulled. The bits that no driver
+    ///   drives are driven by the constant of the pull.
+    ///
+    /// ```text
+    ///                        A --+                    +-----+
+    /// A --+                      +--> P ~~> pull --+->|     |
+    ///     +--> T     ===>    B --+                 |  |  T  |
+    /// B --+                         0 -------------+->|     |
+    ///                                                 +-----+
+    /// ```
+    fn lower_net_types(&mut self, ctx: &LowerContext<'a, '_>, gl: &mut GlobalContext) {
+        // A net without drivers has no node yet, but still gets the value of its pull or supply.
+        for sid in ctx.table.symbol_id_iter() {
+            if let VSymbol::Signal(symbol) = &ctx.table[sid].content
+                && let SignalKind::Net(
+                    NetResolution::Tri0
+                    | NetResolution::Tri1
+                    | NetResolution::Supply0
+                    | NetResolution::Supply1,
+                ) = symbol.kind
+            {
+                self.signal_node(gl, symbol.terminals.probe_signal(), symbol.kind);
+            }
+        }
+
+        let mut ins = Vec::new();
+        for node in self.nodes.table_key_iter().collect::<Vec<_>>() {
+            let DriveNode::Net {
+                key,
+                bit_length,
+                resolution,
+                ..
+            } = self.nodes[node]
+            else {
+                continue;
+            };
+            let (pull, is_supply) = match resolution {
+                NetResolution::Tri0 => (false, false),
+                NetResolution::Tri1 => (true, false),
+                NetResolution::Supply0 => (false, true),
+                NetResolution::Supply1 => (true, true),
+                NetResolution::Wire
+                | NetResolution::Wand
+                | NetResolution::Wor
+                | NetResolution::Uwire => continue,
+            };
+            let value = if pull {
+                Bits::new_ones(bit_length)
+            } else {
+                Bits::new_zeroed(bit_length)
+            };
+            let constant = self.nodes.insert(DriveNode::Constant {
+                value,
+                fst_out: None,
+                fst_read_out: None,
+            });
+
+            self.collect_in(node, &mut ins);
+            if is_supply {
+                for &e in &ins {
+                    self.remove_edge(e);
+                }
+                self.push_edge((constant, 0), (node, 0), bit_length);
+                continue;
+            }
+
+            let mut driven = ins
+                .iter()
+                .map(|&e| self.dst_slice(e))
+                .map(|s| (s.lsb(), s.lsb() + s.width().get()))
+                .collect::<Vec<_>>();
+            driven.sort_unstable();
+            let driven = merge_ranges(driven);
+
+            if !driven.is_empty() {
+                let s = &gl.signals[key];
+                let (name, mode) = (format!("::PULL({})", s.name), s.mode);
+                let proxy = signal_proxy(gl, name, bit_length, mode);
+                let proxy_node = self.signal_node(gl, proxy, SignalKind::Net(NetResolution::Wire));
+                self.splice_in_edges(node, proxy_node);
+                self.pull_proxies.push(proxy);
+
+                let process = self.nodes.insert(DriveNode::Expr {
+                    source: ExprSource::Pull { input: proxy, pull },
+                    bit_length,
+                    fst_out: None,
+                    fst_read_in: None,
+                });
+                self.push_read_edge(ReadKind::Value, (proxy_node, 0), process, bit_length);
+                for &(a, b) in &driven {
+                    self.push_edge((process, a), (node, a), VectorSize::new(b - a).unwrap());
+                }
+            }
+
+            // The bits that no driver drives.
+            let mut lo = 0;
+            for (a, b) in driven
+                .iter()
+                .copied()
+                .chain([(bit_length.get(), bit_length.get())])
+            {
+                if lo < a {
+                    self.push_edge((constant, lo), (node, lo), VectorSize::new(a - lo).unwrap());
+                }
+                lo = b;
+            }
+        }
+    }
+
     fn set_prev(&mut self, edge: BidirEdgeKey, node: BidirNodeKey, prev: BidirEdgeKey) {
         let edge = &mut self.bidir_edges[edge];
         if edge.left == node {
@@ -700,6 +856,7 @@ impl<'a> DriverResolution<'a> {
     ) -> DriveNodeKey {
         *self.signal_lut.entry(key).or_insert_with(|| {
             let bit_length = gl.signals[key].size;
+            self.has_uwires |= kind == SignalKind::Net(NetResolution::Uwire);
             self.nodes.insert(match kind {
                 SignalKind::Net(resolution) => DriveNode::Net {
                     key,
@@ -1428,12 +1585,29 @@ impl<'a> DriverResolution<'a> {
             };
             let proxy = signal_proxy(gl, "::TRAN".to_string(), bit_length, mode);
 
+            // The pull or supply of a member only loses against the other members by strength.
+            if let Some(&(_, signal, _)) = chunk.iter().find(|&&(_, signal, _)| {
+                matches!(
+                    self.closure_resolution(signal),
+                    NetResolution::Tri0
+                        | NetResolution::Tri1
+                        | NetResolution::Supply0
+                        | NetResolution::Supply1
+                )
+            }) {
+                diagnostics.not_yet_implemented(
+                    gl.signals[signal].origin,
+                    "`tri0`, `tri1`, `supply0` and `supply1` nets connected bidirectionally",
+                );
+                error = true;
+            }
+
             let resolution = if kinds.tran {
                 // The members are resolved as `wire`s. Members collapsed by a port into a `wand`
                 // or `wor` would have to be resolved as one net first.
                 if kinds.port
                     && let Some(&(_, signal, _)) = chunk.iter().find(|&&(_, signal, _)| {
-                        self.resolution(self.signal_lut[&signal]) != NetResolution::Wire
+                        self.closure_resolution(signal) != NetResolution::Wire
                     })
                 {
                     diagnostics.not_yet_implemented(
@@ -1446,9 +1620,9 @@ impl<'a> DriverResolution<'a> {
             } else {
                 // The members collapse into one net, so they must be of the same net type.
                 let (_, first, _) = chunk[0];
-                let resolution = self.resolution(self.signal_lut[&first]);
+                let resolution = self.closure_resolution(first);
                 if let Some((other, other_resolution)) = chunk.iter().find_map(|&(_, other, _)| {
-                    let other_resolution = self.resolution(self.signal_lut[&other]);
+                    let other_resolution = self.closure_resolution(other);
                     if resolution == other_resolution {
                         return None;
                     }
@@ -1503,6 +1677,10 @@ impl<'a> DriverResolution<'a> {
     ) -> Result<(ProbeFuseMap, WriteFuseMap), ()> {
         let mut error = self.push_reads(ctx, mctx).is_err();
 
+        if self.has_uwires {
+            error |= self.check_uwires(&mctx.gl, &mut mctx.diagnostics).is_err();
+        }
+        self.lower_net_types(ctx, &mut mctx.gl);
         error |= self
             .lower_bidirectional(&mut mctx.gl, &mut mctx.diagnostics)
             .is_err();
@@ -1568,8 +1746,8 @@ impl<'a> DriverResolution<'a> {
                 mctx.gl.signals.remove(*input);
             }
         }
-        // As is a drive proxy that is aliased.
-        for proxy in &self.drive_proxies {
+        // As is a drive or pull proxy that is aliased.
+        for proxy in self.drive_proxies.iter().chain(&self.pull_proxies) {
             if self.probe_fuse.contains_key(proxy) {
                 mctx.gl.signals.remove(*proxy);
             }
@@ -1714,7 +1892,9 @@ impl<'a> DriverResolution<'a> {
                                 value
                             }
                         }
-                        ExprSource::Gate { .. } | ExprSource::Udp { .. } => unreachable!(),
+                        ExprSource::Gate { .. }
+                        | ExprSource::Udp { .. }
+                        | ExprSource::Pull { .. } => unreachable!(),
                     };
 
                     let targets = self.output_targets(&mut mctx.gl, ctx.logic_mode, node, "::EXPR");
@@ -1805,6 +1985,10 @@ impl<'a> DriverResolution<'a> {
                     state,
                     &drive,
                 ),
+                ExprSource::Pull { input, pull } => {
+                    lower_pull(mctx, input, pull, &drive);
+                    Ok(())
+                }
             }
             .is_err();
         }
@@ -2036,7 +2220,14 @@ impl<'a> DriverResolution<'a> {
                 acc = Some(match acc {
                     None => part,
                     Some(acc) => match resolution {
-                        NetResolution::Wire => bb_builder.resolve_wire(mctx.gl(), acc, part),
+                        // The drivers of `tri0`, `tri1` and `supply` nets were moved to a proxy or
+                        // removed by `lower_net_types`, so they are never resolved here.
+                        NetResolution::Wire
+                        | NetResolution::Uwire
+                        | NetResolution::Tri0
+                        | NetResolution::Tri1
+                        | NetResolution::Supply0
+                        | NetResolution::Supply1 => bb_builder.resolve_wire(mctx.gl(), acc, part),
                         NetResolution::Wand => bb_builder.resolve_wand(mctx.gl(), acc, part),
                         NetResolution::Wor => bb_builder.resolve_wor(mctx.gl(), acc, part),
                     },
@@ -2098,6 +2289,40 @@ impl<'a> DriverResolution<'a> {
                 .is_some_and(|wires| wires.contains(&e))
         })
     }
+}
+
+/// Lowers the process of an [`ExprSource::Pull`], which drives `input` with its bits that are `z`
+/// pulled to `pull`.
+fn lower_pull<'a>(
+    mctx: &mut MutLowerContext<'a>,
+    input: SignalKey,
+    pull: bool,
+    drive: &DriveOutputFn<'a, '_>,
+) {
+    let bit_length = mctx.gl.signals[input].size;
+    let (proc_builder, mut bb_builder) =
+        ProcessBuilder::new(mctx.gl(), ProcessKind::Fuse, TokenRange::default());
+    let entry = proc_builder.entry();
+
+    // `z` is the identity of both `wand` and `wor`, while `0`, `1` and `x` are kept by a `wor`
+    // with `0` and a `wand` with `1`. So these replace exactly the bits that are `z`.
+    let value = bb_builder.probe(mctx.gl(), input);
+    let value = if pull {
+        let ones = bb_builder.constant(mctx.gl(), Bits::new_ones(bit_length));
+        bb_builder.resolve_wand(mctx.gl(), value, ones)
+    } else {
+        let zeros = bb_builder.constant(mctx.gl(), Bits::new_zeroed(bit_length));
+        bb_builder.resolve_wor(mctx.gl(), value, zeros)
+    };
+    drive(mctx, &mut bb_builder, 0, value);
+
+    let watchers = vec![WatchCondition {
+        signal: input,
+        edge: WatchEdge::Any { bit_length },
+        offset: 0,
+    }];
+    bb_builder.watch_conditions_to(mctx.gl(), watchers, entry);
+    proc_builder.finalize(mctx.gl());
 }
 
 /// Drives `value`, the bits of the output of a process at `offset`, into the targets that overlap

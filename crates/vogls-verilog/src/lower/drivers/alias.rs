@@ -1155,6 +1155,8 @@ impl<'a> DriverResolution<'a> {
                     ExprSource::SignExtend { .. } => "sign-extend",
                     ExprSource::Gate { .. } => "gate",
                     ExprSource::Udp { .. } => "udp",
+                    ExprSource::Pull { pull: false, .. } => "pull0",
+                    ExprSource::Pull { pull: true, .. } => "pull1",
                 }
                 .to_string(),
                 DriveNode::Delay { kind, .. } => match kind {

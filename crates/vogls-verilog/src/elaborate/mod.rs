@@ -246,19 +246,29 @@ pub enum NetResolution {
     Wand,
     /// `wor` and `trior`.
     Wor,
+    /// `tri0`: undriven bits are `0`.
+    Tri0,
+    /// `tri1`: undriven bits are `1`.
+    Tri1,
+    /// `supply0`: always `0`.
+    Supply0,
+    /// `supply1`: always `1`.
+    Supply1,
+    /// `uwire`: at most one driver per bit.
+    Uwire,
 }
 
 impl NetResolution {
-    pub fn from_net_type(net_type: NetType) -> Option<Self> {
+    pub fn from_net_type(net_type: NetType) -> Self {
         match net_type {
-            NetType::Wire | NetType::Tri => Some(Self::Wire),
-            NetType::WAnd | NetType::TriAnd => Some(Self::Wand),
-            NetType::WOr | NetType::TriOr => Some(Self::Wor),
-            NetType::Supply0
-            | NetType::Supply1
-            | NetType::Tri0
-            | NetType::Tri1
-            | NetType::Uwire => None,
+            NetType::Wire | NetType::Tri => Self::Wire,
+            NetType::WAnd | NetType::TriAnd => Self::Wand,
+            NetType::WOr | NetType::TriOr => Self::Wor,
+            NetType::Tri0 => Self::Tri0,
+            NetType::Tri1 => Self::Tri1,
+            NetType::Supply0 => Self::Supply0,
+            NetType::Supply1 => Self::Supply1,
+            NetType::Uwire => Self::Uwire,
         }
     }
 
@@ -267,10 +277,10 @@ impl NetResolution {
             DefaultNettype::Wire | DefaultNettype::Tri => Some(Self::Wire),
             DefaultNettype::Wand | DefaultNettype::Triand => Some(Self::Wand),
             DefaultNettype::Wor | DefaultNettype::Trior => Some(Self::Wor),
-            DefaultNettype::Tri0
-            | DefaultNettype::Tri1
-            | DefaultNettype::Trireg
-            | DefaultNettype::Uwire => None,
+            DefaultNettype::Tri0 => Some(Self::Tri0),
+            DefaultNettype::Tri1 => Some(Self::Tri1),
+            DefaultNettype::Uwire => Some(Self::Uwire),
+            DefaultNettype::Trireg => None,
         }
     }
 }
@@ -281,6 +291,11 @@ impl fmt::Display for NetResolution {
             Self::Wire => "wire",
             Self::Wand => "wand",
             Self::Wor => "wor",
+            Self::Tri0 => "tri0",
+            Self::Tri1 => "tri1",
+            Self::Supply0 => "supply0",
+            Self::Supply1 => "supply1",
+            Self::Uwire => "uwire",
         })
     }
 }
@@ -389,31 +404,19 @@ pub fn port_declaration_to_info<'a>(
     (),
 > {
     use ConnectionDirection as D;
-    let mut net_kind = |net_type: Option<AstItem<NetType>>| -> Result<SignalKind, ()> {
-        let Some(net_type) = net_type else {
-            return Ok(SignalKind::Net(NetResolution::Wire));
-        };
-        match NetResolution::from_net_type(net_type.item) {
-            Some(resolution) => Ok(SignalKind::Net(resolution)),
-            None => {
-                diagnostics.not_yet_implemented(
-                    arenas.get_item_span(net_type),
-                    "this kind of net is not yet implemented",
-                );
-                Err(())
-            }
-        }
+    let net_kind = |net_type: Option<NetType>| {
+        SignalKind::Net(net_type.map_or(NetResolution::Wire, NetResolution::from_net_type))
     };
     let (kind, direction, range, signed, identifiers) = match &*id {
         PortDeclaration::Inout(inout) => (
-            net_kind(inout.net_type)?,
+            net_kind(inout.net_type.map(|net_type| net_type.item)),
             D::Both,
             inout.range,
             inout.signed,
             inout.port_identifiers,
         ),
         PortDeclaration::Input(input) => (
-            net_kind(input.net_type)?,
+            net_kind(input.net_type.map(|net_type| net_type.item)),
             D::In,
             input.range,
             input.signed,
@@ -422,17 +425,12 @@ pub fn port_declaration_to_info<'a>(
         PortDeclaration::Output(output) => {
             // `output reg`, `output integer` and `output time` declare a variable, every other
             // port form declares a net.
-            let kind = match output.net {
-                Some(net) => match net.item {
-                    OutputNet::Register | OutputNet::Integer | OutputNet::Time => {
-                        SignalKind::Variable
-                    }
-                    OutputNet::NetType(net_type) => net_kind(Some(AstItem {
-                        item: net_type,
-                        loc: net.loc,
-                    }))?,
-                },
-                None => SignalKind::Net(NetResolution::Wire),
+            let kind = match output.net.map(|net| net.item) {
+                Some(OutputNet::Register | OutputNet::Integer | OutputNet::Time) => {
+                    SignalKind::Variable
+                }
+                Some(OutputNet::NetType(net_type)) => net_kind(Some(net_type)),
+                None => net_kind(None),
             };
             (
                 kind,

@@ -1,0 +1,8 @@
+error: a `uwire` net cannot have multiple drivers
+  --> {path}:7
+ 5 | module tb();
+ 6 |     reg a, b;
+ 7 >     uwire [1:0] u;
+                     ^
+ 8 |     assign u = {a, b};
+ 9 |     assign u[1] = b;

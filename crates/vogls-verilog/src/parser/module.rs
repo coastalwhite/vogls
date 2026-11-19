@@ -549,6 +549,7 @@ impl<'a> Consumable<'a> for NetType {
             T::KeywordTriand => Ok(Self::TriAnd),
             T::KeywordTrior => Ok(Self::TriOr),
             T::KeywordTri0 => Ok(Self::Tri0),
+            T::KeywordTri1 => Ok(Self::Tri1),
             T::KeywordUwire => Ok(Self::Uwire),
             T::KeywordWire => Ok(Self::Wire),
             T::KeywordWand => Ok(Self::WAnd),
@@ -1188,6 +1189,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemContent<'a> {
             | T::KeywordTriand
             | T::KeywordTrior
             | T::KeywordTri0
+            | T::KeywordTri1
             | T::KeywordUwire
             | T::KeywordWire
             | T::KeywordWand
@@ -2642,6 +2644,7 @@ impl<'a> Consumable<'a> for ModuleOrGenerateItemDeclaration<'a> {
             | T::KeywordTriand
             | T::KeywordTrior
             | T::KeywordTri0
+            | T::KeywordTri1
             | T::KeywordUwire
             | T::KeywordWire
             | T::KeywordWand
