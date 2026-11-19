@@ -2,7 +2,7 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, LogicMode, ProcessBuilder,
-    ProcessKind, SCALAR_VSIZE, Signal, SignalFlags, SignalKey, VariableKey,
+    ProcessKind, SCALAR_VSIZE, Signal, SignalFlags, SignalKey, VariableKey, WatchCondition,
 };
 use vogls_utils::OrderedSet;
 
@@ -299,9 +299,31 @@ fn lower_sequential_udp<'a>(
         }
     }
 
-    let entry_tr = proc_builder.next_temporal_region(mctx.gl());
-    builder.watch_to(mctx.gl(), ins.items.clone(), entry_tr);
-    builder.finished_switch_to(mctx.gl(), entry_tr.entry());
+    // A primitive is sensitive to its inputs from the start: the state must see every change at
+    // `t=0`, also those made before the process would first get to run and arm a watch, which
+    // depends on the order of the processes. A standing watch is armed right at the start.
+    //
+    // If an input is poked at `t=0`, the process is scheduled instead (see `Process::standing`),
+    // and its first run must only arm the watch: evaluating the table on the poked values would
+    // overwrite the initial state.
+    let poked = ins
+        .items
+        .iter()
+        .any(|&s| mctx.gl.signals[s].flags.contains(SignalFlags::POKE_T0));
+    let entry_tr = if poked {
+        let entry_tr = proc_builder.next_temporal_region(mctx.gl());
+        builder.watch_to(mctx.gl(), ins.items.clone(), entry_tr);
+        builder.finished_switch_to(mctx.gl(), entry_tr.entry());
+        entry_tr
+    } else {
+        let standing = ins
+            .items
+            .iter()
+            .map(|&signal| WatchCondition::entire_signal(&mctx.gl, signal))
+            .collect();
+        proc_builder.set_standing(mctx.gl(), standing);
+        proc_builder.entry()
+    };
 
     for input in inputs.iter() {
         let (input, input_ty) = lower_expr(ctx, mctx, scope, &mut builder, input, None)?;
