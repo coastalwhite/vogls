@@ -1,32 +1,19 @@
 use std::ops::Range;
-use std::sync::Arc;
 
-use hashbrown::hash_map::Entry;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::Time;
 use vogls_ir::time::{TimeResolution, TimeSize, TimeUnit};
 use vogls_ir::token_range::TokenRange;
-use vogls_ir::{SignalKey, Time};
 use vogls_sdf::{
     AbsoluteDelayType, DelVal, DelValList, DelayFile, DelaySpec, HierarchicalIdent,
     HierarchyDivider, Instance, InterconnectDef, IoPathDef, Port, PortInstance, PortSpec, RTriple,
     RValue, SignedRealNumberOrRTriple, Timescale, TimescaleNumber, TimescaleUnit, TimingSpec,
 };
-use vogls_utils::{IterSliceContinguous, VgHashMap};
+use vogls_utils::VgHashMap;
 use vogls_verilog::elaborate::VSymbol;
 use vogls_verilog::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
-use vogls_verilog::lower::specify::{Condition, SpecifyOutput, SpecifyPath, lower_iopath};
 use vogls_verilog::lower::{Diagnostics, LowerContext, LowerErrorReason, MutLowerContext};
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct TimingProperty {
-    from: SignalKey,
-    to: SignalKey,
-}
-
-struct TimingContent {
-    delays: DelayPtr,
-}
 
 /// Format an SDF hierarchical identifier for diagnostics.
 fn display_ident(ident_table: &IdentTable, ident: &HierarchicalIdent) -> String {
@@ -276,10 +263,9 @@ pub fn lower_sdf<'a>(
             }
         }
     };
-    let mut output_paths = VgHashMap::<SignalKey, SymbolId>::default();
-    let mut properties = Vec::<(TimingProperty, TimingContent)>::new();
-    let mut property_to_content = VgHashMap::<TimingProperty, usize>::default();
-    let mut delays = Vec::<Time>::new();
+    // The paths are only collected here, the driver resolution puts them in front of their
+    // outputs together with the module paths of the specify blocks.
+    let mut delay_values = std::mem::take(&mut mctx.driver_resolution.path_delays.delays);
 
     // IEEE Std 1497-2001 (p. 16)
     //
@@ -436,27 +422,19 @@ pub fn lower_sdf<'a>(
                                                 };
 
                                                 let from = from_net.terminals.probe_signal();
-                                                let to = to_net.terminals.blocking_drive_signal();
-                                                let property = TimingProperty { from, to };
-                                                let delays = parse_delvallist(
+                                                let to = to_net.terminals.probe_signal();
+                                                let Ok(delays) = parse_delvallist(
                                                     delval_list,
-                                                    &mut delays,
+                                                    &mut delay_values,
                                                     timescale,
                                                     ctx.time_resolution,
-                                                )?;
-                                                let content = TimingContent { delays };
-
-                                                output_paths.insert(to, to_sid);
-                                                match property_to_content.entry(property) {
-                                                    Entry::Occupied(entry) => {
-                                                        properties[*entry.get()].1 = content;
-                                                    }
-                                                    Entry::Vacant(entry) => {
-                                                        let idx = properties.len();
-                                                        properties.push((property, content));
-                                                        entry.insert(idx);
-                                                    }
-                                                }
+                                                ) else {
+                                                    error = true;
+                                                    continue;
+                                                };
+                                                mctx.driver_resolution
+                                                    .path_delays
+                                                    .push_sdf(from, to, to_sid, delays);
                                             }
 
                                             // @TODO: These should all be implemented in time.
@@ -512,27 +490,19 @@ pub fn lower_sdf<'a>(
                                                 };
 
                                                 let from = from_net.terminals.probe_signal();
-                                                let to = to_net.terminals.blocking_drive_signal();
-                                                let property = TimingProperty { from, to };
-                                                let delays = parse_delvallist(
+                                                let to = to_net.terminals.probe_signal();
+                                                let Ok(delays) = parse_delvallist(
                                                     delval_list,
-                                                    &mut delays,
+                                                    &mut delay_values,
                                                     timescale,
                                                     ctx.time_resolution,
-                                                )?;
-                                                let content = TimingContent { delays };
-
-                                                output_paths.insert(to, to_sid);
-                                                match property_to_content.entry(property) {
-                                                    Entry::Occupied(entry) => {
-                                                        properties[*entry.get()].1 = content;
-                                                    }
-                                                    Entry::Vacant(entry) => {
-                                                        let idx = properties.len();
-                                                        properties.push((property, content));
-                                                        entry.insert(idx);
-                                                    }
-                                                }
+                                                ) else {
+                                                    error = true;
+                                                    continue;
+                                                };
+                                                mctx.driver_resolution
+                                                    .path_delays
+                                                    .push_sdf(from, to, to_sid, delays);
                                             }
                                             vogls_sdf::DelayDef::NetDelay(_) => todo!(),
                                             vogls_sdf::DelayDef::Device(_) => todo!(),
@@ -555,38 +525,9 @@ pub fn lower_sdf<'a>(
         }
     }
 
+    mctx.driver_resolution.path_delays.delays = delay_values;
     if error {
         return Err(());
     }
-
-    // Drop here. Since we are about to mess up all the references.
-    drop(property_to_content);
-    properties.sort_unstable_by_key(|(p, _)| (p.to, p.from));
-
-    let delays = Arc::<[Time]>::from(delays);
-    let outputs = IterSliceContinguous::new(&properties, |(p, _)| &p.to);
-    for paths_to_output in outputs {
-        let output = paths_to_output[0].0.to;
-        let sid = output_paths[&output];
-        let mut inputs = VgHashMap::default();
-        let mut paths = Vec::new();
-
-        for (p, c) in paths_to_output {
-            inputs.insert(p.from, paths.len());
-            paths.push((
-                p.from,
-                vec![SpecifyPath {
-                    condition: Condition::None,
-                    delays: c.delays,
-                    span: TokenRange::default(),
-                }],
-            ));
-        }
-
-        let specify = SpecifyOutput { sid, inputs, paths };
-
-        lower_iopath(ctx, mctx, sid, output, specify, &delays)?;
-    }
-
     Ok(())
 }

@@ -106,6 +106,8 @@ pub struct ModuleSymbol {
 #[derive(Clone)]
 pub struct Terminals {
     width: VectorSize,
+    /// The proxy that procedural code drives instead of an output with path delays, which is set
+    /// when the drivers are resolved (see `DriverResolution::finalize`).
     pub specify: Option<SignalKey>,
     pub ba: SignalKey,
     pub nba: Option<(ProcessKey, SignalKey, Option<SignalKey>)>,

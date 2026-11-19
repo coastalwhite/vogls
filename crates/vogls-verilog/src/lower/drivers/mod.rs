@@ -59,7 +59,7 @@ use crate::lower::module_or_generate_item::{
     AssignOutputFn, GateDelayFn, lower_assign_delay3, lower_delay_process, lower_delay2,
     lower_delay3, lower_gate_primitive,
 };
-use crate::lower::specify::{SpecifyDelay, lower_specify_delay};
+use crate::lower::specify::{PathDelays, SpecifyDelay, lower_specify_delay};
 use crate::lower::udp::lower_udp;
 use crate::lower::{Diagnostics, LowerContext, MutLowerContext, VType};
 
@@ -469,6 +469,9 @@ pub struct DriverResolution<'a> {
     /// How signals are observed by processes that are lowered after the drivers are resolved,
     /// see [`Self::observe_watch`].
     observed: Vec<(SignalKey, NodeFlags)>,
+    /// The path delays of specify blocks and SDF files, until they are put in front of their
+    /// outputs (see [`Self::insert_path_delays`]).
+    pub path_delays: PathDelays<'a>,
 }
 
 /// Identifies a net assignment. All expressions of an assignment are evaluated by one process.
@@ -1045,58 +1048,84 @@ impl<'a> DriverResolution<'a> {
         self.push_outputs(gl, delay, dsts);
     }
 
-    /// Adds the module path delays of `specify`, where `input` is the signal that the drivers of
-    /// its output drive. The processes of the module paths are sensitive to `reads`.
-    pub fn push_specify_delay(
+    /// Puts the path delays of specify blocks and SDF files in front of their outputs.
+    ///
+    /// The drivers of an output are moved to a delay node, whose input is a proxy of the output.
+    /// Procedural code, which is only lowered after the drivers are resolved, drives the proxy
+    /// instead of the output, because it becomes the specify terminal of the output.
+    ///
+    /// ```text
+    /// A --+                 A --+
+    ///     +--> O    ===>        +--> D(P) ~~> O
+    /// B --+                 B --+
+    /// ```
+    fn insert_path_delays(
         &mut self,
-        gl: &mut GlobalContext,
-        input: SignalKey,
-        specify: SpecifyDelay<'a>,
-        reads: Vec<SignalKey>,
-        kind: SignalKind,
+        ctx: &mut LowerContext<'a, '_>,
+        mctx: &mut MutLowerContext<'a>,
     ) {
-        let output = specify.output;
-        let bit_length = gl.signals[output].size;
-        let delay = self.nodes.insert(DriveNode::Delay {
-            kind: DelayKind::Specify(Arc::new(specify)),
-            input,
-            bit_length,
-            fst_in: None,
-            fst_out: None,
-            fst_read_in: None,
-        });
-        let prev = self.signal_lut.insert(input, delay);
-        assert!(
-            prev.is_none(),
-            "the input of a specify delay is not driven yet"
-        );
-        self.pending_reads.push((delay, reads, ReadKind::Event));
+        if self.path_delays.is_empty() {
+            return;
+        }
 
-        // The delay drives the output, even if the output is declared as a variable.
-        let resolution = match kind {
-            SignalKind::Net(resolution) => resolution,
-            SignalKind::Variable => NetResolution::Wire,
-        };
-        let to = self.signal_node(gl, output, SignalKind::Net(resolution));
-        if let DriveNode::Variable {
-            key,
-            bit_length,
-            flags,
-            fst_out,
-            fst_read_out,
-        } = self.nodes[to]
-        {
-            self.nodes[to] = DriveNode::Net {
+        for specify in self.path_delays.take_merged() {
+            let output = specify.output;
+            let sid = specify.specify.sid;
+            let mut proxy = mctx.gl.signals[output].clone();
+            proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
+            let proxy = mctx.gl.signals.insert(proxy);
+
+            let VSymbol::Signal(symbol) = &mut ctx.table[sid].content else {
+                unreachable!("path delays only drive signals");
+            };
+            let prev = symbol.terminals.set_specify(proxy);
+            assert!(prev.is_none(), "an output has one specify proxy");
+            // The delay drives the output, even if the output is declared as a variable.
+            let resolution = match symbol.kind {
+                SignalKind::Net(resolution) => resolution,
+                SignalKind::Variable => NetResolution::Wire,
+            };
+
+            let reads = specify
+                .specify
+                .paths
+                .iter()
+                .map(|(input, _)| *input)
+                .collect();
+            let bit_length = mctx.gl.signals[output].size;
+            let delay = self.nodes.insert(DriveNode::Delay {
+                kind: DelayKind::Specify(Arc::new(specify)),
+                input: proxy,
+                bit_length,
+                fst_in: None,
+                fst_out: None,
+                fst_read_in: None,
+            });
+            self.signal_lut.insert(proxy, delay);
+            self.pending_reads.push((delay, reads, ReadKind::Event));
+
+            let to = self.signal_node(&mctx.gl, output, SignalKind::Net(resolution));
+            if let DriveNode::Variable {
                 key,
                 bit_length,
                 flags,
-                resolution,
-                fst_in: None,
                 fst_out,
                 fst_read_out,
-            };
+            } = self.nodes[to]
+            {
+                self.nodes[to] = DriveNode::Net {
+                    key,
+                    bit_length,
+                    flags,
+                    resolution,
+                    fst_in: None,
+                    fst_out,
+                    fst_read_out,
+                };
+            }
+            self.splice_in_edges(to, delay);
+            self.push_edge((delay, 0), (to, 0), bit_length);
         }
-        self.push_edge((delay, 0), (to, 0), bit_length);
     }
 
     /// Connects the bits of the output of `from` to `dsts`, given from least to most significant.
@@ -1688,10 +1717,11 @@ impl<'a> DriverResolution<'a> {
     /// [`ResolvedDrivers::apply`], once all processes are lowered.
     pub fn finalize(
         mut self,
-        ctx: &LowerContext<'a, '_>,
+        ctx: &mut LowerContext<'a, '_>,
         mctx: &mut MutLowerContext<'a>,
         options: FinalizeOptions<'_>,
     ) -> Result<ResolvedDrivers<'a>, ()> {
+        self.insert_path_delays(ctx, mctx);
         let mut error = self.push_reads(ctx, mctx).is_err();
 
         if self.has_uwires {

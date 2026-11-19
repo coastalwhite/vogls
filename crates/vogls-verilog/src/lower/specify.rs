@@ -19,10 +19,11 @@ use crate::elaborate::VSymbol;
 use crate::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
 use crate::lower::drivers::DriveOutputFn;
 use crate::lower::expression::lower_expr;
-use crate::lower::{eval_constant_expr, try_resolve_hident, unwrap_get_signal_mut};
+use crate::lower::{eval_constant_expr, try_resolve_hident};
 
 use super::{LowerContext, MutLowerContext, VValue};
 
+#[derive(Clone)]
 pub enum Condition<'a> {
     None,
 
@@ -64,12 +65,14 @@ impl Condition<'_> {
     }
 }
 
+#[derive(Clone)]
 pub struct SpecifyOutput<'a> {
     pub sid: SymbolId,
     pub inputs: VgHashMap<SignalKey, usize>,
     pub paths: Vec<(SignalKey, Vec<SpecifyPath<'a>>)>,
 }
 
+#[derive(Clone)]
 pub struct SpecifyPath<'a> {
     pub condition: Condition<'a>,
     pub delays: DelayPtr,
@@ -142,18 +145,14 @@ fn push_delay<'a>(
     }
 }
 
+/// Collects the module path delays of the specify block `items` of the module instance `scope`
+/// into the [`PathDelays`] of the driver resolution, which puts them in front of their outputs.
 pub fn lower_specify<'a>(
-    ctx: &mut LowerContext<'a, '_>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
-
     items: AstIdRange<'a, SpecifyBlockItem<'a>>,
-    delays: &mut Vec<Time>,
-    outs_lut: &mut VgHashMap<SignalKey, usize>,
-    outs: &mut Vec<(SignalKey, SpecifyOutput<'a>)>,
 ) -> Result<(), ()> {
-    delays.clear();
-
     for item in items.iter() {
         match &*item {
             SpecifyBlockItem::SpecParamDeclaration => todo!(),
@@ -241,7 +240,7 @@ pub fn lower_specify<'a>(
                     );
                     return Err(());
                 };
-                let output = output_net.terminals.blocking_drive_signal();
+                let output = output_net.terminals.probe_signal();
 
                 if matches!(variant, PathDeclarationVariant::Full)
                     && input_net.ty.bit_length() != output_net.ty.bit_length()
@@ -285,48 +284,36 @@ pub fn lower_specify<'a>(
                     // The parser only accepts these counts.
                     n => unreachable!("{n} path delays"),
                 };
+                let mut delays = std::mem::take(&mut mctx.driver_resolution.path_delays.delays);
                 let offset = delays.len() as u64;
                 let mut triple_mask = 0u16;
+                let mut result = Ok(());
                 for (i, expr) in exprs.iter().enumerate() {
-                    let is_triple = push_delay(ctx, mctx, scope, expr, delays)?;
-                    triple_mask |= u16::from(is_triple) << i;
+                    match push_delay(ctx, mctx, scope, expr, &mut delays) {
+                        Ok(is_triple) => triple_mask |= u16::from(is_triple) << i,
+                        Err(()) => result = Err(()),
+                    }
                 }
+                mctx.driver_resolution.path_delays.delays = delays;
+                result?;
                 let delays = DelayPtr::new(offset, delay_variant, triple_mask);
 
-                let out = *outs_lut.entry(output).or_insert_with(|| {
-                    let idx = outs.len();
-                    outs.push((
-                        output,
-                        SpecifyOutput {
-                            sid: output_sid,
-                            inputs: Default::default(),
-                            paths: Default::default(),
-                        },
-                    ));
-                    idx
-                });
-                let out = &mut outs[out].1;
-                let paths_idx = *out.inputs.entry(input).or_insert_with(|| {
-                    let idx = out.paths.len();
-                    out.paths.push((input, Vec::new()));
-                    idx
-                });
-                out.paths[paths_idx].1.push(SpecifyPath {
-                    condition,
-                    delays,
-                    span: ctx.arenas.get_span(item),
-                });
+                mctx.driver_resolution.path_delays.push_specify(
+                    scope,
+                    output_sid,
+                    output,
+                    input,
+                    SpecifyPath {
+                        condition,
+                        delays,
+                        span: ctx.arenas.get_span(item),
+                    },
+                );
             }
             SpecifyBlockItem::SystemTimingCheck(_) => {
                 // @TODO: Don't ignore these.
             }
         }
-    }
-
-    let delays = Arc::<[Time]>::from(delays.as_slice());
-    outs_lut.clear();
-    for (output, specify) in outs.drain(..) {
-        lower_iopath(ctx, mctx, scope, output, specify, &delays)?;
     }
 
     Ok(())
@@ -340,34 +327,130 @@ pub struct SpecifyDelay<'a> {
     pub delays: Arc<[Time]>,
 }
 
-/// Puts the module path delays of `specify` in front of `output`, which its drivers drive from now
-/// on.
-pub fn lower_iopath<'a>(
-    ctx: &mut LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext<'a>,
-    scope: SymbolId,
-    output: SignalKey,
-    specify: SpecifyOutput<'a>,
-    delays: &Arc<[Time]>,
-) -> Result<(), ()> {
-    let mut proxy = mctx.gl.signals.get(output).unwrap().clone();
-    proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
-    let proxy = mctx.gl.signals.insert(proxy);
-    let symbol = unwrap_get_signal_mut(&mut ctx.table, specify.sid);
-    let prev = symbol.terminals.set_specify(proxy);
-    assert!(prev.is_none());
-    let kind = symbol.kind;
+/// An SDF delay from `from` to `to`, which annotates the module paths between them, or is a path
+/// of its own if there are none.
+#[derive(Clone)]
+struct SdfPath {
+    from: SignalKey,
+    to: SignalKey,
+    to_sid: SymbolId,
+    delays: DelayPtr,
+}
 
-    let reads = specify.paths.iter().map(|(input, _)| *input).collect();
-    let delay = SpecifyDelay {
-        scope,
-        output,
-        specify,
-        delays: delays.clone(),
-    };
-    mctx.driver_resolution
-        .push_specify_delay(&mut mctx.gl, proxy, delay, reads, kind);
-    Ok(())
+/// All path delays of a design, collected from its specify blocks and SDF files before they are
+/// put in front of their outputs in one go (see [`PathDelays::take_merged`]).
+#[derive(Default, Clone)]
+pub struct PathDelays<'a> {
+    /// The delay values that every [`DelayPtr`] of the paths points into.
+    pub delays: Vec<Time>,
+    /// The index of the module paths of each output in `specify`.
+    specify_lut: VgHashMap<SignalKey, usize>,
+    /// The module paths of specify blocks per output, with the module instance they are in.
+    specify: Vec<(SymbolId, SignalKey, SpecifyOutput<'a>)>,
+    /// The SDF delays, in the order they are read: a later delay overrides an earlier one.
+    sdf: Vec<SdfPath>,
+}
+
+impl<'a> PathDelays<'a> {
+    pub fn is_empty(&self) -> bool {
+        self.specify.is_empty() && self.sdf.is_empty()
+    }
+
+    fn output_paths(
+        &mut self,
+        scope: SymbolId,
+        output_sid: SymbolId,
+        output: SignalKey,
+    ) -> &mut SpecifyOutput<'a> {
+        let idx = *self.specify_lut.entry(output).or_insert_with(|| {
+            self.specify.push((
+                scope,
+                output,
+                SpecifyOutput {
+                    sid: output_sid,
+                    inputs: Default::default(),
+                    paths: Default::default(),
+                },
+            ));
+            self.specify.len() - 1
+        });
+        &mut self.specify[idx].2
+    }
+
+    /// Adds the module path `path` from `input` to `output` of a specify block in `scope`.
+    pub fn push_specify(
+        &mut self,
+        scope: SymbolId,
+        output_sid: SymbolId,
+        output: SignalKey,
+        input: SignalKey,
+        path: SpecifyPath<'a>,
+    ) {
+        let out = self.output_paths(scope, output_sid, output);
+        let idx = *out.inputs.entry(input).or_insert_with(|| {
+            out.paths.push((input, Vec::new()));
+            out.paths.len() - 1
+        });
+        out.paths[idx].1.push(path);
+    }
+
+    /// Adds an SDF delay from `from` to `to`, whose values `delays` points into
+    /// [`Self::delays`].
+    pub fn push_sdf(&mut self, from: SignalKey, to: SignalKey, to_sid: SymbolId, delays: DelayPtr) {
+        self.sdf.push(SdfPath {
+            from,
+            to,
+            to_sid,
+            delays,
+        });
+    }
+
+    /// Takes the path delays of every output, where the SDF delays annotate the module paths of
+    /// the specify blocks.
+    ///
+    /// IEEE Std 1364-2005, 16.2.1: an `IOPATH` without an edge or condition annotates every module
+    /// path between its ports, whatever its edge or condition. An SDF delay without such module
+    /// paths becomes an unconditional path of its own.
+    pub fn take_merged(&mut self) -> Vec<SpecifyDelay<'a>> {
+        for SdfPath {
+            from,
+            to,
+            to_sid,
+            delays,
+        } in std::mem::take(&mut self.sdf)
+        {
+            let out = self.output_paths(to_sid, to_sid, to);
+            match out.inputs.get(&from) {
+                Some(&idx) => out.paths[idx]
+                    .1
+                    .iter_mut()
+                    .for_each(|path| path.delays = delays),
+                None => {
+                    out.inputs.insert(from, out.paths.len());
+                    out.paths.push((
+                        from,
+                        vec![SpecifyPath {
+                            condition: Condition::None,
+                            delays,
+                            span: TokenRange::default(),
+                        }],
+                    ));
+                }
+            }
+        }
+
+        let delays = Arc::<[Time]>::from(std::mem::take(&mut self.delays));
+        self.specify_lut.clear();
+        std::mem::take(&mut self.specify)
+            .into_iter()
+            .map(|(scope, output, specify)| SpecifyDelay {
+                scope,
+                output,
+                specify,
+                delays: delays.clone(),
+            })
+            .collect()
+    }
 }
 
 /// Lowers the module path delays of `delay` to one process per bit of its output, which drives the

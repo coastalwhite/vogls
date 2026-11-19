@@ -316,10 +316,6 @@ impl<'a> ElaboratedDesign<'a> {
     pub fn annotate_specify<'b>(&'b mut self) -> Result<&'b mut Self, AnnotationError<'a, 'b>> {
         let result = self.with_context(|ctx, mctx, module_lut| {
             let mut error = false;
-            let mut delays = Vec::new();
-            let mut outs_lut = VgHashMap::default();
-            let mut outs = Vec::new();
-
             for key in ctx.table.symbol_id_iter() {
                 if let VSymbol::Module(i) = &ctx.table[key].content {
                     let module = module_lut[&i.module];
@@ -338,9 +334,6 @@ impl<'a> ElaboratedDesign<'a> {
                                 mctx,
                                 key,
                                 specify_block.items,
-                                &mut delays,
-                                &mut outs_lut,
-                                &mut outs,
                             )
                             .is_err();
                         }
@@ -451,7 +444,8 @@ impl<'a> ElaboratedDesign<'a> {
                     .as_deref_mut()
                     .map(|w| w as &mut dyn std::io::Write),
             };
-            match std::mem::take(&mut mctx.driver_resolution).finalize(&ctx, &mut mctx, options) {
+            match std::mem::take(&mut mctx.driver_resolution).finalize(&mut ctx, &mut mctx, options)
+            {
                 Ok(r) => resolved = Some(r),
                 Err(()) => error = true,
             }
