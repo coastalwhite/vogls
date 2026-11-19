@@ -2,16 +2,17 @@ use std::ops::Range;
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::Time;
 use vogls_ir::time::{TimeResolution, TimeSize, TimeUnit};
 use vogls_ir::token_range::TokenRange;
+use vogls_ir::{SignalSlice, Time};
 use vogls_sdf::{
     AbsoluteDelayType, DelVal, DelValList, DelayFile, DelaySpec, HierarchicalIdent,
-    HierarchyDivider, Instance, InterconnectDef, IoPathDef, Port, PortInstance, PortSpec, RTriple,
-    RValue, SignedRealNumberOrRTriple, Timescale, TimescaleNumber, TimescaleUnit, TimingSpec,
+    HierarchyDivider, Instance, Integer, InterconnectDef, IoPathDef, Port, PortInstance, PortSpec,
+    RTriple, RValue, SignedRealNumberOrRTriple, Timescale, TimescaleNumber, TimescaleUnit,
+    TimingSpec,
 };
 use vogls_utils::VgHashMap;
-use vogls_verilog::elaborate::VSymbol;
+use vogls_verilog::elaborate::{SignalSymbol, VSymbol};
 use vogls_verilog::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
 use vogls_verilog::lower::{Diagnostics, LowerContext, LowerErrorReason, MutLowerContext};
 
@@ -86,6 +87,113 @@ fn resolve_ident<'a>(
     Ok(cell_sid)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn push_sdf_path<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext<'a>,
+    divider: HierarchyDivider,
+    cell_sid: SymbolId,
+    (from, to): (&PortInstance, &PortInstance),
+    delval_list: &DelValList,
+    delay_values: &mut Vec<Time>,
+    timescale: TimeResolution,
+) -> Result<(), ()> {
+    let from_sid = resolve_port_instance(ctx, divider, cell_sid, from, &mut mctx.diagnostics);
+    let to_sid = resolve_port_instance(ctx, divider, cell_sid, to, &mut mctx.diagnostics);
+    let (from_sid, to_sid) = (from_sid?, to_sid?);
+
+    let (VSymbol::Signal(from_net), VSymbol::Signal(to_net)) =
+        (&ctx.table[from_sid].content, &ctx.table[to_sid].content)
+    else {
+        mctx.diagnostics
+            .not_yet_implemented(TokenRange::default(), "Not a net");
+        return Err(());
+    };
+
+    let from_bits = port_bits(ctx, from_net, from, &mut mctx.diagnostics);
+    let to_bits = port_bits(ctx, to_net, to, &mut mctx.diagnostics);
+    let (from_bits, to_bits) = (from_bits?, to_bits?);
+
+    let before = delay_values.len();
+    let delays = parse_delvallist(delval_list, delay_values, timescale, ctx.time_resolution)?;
+
+    if from_bits.is_some() || to_bits.is_some() {
+        let is_zero = delay_values[before..].iter().all(|t| t.0 == 0);
+        delay_values.truncate(before);
+        // A zero delay adds no delay, also between the bits of a port, e.g. those of the pads of a
+        // padring that connect to the bits of the ports of the top-level module.
+        if is_zero {
+            return Ok(());
+        }
+        mctx.diagnostics.not_yet_implemented(
+            TokenRange::default(),
+            "a non-zero SDF delay from or to a bit or part select of a port",
+        );
+        return Err(());
+    }
+
+    let from = from_net.terminals.probe_signal();
+    let to = to_net.terminals.probe_signal();
+    mctx.driver_resolution
+        .path_delays
+        .push_sdf(from, to, to_sid, delays);
+    Ok(())
+}
+
+/// Returns the bits of `net` that the bit select `[b1]` or part select `[b1:b2]` of the SDF `port`
+/// selects, or `None` if it selects the whole net.
+fn port_bits(
+    ctx: &LowerContext<'_, '_>,
+    net: &SignalSymbol,
+    port: &PortInstance,
+    diagnostics: &mut Diagnostics,
+) -> Result<Option<SignalSlice>, ()> {
+    let Port { hident, b1, b2 } = &port.port;
+    let Some(b1) = b1 else {
+        return Ok(None);
+    };
+
+    if !net.dims.is_empty() {
+        diagnostics.not_yet_implemented(TokenRange::default(), "SDF port of an array");
+        return Err(());
+    }
+
+    // The bit of a declared index, as in `lower_addressing`.
+    let width = net.ty.bit_length().get();
+    let transform = net.transform;
+    let bit = |index: &Integer| -> Option<u32> {
+        let index = index.0.parse::<i64>().ok()?;
+        let offset = u32::try_from(index.checked_sub(transform.lsb)?).ok()?;
+        (offset < width).then(|| {
+            if transform.bit_reversed {
+                width - 1 - offset
+            } else {
+                offset
+            }
+        })
+    };
+    let (Some(bit1), Some(bit2)) = (bit(b1), bit(b2.as_ref().unwrap_or(b1))) else {
+        let mut path = display_ident(&ctx.arenas.ident_table, hident);
+        if let Some(hident) = &port.hident {
+            path = format!("{}.{path}", display_ident(&ctx.arenas.ident_table, hident));
+        }
+        path = match b2 {
+            None => format!("{path}[{}]", b1.0),
+            Some(b2) => format!("{path}[{}:{}]", b1.0, b2.0),
+        };
+        diagnostics.errors.push((
+            TokenRange::default(),
+            LowerErrorReason::SdfPortSelectOutOfRange(path),
+            Vec::new(),
+        ));
+        return Err(());
+    };
+
+    let slice =
+        SignalSlice::new(bit1.max(bit2), bit1.min(bit2)).expect("the bits are within the net");
+    Ok((slice.width().get() != width).then_some(slice))
+}
+
 /// Whether `sid` is `scope` or lies somewhere below it in the hierarchy.
 fn is_within(ctx: &LowerContext<'_, '_>, sid: SymbolId, scope: SymbolId) -> bool {
     let mut sid = Some(sid);
@@ -145,11 +253,8 @@ fn resolve_port_instance<'a>(
         None => scope,
         Some(hident) => resolve_ident(ctx, divider, Some(scope), hident, diagnostics)?,
     };
-    let Port { hident, b1, b2 } = port;
-    if b1.is_some() || b2.is_some() {
-        todo!();
-    }
-    resolve_ident(ctx, divider, Some(scope), hident, diagnostics)
+    // The bit or part select of the port is handled by `port_bits`.
+    resolve_ident(ctx, divider, Some(scope), &port.hident, diagnostics)
 }
 
 fn parse_signed_real_number(s: &str) -> Result<f64, ()> {
@@ -397,60 +502,17 @@ pub fn lower_sdf<'a>(
                                                     todo!();
                                                 };
 
-                                                let (Ok(from_sid), Ok(to_sid)) = (
-                                                    resolve_port_instance(
-                                                        ctx,
-                                                        divider,
-                                                        cell_sid,
-                                                        from,
-                                                        &mut mctx.diagnostics,
-                                                    ),
-                                                    resolve_port_instance(
-                                                        ctx,
-                                                        divider,
-                                                        cell_sid,
-                                                        to,
-                                                        &mut mctx.diagnostics,
-                                                    ),
-                                                ) else {
-                                                    error = true;
-                                                    continue;
-                                                };
-
-                                                let (
-                                                    vogls_verilog::elaborate::VSymbol::Signal(
-                                                        from_net,
-                                                    ),
-                                                    vogls_verilog::elaborate::VSymbol::Signal(
-                                                        to_net,
-                                                    ),
-                                                ) = (
-                                                    &ctx.table[from_sid].content,
-                                                    &ctx.table[to_sid].content,
-                                                )
-                                                else {
-                                                    mctx.diagnostics.not_yet_implemented(
-                                                        TokenRange::default(),
-                                                        "Not a net",
-                                                    );
-                                                    error = true;
-                                                    continue;
-                                                };
-
-                                                let from = from_net.terminals.probe_signal();
-                                                let to = to_net.terminals.probe_signal();
-                                                let Ok(delays) = parse_delvallist(
+                                                error |= push_sdf_path(
+                                                    ctx,
+                                                    mctx,
+                                                    divider,
+                                                    cell_sid,
+                                                    (from, to),
                                                     delval_list,
                                                     &mut delay_values,
                                                     timescale,
-                                                    ctx.time_resolution,
-                                                ) else {
-                                                    error = true;
-                                                    continue;
-                                                };
-                                                mctx.driver_resolution
-                                                    .path_delays
-                                                    .push_sdf(from, to, to_sid, delays);
+                                                )
+                                                .is_err();
                                             }
 
                                             // @TODO: These should all be implemented in time.
@@ -465,60 +527,17 @@ pub fn lower_sdf<'a>(
                                                     delval_list,
                                                 } = interconnect;
 
-                                                let (Ok(from_sid), Ok(to_sid)) = (
-                                                    resolve_port_instance(
-                                                        ctx,
-                                                        divider,
-                                                        cell_sid,
-                                                        from,
-                                                        &mut mctx.diagnostics,
-                                                    ),
-                                                    resolve_port_instance(
-                                                        ctx,
-                                                        divider,
-                                                        cell_sid,
-                                                        to,
-                                                        &mut mctx.diagnostics,
-                                                    ),
-                                                ) else {
-                                                    error = true;
-                                                    continue;
-                                                };
-
-                                                let (
-                                                    vogls_verilog::elaborate::VSymbol::Signal(
-                                                        from_net,
-                                                    ),
-                                                    vogls_verilog::elaborate::VSymbol::Signal(
-                                                        to_net,
-                                                    ),
-                                                ) = (
-                                                    &ctx.table[from_sid].content,
-                                                    &ctx.table[to_sid].content,
-                                                )
-                                                else {
-                                                    mctx.diagnostics.not_yet_implemented(
-                                                        TokenRange::default(),
-                                                        "Not a net",
-                                                    );
-                                                    error = true;
-                                                    continue;
-                                                };
-
-                                                let from = from_net.terminals.probe_signal();
-                                                let to = to_net.terminals.probe_signal();
-                                                let Ok(delays) = parse_delvallist(
+                                                error |= push_sdf_path(
+                                                    ctx,
+                                                    mctx,
+                                                    divider,
+                                                    cell_sid,
+                                                    (from, to),
                                                     delval_list,
                                                     &mut delay_values,
                                                     timescale,
-                                                    ctx.time_resolution,
-                                                ) else {
-                                                    error = true;
-                                                    continue;
-                                                };
-                                                mctx.driver_resolution
-                                                    .path_delays
-                                                    .push_sdf(from, to, to_sid, delays);
+                                                )
+                                                .is_err();
                                             }
                                             vogls_sdf::DelayDef::NetDelay(_) => todo!(),
                                             vogls_sdf::DelayDef::Device(_) => todo!(),
