@@ -2560,6 +2560,8 @@ pub fn finalize_symbol<'a>(
                 monitor: None,
                 driver_resolution: DriverResolution::default(),
             };
+            // Lowered for constant expressions and continuous assignments only, this is thrown out
+            // once the drivers are resolved (see `function::discard_all`).
             // @TODO: This should ignore errors with unresolved symbols.
             let res =
                 crate::lower::module_or_generate_item::function::lower(ctx, &mut mctx, sid, *id);
