@@ -4,6 +4,7 @@ use vogls_ir::token_range::TokenRange;
 
 use crate::ast::{AstItem, Identifier};
 use crate::elaborate::ModuleSymbol;
+use crate::elaborate::NetResolution;
 use crate::parser::{AstArenas, ReportKind, SpanError};
 use crate::tokenizer::Tokenized;
 use vogls_frontend::ident_table::IdentId;
@@ -24,6 +25,7 @@ pub enum LowerErrorReason {
     NetWidthOverflow,
     ZeroWidthNet,
     IfnoneWithUnconditionalPath,
+    MixedNetResolution(NetResolution, NetResolution),
     MemoryNotAVariable(&'static str),
     SdfParse(String, String),
     SdfNotAnInstance(String),
@@ -133,6 +135,19 @@ impl Diagnostics {
     pub fn zero_width_net(&mut self, at: TokenRange) {
         self.errors
             .push((at, LowerErrorReason::ZeroWidthNet, Vec::new()));
+    }
+    /// A net resolved as `net` is connected bidirectionally to nets resolved as `other`.
+    pub fn mixed_net_resolution(
+        &mut self,
+        at: TokenRange,
+        net: NetResolution,
+        other: NetResolution,
+    ) {
+        self.errors.push((
+            at,
+            LowerErrorReason::MixedNetResolution(net, other),
+            Vec::new(),
+        ));
     }
     pub fn memory_not_a_variable(&mut self, at: TokenRange, task: &'static str) {
         self.errors
@@ -251,6 +266,10 @@ impl<'a> fmt::Display for LowerErrorDisplay<'a> {
             LowerErrorReason::IfnoneWithUnconditionalPath => write!(
                 f,
                 "`ifnone` path combined with an unconditional path for the same module path"
+            ),
+            LowerErrorReason::MixedNetResolution(net, other) => write!(
+                f,
+                "this `{net}` net is connected bidirectionally to a `{other}` net, nets of different types cannot be resolved together"
             ),
             LowerErrorReason::MemoryNotAVariable(task) => {
                 write!(f, "the memory of `{task}` must be a variable, not a net")

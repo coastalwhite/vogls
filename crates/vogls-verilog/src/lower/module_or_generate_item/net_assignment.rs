@@ -5,7 +5,7 @@ use crate::ast::AstId;
 use crate::ast::expr::Expr;
 use crate::ast::module::{ModuleOrGenerateItemDeclaration, NetDeclAssignment, NetDeclarationNets};
 use crate::ast::statement::Delay3;
-use crate::elaborate::{SignalKind, VSymbol};
+use crate::elaborate::{NetResolution, SignalKind, VSymbol};
 use crate::lower::fuse::{
     DestinationSite, DestinationSiteContent, RequiredSignalKind, SiteTerminal, SiteType,
     expr_to_src_sites,
@@ -129,7 +129,8 @@ fn assign_net<'a>(
             content: DestinationSiteContent::Signal {
                 signal: input,
                 slice: SignalSlice::with_end(bit_length),
-                kind: SignalKind::Net,
+                // The input of a delay is only driven by the assignment.
+                kind: SignalKind::Net(NetResolution::Wire),
             },
             ty: SiteType::from(net_symbol.ty),
         });

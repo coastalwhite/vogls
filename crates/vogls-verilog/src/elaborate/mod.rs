@@ -11,12 +11,12 @@ use vogls_ir::{
 use vogls_utils::{Entry, IndexMap, Table, VgHashMap, new_table_key};
 
 use crate::ast::module::{
-    Dimension, FunctionDeclaration, ModuleOrGenerateItem, OutputNet, PortDeclaration, Range,
-    TaskDeclaration, TimeScale,
+    Dimension, FunctionDeclaration, ModuleOrGenerateItem, NetType, OutputNet, PortDeclaration,
+    Range, TaskDeclaration, TimeScale,
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::lower::{Diagnostics, VType, VValue, create_nba_process, eval_constant_expr};
-use crate::parser::AstArenas;
+use crate::parser::{AstArenas, DefaultNettype};
 
 pub mod function;
 pub mod next;
@@ -75,7 +75,7 @@ impl fmt::Debug for VSymbol {
             VSymbol::Module(_) => "module",
             VSymbol::Parameter(_) => "param",
             VSymbol::Signal(s) => match s.kind {
-                SignalKind::Net => "net",
+                SignalKind::Net(_) => "net",
                 SignalKind::Variable => "variable",
             },
             VSymbol::NamedBlock => "named_block",
@@ -224,12 +224,65 @@ pub enum SignalKind {
     /// Verilog nets.
     ///
     /// For instance, `wire`, ports or `tri`.
-    Net,
+    Net(NetResolution),
 
     /// Verilog variables.
     ///
     /// For instance, `reg`, `time` or `real`.
     Variable,
+}
+
+impl SignalKind {
+    pub fn is_net(self) -> bool {
+        matches!(self, Self::Net(_))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NetResolution {
+    /// `wire` and `tri`.
+    Wire,
+    /// `wand` and `triand`.
+    Wand,
+    /// `wor` and `trior`.
+    Wor,
+}
+
+impl NetResolution {
+    pub fn from_net_type(net_type: NetType) -> Option<Self> {
+        match net_type {
+            NetType::Wire | NetType::Tri => Some(Self::Wire),
+            NetType::WAnd | NetType::TriAnd => Some(Self::Wand),
+            NetType::WOr | NetType::TriOr => Some(Self::Wor),
+            NetType::Supply0
+            | NetType::Supply1
+            | NetType::Tri0
+            | NetType::Tri1
+            | NetType::Uwire => None,
+        }
+    }
+
+    pub fn from_default_nettype(net_type: DefaultNettype) -> Option<Self> {
+        match net_type {
+            DefaultNettype::Wire | DefaultNettype::Tri => Some(Self::Wire),
+            DefaultNettype::Wand | DefaultNettype::Triand => Some(Self::Wand),
+            DefaultNettype::Wor | DefaultNettype::Trior => Some(Self::Wor),
+            DefaultNettype::Tri0
+            | DefaultNettype::Tri1
+            | DefaultNettype::Trireg
+            | DefaultNettype::Uwire => None,
+        }
+    }
+}
+
+impl fmt::Display for NetResolution {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Wire => "wire",
+            Self::Wand => "wand",
+            Self::Wor => "wor",
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -336,16 +389,31 @@ pub fn port_declaration_to_info<'a>(
     (),
 > {
     use ConnectionDirection as D;
+    let mut net_kind = |net_type: Option<AstItem<NetType>>| -> Result<SignalKind, ()> {
+        let Some(net_type) = net_type else {
+            return Ok(SignalKind::Net(NetResolution::Wire));
+        };
+        match NetResolution::from_net_type(net_type.item) {
+            Some(resolution) => Ok(SignalKind::Net(resolution)),
+            None => {
+                diagnostics.not_yet_implemented(
+                    arenas.get_item_span(net_type),
+                    "this kind of net is not yet implemented",
+                );
+                Err(())
+            }
+        }
+    };
     let (kind, direction, range, signed, identifiers) = match &*id {
         PortDeclaration::Inout(inout) => (
-            SignalKind::Net,
+            net_kind(inout.net_type)?,
             D::Both,
             inout.range,
             inout.signed,
             inout.port_identifiers,
         ),
         PortDeclaration::Input(input) => (
-            SignalKind::Net,
+            net_kind(input.net_type)?,
             D::In,
             input.range,
             input.signed,
@@ -354,11 +422,17 @@ pub fn port_declaration_to_info<'a>(
         PortDeclaration::Output(output) => {
             // `output reg`, `output integer` and `output time` declare a variable, every other
             // port form declares a net.
-            let kind = match output.net.map(|net| net.item) {
-                Some(OutputNet::Register | OutputNet::Integer | OutputNet::Time) => {
-                    SignalKind::Variable
-                }
-                Some(OutputNet::NetType(_)) | None => SignalKind::Net,
+            let kind = match output.net {
+                Some(net) => match net.item {
+                    OutputNet::Register | OutputNet::Integer | OutputNet::Time => {
+                        SignalKind::Variable
+                    }
+                    OutputNet::NetType(net_type) => net_kind(Some(AstItem {
+                        item: net_type,
+                        loc: net.loc,
+                    }))?,
+                },
+                None => SignalKind::Net(NetResolution::Wire),
             };
             (
                 kind,

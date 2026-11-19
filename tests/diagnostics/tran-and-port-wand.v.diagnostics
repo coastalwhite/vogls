@@ -1,0 +1,8 @@
+error: not yet implemented or no specialized error: `wand` and `wor` nets connected by both `tran`s and `inout` ports
+   --> {path}:11
+  9 | module tb();
+ 10 |     reg a;
+ 11 >     wand w;
+               ^
+ 12 |     wire t;
+ 13 |     assign w = a;

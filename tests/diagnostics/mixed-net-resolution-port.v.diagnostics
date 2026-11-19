@@ -1,0 +1,8 @@
+error: this `wand` net is connected bidirectionally to a `wire` net, nets of different types cannot be resolved together
+  --> {path}:5
+ 3 | // vogls: mode=four-value-logic
+ 4 | // vogls: fail=lower
+ 5 > module m(inout wand p);
+                         ^
+ 6 |     assign p = 1'b0;
+ 7 | endmodule

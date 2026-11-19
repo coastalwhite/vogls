@@ -5,7 +5,7 @@ use crate::ast::AstId;
 use crate::ast::expr::Expr;
 use crate::ast::module::{ContinousAssign, NetAssignment};
 use crate::ast::statement::Delay3;
-use crate::elaborate::SignalKind;
+use crate::elaborate::{NetResolution, SignalKind};
 use crate::lower::fuse::{
     DestinationSite, DestinationSiteContent, RequiredSignalKind, SiteTerminal, SiteType,
     expr_to_src_sites, net_flat_lvalue_to_dsts,
@@ -107,7 +107,8 @@ fn assign_net_lvalue<'a>(
             content: DestinationSiteContent::Signal {
                 signal: input,
                 slice: SignalSlice::with_end(bit_length),
-                kind: SignalKind::Net,
+                // The input of a delay is only driven by the assignment.
+                kind: SignalKind::Net(NetResolution::Wire),
             },
             ty: SiteType::from(dsts_ty),
         });
