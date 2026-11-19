@@ -356,6 +356,7 @@ pub fn lower_iopath<'a>(
     let symbol = unwrap_get_signal_mut(&mut ctx.table, specify.sid);
     let prev = symbol.terminals.set_specify(proxy);
     assert!(prev.is_none());
+    let kind = symbol.kind;
 
     let reads = specify.paths.iter().map(|(input, _)| *input).collect();
     let delay = SpecifyDelay {
@@ -365,7 +366,7 @@ pub fn lower_iopath<'a>(
         delays: delays.clone(),
     };
     mctx.driver_resolution
-        .push_specify_delay(&mut mctx.gl, proxy, delay, reads);
+        .push_specify_delay(&mut mctx.gl, proxy, delay, reads, kind);
     Ok(())
 }
 

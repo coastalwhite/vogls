@@ -3,8 +3,7 @@ use std::fmt;
 use vogls_bits::arithmetic::{
     fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem,
     fv_bitwise_xnor_elem, fv_bitwise_xor_elem, fv_resolve_wand_elem, fv_resolve_wire_elem,
-    fv_resolve_wor_elem,
-    tv_resolve_wire_elem,
+    fv_resolve_wor_elem, tv_resolve_wire_elem,
 };
 use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::edge::fv_negedge_u64;

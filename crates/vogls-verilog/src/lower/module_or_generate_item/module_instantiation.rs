@@ -7,6 +7,7 @@ use crate::ast::module::{
     ListOfPortConnections, ModuleInstance, ModuleInstantiation, NamedPortConnection,
 };
 use crate::elaborate::{SignalSymbol, VSymbol};
+use crate::lower::drivers::BidirKind;
 use crate::lower::expression::get_expr_type;
 use crate::lower::fuse::{
     DestinationSite, DestinationSiteContent, RequiredSignalKind, SiteTerminal, SiteType,
@@ -227,7 +228,11 @@ fn assign_inout<'a>(
         .fuse_srcs_scratch
         .drain(..)
         .map(|site| match site.content {
-            SourceSiteContent::Signal { signal, slice, .. } => Some((signal, slice)),
+            SourceSiteContent::Signal {
+                signal,
+                slice,
+                kind,
+            } => Some((signal, slice, kind)),
             SourceSiteContent::Constant(_)
             | SourceSiteContent::OutOfBounds { .. }
             | SourceSiteContent::Expr { .. } => None,
@@ -242,7 +247,9 @@ fn assign_inout<'a>(
     let port_bit_length = port.ty.bit_length().get();
     let outer_bit_length = outer
         .iter()
-        .try_fold(0u32, |acc, (_, slice)| acc.checked_add(slice.width().get()))
+        .try_fold(0u32, |acc, (_, slice, _)| {
+            acc.checked_add(slice.width().get())
+        })
         .and_then(VectorSize::new);
     let Some(outer_bit_length) = outer_bit_length else {
         mctx.diagnostics
@@ -261,10 +268,12 @@ fn assign_inout<'a>(
     let bit_length = outer_bit_length.get().min(port_bit_length);
     let mut outer_connected = Vec::with_capacity(outer.len());
     let mut remaining = bit_length;
-    for (signal, slice) in outer {
+    for (signal, slice, kind) in outer {
         let Some(width) = VectorSize::new(slice.width().get().min(remaining)) else {
             break;
         };
+        // The nets keep their net type, so that nets of different types are told apart.
+        mctx.driver_resolution.declare_net(&mctx.gl, signal, kind);
         outer_connected.push((signal, SignalSlice::from_width(slice.lsb(), width).unwrap()));
         remaining -= width.get();
     }
@@ -274,7 +283,9 @@ fn assign_inout<'a>(
         SignalSlice::from_width(0, VectorSize::new(bit_length).unwrap()).unwrap(),
     )];
     mctx.driver_resolution
-        .push_bidirectional_sites(&outer_connected, &inner);
+        .declare_net(&mctx.gl, inner[0].0, port.kind);
+    mctx.driver_resolution
+        .push_bidirectional_sites(&outer_connected, &inner, BidirKind::Port);
     Ok(())
 }
 

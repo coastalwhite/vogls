@@ -15,7 +15,7 @@ use crate::ast::module::{
 };
 use crate::ast::statement::{Delay2, Delay3, DelayValue, MinTypMaxExpression, NetLValue};
 use crate::lower::assign::net_lvalue_bit_length;
-use crate::lower::drivers::{DriveOutputFn, ExprSource, GateDelay};
+use crate::lower::drivers::{BidirKind, DriveOutputFn, ExprSource, GateDelay};
 use crate::lower::expression::{get_used_signals, lower_expr, truncate_or_extend};
 use crate::lower::fuse::{
     RequiredSignalKind, SiteTerminal, SiteType, SourceSite, SourceSiteContent, expr_to_src_sites,
@@ -579,7 +579,14 @@ fn lower_pass_switch_instance<'a>(
         sites
             .into_iter()
             .map(|site| match site.content {
-                SourceSiteContent::Signal { signal, slice, .. } => Ok((signal, slice)),
+                SourceSiteContent::Signal {
+                    signal,
+                    slice,
+                    kind,
+                } => {
+                    mctx.driver_resolution.declare_net(&mctx.gl, signal, kind);
+                    Ok((signal, slice))
+                }
                 SourceSiteContent::Constant(_)
                 | SourceSiteContent::OutOfBounds { .. }
                 | SourceSiteContent::Expr { .. } => {
@@ -607,7 +614,7 @@ fn lower_pass_switch_instance<'a>(
     }
 
     mctx.driver_resolution
-        .push_bidirectional_sites(&fst_slices, &snd_slices);
+        .push_bidirectional_sites(&fst_slices, &snd_slices, BidirKind::Tran);
 
     Ok(())
 }

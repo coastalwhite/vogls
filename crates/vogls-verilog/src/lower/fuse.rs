@@ -330,7 +330,7 @@ where
     match required_signal_kind {
         RequiredSignalKind::None => {}
         RequiredSignalKind::Net => {
-            if symbol.kind != SignalKind::Net {
+            if !symbol.kind.is_net() {
                 diagnostics.not_yet_implemented(
                     hident_span(ctx.arenas, ident),
                     "only nets can be used here",

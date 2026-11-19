@@ -19,7 +19,7 @@ use crate::ast::module::{
     IntegerDeclaration, ListOfPortConnections, LocalParameterDeclaration, LoopGenerateConstruct,
     Module, ModuleInstantiation, ModuleItem, ModuleOrGenerateItem, ModuleOrGenerateItemContent,
     ModuleOrGenerateItemDeclaration, ModulePorts, NamedParameterAssignment, NetDeclAssignment,
-    NetDeclaration, NetDeclarationNets, NetIdent, NetType, NonPortModuleItem, ParamAssignment,
+    NetDeclaration, NetDeclarationNets, NetIdent, NonPortModuleItem, ParamAssignment,
     ParameterDeclaration, ParameterDeclarationTyping, ParameterValueAssignment, Port,
     PortDeclaration, PortExpression, PortReference, Range, RealDeclaration, RealtimeDeclaration,
     RegDeclaration, TaskDeclaration, TaskPortItem, TaskPortItemContent, TfType, TimeDeclaration,
@@ -41,8 +41,8 @@ use crate::lower::{
 use crate::parser::DefaultNettype;
 
 use super::{
-    ModuleSymbol, SignalKind, SignalSymbol, Terminals, VSymbol, VSymbolTable, VectorTransform,
-    evaluate_net_msb_lsb, port_declaration_to_info, try_table_insert,
+    ModuleSymbol, NetResolution, SignalKind, SignalSymbol, Terminals, VSymbol, VSymbolTable,
+    VectorTransform, evaluate_net_msb_lsb, port_declaration_to_info, try_table_insert,
 };
 
 pub enum ElabLevel<'a> {
@@ -92,6 +92,7 @@ pub struct NetInLevelSymbol<'a> {
 pub struct PortInLevelSymbol<'a> {
     decl: AstId<'a, PortDeclaration<'a>>,
     ident: AstItem<Identifier>,
+    net: Option<NetResolution>,
 }
 
 pub struct ElaborationState<'a, 'b> {
@@ -248,14 +249,14 @@ pub fn elaborate<'a>(
         for (&ident, &(ast_ident, nettype)) in st.implicit_nets.iter() {
             if ctx.table.resolve(scope, ident).is_none() {
                 let origin = ctx.arenas.get_item_span(ast_ident);
-                if !matches!(nettype, DefaultNettype::Wire) {
+                let Some(resolution) = NetResolution::from_default_nettype(nettype) else {
                     diagnostics.not_yet_implemented(
                         origin,
                         "given default_nettype is not yet implemented",
                     );
                     error = true;
                     continue;
-                }
+                };
 
                 // @TODO: Warn for implicitly generated nets.
 
@@ -274,7 +275,7 @@ pub fn elaborate<'a>(
                     nba: None,
                 };
                 let symbol = SignalSymbol {
-                    kind: SignalKind::Net,
+                    kind: SignalKind::Net(resolution),
                     ty: VType::SCALAR_NET,
                     dims: Vec::new(),
                     terminals: net,
@@ -779,7 +780,7 @@ fn elaborate_module<'a, 'b>(
                         let PortExpression { references } = &**id;
                         let PortReference { identifier, .. } = &**references;
                         let symbol = SignalSymbol {
-                            kind: SignalKind::Net,
+                            kind: SignalKind::Net(NetResolution::Wire),
                             ty: VType::SCALAR_NET,
                             dims: Vec::new(),
                             terminals: st.dummy_net(),
@@ -819,7 +820,7 @@ fn elaborate_module<'a, 'b>(
                 for ident in identifiers.iter() {
                     let ident = ctx.arenas.to_item(ident);
                     let symbol = SignalSymbol {
-                        kind: SignalKind::Net,
+                        kind: SignalKind::Net(NetResolution::Wire),
                         ty: VType::SCALAR_NET,
                         dims: Vec::new(),
                         terminals: st.dummy_net(),
@@ -841,7 +842,11 @@ fn elaborate_module<'a, 'b>(
 
                     st.insert_lvl_symbol(
                         sid,
-                        InLevelSymbol::Port(PortInLevelSymbol { decl: id, ident }),
+                        InLevelSymbol::Port(PortInLevelSymbol {
+                            decl: id,
+                            ident,
+                            net: None,
+                        }),
                     );
                     unwrap_get_module_mut(&mut ctx.table, scope)
                         .ports
@@ -896,6 +901,7 @@ fn elaborate_module<'a, 'b>(
                         InLevelSymbol::Port(PortInLevelSymbol {
                             decl: id,
                             ident: ctx.arenas.to_item(ident),
+                            net: None,
                         }),
                     );
                     unwrap_get_module_mut(&mut ctx.table, scope).ports[port_idx].1 = direction;
@@ -962,13 +968,13 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                     nets,
                 } = &**id;
 
-                if !matches!(net_type.item, NetType::Wire) {
+                let Some(resolution) = NetResolution::from_net_type(net_type.item) else {
                     diagnostics.not_yet_implemented(
                         ctx.arenas.get_item_span(*net_type),
                         "this kind of net is not yet implemented",
                     );
                     return Err(());
-                }
+                };
 
                 let mut error = false;
                 match nets {
@@ -979,16 +985,17 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                             if let Some(sid) = ctx.table.resolve(scope, ident.item.0) {
                                 // @Hack.
                                 // Verilog allows shadowing ports with wires.
-                                let InLevelSymbol::Port(..) = &mut st.lvl_symbols[sid] else {
+                                let InLevelSymbol::Port(port) = &mut st.lvl_symbols[sid] else {
                                     error = true;
                                     continue;
                                 };
+                                port.net = Some(resolution);
 
                                 continue;
                             }
 
                             let symbol = SignalSymbol {
-                                kind: SignalKind::Net,
+                                kind: SignalKind::Net(resolution),
                                 ty: VType::SCALAR_NET,
                                 dims: Vec::new(),
                                 terminals: st.dummy_net(),
@@ -1025,16 +1032,17 @@ fn extend_module_or_generate_item_sids<'a, 'b>(
                             if let Some(sid) = ctx.table.resolve(scope, ident.item.0) {
                                 // @Hack.
                                 // Verilog allows shadowing ports with wires.
-                                let InLevelSymbol::Port(..) = &mut st.lvl_symbols[sid] else {
+                                let InLevelSymbol::Port(port) = &mut st.lvl_symbols[sid] else {
                                     error = true;
                                     continue;
                                 };
+                                port.net = Some(resolution);
 
                                 continue;
                             }
 
                             let symbol = SignalSymbol {
-                                kind: SignalKind::Net,
+                                kind: SignalKind::Net(resolution),
                                 ty: VType::SCALAR_NET,
                                 dims: Vec::new(),
                                 terminals: st.dummy_net(),
@@ -1895,7 +1903,7 @@ impl<'a> InLevelSymbol<'a> {
             InLevelSymbol::Integer(var_type) => extend_var_type_needs(scope, table, st, *var_type),
             InLevelSymbol::Time(var_type) => extend_var_type_needs(scope, table, st, *var_type),
             InLevelSymbol::Real(var_type) => extend_var_type_needs(scope, table, st, *var_type),
-            InLevelSymbol::Port(PortInLevelSymbol { decl, ident: _ }) => {
+            InLevelSymbol::Port(PortInLevelSymbol { decl, .. }) => {
                 let range = match &**decl {
                     PortDeclaration::Inout(id) => id.range,
                     PortDeclaration::Input(id) => id.range,
@@ -2328,7 +2336,7 @@ pub fn finalize_symbol<'a>(
             let NetDeclaration {
                 signed,
                 range,
-                net_type: _,
+                net_type,
                 drive_strength: _,
                 delay3: _,
                 nets: _,
@@ -2363,8 +2371,10 @@ pub fn finalize_symbol<'a>(
                     *dims,
                 )?,
             };
+            let resolution = NetResolution::from_net_type(net_type.item)
+                .expect("unsupported net types are rejected when the net is declared");
             let symbol = unwrap_get_signal_mut(&mut ctx.table, sid);
-            symbol.kind = SignalKind::Net;
+            symbol.kind = SignalKind::Net(resolution);
             symbol.terminals = super::new_terminals(
                 gl,
                 ctx.logic_mode,
@@ -2373,7 +2383,7 @@ pub fn finalize_symbol<'a>(
                 &dims,
                 *ident,
                 None,
-                SignalKind::Net,
+                symbol.kind,
             );
             symbol.dims = dims;
             symbol.transform = transform;
@@ -2529,9 +2539,12 @@ pub fn finalize_symbol<'a>(
             symbol.dims = dims;
             symbol.ty = VType::Real;
         }
-        InLevelSymbol::Port(PortInLevelSymbol { decl, ident }) => {
-            let (kind, ty, transform, _, _) =
+        InLevelSymbol::Port(PortInLevelSymbol { decl, ident, net }) => {
+            let (mut kind, ty, transform, _, _) =
                 port_declaration_to_info(gl, ctx.arenas, *decl, scope, &ctx.table, diagnostics)?;
+            if let (SignalKind::Net(_), Some(net)) = (kind, net) {
+                kind = SignalKind::Net(*net);
+            }
             let symbol = unwrap_get_signal_mut(&mut ctx.table, sid);
             symbol.kind = kind;
             symbol.terminals =

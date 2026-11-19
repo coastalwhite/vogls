@@ -4,8 +4,8 @@ use vogls_bits::arithmetic::{
     FvLogicValue, fv_addition, fv_bin_u64_cell_bitwise_op, fv_bin_u64_cell_bitwise_op_output_tv,
     fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem,
     fv_bitwise_xnor_elem, fv_bitwise_xor_elem, fv_contains_special, fv_division, fv_division_x,
-    fv_multiplication, fv_power, fv_resolve_wand_elem, fv_resolve_wire_elem, fv_resolve_wor_elem, fv_subtraction, tv_addition,
-    tv_bin_u64_cell_bitwise_mask_last_op, tv_bin_u64_cell_bitwise_op,
+    fv_multiplication, fv_power, fv_resolve_wand_elem, fv_resolve_wire_elem, fv_resolve_wor_elem,
+    fv_subtraction, tv_addition, tv_bin_u64_cell_bitwise_mask_last_op, tv_bin_u64_cell_bitwise_op,
     tv_bin_u64_cell_bitwise_op_output_fv, tv_division, tv_division_x, tv_multiplication, tv_power,
     tv_resolve_wire_elem, tv_subtraction,
 };

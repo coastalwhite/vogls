@@ -231,7 +231,7 @@ pub fn net_lvalue_flat_ty<'a>(
 
     let s = try_resolve_signal(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
 
-    if s.kind != SignalKind::Net {
+    if !s.kind.is_net() {
         mctx.diagnostics
             .not_yet_implemented(ctx.arenas.get_span(ast_lvalue), "can only assign nets here");
         return Err(());

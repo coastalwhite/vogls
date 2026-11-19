@@ -38,6 +38,7 @@ use vogls_ir::SCALAR_VSIZE;
 use super::*;
 use crate::ast::AstIdRange;
 use crate::ast::statement::DelayValue;
+use crate::lower::Diagnostics;
 use crate::lower::specify::SpecifyOutput;
 
 // -------------------------------------------------------------------------------------------------
@@ -338,7 +339,7 @@ fn build<'a>(spec: &GraphSpec, ast: &Ast<'a>) -> (DriverResolution<'a>, GlobalCo
                 let kind = if is_variable {
                     SignalKind::Variable
                 } else {
-                    SignalKind::Net
+                    SignalKind::Net(crate::elaborate::NetResolution::Wire)
                 };
                 let key = dr.signal_node(&gl, signal, kind);
 
@@ -620,6 +621,7 @@ fn build<'a>(spec: &GraphSpec, ast: &Ast<'a>) -> (DriverResolution<'a>, GlobalCo
             dr.push_bidirectional(
                 (signals[left].unwrap(), slice(b.left_offset, lw)),
                 (signals[right].unwrap(), slice(b.right_offset, rw)),
+                BidirKind::Tran,
             );
         }
     }
@@ -1217,7 +1219,9 @@ proptest! {
 
         let (before, mut gl, world) = build(&spec, &ast);
         let mut after = before.clone();
-        after.lower_bidirectional(&mut gl);
+        after
+            .lower_bidirectional(&mut gl, &mut Diagnostics::default())
+            .unwrap();
         after.alias(&gl, spec.max_rounds, spec.optimize);
 
         let errors = check(&gl, &world, &before, &after);

@@ -52,7 +52,7 @@ use crate::ast::expr::Expr;
 use crate::ast::module::GateInstantiation;
 use crate::ast::statement::{Delay2, Delay3};
 use crate::ast::udp::{UdpDeclaration, UdpInstance};
-use crate::elaborate::{SignalKind, VSymbol};
+use crate::elaborate::{NetResolution, SignalKind, VSymbol};
 use crate::lower::expression::{coerce_to, get_used_signals, lower_expr};
 use crate::lower::fuse::{DestinationSite, DestinationSiteContent};
 use crate::lower::module_or_generate_item::{
@@ -61,7 +61,7 @@ use crate::lower::module_or_generate_item::{
 };
 use crate::lower::specify::{SpecifyDelay, lower_specify_delay};
 use crate::lower::udp::lower_udp;
-use crate::lower::{LowerContext, MutLowerContext, VType};
+use crate::lower::{Diagnostics, LowerContext, MutLowerContext, VType};
 
 mod alias;
 mod rewrite;
@@ -124,8 +124,36 @@ pub struct ReadEdge {
     next_in: Option<ReadEdgeKey>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BidirKind {
+    Tran,
+    Port,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ClosureKinds {
+    tran: bool,
+    port: bool,
+}
+
+#[derive(Clone, Copy)]
+struct BidirGroup {
+    bit_length: VectorSize,
+    kinds: ClosureKinds,
+}
+
+impl BidirGroup {
+    fn new(bit_length: VectorSize) -> Self {
+        Self {
+            bit_length,
+            kinds: ClosureKinds::default(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct BidirEdge {
+    kind: BidirKind,
     left: BidirNodeKey,
     left_offset: u32,
     right: BidirNodeKey,
@@ -232,6 +260,7 @@ pub enum DriveNode<'a> {
         key: SignalKey,
         bit_length: VectorSize,
         flags: NodeFlags,
+        resolution: NetResolution,
 
         fst_in: Option<DriveEdgeKey>,
         fst_out: Option<DriveEdgeKey>,
@@ -534,6 +563,7 @@ impl<'a> DriverResolution<'a> {
         &mut self,
         left: (SignalKey, SignalSlice),
         right: (SignalKey, SignalSlice),
+        kind: BidirKind,
     ) {
         assert_eq!(left.1.width(), right.1.width());
         let lkey = *self.bidir_lut.entry(left.0).or_insert_with(|| {
@@ -556,6 +586,7 @@ impl<'a> DriverResolution<'a> {
             .then(|| self.bidir_nodes[rkey].fst_bidir)
             .flatten();
         let edge = self.bidir_edges.insert(BidirEdge {
+            kind,
             left: lkey,
             left_offset: left.1.lsb(),
             right: rkey,
@@ -584,6 +615,7 @@ impl<'a> DriverResolution<'a> {
         &mut self,
         left: &[(SignalKey, SignalSlice)],
         right: &[(SignalKey, SignalSlice)],
+        kind: BidirKind,
     ) {
         debug_assert_eq!(
             left.iter()
@@ -604,7 +636,7 @@ impl<'a> DriverResolution<'a> {
 
             let l_piece = SignalSlice::from_width(l_slice.lsb(), width).unwrap();
             let r_piece = SignalSlice::from_width(r_slice.lsb(), width).unwrap();
-            self.push_bidirectional((l_signal, l_piece), (r_signal, r_piece));
+            self.push_bidirectional((l_signal, l_piece), (r_signal, r_piece), kind);
 
             let l_next = SignalSlice::from_range(l_slice.lsb() + width.get()..l_slice.msb() + 1);
             let r_next = SignalSlice::from_range(r_slice.lsb() + width.get()..r_slice.msb() + 1);
@@ -617,6 +649,35 @@ impl<'a> DriverResolution<'a> {
                 Some(rest) => Some((r_signal, rest)),
                 None => right_iter.next(),
             };
+        }
+    }
+
+    /// Declares the net `signal` of `kind`, before it is connected bidirectionally, so that its
+    /// resolution is known even if it is never driven.
+    pub fn declare_net(&mut self, gl: &GlobalContext, signal: SignalKey, kind: SignalKind) {
+        self.signal_node(gl, signal, kind);
+    }
+
+    /// How the drivers of the drivee of `node` are resolved. The input of a specify delay
+    /// resolves the drivers of its output.
+    fn resolution(&self, node: DriveNodeKey) -> NetResolution {
+        match &self.nodes[node] {
+            DriveNode::Net { resolution, .. } => *resolution,
+            DriveNode::Delay {
+                kind: DelayKind::Specify(specify),
+                ..
+            } => match self
+                .signal_lut
+                .get(&specify.output)
+                .map(|&n| &self.nodes[n])
+            {
+                Some(DriveNode::Net { resolution, .. }) => *resolution,
+                _ => NetResolution::Wire,
+            },
+            DriveNode::Delay { .. }
+            | DriveNode::Variable { .. }
+            | DriveNode::Constant { .. }
+            | DriveNode::Expr { .. } => NetResolution::Wire,
         }
     }
 
@@ -640,10 +701,11 @@ impl<'a> DriverResolution<'a> {
         *self.signal_lut.entry(key).or_insert_with(|| {
             let bit_length = gl.signals[key].size;
             self.nodes.insert(match kind {
-                SignalKind::Net => DriveNode::Net {
+                SignalKind::Net(resolution) => DriveNode::Net {
                     key,
                     bit_length,
                     flags: NodeFlags::EMPTY,
+                    resolution,
                     fst_in: None,
                     fst_out: None,
                     fst_read_out: None,
@@ -819,6 +881,7 @@ impl<'a> DriverResolution<'a> {
         input: SignalKey,
         specify: SpecifyDelay<'a>,
         reads: Vec<SignalKey>,
+        kind: SignalKind,
     ) {
         let output = specify.output;
         let bit_length = gl.signals[output].size;
@@ -838,7 +901,11 @@ impl<'a> DriverResolution<'a> {
         self.pending_reads.push((delay, reads, ReadKind::Event));
 
         // The delay drives the output, even if the output is declared as a variable.
-        let to = self.signal_node(gl, output, SignalKind::Net);
+        let resolution = match kind {
+            SignalKind::Net(resolution) => resolution,
+            SignalKind::Variable => NetResolution::Wire,
+        };
+        let to = self.signal_node(gl, output, SignalKind::Net(resolution));
         if let DriveNode::Variable {
             key,
             bit_length,
@@ -851,6 +918,7 @@ impl<'a> DriverResolution<'a> {
                 key,
                 bit_length,
                 flags,
+                resolution,
                 fst_in: None,
                 fst_out,
                 fst_read_out,
@@ -937,9 +1005,7 @@ impl<'a> DriverResolution<'a> {
             .table
             .symbol_id_iter()
             .filter_map(|sid| match &ctx.table[sid].content {
-                VSymbol::Signal(symbol) if symbol.kind == SignalKind::Net => {
-                    Some(&symbol.terminals)
-                }
+                VSymbol::Signal(symbol) if symbol.kind.is_net() => Some(&symbol.terminals),
                 _ => None,
             })
             .flat_map(|terminals| {
@@ -1150,13 +1216,21 @@ impl<'a> DriverResolution<'a> {
     /// 1. All closures are collected as groups of `(signal, offset)` entries.
     /// 2. The entries are ordered per signal to find the bits of every member that are in a closure.
     /// 3. The drive proxies of the members and the proxies of the closures are created.
-    fn lower_bidirectional(&mut self, gl: &mut GlobalContext) {
+    ///
+    /// - `tran` connections get resolved as `wire` nets.
+    /// - `inout` ports collapse into one net, so they must be of the same net type,
+    fn lower_bidirectional(
+        &mut self,
+        gl: &mut GlobalContext,
+        diagnostics: &mut Diagnostics,
+    ) -> Result<(), ()> {
         if self.bidir_edges.is_empty() {
-            return;
+            return Ok(());
         }
+        let mut error = false;
 
         // 1. Collect the closures.
-        let mut groups = Table::<BidirGroupKey, VectorSize>::default();
+        let mut groups = Table::<BidirGroupKey, BidirGroup>::default();
         let mut entries = Vec::<(BidirGroupKey, SignalKey, u32)>::new();
         {
             let mut seen = SeenSet::new();
@@ -1177,7 +1251,7 @@ impl<'a> DriverResolution<'a> {
                 }
                 handled.extend(active.iter().copied());
 
-                let group = groups.insert(self.bidir_edges[bidir_key].bit_length);
+                let group = groups.insert(BidirGroup::new(self.bidir_edges[bidir_key].bit_length));
                 entries.extend(
                     active
                         .iter()
@@ -1188,7 +1262,7 @@ impl<'a> DriverResolution<'a> {
             // Slow path: partially overlapping or self-connected edges are resolved per bit.
             if !slow.is_empty() {
                 for (members, bit_length) in self.collect_bidir_per_bit(&slow) {
-                    let group = groups.insert(bit_length);
+                    let group = groups.insert(BidirGroup::new(bit_length));
                     entries.extend(
                         members
                             .iter()
@@ -1208,12 +1282,12 @@ impl<'a> DriverResolution<'a> {
             let signal = chunk[0].1;
             let size = gl.signals[signal].size.get();
             let mask = match *chunk {
-                [(group, _, 0)] if groups[group].get() == size => CoveredMask::Entire,
+                [(group, _, 0)] if groups[group].bit_length.get() == size => CoveredMask::Entire,
                 _ => {
                     let start = covered_bits.len();
                     covered_bits.extend_zeroed(size as usize);
                     for &(group, _, offset) in chunk {
-                        for bit in offset..offset + groups[group].get() {
+                        for bit in offset..offset + groups[group].bit_length.get() {
                             covered_bits.set(start + bit as usize, true);
                         }
                     }
@@ -1221,6 +1295,43 @@ impl<'a> DriverResolution<'a> {
                 }
             };
             members.push((signal, mask));
+        }
+
+        // Collect which connections are part of each closure.
+        for chunk in by_signal.chunk_by(|a, b| a.1 == b.1) {
+            let node = self.bidir_lut[&chunk[0].1];
+            let mut next = self.bidir_nodes[node].fst_bidir;
+            while let Some(e) = next {
+                let edge = &self.bidir_edges[e];
+                // A self-loop is only linked through its `left` fields.
+                next = if edge.left == node {
+                    edge.next_left
+                } else {
+                    edge.next_right
+                };
+                if edge.left != node {
+                    continue;
+                }
+
+                let end = edge.left_offset + edge.bit_length.get();
+                let mut bit = edge.left_offset;
+                while bit < end {
+                    let i = chunk.partition_point(|&(_, _, offset)| offset <= bit);
+                    let entry = i.checked_sub(1).map(|i| chunk[i]);
+                    let Some((group, _, offset)) = entry.filter(|&(group, _, offset)| {
+                        bit < offset + groups[group].bit_length.get()
+                    }) else {
+                        bit += 1;
+                        continue;
+                    };
+                    let kinds = &mut groups[group].kinds;
+                    match edge.kind {
+                        BidirKind::Tran => kinds.tran = true,
+                        BidirKind::Port => kinds.port = true,
+                    }
+                    bit = offset + groups[group].bit_length.get();
+                }
+            }
         }
 
         // 3a. The drive proxies. Each takes over all incoming edges of its member and drives the
@@ -1239,7 +1350,8 @@ impl<'a> DriverResolution<'a> {
         let mut drive_proxies = VgHashMap::<SignalKey, (DriveNodeKey, Vec<(u32, u32)>)>::default();
         let mut ins = Vec::new();
         for (signal, mask) in members {
-            let net = self.signal_node(gl, signal, SignalKind::Net);
+            // Every member is declared before it is connected.
+            let net = self.signal_lut[&signal];
             let is_ext = self.nodes[net].flags().contains(NodeFlags::DRIVE_EXT)
                 || gl.signals[signal].flags.contains(SignalFlags::EXT_DRIVE);
             if !is_ext && self.nodes[net].fst_in().is_none() {
@@ -1249,7 +1361,9 @@ impl<'a> DriverResolution<'a> {
             let s = &gl.signals[signal];
             let (name, size, mode) = (format!("::DRIVE({})", s.name), s.size, s.mode);
             let proxy = signal_proxy(gl, name, size, mode);
-            let drive_proxy = self.signal_node(gl, proxy, SignalKind::Net);
+            // The drive proxy resolves the drivers of the member.
+            let resolution = self.resolution(net);
+            let drive_proxy = self.signal_node(gl, proxy, SignalKind::Net(resolution));
             self.splice_in_edges(net, drive_proxy);
             self.drive_proxies.push(proxy);
 
@@ -1303,7 +1417,7 @@ impl<'a> DriverResolution<'a> {
         // 3b. The proxies of the closures. The entries of a group are contiguous. A closure with a
         //     four-valued member is resolved in four-valued logic.
         for chunk in entries.chunk_by(|a, b| a.0 == b.0) {
-            let bit_length = groups[chunk[0].0];
+            let BidirGroup { bit_length, kinds } = groups[chunk[0].0];
             let mode = if chunk
                 .iter()
                 .any(|&(_, signal, _)| gl.signals[signal].mode.is_four_value())
@@ -1313,7 +1427,44 @@ impl<'a> DriverResolution<'a> {
                 LogicMode::TwoValue
             };
             let proxy = signal_proxy(gl, "::TRAN".to_string(), bit_length, mode);
-            let proxy = self.signal_node(gl, proxy, SignalKind::Net);
+
+            let resolution = if kinds.tran {
+                // The members are resolved as `wire`s. Members collapsed by a port into a `wand`
+                // or `wor` would have to be resolved as one net first.
+                if kinds.port
+                    && let Some(&(_, signal, _)) = chunk.iter().find(|&&(_, signal, _)| {
+                        self.resolution(self.signal_lut[&signal]) != NetResolution::Wire
+                    })
+                {
+                    diagnostics.not_yet_implemented(
+                        gl.signals[signal].origin,
+                        "`wand` and `wor` nets connected by both `tran`s and `inout` ports",
+                    );
+                    error = true;
+                }
+                NetResolution::Wire
+            } else {
+                // The members collapse into one net, so they must be of the same net type.
+                let (_, first, _) = chunk[0];
+                let resolution = self.resolution(self.signal_lut[&first]);
+                if let Some((other, other_resolution)) = chunk.iter().find_map(|&(_, other, _)| {
+                    let other_resolution = self.resolution(self.signal_lut[&other]);
+                    if resolution == other_resolution {
+                        return None;
+                    }
+                    Some((other, other_resolution))
+                }) {
+                    diagnostics.mixed_net_resolution(
+                        gl.signals[other].origin,
+                        other_resolution,
+                        resolution,
+                    );
+                    error = true;
+                }
+                resolution
+            };
+
+            let proxy = self.signal_node(gl, proxy, SignalKind::Net(resolution));
 
             for &(_, signal, offset) in chunk {
                 if let Some((drive_proxy, driven)) = drive_proxies.get(&signal) {
@@ -1329,6 +1480,8 @@ impl<'a> DriverResolution<'a> {
                 self.push_edge((proxy, 0), (net, offset), bit_length);
             }
         }
+
+        if error { Err(()) } else { Ok(()) }
     }
 
     /// Resolves all drivers.
@@ -1350,7 +1503,9 @@ impl<'a> DriverResolution<'a> {
     ) -> Result<(ProbeFuseMap, WriteFuseMap), ()> {
         let mut error = self.push_reads(ctx, mctx).is_err();
 
-        self.lower_bidirectional(&mut mctx.gl);
+        error |= self
+            .lower_bidirectional(&mut mctx.gl, &mut mctx.diagnostics)
+            .is_err();
 
         if let Some(w) = options.unoptimized_dot {
             self.write_dot(&mctx.gl, w).unwrap();
@@ -1377,9 +1532,9 @@ impl<'a> DriverResolution<'a> {
         // %i0 = lower(A)
         // %i1 = lower(B)
         // %i2 = lower(C)
-        // %r1 = resolve_wire for bit 1
+        // %r1 = resolve_{wire,wand,wor} for bit 1
         // # ...
-        // %rn = resolve_wire for bit n
+        // %rn = resolve_{wire,wand,wor} for bit n
         // %R = concat { %r1, ..., %rn }
         // %_ = drv S, %R
         let mut scratch = LowerDriversScratch::default();
@@ -1764,8 +1919,8 @@ impl<'a> DriverResolution<'a> {
     ///
     /// The signal is split into segments at the boundaries of every incoming edge, so that each
     /// segment is covered by the same set of drivers for all of its bits. Each segment is resolved
-    /// with `resolve_wire` and every contiguous run of driven segments is concatenated back together
-    /// and driven. Bits that are not covered by any edge are left untouched, as they may be driven
+    /// with the resolution of the drivee, i.e. `resolve_wire`, `resolve_wand` or `resolve_wor`, and
+    /// every contiguous run of driven segments is concatenated back together and driven. Bits that are not covered by any edge are left untouched, as they may be driven
     /// outside of the drive graph.
     ///
     /// A process does not observe its own drives, so bits of `drivee` that drive other bits of
@@ -1860,7 +2015,9 @@ impl<'a> DriverResolution<'a> {
         boundaries.sort_unstable();
         boundaries.dedup();
 
-        // %r_i = resolve_wire for segment i
+        let resolution = self.resolution(node);
+
+        // %r_i = resolve_{wire,wand,wor} for segment i
         // %R = concat { %r_n, ..., %r_1 }
         //
         // `run` is the current contiguous run of driven segments with its least significant bit.
@@ -1878,7 +2035,11 @@ impl<'a> DriverResolution<'a> {
                 let part = bb_builder.slice_constant(mctx.gl(), value, lo - to_offset, width);
                 acc = Some(match acc {
                     None => part,
-                    Some(acc) => bb_builder.resolve_wire(mctx.gl(), acc, part),
+                    Some(acc) => match resolution {
+                        NetResolution::Wire => bb_builder.resolve_wire(mctx.gl(), acc, part),
+                        NetResolution::Wand => bb_builder.resolve_wand(mctx.gl(), acc, part),
+                        NetResolution::Wor => bb_builder.resolve_wor(mctx.gl(), acc, part),
+                    },
                 });
             }
             run = match (acc, run) {
