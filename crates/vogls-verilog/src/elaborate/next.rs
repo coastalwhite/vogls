@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::marker::PhantomData;
 use std::sync::Arc;
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
@@ -33,7 +32,7 @@ use crate::ast::statement::{
 };
 use crate::ast::{AstId, AstIdRange, AstItem, Identifier};
 use crate::elaborate::{FunctionSymbol, TaskSymbol};
-use crate::lower::multidriver::MultidriverResolution;
+use crate::lower::drivers::DriverResolution;
 use crate::lower::{
     Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr, resolve_hident,
     try_resolve_hident, unwrap_get_module, unwrap_get_module_mut, unwrap_get_param_mut,
@@ -260,14 +259,12 @@ pub fn elaborate<'a>(
 
                 // @TODO: Warn for implicitly generated nets.
 
-                let mut flags = SignalFlags::EMPTY;
-                flags.set(SignalFlags::POKE_T0, ctx.logic_mode.is_two_value());
                 let signal = gl.signals.insert(Signal {
                     name: ctx.arenas.ident_table[ident].to_string(),
                     size: SCALAR_VSIZE,
                     initialize: None,
                     mode: ctx.logic_mode,
-                    flags,
+                    flags: SignalFlags::EMPTY,
                     origin,
                 });
                 let net = Terminals {
@@ -2321,6 +2318,7 @@ pub fn finalize_symbol<'a>(
                 &dims,
                 *identifier,
                 initialize,
+                SignalKind::Variable,
             );
             symbol.dims = dims;
             symbol.transform = transform;
@@ -2367,8 +2365,16 @@ pub fn finalize_symbol<'a>(
             };
             let symbol = unwrap_get_signal_mut(&mut ctx.table, sid);
             symbol.kind = SignalKind::Net;
-            symbol.terminals =
-                super::new_terminals(gl, ctx.logic_mode, ctx.arenas, &ty, &dims, *ident, None);
+            symbol.terminals = super::new_terminals(
+                gl,
+                ctx.logic_mode,
+                ctx.arenas,
+                &ty,
+                &dims,
+                *ident,
+                None,
+                SignalKind::Net,
+            );
             symbol.dims = dims;
             symbol.transform = transform;
             symbol.ty = ty;
@@ -2418,6 +2424,7 @@ pub fn finalize_symbol<'a>(
                 &dims,
                 *identifier,
                 initialize,
+                SignalKind::Variable,
             );
             symbol.dims = dims;
             symbol.ty = ty;
@@ -2467,6 +2474,7 @@ pub fn finalize_symbol<'a>(
                 &dims,
                 *identifier,
                 initialize,
+                SignalKind::Variable,
             );
             symbol.dims = dims;
             symbol.ty = ty;
@@ -2516,6 +2524,7 @@ pub fn finalize_symbol<'a>(
                 &dims,
                 *identifier,
                 initialize,
+                SignalKind::Variable,
             );
             symbol.dims = dims;
             symbol.ty = VType::Real;
@@ -2526,7 +2535,7 @@ pub fn finalize_symbol<'a>(
             let symbol = unwrap_get_signal_mut(&mut ctx.table, sid);
             symbol.kind = kind;
             symbol.terminals =
-                super::new_terminals(gl, ctx.logic_mode, ctx.arenas, &ty, &[], *ident, None);
+                super::new_terminals(gl, ctx.logic_mode, ctx.arenas, &ty, &[], *ident, None, kind);
             symbol.transform = transform;
             symbol.ty = ty;
         }
@@ -2539,13 +2548,11 @@ pub fn finalize_symbol<'a>(
                 gl: std::mem::take(gl),
                 nbas: IndexMap::default(),
                 diagnostics: std::mem::take(diagnostics),
-                connections: Vec::new(),
                 fuse_srcs_scratch: Vec::new(),
                 fuse_dsts_scratch: Vec::new(),
                 has_vcd: false,
                 monitor: None,
-                multidriver: MultidriverResolution::default(),
-                _marker: PhantomData,
+                driver_resolution: DriverResolution::default(),
             };
             // @TODO: This should ignore errors with unresolved symbols.
             let res =

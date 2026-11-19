@@ -7,7 +7,6 @@ edition.workspace = true
 vogls-ir.workspace = true
 vogls-frontend.workspace = true
 vogls-utils.workspace = true
-vogls-fuse-signals.workspace = true
 vogls-world.workspace = true
 slotmap.workspace = true
 foldhash.workspace = true
@@ -16,3 +15,7 @@ bumpalo.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+vogls-world = { workspace = true, features = ["std"] }

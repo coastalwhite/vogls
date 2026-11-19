@@ -157,6 +157,19 @@ impl Design {
         RtSignal { key, slice }
     }
 
+    /// Writes `bits` to the signal of `handle` from outside of the design.
+    ///
+    /// The write lasts until a driver of the signal updates it. A net connected by a `tran` is
+    /// written through the value it drives into the `tran`, as in Icarus Verilog: the other side
+    /// observes the write, and a bit that the net does not drive itself keeps it as one more driver
+    /// of the `tran`.
+    pub fn write_handle(&self, state: &mut DesignState, handle: SignalHandle, bits: &Bits) {
+        let (_, refs) = self.resolve_handle_sym(handle);
+        let (key, slice) = refs.blocking_drive_signal();
+        let key = self.rt_signal_map[&key];
+        self.set_signal(state, RtSignal { key, slice }, bits);
+    }
+
     pub fn resolve_handle_width(&self, signal: SignalHandle) -> VectorSize {
         let (net, _) = self.resolve_handle_sym(signal);
         net.ty.bit_length()
@@ -176,7 +189,11 @@ impl Design {
         };
 
         if updated {
-            state.runtime_mut().heap.store_bits(heap_ref, mode, bits);
+            let value = match signal.slice {
+                None => bits.clone(),
+                Some(slice) => signal_bits.set_slice(slice.lsb(), bits),
+            };
+            state.runtime_mut().heap.store_bits(heap_ref, mode, &value);
 
             match (&self.backend, state) {
                 (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {

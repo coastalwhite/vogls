@@ -2,20 +2,18 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, LogicMode, ProcessBuilder,
-    ProcessKind, SCALAR_VSIZE, Signal, SignalFlags, VariableKey,
+    ProcessKind, SCALAR_VSIZE, Signal, SignalFlags, SignalKey, VariableKey,
 };
 use vogls_utils::OrderedSet;
 
 use crate::ast::expr::Expr;
-use crate::ast::statement::NetLValue;
 use crate::ast::udp::{
     UdpBody, UdpCombinationalEntry, UdpDeclaration, UdpEdgeIndicator, UdpEdgeSymbol, UdpInitVal,
     UdpInitialStatement, UdpLevelSymbol, UdpNextState, UdpOutputSymbol, UdpPorts,
     UdpSequentialEntry,
 };
 use crate::ast::{AstId, AstIdRange};
-use crate::lower::VType;
-use crate::lower::assign::assign_net_lvalue;
+use crate::lower::drivers::DriveOutputFn;
 use crate::lower::expression::{get_used_signals, lower_expr, truncate_or_extend};
 
 use super::{LowerContext, MutLowerContext, eval_constant_expr};
@@ -43,28 +41,28 @@ fn lower_level(
     }
 }
 
+/// Lowers an instance of `id` with `inputs` to a process.
+///
+/// The process of a combinational UDP drives its output with `drive`. The process of a sequential
+/// UDP writes its `state` (see [`sequential_udp_state`]), which drives the output in the drive
+/// graph.
 pub fn lower_udp<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, UdpDeclaration<'a>>,
-    output_terminal: AstId<'a, NetLValue<'a>>,
     inputs: AstIdRange<'a, Expr<'a>>,
+    state: Option<SignalKey>,
+    drive: &DriveOutputFn<'a, '_>,
 ) -> Result<(), ()> {
     match id.body {
         UdpBody::Combinational(entries) => {
-            lower_combinational_udp(ctx, mctx, scope, id, entries, output_terminal, inputs)
+            lower_combinational_udp(ctx, mctx, scope, id, entries, inputs, drive)
         }
-        UdpBody::Sequential(initial, entries) => lower_sequential_udp(
-            ctx,
-            mctx,
-            scope,
-            id,
-            initial,
-            entries,
-            output_terminal,
-            inputs,
-        ),
+        UdpBody::Sequential(_, entries) => {
+            let state = state.expect("a sequential UDP has a state");
+            lower_sequential_udp(ctx, mctx, scope, entries, inputs, state)
+        }
     }
 }
 
@@ -74,8 +72,8 @@ pub fn lower_combinational_udp<'a>(
     scope: SymbolId,
     id: AstId<'a, UdpDeclaration<'a>>,
     entries: AstIdRange<'a, UdpCombinationalEntry<'a>>,
-    output_terminal: AstId<'a, NetLValue<'a>>,
     inputs: AstIdRange<'a, Expr<'a>>,
+    drive: &DriveOutputFn<'a, '_>,
 ) -> Result<(), ()> {
     let (proc_builder, mut builder) =
         ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, ctx.arenas.get_span(id));
@@ -145,31 +143,25 @@ pub fn lower_combinational_udp<'a>(
 
     builder.finished_switch_to(mctx.gl(), exit_bb);
     let (output_value, _) = builder.phi(mctx.gl(), phi_sources.into_boxed_slice());
-    assign_net_lvalue(
-        ctx,
-        mctx,
-        scope,
-        &mut builder,
-        output_terminal,
-        output_value,
-        VType::SCALAR_NET,
-    )?;
+    drive(mctx, &mut builder, 0, output_value);
     builder.watch_to(mctx.gl(), ins.items, proc_builder.entry());
 
     proc_builder.finalize(mctx.gl());
     Ok(())
 }
 
-pub fn lower_sequential_udp<'a>(
+/// Creates the state of an instance of the UDP `id`, if it is sequential: the variable with the
+/// initial value of the output that the process of the instance writes. It drives the output of
+/// the instance in the drive graph.
+pub fn sequential_udp_state<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     id: AstId<'a, UdpDeclaration<'a>>,
-    initial: Option<AstId<'a, UdpInitialStatement>>,
-    entries: AstIdRange<'a, UdpSequentialEntry<'a>>,
-    output_terminal: AstId<'a, NetLValue<'a>>,
-    inputs: AstIdRange<'a, Expr<'a>>,
-) -> Result<(), ()> {
+) -> Result<Option<SignalKey>, ()> {
+    let UdpBody::Sequential(initial, _) = id.body else {
+        return Ok(None);
+    };
     let UdpDeclaration {
         attribute_instances: _,
         identifier: _,
@@ -177,16 +169,6 @@ pub fn lower_sequential_udp<'a>(
         ports,
     } = &*id;
 
-    let (mut proc_builder, mut builder) =
-        ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, ctx.arenas.get_span(id));
-
-    let mut ins = OrderedSet::new();
-    let mut input_vars = Vec::with_capacity(inputs.len());
-    for input in inputs.iter() {
-        get_used_signals(ctx, mctx, scope, &mut ins, input)?;
-    }
-
-    let mut phi_sources = Vec::new();
     let mut initial_value = None;
     let (output, output_name) = match *ports {
         UdpPorts::PortList(mut port_list, _) => {
@@ -237,12 +219,58 @@ pub fn lower_sequential_udp<'a>(
                 if mctx.gl.signals[output_signal].mode.is_two_value() {
                     initial = initial.special_to_zero();
                 };
-                mctx.gl.signals[output_signal].initialize = Some(initial.clone());
                 initial_value = Some(initial);
             }
             (output_signal, output_name)
         }
     };
+
+    if let Some(initial) = initial {
+        let UdpInitialStatement {
+            output_port_ident,
+            init_val,
+        } = &*initial;
+        if output_port_ident.item.0 != output_name {
+            mctx.diagnostics.not_yet_implemented(
+                ctx.arenas.get_item_span(*output_port_ident),
+                "cannot set initial for non-output port",
+            );
+            return Err(());
+        }
+        let mode = mctx.gl.signals[output].mode;
+        let initial = match init_val.item {
+            UdpInitVal::L0 => Bits::new_zeroed(SCALAR_VSIZE),
+            UdpInitVal::L1 => Bits::new_ones(SCALAR_VSIZE),
+            UdpInitVal::X if mode.is_four_value() => Bits::new_unknown(SCALAR_VSIZE),
+            UdpInitVal::X => Bits::new_zeroed(SCALAR_VSIZE),
+        };
+        initial_value = Some(initial);
+    }
+
+    mctx.gl.signals[output].initialize = initial_value;
+    Ok(Some(output))
+}
+
+/// Lowers an instance of a sequential UDP to a process that writes its state `output`.
+///
+/// The table is not evaluated at `t=0`: the state starts with the initial value of the output and
+/// the process waits for its inputs to change.
+fn lower_sequential_udp<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext<'a>,
+    scope: SymbolId,
+    entries: AstIdRange<'a, UdpSequentialEntry<'a>>,
+    inputs: AstIdRange<'a, Expr<'a>>,
+    output: SignalKey,
+) -> Result<(), ()> {
+    let origin = mctx.gl.signals[output].origin;
+    let (mut proc_builder, mut builder) = ProcessBuilder::new(mctx.gl(), ProcessKind::Udp, origin);
+
+    let mut ins = OrderedSet::new();
+    let mut input_vars = Vec::with_capacity(inputs.len());
+    for input in inputs.iter() {
+        get_used_signals(ctx, mctx, scope, &mut ins, input)?;
+    }
 
     let mut before_inputs = vec![None; inputs.len()];
     for entry in entries.iter() {
@@ -271,69 +299,9 @@ pub fn lower_sequential_udp<'a>(
         }
     }
 
-    if let Some(initial) = initial {
-        let UdpInitialStatement {
-            output_port_ident,
-            init_val,
-        } = &*initial;
-        if output_port_ident.item.0 != output_name {
-            mctx.diagnostics.not_yet_implemented(
-                ctx.arenas.get_item_span(*output_port_ident),
-                "cannot set initial for non-output port",
-            );
-            return Err(());
-        }
-        let mode = mctx.gl.signals[output].mode;
-        let initial = match init_val.item {
-            UdpInitVal::L0 => Bits::new_zeroed(SCALAR_VSIZE),
-            UdpInitVal::L1 => Bits::new_ones(SCALAR_VSIZE),
-            UdpInitVal::X if mode.is_four_value() => Bits::new_unknown(SCALAR_VSIZE),
-            UdpInitVal::X => Bits::new_zeroed(SCALAR_VSIZE),
-        };
-        mctx.gl.signals[output].initialize = Some(initial.clone());
-        initial_value = Some(initial);
-    }
-
-    let (entry_tr, exit_bb, is_init) = match initial_value {
-        None => {
-            let entry_tr = proc_builder.next_temporal_region(mctx.gl());
-            builder.watch_to(mctx.gl(), ins.items.clone(), entry_tr);
-            builder.finished_switch_to(mctx.gl(), entry_tr.entry());
-            let exit_bb = builder.new_basic_block(mctx.gl());
-            (entry_tr, exit_bb, None)
-        }
-        Some(initial_value) => {
-            let entry_tr = proc_builder.entry();
-            let exit_bb = builder.new_basic_block(mctx.gl());
-
-            let init_flag = mctx.gl.signals.insert(Signal {
-                name: String::from("__UDP_INIT"),
-                size: SCALAR_VSIZE,
-                initialize: Some(Bits::new_ones(SCALAR_VSIZE)),
-                mode: LogicMode::TwoValue,
-                flags: SignalFlags::EMPTY,
-                origin: TokenRange::default(),
-            });
-            let is_init = builder.probe(mctx.gl(), init_flag);
-            let init_bb = builder.new_basic_block(mctx.gl());
-            let eval_bb = builder.new_basic_block(mctx.gl());
-            builder.finalize(
-                mctx.gl(),
-                BasicBlockTerminator::Branch(is_init, init_bb, eval_bb),
-            );
-
-            builder.finished_switch_to(mctx.gl(), init_bb);
-            let cleared = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
-            builder.drive(mctx.gl(), init_flag, cleared);
-            let initial_value = builder.constant(mctx.gl(), initial_value);
-            let value = builder.convert_mode(mctx.gl(), initial_value, LogicMode::FourValue);
-            phi_sources.push((builder.key(), value));
-            builder.jump_to(mctx.gl(), exit_bb);
-
-            builder.finished_switch_to(mctx.gl(), eval_bb);
-            (entry_tr, exit_bb, Some(is_init))
-        }
-    };
+    let entry_tr = proc_builder.next_temporal_region(mctx.gl());
+    builder.watch_to(mctx.gl(), ins.items.clone(), entry_tr);
+    builder.finished_switch_to(mctx.gl(), entry_tr.entry());
 
     for input in inputs.iter() {
         let (input, input_ty) = lower_expr(ctx, mctx, scope, &mut builder, input, None)?;
@@ -441,9 +409,7 @@ pub fn lower_sequential_udp<'a>(
                     };
                     let output_value = builder.constant(mctx.gl(), output_value);
                     builder.drive(mctx.gl(), output, output_value);
-                    let value = builder.convert_mode(mctx.gl(), output_value, LogicMode::FourValue);
-                    phi_sources.push((builder.key(), value));
-                    exit_bb
+                    watch_bb
                 }
                 _ => watch_bb,
             };
@@ -460,38 +426,7 @@ pub fn lower_sequential_udp<'a>(
     // No entry matched.
     let output_value = builder.constant(mctx.gl(), Bits::new_unknown(SCALAR_VSIZE));
     builder.drive(mctx.gl(), output, output_value);
-    let value = builder.convert_mode(mctx.gl(), output_value, LogicMode::FourValue);
-    phi_sources.push((builder.key(), value));
-    builder.jump_to(mctx.gl(), exit_bb);
-
-    let after_assign = match is_init {
-        None => BasicBlockTerminator::Jump(watch_bb),
-        Some(is_init) => {
-            // At `t=0` the inputs have not been evaluated, so there is nothing to
-            // remember for edge detection yet.
-            let init_watch_bb = builder.new_basic_block(mctx.gl());
-            builder.finished_switch_to(mctx.gl(), init_watch_bb);
-            builder.watch_to(mctx.gl(), ins.items.clone(), entry_tr);
-            BasicBlockTerminator::Branch(is_init, init_watch_bb, watch_bb)
-        }
-    };
-    let after_assign = Some(after_assign);
-
-    builder.finished_switch_to(mctx.gl(), exit_bb);
-    let (output_value, _) = builder.phi(mctx.gl(), phi_sources.into_boxed_slice());
-    assign_net_lvalue(
-        ctx,
-        mctx,
-        scope,
-        &mut builder,
-        output_terminal,
-        output_value,
-        VType::SCALAR_NET,
-    )?;
-    match after_assign {
-        None => builder.watch_to(mctx.gl(), ins.items, proc_builder.entry()),
-        Some(after_assign) => builder.finalize(mctx.gl(), after_assign),
-    }
+    builder.finalize(mctx.gl(), BasicBlockTerminator::Jump(watch_bb));
 
     proc_builder.finalize(mctx.gl());
     Ok(())

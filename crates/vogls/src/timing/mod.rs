@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::rc::Rc;
 
 use hashbrown::hash_map::Entry;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
@@ -14,9 +15,7 @@ use vogls_sdf::{
 use vogls_utils::{IterSliceContinguous, VgHashMap};
 use vogls_verilog::elaborate::VSymbol;
 use vogls_verilog::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
-use vogls_verilog::lower::specify::{
-    Condition, LowerIoPathScratches, SpecifyOutput, SpecifyPath, lower_iopath,
-};
+use vogls_verilog::lower::specify::{Condition, SpecifyOutput, SpecifyPath, lower_iopath};
 use vogls_verilog::lower::{Diagnostics, LowerContext, LowerErrorReason, MutLowerContext};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -564,7 +563,7 @@ pub fn lower_sdf<'a>(
     drop(property_to_content);
     properties.sort_unstable_by_key(|(p, _)| (p.to, p.from));
 
-    let mut scratches = LowerIoPathScratches::default();
+    let delays = Rc::<[Time]>::from(delays);
     let outputs = IterSliceContinguous::new(&properties, |(p, _)| &p.to);
     for paths_to_output in outputs {
         let output = paths_to_output[0].0.to;
@@ -586,7 +585,7 @@ pub fn lower_sdf<'a>(
 
         let specify = SpecifyOutput { sid, inputs, paths };
 
-        lower_iopath(ctx, mctx, sid, output, specify, &delays, &mut scratches)?;
+        lower_iopath(ctx, mctx, sid, output, specify, &delays)?;
     }
 
     Ok(())

@@ -387,6 +387,7 @@ fn new_terminals(
     dims: &[ArrayDim],
     name: AstItem<Identifier>,
     initialize: Option<VValue>,
+    kind: SignalKind,
 ) -> Terminals {
     let mut size = ty.bit_length();
     for dim in dims {
@@ -398,13 +399,15 @@ fn new_terminals(
     let name = format!("{name}/{}", gl.signals.len());
 
     let initialize = initialize.map(|i| i.into_bits());
+    // The initial value of a net is decided by the driver resolution.
     let mut flags = SignalFlags::EMPTY;
     flags.set(
         SignalFlags::POKE_T0,
-        mode.is_two_value()
-            || initialize
-                .as_ref()
-                .is_some_and(|v| v.count_unknown() != v.size().get()),
+        kind == SignalKind::Variable
+            && (mode.is_two_value()
+                || initialize
+                    .as_ref()
+                    .is_some_and(|v| v.count_unknown() != v.size().get())),
     );
 
     let signal = gl.signals.insert(Signal {

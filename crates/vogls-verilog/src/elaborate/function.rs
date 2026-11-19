@@ -66,6 +66,7 @@ pub fn elaborate_fn<'a>(
         &[],
         *ident,
         None,
+        SignalKind::Variable,
     );
     let output_key = terminals.ba;
     if ctx
@@ -122,8 +123,16 @@ pub fn elaborate_fn<'a>(
             };
             let ident = ctx.arenas.to_item(ident);
             let origin = ctx.arenas.get_item_span(ident);
-            let terminals =
-                super::new_terminals(gl, ctx.logic_mode, ctx.arenas, &ty, &[], ident, None);
+            let terminals = super::new_terminals(
+                gl,
+                ctx.logic_mode,
+                ctx.arenas,
+                &ty,
+                &[],
+                ident,
+                None,
+                SignalKind::Variable,
+            );
             let signal = terminals.ba;
             if ctx
                 .table
@@ -214,8 +223,16 @@ pub fn elaborate_task<'a>(
             };
             let ident = ctx.arenas.to_item(ident);
             let origin = ctx.arenas.get_item_span(ident);
-            let terminals =
-                super::new_terminals(gl, ctx.logic_mode, ctx.arenas, &ty, &[], ident, None);
+            let terminals = super::new_terminals(
+                gl,
+                ctx.logic_mode,
+                ctx.arenas,
+                &ty,
+                &[],
+                ident,
+                None,
+                SignalKind::Variable,
+            );
             let signal = terminals.ba;
             if ctx
                 .table

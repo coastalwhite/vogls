@@ -15,6 +15,12 @@ mod module_instantiation;
 mod net_assignment;
 mod udp;
 
+pub(crate) use continuous_assign::lower_assign_delay3;
+pub(crate) use gate_instantiation::{
+    AssignOutputFn, GateDelayFn, lower_delay_process, lower_delay2, lower_delay3,
+    lower_gate_primitive,
+};
+
 /// Lower a Verilog module or generate item to Vogls IR.
 pub fn lower<'a>(
     ctx: &LowerContext<'a, '_>,

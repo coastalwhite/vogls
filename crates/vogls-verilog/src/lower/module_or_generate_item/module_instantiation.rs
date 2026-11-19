@@ -1,6 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{ConnectionDirection, ProcessBuilder, ProcessKind, SignalSlice, VectorSize};
-use vogls_utils::OrderedSet;
+use vogls_ir::{ConnectionDirection, SignalSlice, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::expr::Expr;
@@ -8,16 +7,12 @@ use crate::ast::module::{
     ListOfPortConnections, ModuleInstance, ModuleInstantiation, NamedPortConnection,
 };
 use crate::elaborate::{SignalSymbol, VSymbol};
-use crate::lower::expression::{self, get_expr_type};
+use crate::lower::expression::get_expr_type;
 use crate::lower::fuse::{
-    DestinationSite, DestinationSiteContent, FuseFailure, FuseResult, RequiredSignalKind,
-    SiteTerminal, SiteType, SourceSite, SourceSiteContent, convert_src_sites_to_dsts,
-    expr_to_src_sites, try_fuse_srcs_to_dsts,
+    DestinationSite, DestinationSiteContent, RequiredSignalKind, SiteTerminal, SiteType,
+    SourceSite, SourceSiteContent, convert_src_sites_to_dsts, expr_to_src_sites, slice_src_sites,
 };
-use crate::lower::multidriver::MultiDriverResult;
-use crate::lower::{
-    Diagnostics, LowerContext, MutLowerContext, VType, resolve_symbol_id, unwrap_get_signal,
-};
+use crate::lower::{LowerContext, MutLowerContext, VType, resolve_symbol_id, unwrap_get_signal};
 
 /// Lower a Verilog module instantiation to Vogls IR.
 ///
@@ -132,28 +127,20 @@ fn assign_port<'a>(
     port: SymbolId,
 ) -> Result<(), ()> {
     let port_ident = ctx.table[port].name();
-    let port_net = ctx.table[port]
+    let port_symbol = ctx.table[port]
         .content
         .as_signal()
         .expect("Port should always be nets");
-    let is_input = matches!(
-        direction,
-        ConnectionDirection::In | ConnectionDirection::Both
-    );
-    let is_output = matches!(
-        direction,
-        ConnectionDirection::Out | ConnectionDirection::Both
-    );
-
     let Some(modules_sid) = range_specification else {
-        // Base case is that you have no range specification for your port.
-        if is_input {
-            assign_input_port(ctx, mctx, scope, value, port, None)?;
-        }
-        if is_output {
-            assign_port_output(ctx, mctx, scope, value, port, None)?;
-        }
-        return Ok(());
+        return match direction {
+            ConnectionDirection::In => {
+                assign_input_port(ctx, mctx, scope, value, port_symbol, None)
+            }
+            ConnectionDirection::Out => {
+                assign_port_output(ctx, mctx, scope, value, port_symbol, None)
+            }
+            ConnectionDirection::Both => assign_inout(ctx, mctx, scope, value, port_symbol, None),
+        };
     };
 
     let assigner_bit_length = get_expr_type(
@@ -165,7 +152,7 @@ fn assign_port<'a>(
         value,
     )?
     .bit_length();
-    let assigned_bit_length = port_net.ty.bit_length();
+    let assigned_bit_length = port_symbol.ty.bit_length();
 
     let module_instances = ctx.table[modules_sid].children();
 
@@ -186,16 +173,108 @@ fn assign_port<'a>(
     // Get the SymbolId of the actual module instance.
     for (i, &module_sid) in module_instances.iter().enumerate() {
         let port = ctx.table.resolve(module_sid, port_ident).unwrap();
+        let port_symbol = unwrap_get_signal(&ctx.table, port);
         let lsb = i as u32 * split_width;
         let slice = SignalSlice::from_width(lsb, assigned_bit_length).unwrap();
-        if is_input {
-            assign_input_port(ctx, mctx, scope, value, port, Some(slice))?;
-        }
-        if is_output {
-            assign_port_output(ctx, mctx, scope, value, port, Some(slice))?;
+        match direction {
+            ConnectionDirection::In => {
+                assign_input_port(ctx, mctx, scope, value, port_symbol, Some(slice))?
+            }
+            ConnectionDirection::Out => {
+                assign_port_output(ctx, mctx, scope, value, port_symbol, Some(slice))?
+            }
+            ConnectionDirection::Both => {
+                assign_inout(ctx, mctx, scope, value, port_symbol, Some(slice))?
+            }
         }
     }
 
+    Ok(())
+}
+
+/// Connects an inout port bidirectionally to the nets of `expr`.
+///
+/// The port and the nets are connected bit for bit from the least significant bit. If their widths
+/// differ, the excess bits are left unconnected.
+fn assign_inout<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext<'a>,
+    scope: SymbolId,
+    expr: AstId<'a, Expr<'a>>,
+    port: &SignalSymbol,
+    expr_slice: Option<SignalSlice>,
+) -> Result<(), ()> {
+    mctx.fuse_srcs_scratch.clear();
+    expr_to_src_sites(
+        ctx,
+        &mctx.gl,
+        &mut mctx.fuse_srcs_scratch,
+        scope,
+        &mut mctx.diagnostics,
+        expr,
+        SiteTerminal::Probe,
+        RequiredSignalKind::Net,
+    )?;
+    if let Some(expr_slice) = expr_slice
+        && slice_src_sites(&mut mctx.fuse_srcs_scratch, expr_slice).is_err()
+    {
+        mctx.diagnostics
+            .not_yet_implemented(ctx.arenas.get_span(expr), "part-select on real");
+        return Err(());
+    }
+
+    let Some(outer) = mctx
+        .fuse_srcs_scratch
+        .drain(..)
+        .map(|site| match site.content {
+            SourceSiteContent::Signal { signal, slice, .. } => Some((signal, slice)),
+            SourceSiteContent::Constant(_)
+            | SourceSiteContent::OutOfBounds { .. }
+            | SourceSiteContent::Expr { .. } => None,
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        mctx.diagnostics
+            .output_expr_not_allowed(ctx.arenas.get_span(expr));
+        return Err(());
+    };
+
+    let port_bit_length = port.ty.bit_length().get();
+    let outer_bit_length = outer
+        .iter()
+        .try_fold(0u32, |acc, (_, slice)| acc.checked_add(slice.width().get()))
+        .and_then(VectorSize::new);
+    let Some(outer_bit_length) = outer_bit_length else {
+        mctx.diagnostics
+            .net_width_overflow(ctx.arenas.get_span(expr));
+        return Err(());
+    };
+    if outer_bit_length.get() != port_bit_length {
+        mctx.diagnostics.warn_assign_type_mismatch(
+            ctx.arenas.get_span(expr),
+            port.ty,
+            VType::UnsignedNet(outer_bit_length),
+        );
+    }
+
+    // Only the common least significant bits are connected.
+    let bit_length = outer_bit_length.get().min(port_bit_length);
+    let mut outer_connected = Vec::with_capacity(outer.len());
+    let mut remaining = bit_length;
+    for (signal, slice) in outer {
+        let Some(width) = VectorSize::new(slice.width().get().min(remaining)) else {
+            break;
+        };
+        outer_connected.push((signal, SignalSlice::from_width(slice.lsb(), width).unwrap()));
+        remaining -= width.get();
+    }
+
+    let inner = [(
+        port.terminals.probe_signal(),
+        SignalSlice::from_width(0, VectorSize::new(bit_length).unwrap()).unwrap(),
+    )];
+    mctx.driver_resolution
+        .push_bidirectional_sites(&outer_connected, &inner);
     Ok(())
 }
 
@@ -204,94 +283,64 @@ fn assign_input_port<'a>(
     mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
-    port: SymbolId,
-    expr_slice: Option<SignalSlice>,
-) -> Result<(), ()> {
-    // @NOTE: Input ports cannot have multiple drivers, so they don't have be tracked.
-    let port = unwrap_get_signal(&ctx.table, port);
-
-    if try_fuse_input_port(ctx, mctx, scope, expr, port, expr_slice).is_ok() {
-        return Ok(());
-    }
-
-    let mut sensitivity_list = OrderedSet::new();
-    expression::get_used_signals(ctx, mctx, scope, &mut sensitivity_list, expr)?;
-    let sensitivity_list = sensitivity_list.items;
-
-    let port_bit_length = port.ty.bit_length();
-
-    let (proc_builder, mut bb_builder) =
-        ProcessBuilder::new(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
-    let entry_tr = proc_builder.entry();
-    let (v, v_ty) = expression::lower_expr(
-        ctx,
-        mctx,
-        scope,
-        &mut bb_builder,
-        expr,
-        Some(port_bit_length),
-    )?;
-    let v = match expr_slice {
-        None => expression::coerce_to(mctx.gl(), &mut bb_builder, v, v_ty, port.ty),
-        Some(slice) => bb_builder.slice_constant(mctx.gl(), v, slice.lsb(), slice.width()),
-    };
-    port.terminals
-        .drive_blocking(mctx.gl(), &mut bb_builder, v, None);
-
-    bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_tr);
-    proc_builder.finalize(mctx.gl());
-    Ok(())
-}
-
-fn try_fuse_input_port<'a>(
-    ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext<'a>,
-    scope: SymbolId,
-    expr: AstId<'a, Expr<'a>>,
     port: &SignalSymbol,
     expr_slice: Option<SignalSlice>,
-) -> FuseResult {
-    mctx.fuse_srcs_scratch.clear();
-    mctx.fuse_dsts_scratch.clear();
+) -> Result<(), ()> {
+    let MutLowerContext {
+        gl,
+        diagnostics,
+        fuse_srcs_scratch: srcs,
+        fuse_dsts_scratch: dsts,
+        driver_resolution,
+        ..
+    } = mctx;
+    srcs.clear();
+    dsts.clear();
 
-    // Destinations
-    mctx.fuse_dsts_scratch.push(DestinationSite {
+    // Destinations, from least to most significant.
+    dsts.push(DestinationSite {
         content: DestinationSiteContent::Signal {
             signal: port.terminals.blocking_drive_signal(),
             slice: SignalSlice::with_end(port.ty.bit_length()),
+            kind: port.kind,
         },
         ty: port.ty.into(),
     });
 
-    // Sources
-    if expr_to_src_sites(
+    // Sources, from least to most significant.
+    expr_to_src_sites(
         ctx,
-        &mctx.gl,
-        &mut mctx.fuse_srcs_scratch,
+        gl,
+        srcs,
         scope,
-        &mut Diagnostics::default(),
+        diagnostics,
         expr,
         SiteTerminal::Probe,
         RequiredSignalKind::None,
-    )
-    .is_err()
+    )?;
+    if let Some(expr_slice) = expr_slice
+        && slice_src_sites(srcs, expr_slice).is_err()
     {
-        return FuseResult::Err(FuseFailure);
-    };
-    if let Some(expr_slice) = expr_slice {
-        // If we only include a part of the expression, we slice fuse sources afterwards.
-        if slice_src_sites(&mut mctx.fuse_srcs_scratch, expr_slice).is_err() {
-            return Err(FuseFailure);
-        }
+        diagnostics.not_yet_implemented(ctx.arenas.get_span(expr), "part-select on real");
+        return Err(());
     }
 
-    // @NOTE: Input ports cannot have multiple drivers, so they don't have be tracked.
-    try_fuse_srcs_to_dsts(
-        &mctx.gl,
-        &mut mctx.connections,
-        &mctx.fuse_srcs_scratch,
-        &mctx.fuse_dsts_scratch,
-    )
+    // The right-hand side is context-determined by the destinations, unless it is a concatenation
+    // or only a part of it is assigned.
+    let is_context_determined =
+        expr_slice.is_none() && !matches!(&*expr, Expr::Concatenation(_) | Expr::Replication(_));
+    let context = is_context_determined.then_some((expr, scope, port.ty));
+    if driver_resolution
+        .push_sites(gl, srcs, dsts, context)
+        .is_err()
+    {
+        diagnostics.not_yet_implemented(
+            ctx.arenas.get_span(expr),
+            "assigning a real as part of a concatenation",
+        );
+        return Err(());
+    }
+    Ok(())
 }
 
 fn assign_port_output<'a>(
@@ -299,11 +348,9 @@ fn assign_port_output<'a>(
     mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     expr: AstId<'a, Expr<'a>>,
-    output_net: SymbolId,
+    output: &SignalSymbol,
     expr_slice: Option<SignalSlice>,
 ) -> Result<(), ()> {
-    let output = unwrap_get_signal(&ctx.table, output_net);
-
     mctx.fuse_srcs_scratch.clear();
     mctx.fuse_dsts_scratch.clear();
 
@@ -338,132 +385,25 @@ fn assign_port_output<'a>(
         content: SourceSiteContent::Signal {
             signal: output.terminals.probe_signal(),
             slice: SignalSlice::with_end(output.ty.bit_length()),
+            kind: output.kind,
         },
         ty: SiteType::from(output.ty),
     });
 
-    for dst in mctx.fuse_dsts_scratch.iter_mut() {
-        if let DestinationSiteContent::Signal { signal, slice } = &mut dst.content {
-            match mctx
-                .multidriver
-                .push_new_driver(&mut mctx.gl, *signal, *slice)
-            {
-                MultiDriverResult::Keep => {}
-                MultiDriverResult::NeedsRemap(proxy) => *signal = proxy,
-            };
-        }
-    }
-
-    if try_fuse_srcs_to_dsts(
-        &mctx.gl,
-        &mut mctx.connections,
-        &mctx.fuse_srcs_scratch,
-        &mctx.fuse_dsts_scratch,
-    )
-    .is_ok()
-    {
-        return Ok(());
-    }
-
-    let (proc_builder, mut bb_builder) =
-        ProcessBuilder::new(mctx.gl(), ProcessKind::Port, ctx.arenas.get_span(expr));
-    let entry_tr = proc_builder.entry();
-
-    let destination_size = mctx
-        .fuse_dsts_scratch
-        .iter()
-        .map(|d| d.bit_length())
-        .try_fold(0u32, |l, r| l.checked_add(r.get()))
-        .unwrap();
-    let destination_size = VectorSize::new(destination_size).unwrap();
-
-    let output_signal = output.terminals.probe_signal();
-    let mut probed = bb_builder.probe(mctx.gl(), output_signal);
-    let source_size = mctx.gl.vars.size(probed);
-    if source_size != destination_size {
-        probed = match output.ty {
-            VType::SignedNet(_) | VType::UnsignedNet(_) if destination_size < source_size => {
-                bb_builder.truncate(mctx.gl(), probed, destination_size)
-            }
-            VType::SignedNet(_) => bb_builder.sign_extend(mctx.gl(), probed, destination_size),
-            VType::UnsignedNet(_) => bb_builder.zero_extend(mctx.gl(), probed, destination_size),
-            VType::Real => {
-                mctx.diagnostics
-                    .not_yet_implemented(ctx.arenas.get_span(expr), "part-select on real");
-                return Err(());
-            }
-        };
-    }
-
-    let mut offset = 0;
-    for dst in &mctx.fuse_dsts_scratch {
-        let bitlength = dst.bit_length();
-        if let DestinationSiteContent::Signal { signal, slice } = dst.content {
-            let probe_v = bb_builder.slice_constant(&mut mctx.gl, probed, offset, bitlength);
-            bb_builder.drive_partial_constant(&mut mctx.gl, signal, probe_v, slice.lsb());
-        }
-        offset += bitlength.get();
-    }
-
-    bb_builder.watch_to(mctx.gl(), [output_signal].into(), entry_tr);
-    proc_builder.finalize(mctx.gl());
-
-    Ok(())
-}
-
-fn slice_src_sites(srcs: &mut Vec<SourceSite>, slice: SignalSlice) -> Result<(), ()> {
-    // Expression slice is [lo, hi)
-    let (lo, hi) = (slice.lsb(), slice.msb() + 1);
-
-    let mut failed = false;
-    let mut bit_offset = 0u32;
-
-    srcs.retain_mut(|src| {
-        let src_offset = bit_offset;
-        bit_offset += src.bit_length().get();
-
-        // Entire source is included.
-        if lo <= src_offset && hi >= bit_offset {
-            return true;
-        }
-
-        // Source slice is [src_lo, src_hi)
-        let src_lo = lo.max(src_offset);
-        let src_hi = hi.min(bit_offset);
-
-        // Entire source is excluded.
-        if src_lo >= src_hi {
-            return false;
-        }
-
-        // We cannot partially slice a real.
-        failed |= src.ty == SiteType::Real;
-
-        let sub = SignalSlice::from_width(
-            src_lo - src_offset,
-            VectorSize::new(src_hi - src_lo).unwrap(),
+    if mctx
+        .driver_resolution
+        .push_sites(
+            &mctx.gl,
+            &mctx.fuse_srcs_scratch,
+            &mctx.fuse_dsts_scratch,
+            None,
         )
-        .unwrap();
-        src.content = match &src.content {
-            SourceSiteContent::Constant(bits) => {
-                SourceSiteContent::Constant(bits.slicez(sub.lsb(), sub.width()))
-            }
-            SourceSiteContent::Signal { signal, slice } => SourceSiteContent::Signal {
-                signal: *signal,
-                slice: slice.subslice(sub).unwrap(),
-            },
-            SourceSiteContent::OutOfBounds {
-                signal,
-                bit_length: _,
-            } => SourceSiteContent::OutOfBounds {
-                signal: *signal,
-                bit_length: sub.width(),
-            },
-        };
-        true
-    });
-
-    if failed {
+        .is_err()
+    {
+        mctx.diagnostics.not_yet_implemented(
+            ctx.arenas.get_span(expr),
+            "connecting a real output port to a net",
+        );
         return Err(());
     }
 

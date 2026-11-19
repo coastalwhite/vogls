@@ -1,5 +1,5 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, SignalSlice, VariableKey, VectorSize};
+use vogls_ir::{BasicBlockBuilder, VariableKey, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::expr::{BitSlice, BitSliceKind};
@@ -12,8 +12,6 @@ use crate::lower::addressing::{
 use crate::lower::expression::{self, truncate_or_extend};
 use crate::lower::try_resolve_hident;
 
-use super::addressing::ConstantAddressingContext;
-use super::multidriver::MultiDriverResult;
 use super::{LowerContext, try_resolve_signal};
 use super::{MutLowerContext, VType};
 
@@ -219,69 +217,6 @@ pub fn assign_variable_lvalue_flat<'a>(
     Ok(())
 }
 
-pub fn assign_net_lvalue<'a>(
-    ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext<'a>,
-    scope: SymbolId,
-    builder: &mut BasicBlockBuilder,
-    ast_lvalue: AstId<'a, NetLValue<'a>>,
-    variable: VariableKey,
-    variable_ty: VType,
-) -> Result<(), ()> {
-    let lvalue = &*ast_lvalue;
-    if lvalue.0.len() == 1 {
-        return assign_net_lvalue_flat(
-            ctx,
-            mctx,
-            scope,
-            builder,
-            lvalue.0.get(0),
-            variable,
-            variable_ty,
-        );
-    }
-
-    assert!(!lvalue.0.is_empty());
-    let mut total_width = 0u32;
-    for lvf in lvalue.0.iter() {
-        let ty = net_lvalue_flat_ty(ctx, mctx, scope, lvf)?;
-        total_width += ty.bit_length().get();
-    }
-    let variable = truncate_or_extend(
-        mctx.gl(),
-        builder,
-        variable,
-        variable_ty,
-        VectorSize::new(total_width).unwrap(),
-    );
-
-    let mut offset = 0u32;
-    for lvf in lvalue.0.iter().rev() {
-        let ty = net_lvalue_flat_ty(ctx, mctx, scope, lvf)?;
-        let width = ty.bit_length();
-        let variable = builder.slice_constant(mctx.gl(), variable, offset, width);
-        assign_net_lvalue_flat(ctx, mctx, scope, builder, lvf, variable, ty)?;
-        offset += width.get();
-    }
-    Ok(())
-}
-
-pub fn net_lvalue_size<'a>(
-    ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext<'a>,
-    scope: SymbolId,
-    ast_lvalue: AstId<'a, NetLValue<'a>>,
-) -> Result<VectorSize, ()> {
-    // @TODO: Overflow checks
-    let mut size = 0;
-    for lvalue_flat in ast_lvalue.0.iter() {
-        size += net_lvalue_flat_ty(ctx, mctx, scope, lvalue_flat)?
-            .bit_length()
-            .get();
-    }
-    Ok(VectorSize::new(size).unwrap())
-}
-
 pub fn net_lvalue_flat_ty<'a>(
     ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext<'a>,
@@ -338,98 +273,6 @@ pub fn net_lvalue_flat_ty<'a>(
     } else {
         s.ty.truncate(output_width)
     })
-}
-
-fn assign_net_lvalue_flat<'a>(
-    ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext<'a>,
-    scope: SymbolId,
-    builder: &mut BasicBlockBuilder,
-    lvalue: AstId<'a, NetLValueFlat<'a>>,
-    variable: VariableKey,
-    variable_ty: VType,
-) -> Result<(), ()> {
-    let NetLValueFlat {
-        ident,
-        constant_exprs,
-        constant_range_expression,
-    } = &*lvalue;
-
-    let s = try_resolve_signal(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
-
-    let mut actx = ConstantAddressingContext {
-        gl: &mctx.gl,
-        arenas: ctx.arenas,
-        table: &ctx.table,
-        scope,
-        diagnostics: &mut mctx.diagnostics,
-        loc: lvalue.loc,
-        _pd: std::marker::PhantomData,
-    };
-
-    let range = constant_range_expression.map(|r| match r.kind {
-        BitSliceKind::MsbLsb => RangeExpr::MsbLsb(r.fst, r.snd),
-        BitSliceKind::PlusWidth => RangeExpr::PlusWidth(r.fst, r.snd),
-        BitSliceKind::MinusWidth => RangeExpr::MinusWidth(r.fst, r.snd),
-    });
-
-    let Address {
-        elem_offset,
-        output_width,
-        array,
-        is_unsigned: _,
-    } = lower_addressing(
-        &mut actx,
-        s.ty.bit_length(),
-        &s.dims,
-        s.transform,
-        constant_exprs.iter(),
-        range,
-    )?;
-
-    // @TODO: Use array overflow.
-    let partial = match (elem_offset, array) {
-        (Some(elem_offset), Some((array_offset, _array_overflow))) => {
-            let offset = elem_offset.checked_add(array_offset).ok_or_else(|| {
-                mctx.diagnostics
-                    .not_yet_implemented(ctx.arenas.get_span(lvalue), "overflow");
-            })?;
-            Some(offset)
-        }
-        (Some(elem_offset), None) => Some(elem_offset),
-        (None, Some((array_offset, _array_overflow))) => Some(array_offset),
-        (None, None) => None,
-    };
-    let partial = partial.unwrap_or(0);
-    let partial = u32::try_from(partial).map_err(|_| {
-        mctx.diagnostics
-            .not_yet_implemented(ctx.arenas.get_span(lvalue), "overflow");
-    })?;
-    let var = expression::coerce_to(
-        mctx.gl(),
-        builder,
-        variable,
-        variable_ty,
-        s.ty.resize_net_to(output_width),
-    );
-
-    let Some(slice) = SignalSlice::from_width(partial, output_width) else {
-        mctx.diagnostics
-            .not_yet_implemented(ctx.arenas.get_span(lvalue), "overflow");
-        return Err(());
-    };
-    let dst_signal = s.terminals.blocking_drive_signal();
-    let dst_signal = match mctx.multidriver.push_new_driver(
-        &mut mctx.gl,
-        s.terminals.blocking_drive_signal(),
-        slice,
-    ) {
-        MultiDriverResult::Keep => dst_signal,
-        MultiDriverResult::NeedsRemap(s) => s,
-    };
-
-    builder.drive_partial_constant(mctx.gl(), dst_signal, var, partial);
-    Ok(())
 }
 
 pub fn net_lvalue_bit_length<'a>(

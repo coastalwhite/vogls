@@ -204,11 +204,10 @@ impl LazyStep {
             Self::Repeat(_) => Ok(()),
             Self::SetSignal(signal_ref, lp) => {
                 let handle = design.handles[signal_ref];
-                let rt = design.design.resolve_handle(handle);
                 let size = design.design.resolve_handle_width(handle);
                 let value = inputs.arrays[lp].get(rid);
                 let value = value.to_bits(size);
-                design.design.set_signal(state, rt, &value);
+                design.design.write_handle(state, handle, &value);
                 Ok(())
             }
             Self::RunFor(time) => design

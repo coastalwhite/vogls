@@ -52,7 +52,7 @@ struct Args {
     time: u64,
 
     #[arg(long)]
-    max_fuse_signals_rounds: Option<usize>,
+    drive_graph_rounds: Option<usize>,
 
     #[arg(long = "opt-rounds", default_value_t = 0)]
     opt_rounds: u8,
@@ -104,10 +104,29 @@ struct Args {
     #[arg(long)]
     no_warnings: bool,
 
+    /// Optimize the drive graph of the nets, e.g. by aliasing nets.
+    #[arg(
+        long,
+        value_name = "yes|no",
+        default_value = "yes",
+        value_parser = parse_yes_no,
+        action = clap::ArgAction::Set
+    )]
+    drive_opt: bool,
+
     #[arg(long)]
-    emit_unoptimized_fuse_graph: bool,
+    emit_unoptimized_drive_graph: bool,
     #[arg(long)]
-    emit_optimized_fuse_graph: bool,
+    emit_drive_graph: bool,
+}
+
+/// Parses a `yes` or `no` flag value.
+fn parse_yes_no(value: &str) -> Result<bool, String> {
+    match value {
+        "yes" => Ok(true),
+        "no" => Ok(false),
+        _ => Err(format!("expected `yes` or `no`, got `{value}`")),
+    }
 }
 
 /// The flag that rejects the syntax a parse error is about, if any.
@@ -161,9 +180,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         no_data_sourceless_edge_path,
         profile,
         no_warnings,
-        emit_unoptimized_fuse_graph,
-        emit_optimized_fuse_graph,
-        max_fuse_signals_rounds,
+        emit_unoptimized_drive_graph,
+        emit_drive_graph,
+        drive_graph_rounds,
+        drive_opt,
     } = Args::parse();
     let logic_mode = if four_value_logic {
         LogicMode::FourValue
@@ -235,14 +255,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprint!("{}", elaborate.report_warnings());
         }
 
-        if let Some(max_fuse_signals_rounds) = max_fuse_signals_rounds {
-            elaborate.max_fuse_signals_rounds = max_fuse_signals_rounds;
+        if let Some(drive_graph_rounds) = drive_graph_rounds {
+            elaborate.drive_graph_rounds = drive_graph_rounds;
         }
+        elaborate.drive_graph_opt = drive_opt;
 
-        if emit_unoptimized_fuse_graph {
+        if emit_unoptimized_drive_graph {
             elaborate.set_unoptimized_fuse_graphs_emit(Arc::new(Mutex::new(stdout())) as _);
         }
-        if emit_optimized_fuse_graph {
+        if emit_drive_graph {
             elaborate.set_optimized_fuse_graphs_emit(Arc::new(Mutex::new(stdout())) as _);
         }
 
