@@ -649,9 +649,16 @@ impl<const NBITS: usize> SignedImmediate<NBITS> {
 pub struct InlineIndex<const NBITS: usize>(Option<NonMaxU32>);
 
 impl<const NBITS: usize> InlineIndex<NBITS> {
+    const MAX: u32 = 1u32.unbounded_shl(NBITS as u32).wrapping_sub(1);
+
     #[inline(always)]
     pub fn new_shifted(v: u32, offset: u32) -> Self {
-        Self(NonMaxU32::new(v >> offset))
+        let v = (v >> offset) & Self::MAX;
+        Self(if v == Self::MAX {
+            None
+        } else {
+            NonMaxU32::new(v)
+        })
     }
 
     pub fn encode(self) -> u32 {
@@ -1394,4 +1401,32 @@ fn write_operands(
         }
     }
     writeln!(f)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline_index_roundtrip() {
+        const MAX: u64 = (1 << 20) - 1;
+        for value in [
+            0,
+            1,
+            MAX - 1,
+            MAX,
+            MAX + 1,
+            u64::from(u32::MAX),
+            u64::MAX >> 1,
+        ] {
+            let index = InlineIndex::<20>::new(value);
+            let encoded = index.encode() << 12 | 0xABC;
+            let decoded = InlineIndex::<20>::new_shifted(encoded, 12);
+            assert_eq!(decoded.is_inline(), value < MAX, "{value}");
+
+            let code = [Bytecode((value >> 32) as u32), Bytecode(value as u32)];
+            let mut pc = 0;
+            assert_eq!(decoded.get(&mut pc, &code), value);
+        }
+    }
 }
