@@ -213,6 +213,18 @@ pub fn lower_system_function_call<'a, 'b>(
             );
             Ok((e, e_ty))
         }
+        "vogls_to_twovalue" => {
+            ensure_num_args_equal!(1);
+            let (e, e_ty) = arguments[0].ok_or(())?;
+            let e = builder.convert_mode(mctx.gl(), e, LogicMode::TwoValue);
+            Ok((e, e_ty))
+        }
+        "vogls_to_fourvalue" => {
+            ensure_num_args_equal!(1);
+            let (e, e_ty) = arguments[0].ok_or(())?;
+            let e = builder.convert_mode(mctx.gl(), e, LogicMode::FourValue);
+            Ok((e, e_ty))
+        }
         "vogls_blackbox" => {
             ensure_num_args_equal!(1);
             let (e, e_ty) = arguments[0].ok_or(())?;
@@ -424,6 +436,15 @@ pub fn get_system_function_call_output_ty(
         "vogls_dbg" => {
             ensure_num_args_equal!(1);
             let e_ty = arguments[0].ok_or(())?;
+            Ok(e_ty)
+        }
+        "vogls_to_twovalue" | "vogls_to_fourvalue" => {
+            ensure_num_args_equal!(1);
+            let e_ty = arguments[0].ok_or(())?;
+            if e_ty.is_real() {
+                diagnostics
+                    .not_yet_implemented(arenas.get_span(expr), "reals cannot be four-valued");
+            }
             Ok(e_ty)
         }
         "vogls_blackbox" => {
@@ -962,6 +983,18 @@ pub fn eval_constant(
 
         // VoGLS specific system function calls
         "vogls_dbg" => {
+            ensure_num_args_equal!(1);
+            diagnostics
+                .not_yet_implemented(arenas.get_span(expr), "vogls_dbg is not yet implemented");
+            Err(())
+        }
+        "vogls_to_fourvalue" => {
+            ensure_num_args_equal!(1);
+            diagnostics
+                .not_yet_implemented(arenas.get_span(expr), "vogls_dbg is not yet implemented");
+            Err(())
+        }
+        "vogls_to_twovalue" => {
             ensure_num_args_equal!(1);
             diagnostics
                 .not_yet_implemented(arenas.get_span(expr), "vogls_dbg is not yet implemented");
