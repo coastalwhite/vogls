@@ -1,0 +1,8 @@
+// Comments, underscores and upper case digits.
+01 2_3 Ab
+/* A comment
+   over several lines */ cD
+5   // A short word is zero-extended.
+@a
+f0 f1/*no space*/f2
+@0E 1ff

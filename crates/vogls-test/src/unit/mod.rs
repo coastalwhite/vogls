@@ -534,6 +534,8 @@ fn run_test(
     let mut gotten_diagnostics = test_information.verify_diagnostics.then_some(String::new());
 
     let mut world = StdWorldCaptured::default();
+    // Files that the design opens are relative to the test.
+    world.set_current_dir(path.parent().unwrap());
     let result: Result<Result<(), FailureInfo>, Box<dyn std::any::Any + Send + 'static>> =
         std::panic::catch_unwind(AssertUnwindSafe(|| {
             let arena = Arena::new();
@@ -783,6 +785,7 @@ fn run_test(
             .truncate_or_multiply_to(v, design.time_resolution())
         });
         let mut world = StdWorldCaptured::default();
+        world.set_current_dir(path.parent().unwrap());
         design
             .run(&mut state, &mut world, timeout)
             .expect("failed to execute");

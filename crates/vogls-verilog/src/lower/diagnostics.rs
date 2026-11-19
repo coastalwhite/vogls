@@ -24,6 +24,7 @@ pub enum LowerErrorReason {
     NetWidthOverflow,
     ZeroWidthNet,
     IfnoneWithUnconditionalPath,
+    MemoryNotAVariable(&'static str),
     SdfParse(String, String),
     SdfNotAnInstance(String),
     SdfCelltypeMismatch(String, IdentId, IdentId),
@@ -132,6 +133,10 @@ impl Diagnostics {
     pub fn zero_width_net(&mut self, at: TokenRange) {
         self.errors
             .push((at, LowerErrorReason::ZeroWidthNet, Vec::new()));
+    }
+    pub fn memory_not_a_variable(&mut self, at: TokenRange, task: &'static str) {
+        self.errors
+            .push((at, LowerErrorReason::MemoryNotAVariable(task), Vec::new()));
     }
     pub fn ifnone_with_unconditional_path(&mut self, at: TokenRange) {
         self.errors.push((
@@ -247,6 +252,9 @@ impl<'a> fmt::Display for LowerErrorDisplay<'a> {
                 f,
                 "`ifnone` path combined with an unconditional path for the same module path"
             ),
+            LowerErrorReason::MemoryNotAVariable(task) => {
+                write!(f, "the memory of `{task}` must be a variable, not a net")
+            }
             LowerErrorReason::SdfParse(path, error) => {
                 write!(f, "failed to parse SDF file `{path}`: {error}")
             }

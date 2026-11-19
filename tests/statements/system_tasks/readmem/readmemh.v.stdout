@@ -1,0 +1,16 @@
+mem[0] = 01
+mem[1] = 23
+mem[2] = ab
+mem[3] = cd
+mem[4] = 05
+mem[5] = ee
+mem[6] = ee
+mem[7] = ee
+mem[8] = ee
+mem[9] = ee
+mem[10] = f0
+mem[11] = f1
+mem[12] = f2
+mem[13] = ee
+mem[14] = ff
+mem[15] = ee

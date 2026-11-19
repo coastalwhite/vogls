@@ -1,3 +1,4 @@
+use std::io::Write as _;
 use std::sync::Arc;
 
 use vogls_codegen::HeapRef;
@@ -7,7 +8,7 @@ use vogls_ir::time::TimeResolution;
 use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariableKey};
 use vogls_ir::{Bits, GlobalContext, LogicMode, SignalKey, SignalSlice, VectorSize};
 use vogls_runtime::plugins::RuntimePluginState;
-use vogls_runtime::{RtSignalKey, RuntimeState};
+use vogls_runtime::{RtSignalKey, RuntimeError, RuntimeState};
 use vogls_utils::{Table, VgHashMap};
 pub use vogls_verilog::arena::Arena;
 pub use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
@@ -85,13 +86,11 @@ impl Design {
         world: &mut dyn World,
         time: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        match (&self.backend, state) {
+        let result = match (&self.backend, state) {
             #[cfg(feature = "tailcall")]
             (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
                 state.schedule.set_max_time(time);
-                design
-                    .execute_inner_tailcall(state, world)
-                    .map_err(|_| "execution failed.".into())
+                design.execute_inner_tailcall(state, world)
             }
             #[cfg(not(feature = "tailcall"))]
             (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
@@ -107,7 +106,7 @@ impl Design {
                             state,
                             world,
                         )
-                        .map_err(|_| "execution failed.".into());
+                        .map_err(|err| report(world, err));
                 }
 
                 if design.itrace {
@@ -125,16 +124,16 @@ impl Design {
                 } else {
                     design.execute(state, world)
                 }
-                .map_err(|_| "execution failed.".into())
             }
             #[cfg(feature = "native")]
-            (DesignBackend::Cranelift { design }, DesignState::Cranelift(state)) => design
-                .run(state, world, time)
-                .map_err(|_| "execution failed.".into()),
+            (DesignBackend::Cranelift { design }, DesignState::Cranelift(state)) => {
+                design.run(state, world, time)
+            }
 
             #[allow(unreachable_patterns)]
             _ => panic!(),
-        }
+        };
+        result.map_err(|err| report(world, err))
     }
 
     pub fn time_resolution(&self) -> TimeResolution {
@@ -323,4 +322,10 @@ fn extend_symbol_table_to_vcd_scope(
             Symbol::Task | Symbol::Function => {}
         }
     }
+}
+
+/// Reports the error that ended the simulation on the standard error of `world`.
+fn report(world: &mut dyn World, err: RuntimeError) -> Box<dyn std::error::Error> {
+    _ = writeln!(world.stderr(), "ERR! {err}");
+    err.into()
 }

@@ -10,7 +10,7 @@ use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::time::{TimeFormat, TimeResolution};
 use vogls_ir::{Bits, GlobalContext, Mode, ReadMem, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
-use vogls_runtime::{RtSignalKey, RuntimeState};
+use vogls_runtime::{RtSignalKey, RuntimeError, RuntimeState};
 use vogls_utils::{SyncWrapper, TableKey};
 use vogls_world::World;
 
@@ -89,6 +89,8 @@ pub struct ReturnValue(std::ffi::c_int);
 impl ReturnValue {
     pub const CONTINUE: Self = Self(0);
     pub const STOP: Self = Self(1);
+    /// Exit with an error, which is stored in the cold context.
+    pub const ERROR: Self = Self(2);
 
     fn should_exit(self) -> bool {
         self.0 > 0
@@ -508,13 +510,14 @@ pub struct ColdContextT<'a> {
 
     heap_len: usize,
     readmems: *const (HeapRef, ReadMem),
+    /// Returns 0 on success, or stores the error in the cold context and returns 1.
     readmem: extern "C" fn(
         *mut u64,
         usize,
         u8,
         NonNull<(HeapRef, ReadMem)>,
-        world: NonNull<&mut dyn World>,
-    ),
+        cldctx: NonNull<ColdContextT>,
+    ) -> u8,
     time_fmts: &'a [TimeFormat],
 
     pub heap_wide_ptr: *mut u64,
@@ -533,6 +536,9 @@ pub struct ColdContextT<'a> {
     // it in a pointer.
     #[expect(clippy::redundant_allocation)]
     world: Box<&'a mut dyn World>,
+
+    /// The error that ended the simulation.
+    error: Option<RuntimeError>,
 }
 
 #[repr(C)]
@@ -772,13 +778,12 @@ impl ClifDesign {
         }
     }
 
-    #[expect(clippy::result_unit_err)]
     pub fn run(
         &self,
         state: &mut ClifDesignState,
         world: &mut dyn World,
         max_time: u64,
-    ) -> Result<(), ()> {
+    ) -> Result<(), RuntimeError> {
         // The active regions is assumed to be preallocated. This leads to UB if violated.
         assert!(
             state.schedule.active_region.capacity() > self.procs.len(),
@@ -813,6 +818,7 @@ impl ClifDesign {
             pending_time: 0,
             pending_region: 0,
             world: Box::new(world),
+            error: None,
         };
         let return_value = state.schedule.with_t(|schedule| {
             'main_loop: loop {
@@ -856,8 +862,8 @@ impl ClifDesign {
                 // overflowing delay shows up as an event before the current time. An event at
                 // exactly `u64::MAX` is valid.
                 if schedule.next_time < state.runtime.time {
-                    eprintln!("Time overflow!");
-                    return ReturnValue::STOP;
+                    cldctx.error = Some(RuntimeError::TimeOverflow);
+                    return ReturnValue::ERROR;
                 }
 
                 if schedule.next_time > max_time {
@@ -894,15 +900,17 @@ impl ClifDesign {
 
         state.runtime.time_format = cldctx.time_format;
         state.runtime.instruction_count = cldctx.icount;
+        let error = cldctx.error;
         for plugin in state.plugins.iter_mut() {
             plugin.finish(&mut state.runtime);
         }
         if return_value.should_exit() {
             if return_value.is_ok() {
-                writeln!(world.stdout(), "[FINISH]").unwrap();
+                writeln!(world.stdout(), "[FINISH]")?;
                 return Ok(());
             } else {
-                return Err(());
+                // A failed assertion is the only error that is not stored.
+                return Err(error.unwrap_or(RuntimeError::AssertionFailed));
             }
         }
         Ok(())
@@ -929,28 +937,23 @@ extern "C" fn read_mem(
     heap_len: usize,
     mode: u8,
     ptr: NonNull<(HeapRef, ReadMem)>,
-    mut world: NonNull<&mut dyn World>,
-) {
+    mut cldctx: NonNull<ColdContextT>,
+) -> u8 {
     let (heap_ref, read_mem) = unsafe { ptr.as_ref() };
-    let world = unsafe { world.as_mut() };
+    let cldctx = unsafe { cldctx.as_mut() };
     let heap = unsafe { std::slice::from_raw_parts_mut(heap, heap_len) };
     let mode = if mode == 0 {
         Mode::TwoValue
     } else {
         Mode::FourValue
     };
-    vogls_runtime::readmem::read_mem(
-        &read_mem.path,
-        *world,
-        heap,
-        *heap_ref,
-        mode,
-        read_mem.offset,
-        read_mem.limit,
-        read_mem.stride,
-        read_mem.binary,
-    )
-    .unwrap();
+    match vogls_runtime::readmem::read_mem(*cldctx.world, heap, *heap_ref, mode, read_mem) {
+        Ok(()) => 0,
+        Err(err) => {
+            cldctx.error = Some(err);
+            1
+        }
+    }
 }
 
 extern "C" fn fmt(mut cldctx: NonNull<ColdContextT>, fmt_index: i64, bits: *const BitsRefT) {
@@ -1033,7 +1036,9 @@ mod random_shims {
         if let Some(warning) = warning {
             use std::io::Write;
             let world = unsafe { world.as_mut() };
-            _ = writeln!(world.stderr(), "WARNING: {}", warning.as_str());
+            if let Ok(mut f) = world.runtime_warn() {
+                _ = writeln!(f, "{}", warning.as_str());
+            }
         }
         combine_seed_result(seed, result)
     }
@@ -1047,7 +1052,9 @@ mod random_shims {
         if let Some(warning) = warning {
             use std::io::Write;
             let world = unsafe { world.as_mut() };
-            _ = writeln!(world.stderr(), "WARNING: {}", warning.as_str());
+            if let Ok(mut f) = world.runtime_warn() {
+                _ = writeln!(f, "{}", warning.as_str());
+            }
         }
         combine_seed_result(seed, result)
     }
@@ -1061,7 +1068,9 @@ mod random_shims {
         if let Some(warning) = warning {
             use std::io::Write;
             let world = unsafe { world.as_mut() };
-            _ = writeln!(world.stderr(), "WARNING: {}", warning.as_str());
+            if let Ok(mut f) = world.runtime_warn() {
+                _ = writeln!(f, "{}", warning.as_str());
+            }
         }
         combine_seed_result(seed, result)
     }
@@ -1090,7 +1099,9 @@ mod random_shims {
         if let Some(warning) = warning {
             use std::io::Write;
             let world = unsafe { world.as_mut() };
-            _ = writeln!(world.stderr(), "WARNING: {}", warning.as_str());
+            if let Ok(mut f) = world.runtime_warn() {
+                _ = writeln!(f, "{}", warning.as_str());
+            }
         }
         combine_seed_result(seed, result)
     }

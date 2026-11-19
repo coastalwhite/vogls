@@ -1,0 +1,12 @@
+tiny[0] = xxxx
+tiny[1] = zzzz
+tiny[2] = 0101
+tiny[3] = 1010
+mem[0] = 0000000x
+mem[1] = 0000000z
+mem[2] = 0000001x
+mem[3] = 0000zz01
+mem[4] = 00000xz0
+mem[5] = 10110110
+wide[0] = 3ffffffffffffffzzf
+wide[1] = 3x000000000000000x

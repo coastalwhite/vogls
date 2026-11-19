@@ -3371,8 +3371,6 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 self.compiler.read_mems.push((href, (**rm).clone()));
                                 let cldctx = params.cldctx;
                                 let heap = params.heap_ptr;
-                                let world =
-                                    b.ins().load(ptr, mem(), cldctx, layout::CTX_WORLD as i32);
                                 let heap_len =
                                     b.ins()
                                         .load(I64, mem(), cldctx, layout::CTX_HEAP_LEN as i32);
@@ -3390,12 +3388,23 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 let mut sig = Signature::new(CallConv::SystemV);
                                 sig.params
                                     .extend([ptr, I64, types::I8, ptr, ptr].map(AbiParam::new));
+                                sig.returns.push(AbiParam::new(types::I8));
                                 let sr = b.import_signature(sig);
-                                b.ins().call_indirect(
+                                let call = b.ins().call_indirect(
                                     sr,
                                     readmem_ptr,
-                                    &[heap, heap_len, mode_c, entry, world],
+                                    &[heap, heap_len, mode_c, entry, cldctx],
                                 );
+                                // The shim stored the error in the cold context: end the
+                                // simulation with an error.
+                                let failed = b.inst_results(call)[0];
+                                let fail = b.create_block();
+                                let cont = b.create_block();
+                                b.ins().brif(failed, fail, &[], cont, &[]);
+                                b.switch_to_block(fail);
+                                let two = b.ins().iconst(I32, 2);
+                                b.ins().return_(&[two]);
+                                b.switch_to_block(cont);
                                 let z = b.ins().iconst(I64, 0);
                                 b.def_var(vmap[dst], z);
                             }
