@@ -1,5 +1,5 @@
 use std::ops::Range;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
@@ -563,7 +563,7 @@ pub fn lower_sdf<'a>(
     drop(property_to_content);
     properties.sort_unstable_by_key(|(p, _)| (p.to, p.from));
 
-    let delays = Rc::<[Time]>::from(delays);
+    let delays = Arc::<[Time]>::from(delays);
     let outputs = IterSliceContinguous::new(&properties, |(p, _)| &p.to);
     for paths_to_output in outputs {
         let output = paths_to_output[0].0.to;

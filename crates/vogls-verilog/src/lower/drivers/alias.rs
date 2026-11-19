@@ -319,9 +319,8 @@ impl<'a> DriverResolution<'a> {
         for bb in gl.bbs.values() {
             for i in &bb.instrs {
                 use Instruction as I;
-                match &i {
-                    I::LastUpdateTime(_, s) => self.mark(*s, NodeFlags::LUPDT),
-                    _ => {}
+                if let I::LastUpdateTime(_, s) = i {
+                    self.mark(*s, NodeFlags::LUPDT);
                 }
             }
             use BasicBlockTerminator as T;

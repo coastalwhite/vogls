@@ -36,7 +36,7 @@
 
 use std::cmp;
 use std::io::Write;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
@@ -157,7 +157,7 @@ pub enum DelayKind<'a> {
         scope: SymbolId,
     },
     /// The module path delays of an output with a specify block.
-    Specify(Rc<SpecifyDelay<'a>>),
+    Specify(Arc<SpecifyDelay<'a>>),
 }
 
 #[derive(Clone, Copy)]
@@ -823,7 +823,7 @@ impl<'a> DriverResolution<'a> {
         let output = specify.output;
         let bit_length = gl.signals[output].size;
         let delay = self.nodes.insert(DriveNode::Delay {
-            kind: DelayKind::Specify(Rc::new(specify)),
+            kind: DelayKind::Specify(Arc::new(specify)),
             input,
             bit_length,
             fst_in: None,
