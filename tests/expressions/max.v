@@ -18,6 +18,8 @@ module tb();
         $vogls_assert_eq($vogls_max(1'bz, 1'bz), 1'bx);
         $vogls_assert_eq($vogls_max(1'bx, 1'bz), 1'bx);
         $vogls_assert_eq($vogls_max($vogls_to_fourvalue(1'b0), $vogls_to_fourvalue(1'b1)), 1'b1);
+        $vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(1'b0)), $vogls_to_fourvalue(1'b1)), 1'b1);
+        $vogls_assert_eq($vogls_max($vogls_blackbox(1'bx), $vogls_to_fourvalue(1'b1)), 1'bx);
 `endif
 
 		$vogls_assert_eq($vogls_max(7'b000_0000, 7'b000_0000), 7'b000_0000);
@@ -44,6 +46,9 @@ module tb();
 		$vogls_assert_eq($vogls_max(7'b0x1_1x10, 7'bxz0_0xx1), 7'bxxx_xxxx);
 		$vogls_assert_eq($vogls_max(7'b010_0z01, 7'b1z1_xz11), 7'bxxx_xxxx);
 		$vogls_assert_eq($vogls_max($vogls_to_fourvalue(7'b101_1101), $vogls_to_fourvalue(7'b010_1001)), 7'b101_1101);
+		$vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(7'b000_0010)), $vogls_to_fourvalue(7'b000_0101)), 7'b000_0101);
+		$vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(7'b111_0111)), $vogls_to_fourvalue(7'b000_0101)), 7'b111_0111);
+		$vogls_assert_eq($vogls_max($vogls_blackbox(7'bx00_0010), $vogls_to_fourvalue(7'b000_0101)), 7'bxxx_xxxx);
 `endif
 
 		$vogls_assert_eq($vogls_max(31'b000_0000_0000_0000_0000_0000_0000_0000, 31'b000_0000_0000_0000_0000_0000_0000_0000), 31'b000_0000_0000_0000_0000_0000_0000_0000);
@@ -70,6 +75,9 @@ module tb();
 		$vogls_assert_eq($vogls_max(31'b01z_0zz1_zzz1_100z_11z0_10z1_zxzz_z1zz, 31'bx1x_z1xz_0x1x_xx01_11z1_10zz_xzz0_1zz0), 31'bxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 		$vogls_assert_eq($vogls_max(31'bzz0_xxzz_1z1x_zz0z_xz1z_10z0_0z1z_10xz, 31'bx1z_xxzx_zx0z_00x1_0001_1011_1z01_zxx1), 31'bxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 		$vogls_assert_eq($vogls_max($vogls_to_fourvalue(31'b000_0001_1101_0111_0100_0010_0101_0110), $vogls_to_fourvalue(31'b001_0010_0010_1100_1001_1010_0101_0110)), 31'b001_0010_0010_1100_1001_1010_0101_0110);
+		$vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(31'b000_0000_0000_0000_0000_0000_0000_0010)), $vogls_to_fourvalue(31'b000_0000_0000_0000_0000_0000_0000_0101)), 31'b000_0000_0000_0000_0000_0000_0000_0101);
+		$vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(31'b111_1111_1111_1111_0111_1111_1111_1111)), $vogls_to_fourvalue(31'b000_0000_0000_0000_0000_0000_0000_0101)), 31'b111_1111_1111_1111_0111_1111_1111_1111);
+		$vogls_assert_eq($vogls_max($vogls_blackbox(31'bx00_0000_0000_0000_0000_0000_0000_0010), $vogls_to_fourvalue(31'b000_0000_0000_0000_0000_0000_0000_0101)), 31'bxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 `endif
 
 		$vogls_assert_eq($vogls_max(32'b0000_0000_0000_0000_0000_0000_0000_0000, 32'b0000_0000_0000_0000_0000_0000_0000_0000), 32'b0000_0000_0000_0000_0000_0000_0000_0000);
@@ -96,6 +104,9 @@ module tb();
 		$vogls_assert_eq($vogls_max(32'bz1z0_1x0z_0z01_z10z_xxz0_xzxz_001x_10z0, 32'b0z1x_00x0_xxxz_11z1_110z_1z11_zxzx_0zx1), 32'bxxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 		$vogls_assert_eq($vogls_max(32'b0zxx_zxzx_1zz0_1zxx_x0zx_00zx_1x11_x100, 32'bxz0x_10xx_z111_xx1x_zxx0_z011_zx0z_0x0z), 32'bxxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 		$vogls_assert_eq($vogls_max($vogls_to_fourvalue(32'b1100_1101_1001_0101_0100_1111_0100_0110), $vogls_to_fourvalue(32'b0001_1001_0011_0110_1011_1100_1010_1110)), 32'b1100_1101_1001_0101_0100_1111_0100_0110);
+		$vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(32'b0000_0000_0000_0000_0000_0000_0000_0010)), $vogls_to_fourvalue(32'b0000_0000_0000_0000_0000_0000_0000_0101)), 32'b0000_0000_0000_0000_0000_0000_0000_0101);
+		$vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(32'b1111_1111_1111_1110_1111_1111_1111_1111)), $vogls_to_fourvalue(32'b0000_0000_0000_0000_0000_0000_0000_0101)), 32'b1111_1111_1111_1110_1111_1111_1111_1111);
+		$vogls_assert_eq($vogls_max($vogls_blackbox(32'bx000_0000_0000_0000_0000_0000_0000_0010), $vogls_to_fourvalue(32'b0000_0000_0000_0000_0000_0000_0000_0101)), 32'bxxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 `endif
 
 		$vogls_assert_eq($vogls_max(33'b0_0000_0000_0000_0000_0000_0000_0000_0000, 33'b0_0000_0000_0000_0000_0000_0000_0000_0000), 33'b0_0000_0000_0000_0000_0000_0000_0000_0000);
@@ -122,6 +133,9 @@ module tb();
 		$vogls_assert_eq($vogls_max(33'bz_z0z1_xz10_z0x0_101z_z1xx_xzzx_0x0x_0zxx, 33'b1_x01x_xz10_xzx1_0zx0_xx11_xz11_110x_00x1), 33'bx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 		$vogls_assert_eq($vogls_max(33'bz_1111_z0zx_1zxz_11xz_1xzz_xzz1_11x0_zx00, 33'bx_01xz_1z01_zx0z_0zx1_z0x1_0x0x_110x_z1zz), 33'bx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 		$vogls_assert_eq($vogls_max($vogls_to_fourvalue(33'b1_0110_0011_0111_1000_1100_1001_0111_0111), $vogls_to_fourvalue(33'b0_1011_1011_1100_0100_1011_1010_0101_0000)), 33'b1_0110_0011_0111_1000_1100_1001_0111_0111);
+		$vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(33'b0_0000_0000_0000_0000_0000_0000_0000_0010)), $vogls_to_fourvalue(33'b0_0000_0000_0000_0000_0000_0000_0000_0101)), 33'b0_0000_0000_0000_0000_0000_0000_0000_0101);
+		$vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(33'b1_1111_1111_1111_1110_1111_1111_1111_1111)), $vogls_to_fourvalue(33'b0_0000_0000_0000_0000_0000_0000_0000_0101)), 33'b1_1111_1111_1111_1110_1111_1111_1111_1111);
+		$vogls_assert_eq($vogls_max($vogls_blackbox(33'bx_0000_0000_0000_0000_0000_0000_0000_0010), $vogls_to_fourvalue(33'b0_0000_0000_0000_0000_0000_0000_0000_0101)), 33'bx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 `endif
 
 		$vogls_assert_eq($vogls_max(63'b000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000, 63'b000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000), 63'b000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000);
@@ -148,6 +162,9 @@ module tb();
 		$vogls_assert_eq($vogls_max(63'b0z0_xz11_zxzz_zz01_x01z_1100_xzzz_11zx_1x10_0z01_1000_z010_zz11_01x1_xx1x_11zx, 63'bx01_zz0x_zxzz_1xz1_z11x_1z0z_z1z1_x1x0_zx01_0xz0_011z_1xx0_110z_11z1_xxzz_xxxx), 63'bxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 		$vogls_assert_eq($vogls_max(63'bzz0_zx1x_xz01_10xz_x11x_1z1z_xxzz_z1x1_1z10_0000_z110_101z_x0zz_00z0_0xx0_z100, 63'b111_xxxz_0xzz_11x0_00zz_zz00_10zz_x001_1zx0_0x01_x011_z0x1_1zxz_10x0_0z10_xzx0), 63'bxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 		$vogls_assert_eq($vogls_max($vogls_to_fourvalue(63'b000_1110_1001_0011_1111_1111_1101_0001_0011_0011_1101_1010_0111_0011_0010_0111), $vogls_to_fourvalue(63'b011_1010_0101_0001_0101_0100_0101_0101_1000_1010_1101_1101_1000_0100_1001_1011)), 63'b011_1010_0101_0001_0101_0100_0101_0101_1000_1010_1101_1101_1000_0100_1001_1011);
+		$vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(63'b000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0010)), $vogls_to_fourvalue(63'b000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0101)), 63'b000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0101);
+		$vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(63'b111_1111_1111_1111_1111_1111_1111_1111_0111_1111_1111_1111_1111_1111_1111_1111)), $vogls_to_fourvalue(63'b000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0101)), 63'b111_1111_1111_1111_1111_1111_1111_1111_0111_1111_1111_1111_1111_1111_1111_1111);
+		$vogls_assert_eq($vogls_max($vogls_blackbox(63'bx00_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0010), $vogls_to_fourvalue(63'b000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0101)), 63'bxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 `endif
 
 		$vogls_assert_eq($vogls_max(64'b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000, 64'b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000), 64'b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000);
@@ -174,6 +191,9 @@ module tb();
 		$vogls_assert_eq($vogls_max(64'bx0x0_zx01_1zz0_1x00_1zxz_001z_00z1_1xxx_zxxz_x101_1010_1zzx_z0x1_zxzx_001x_01x1, 64'b01xz_0xx1_0zz1_0z01_0001_11zx_0x00_01z1_0x00_z01z_zz0z_z1x1_1xxz_101x_zzz0_0xz1), 64'bxxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 		$vogls_assert_eq($vogls_max(64'bz110_zxzz_xxzx_10x1_0x0z_x110_11x0_1zx1_11xx_0x11_zx1z_0001_10z0_x11x_1x00_110x, 64'b0xz0_xxx1_1zzx_1x11_zxx1_10z0_1x10_z1x0_1xx1_0xz0_x110_xx00_0zzz_1zzz_xz0z_11z0), 64'bxxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 		$vogls_assert_eq($vogls_max($vogls_to_fourvalue(64'b1110_0001_0000_1111_1010_1101_1100_1011_0011_0011_1001_1110_0001_0101_1011_0001), $vogls_to_fourvalue(64'b1110_1011_1001_1111_0101_1011_1111_0001_0001_0010_0001_1111_0010_0100_1101_1110)), 64'b1110_1011_1001_1111_0101_1011_1111_0001_0001_0010_0001_1111_0010_0100_1101_1110);
+		$vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(64'b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0010)), $vogls_to_fourvalue(64'b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0101)), 64'b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0101);
+		$vogls_assert_eq($vogls_max($vogls_blackbox($vogls_to_fourvalue(64'b1111_1111_1111_1111_1111_1111_1111_1110_1111_1111_1111_1111_1111_1111_1111_1111)), $vogls_to_fourvalue(64'b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0101)), 64'b1111_1111_1111_1111_1111_1111_1111_1110_1111_1111_1111_1111_1111_1111_1111_1111);
+		$vogls_assert_eq($vogls_max($vogls_blackbox(64'bx000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0010), $vogls_to_fourvalue(64'b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0101)), 64'bxxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx_xxxx);
 `endif
 
 		$vogls_assert_eq($vogls_max(65'b0_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000, 65'b0_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000), 65'b0_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000);
