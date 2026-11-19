@@ -697,6 +697,16 @@ pub enum BinaryOp {
     /// 1 | x  1  1  0
     /// 0 | 0  0  0  0
     ResolveWand,
+    /// Resolution of two equal-strength drivers of a `wor`.
+    /// Per IEEE Std 1364-2005 table 4-4,
+    ///
+    ///   | x  z  1  0
+    /// --+-----------
+    /// x | x  x  1  x
+    /// z | x  z  1  0
+    /// 1 | 1  1  1  1
+    /// 0 | x  0  1  0
+    ResolveWor,
 
     /// Minimum of lhs and rhs
     Min,
@@ -1509,6 +1519,7 @@ impl BinaryOp {
             O::CopyZ => Bits::copyz(lhs, rhs),
             O::ResolveWire => Bits::resolve_wire(lhs, rhs),
             O::ResolveWand => Bits::resolve_wand(lhs, rhs),
+            O::ResolveWor => Bits::resolve_wor(lhs, rhs),
 
             O::Min => Bits::min(lhs, rhs),
             O::Max => Bits::max(lhs, rhs),
@@ -1616,6 +1627,7 @@ impl BinaryOp {
             | O::CopyZ
             | O::ResolveWire
             | O::ResolveWand
+            | O::ResolveWor
             | O::Min
             | O::Max => {
                 if lhs != rhs {
@@ -1682,6 +1694,7 @@ impl BinaryOp {
             | O::CopyX
             | O::CopyZ
             | O::ResolveWand
+            | O::ResolveWor
             | O::Min
             | O::Max
             | O::UnsignedLessEqual
@@ -1751,6 +1764,7 @@ impl BinaryOp {
             | Self::Modulus0
             | Self::CopyX
             | Self::ResolveWand
+            | Self::ResolveWor
             | Self::CopyZ => Some(TvPushdownVariant::CastOutput),
 
             Self::CaseEquality | Self::Negedge => Some(TvPushdownVariant::KeepOutput),

@@ -4,7 +4,7 @@ use vogls_bits::arithmetic::{
     FvLogicValue, fv_addition, fv_bin_u64_cell_bitwise_op, fv_bin_u64_cell_bitwise_op_output_tv,
     fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem,
     fv_bitwise_xnor_elem, fv_bitwise_xor_elem, fv_contains_special, fv_division, fv_division_x,
-    fv_multiplication, fv_power, fv_resolve_wand_elem, fv_resolve_wire_elem, fv_subtraction, tv_addition,
+    fv_multiplication, fv_power, fv_resolve_wand_elem, fv_resolve_wire_elem, fv_resolve_wor_elem, fv_subtraction, tv_addition,
     tv_bin_u64_cell_bitwise_mask_last_op, tv_bin_u64_cell_bitwise_op,
     tv_bin_u64_cell_bitwise_op_output_fv, tv_division, tv_division_x, tv_multiplication, tv_power,
     tv_resolve_wire_elem, tv_subtraction,
@@ -269,6 +269,11 @@ impl BytecodeInstruction for HeapBinaryBitwise {
             O::FvResolveWand => {
                 fv_bin_u64_cell_bitwise_op(dst, src1, src2, |lspc, lval, rspc, rval| {
                     fv_resolve_wand_elem(lspc, lval, rspc, rval)
+                })
+            }
+            O::FvResolveWor => {
+                fv_bin_u64_cell_bitwise_op(dst, src1, src2, |lspc, lval, rspc, rval| {
+                    fv_resolve_wor_elem(lspc, lval, rspc, rval)
                 })
             }
             O::FvBitwiseCeq => {
@@ -1791,6 +1796,7 @@ operator! {
         (FvResolveWire, "fv.heap_resolvewire", true),
         (TvResolveWire, "tv.heap_resolvewire", false),
         (FvResolveWand, "fv.heap_resolvewand", true),
+        (FvResolveWor, "fv.heap_resolvewor", true),
         (FvBitwiseCeq, "fv.heap_bitwise_ceq", true),
         (FvMerge, "fv.heap_merge", true),
     }
@@ -2128,6 +2134,9 @@ impl BytecodeEncoder {
     }
     pub fn heap_fv_resolve_wand(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_binary_bitwise(rd, rs1, rs2, BitwiseOp::FvResolveWand, size);
+    }
+    pub fn heap_fv_resolve_wor(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
+        self.heap_binary_bitwise(rd, rs1, rs2, BitwiseOp::FvResolveWor, size);
     }
     pub fn heap_fv_bitwise_ceq(&mut self, rd: Reg, rs1: Reg, rs2: Reg, size: VectorSize) {
         self.heap_binary_bitwise(rd, rs1, rs2, BitwiseOp::FvBitwiseCeq, size);

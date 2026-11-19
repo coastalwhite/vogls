@@ -1310,6 +1310,10 @@ impl Bits {
     pub fn resolve_wand(lhs: &Self, rhs: &Self) -> Self {
         Self::bitwise_op(lhs, rhs, |l, r| l & r, arithmetic::fv_resolve_wand_elem)
     }
+    /// Resolve two equal-strength drivers of a `wor`.
+    pub fn resolve_wor(lhs: &Self, rhs: &Self) -> Self {
+        Self::bitwise_op(lhs, rhs, |l, r| l | r, arithmetic::fv_resolve_wor_elem)
+    }
     pub fn bitwise_xor(lhs: &Self, rhs: &Self) -> Self {
         Self::bitwise_op(lhs, rhs, |l, r| l ^ r, arithmetic::fv_bitwise_xor_elem)
     }

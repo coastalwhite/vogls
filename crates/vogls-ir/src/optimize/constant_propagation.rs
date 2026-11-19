@@ -341,6 +341,8 @@ fn constant_propagate_instruction(
                 (O::ResolveWire, _, Some(_)) => {}
                 (O::ResolveWand, Some(_), _) => {}
                 (O::ResolveWand, _, Some(_)) => {}
+                (O::ResolveWor, Some(_), _) => {}
+                (O::ResolveWor, _, Some(_)) => {}
 
                 (O::Min, Some(b), _) => additional.push(BI(dst, IO::Min, rhs, b.clone())),
                 (O::Min, _, Some(b)) => additional.push(BI(dst, IO::Min, lhs, b.clone())),
