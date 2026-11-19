@@ -1086,12 +1086,15 @@ impl<'a> DriverResolution<'a> {
                 SignalKind::Variable => NetResolution::Wire,
             };
 
-            let reads = specify
+            let reads: Vec<_> = specify
                 .specify
                 .paths
                 .iter()
                 .map(|(input, _)| *input)
                 .collect();
+            for &input in &reads {
+                self.observed.push((input, NodeFlags::LUPDT));
+            }
             let bit_length = mctx.gl.signals[output].size;
             let delay = self.nodes.insert(DriveNode::Delay {
                 kind: DelayKind::Specify(Arc::new(specify)),
