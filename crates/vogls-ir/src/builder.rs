@@ -413,6 +413,7 @@ impl BasicBlockBuilder {
         (copy_x, CopyX)
         (copy_z, CopyZ)
         (resolve_wire, ResolveWire)
+        (resolve_wand, ResolveWand)
         (unsigned_le, UnsignedLessEqual)
         (case_equals, CaseEquality)
         (logical_shift_left, LogicalShiftLeft)

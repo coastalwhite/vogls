@@ -390,6 +390,33 @@ pub fn tv_resolve_wire_elem(x: u64, y: u64) -> (u64, u64) {
     (zspc, zval)
 }
 #[inline(always)]
+pub fn fv_resolve_wand_elem(xspc: u64, xval: u64, yspc: u64, yval: u64) -> (u64, u64) {
+    // IEEE Std 1364-2005 table 4-3
+    // Resolution of two equal-strength drivers of a `wand` / `triand`.
+    //
+    //   | x  z  1  0
+    // --+-----------
+    // x | x  x  x  0
+    // z | x  z  1  0
+    // 1 | x  1  1  0
+    // 0 | 0  0  0  0
+    //
+    // There is no two-valued variant, since for two-valued drivers this is `x & y`.
+    //
+    // z1z0 = fv.resolve_wand(x1x0, y1y0)
+    //
+    // z0 = x0 & y0         z1 = (x1 & (y0 | !x0)) | (y1 & (x0 | !y0))
+    //   | x  z  1  0         | x  z  1  0
+    // --+-----------       --+-----------
+    // x | 0  0  0  0       x | 0  0  0  1
+    // z | 0  1  1  0       z | 0  0  1  1
+    // 1 | 0  1  1  0       1 | 0  1  1  1
+    // 0 | 0  0  0  0       0 | 1  1  1  1
+    let zval = xval & yval;
+    let zspc = (xspc & (yval | !xval)) | (yspc & (xval | !yval));
+    (zspc, zval)
+}
+#[inline(always)]
 pub fn fv_bitwise_or_elem(xspc: u64, x: u64, yspc: u64, y: u64) -> (u64, u64) {
     // | | x  z  1  0
     // --+-----------
@@ -580,27 +607,27 @@ mod tests {
     use proptest::prelude::Just;
 
     #[rustfmt::skip]
-    const FV_BIN_TEST_VECTORS: [[L; 8]; 16] = [
-        //  lhs rhs       AND    OR     XOR    ANDNOT  ORNOT  RESOLVE
-        [   X,  X,        X,     X,     X,     X,      X,     X,   ],
-        [   X,  Z,        X,     X,     X,     X,      X,     X,   ],
-        [   X,  L0,       L0,    X,     X,     X,      L1,    X,   ],
-        [   X,  L1,       X,     L1,    X,     L0,     X,     X,   ],
+    const FV_BIN_TEST_VECTORS: [[L; 9]; 16] = [
+        //  lhs rhs       AND    OR     XOR    ANDNOT  ORNOT  RESOLVE  WAND
+        [   X,  X,        X,     X,     X,     X,      X,     X,       X,   ],
+        [   X,  Z,        X,     X,     X,     X,      X,     X,       X,   ],
+        [   X,  L0,       L0,    X,     X,     X,      L1,    X,       L0,  ],
+        [   X,  L1,       X,     L1,    X,     L0,     X,     X,       X,   ],
 
-        [   Z,  X,        X,     X,     X,     X,      X,     X,   ],
-        [   Z,  Z,        X,     X,     X,     X,      X,     Z,   ],
-        [   Z,  L0,       L0,    X,     X,     X,      L1,    L0,  ],
-        [   Z,  L1,       X,     L1,    X,     L0,     X,     L1,  ],
+        [   Z,  X,        X,     X,     X,     X,      X,     X,       X,   ],
+        [   Z,  Z,        X,     X,     X,     X,      X,     Z,       Z,   ],
+        [   Z,  L0,       L0,    X,     X,     X,      L1,    L0,      L0,  ],
+        [   Z,  L1,       X,     L1,    X,     L0,     X,     L1,      L1,  ],
 
-        [   L0, X,        L0,    X,     X,     L0,     X,     X,   ],
-        [   L0, Z,        L0,    X,     X,     L0,     X,     L0,  ],
-        [   L0, L0,       L0,    L0,    L0,    L0,     L1,    L0,  ],
-        [   L0, L1,       L0,    L1,    L1,    L0,     L0,    X,   ],
+        [   L0, X,        L0,    X,     X,     L0,     X,     X,       L0,  ],
+        [   L0, Z,        L0,    X,     X,     L0,     X,     L0,      L0,  ],
+        [   L0, L0,       L0,    L0,    L0,    L0,     L1,    L0,      L0,  ],
+        [   L0, L1,       L0,    L1,    L1,    L0,     L0,    X,       L0,  ],
 
-        [   L1, X,        X,     L1,    X,     X,      L1,    X,   ],
-        [   L1, Z,        X,     L1,    X,     X,      L1,    L1,  ],
-        [   L1, L0,       L0,    L1,    L1,    L1,     L1,    X,   ],
-        [   L1, L1,       L1,    L1,    L0,    L0,     L1,    L1,  ],
+        [   L1, X,        X,     L1,    X,     X,      L1,    X,       X,   ],
+        [   L1, Z,        X,     L1,    X,     X,      L1,    L1,      L1,  ],
+        [   L1, L0,       L0,    L1,    L1,    L1,     L1,    X,       L0,  ],
+        [   L1, L1,       L1,    L1,    L0,    L0,     L1,    L1,      L1,  ],
     ];
 
     #[rustfmt::skip]
@@ -622,6 +649,7 @@ mod tests {
             expect_andnot,
             expect_ornot,
             expect_resolve,
+            expect_wand,
         ] in FV_BIN_TEST_VECTORS
         {
             let (xspc, xval) = (x.spc() as u64, x.val() as u64);
@@ -633,6 +661,7 @@ mod tests {
             let (z_andnotspc, z_andnot) = fv_bitwise_andnot_elem(xspc, xval, yspc, yval);
             let (z_ornotspc, z_ornot) = fv_bitwise_ornot_elem(xspc, xval, yspc, yval);
             let (z_resolvespc, z_resolve) = fv_resolve_wire_elem(xspc, xval, yspc, yval);
+            let (z_wandspc, z_wand) = fv_resolve_wand_elem(xspc, xval, yspc, yval);
 
             let z_and = FvLogicValue::from_repr(((z_and << 1) | z_andspc) as u8);
             let z_or = FvLogicValue::from_repr(((z_or << 1) | z_orspc) as u8);
@@ -640,6 +669,7 @@ mod tests {
             let z_andnot = FvLogicValue::from_repr(((z_andnot << 1) | z_andnotspc) as u8);
             let z_ornot = FvLogicValue::from_repr(((z_ornot << 1) | z_ornotspc) as u8);
             let z_resolve = FvLogicValue::from_repr(((z_resolve << 1) | z_resolvespc) as u8);
+            let z_wand = FvLogicValue::from_repr(((z_wand << 1) | z_wandspc) as u8);
 
             assert_eq!(
                 z_and, expect_and,
@@ -664,6 +694,10 @@ mod tests {
             assert_eq!(
                 z_resolve, expect_resolve,
                 "resolve({x:?}, {y:?}), expected = {expect_resolve:?}, gotten = {z_resolve:?}"
+            );
+            assert_eq!(
+                z_wand, expect_wand,
+                "resolve_wand({x:?}, {y:?}), expected = {expect_wand:?}, gotten = {z_wand:?}"
             );
 
             let spc = (xspc << 1) | (yspc);

@@ -711,6 +711,7 @@ fn parse_instr<'a>(
         "copyx" => parse_binary(c, symbols, gl, dst, B::CopyX)?,
         "copyz" => parse_binary(c, symbols, gl, dst, B::CopyZ)?,
         "resolvewire" => parse_binary(c, symbols, gl, dst, B::ResolveWire)?,
+        "resolvewand" => parse_binary(c, symbols, gl, dst, B::ResolveWand)?,
         "min" => parse_binary(c, symbols, gl, dst, B::Min)?,
         "max" => parse_binary(c, symbols, gl, dst, B::Max)?,
         "ceq" => parse_binary(c, symbols, gl, dst, B::CaseEquality)?,

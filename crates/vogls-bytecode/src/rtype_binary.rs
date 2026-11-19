@@ -2,7 +2,8 @@ use std::fmt;
 
 use vogls_bits::arithmetic::{
     fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem,
-    fv_bitwise_xnor_elem, fv_bitwise_xor_elem, fv_resolve_wire_elem, tv_resolve_wire_elem,
+    fv_bitwise_xnor_elem, fv_bitwise_xor_elem, fv_resolve_wand_elem, fv_resolve_wire_elem,
+    tv_resolve_wire_elem,
 };
 use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::edge::fv_negedge_u64;
@@ -101,6 +102,7 @@ pub struct FvCopyX(pub SbsBitwiseRType);
 pub struct FvCopyZ(pub SbsBitwiseRType);
 pub struct FvResolveWire(pub BitwiseRType);
 pub struct TvResolveWire(pub SbsBitwiseRType);
+pub struct FvResolveWand(pub BitwiseRType);
 
 impl BitwiseRType {
     #[inline(always)]
@@ -1727,6 +1729,34 @@ impl BytecodeInstruction for TvResolveWire {
         regs[rd_val] = val;
     }
 }
+impl BytecodeInstruction for FvResolveWand {
+    impl_bitwise!(
+        FvResolveWand,
+        "fv.resolvewand",
+        FourValue,
+        FourValue,
+        FourValue
+    );
+
+    #[inline(always)]
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        _state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        _cldctx: &mut ColdContext,
+    ) {
+        let BitwiseRType { rd, rs1, rs2 } = self.0;
+        let (rd_spc, rd_val) = rd.to_spc_and_val();
+        let (rs1_spc, rs1_val) = rs1.to_spc_and_val();
+        let (rs2_spc, rs2_val) = rs2.to_spc_and_val();
+        (regs[rd_spc], regs[rd_val]) =
+            fv_resolve_wand_elem(regs[rs1_spc], regs[rs1_val], regs[rs2_spc], regs[rs2_val]);
+    }
+}
 impl BytecodeInstruction for FvMerge {
     impl_bitwise!(FvMerge, "fv.merge", FourValue, FourValue, FourValue);
 
@@ -1803,6 +1833,7 @@ impl_bytecode_methods! {
     (fv_negedge, FvNegedge)
     (merge, FvMerge)
     (fv_resolve_wire, FvResolveWire)
+    (fv_resolve_wand, FvResolveWand)
 }
 
 impl_bytecode_sbs_methods! {

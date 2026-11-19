@@ -1227,6 +1227,29 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                                 )
                             }
 
+                            // Two-valued drivers can never be `z`, so `wand` resolves to `and`.
+                            (O::ResolveWand, M::TwoValue, _, Some(_), _, _) => {
+                                map!(lhs, rhs => @tv b.ins().band(lhs, rhs))
+                            }
+                            (O::ResolveWand, M::FourValue, _, Some(_), _, _) => {
+                                map!((lval, lspc), (rval, rspc) => @fv
+                                    clif_fv_resolve_wand(b, lval, lspc, rval, rspc)
+                                )
+                            }
+                            (O::ResolveWand, _, _, _, _, _) => wide_binary_bitwise(
+                                b,
+                                wide_map,
+                                dst_size,
+                                ptr,
+                                params,
+                                *dst,
+                                *lhs,
+                                *rhs,
+                                |b, l, r| b.ins().band(l, r),
+                                clif_fv_resolve_wand,
+                                false,
+                            ),
+
                             (O::Add, _, _, Some(_), _, _) => {
                                 bin_arith!(lhs, rhs => b.ins().iadd(lhs, rhs), true)
                             }
@@ -5902,6 +5925,24 @@ fn clif_fv_resolve_wire(
     let from_lspc = b.ins().band(lspc, rhs_differs);
     let from_rspc = b.ins().band(lval, rspc);
     let spc = b.ins().bxor(from_lspc, from_rspc);
+    (val, spc)
+}
+
+fn clif_fv_resolve_wand(
+    b: &mut FunctionBuilder,
+    lval: Value,
+    lspc: Value,
+    rval: Value,
+    rspc: Value,
+) -> (Value, Value) {
+    // val = lval & rval
+    // spc = (lspc & (rval | !lval)) | (rspc & (lval | !rval))
+    let val = b.ins().band(lval, rval);
+    let lhs_keeps = b.ins().bor_not(rval, lval);
+    let from_lspc = b.ins().band(lspc, lhs_keeps);
+    let rhs_keeps = b.ins().bor_not(lval, rval);
+    let from_rspc = b.ins().band(rspc, rhs_keeps);
+    let spc = b.ins().bor(from_lspc, from_rspc);
     (val, spc)
 }
 

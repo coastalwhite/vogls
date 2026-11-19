@@ -971,6 +971,16 @@ fn lower_instruction(
                     bce.heap_fv_resolve_wire(rd, rs1, rs2, dst_size)
                 }
 
+                // Two-valued drivers can never be `z`, so `wand` resolves to `and`.
+                (O::ResolveWand, M::TwoValue, Some(_), _, _) => bce.and(rd, rs1, rs2),
+                (O::ResolveWand, M::TwoValue, None, _, _) => {
+                    bce.heap_tv_and(rd, rs1, rs2, dst_size)
+                }
+                (O::ResolveWand, M::FourValue, Some(_), _, _) => bce.fv_resolve_wand(rd, rs1, rs2),
+                (O::ResolveWand, M::FourValue, None, _, _) => {
+                    bce.heap_fv_resolve_wand(rd, rs1, rs2, dst_size)
+                }
+
                 (O::Min, _, Some(_), M::TwoValue, _) => bce.min(rd, rs1, rs2),
                 (O::Min, _, None, M::TwoValue, _) => bce.heap_tv_min(rd, rs1, rs2, lhs_size),
                 (O::Min, _, Some(size), M::FourValue, _) => bce.fv_min(rd, rs1, rs2, size),
