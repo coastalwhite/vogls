@@ -1,9 +1,11 @@
-// The input of a module path can be aliased to a bit of a wider net, while the process of the path
-// takes its last update time.
+// The input of a module path can be a bit of a wider net, while the process of the path takes its
+// last update time: the delay applies, also though the value reaches the output around the input.
+//
+// The expected values match Icarus Verilog.
 `timescale 1ns/1ns
 module buf1(input a, output y);
     assign y = a;
-    specify (a => y) = 1; endspecify
+    specify (a => y) = 5; endspecify
 endmodule
 
 module top;
@@ -15,8 +17,9 @@ module top;
 
     initial begin
         r = 0;
-        #5 r = 2'b10;
-        #2 $vogls_assert_eq(y, 1'b1);
+        #10 r = 2'b10;
+        #2 $vogls_assert_eq(y, 1'b0);
+        #5 $vogls_assert_eq(y, 1'b1);
         $finish;
     end
 endmodule
