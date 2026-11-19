@@ -1425,7 +1425,7 @@ impl BytecodeInstruction for FvMax {
 
         if regs[rs1_spc] == mask && regs[rs2_spc] == mask {
             regs[rd_spc] = mask;
-            regs[rd_val] = u64::min(regs[rs1_val], regs[rs2_val]);
+            regs[rd_val] = u64::max(regs[rs1_val], regs[rs2_val]);
         } else {
             regs[rd_spc] = 0;
             regs[rd_val] = 0;
