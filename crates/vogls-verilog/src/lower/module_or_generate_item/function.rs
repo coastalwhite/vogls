@@ -1,6 +1,6 @@
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::{GlobalContext, ProcessBuilder};
-use vogls_utils::{SeenSet, VgHashMap, VgHashSet};
+use vogls_utils::{SeenSet, VgHashMap};
 
 use crate::ast::module::{FunctionDeclaration, TaskDeclaration};
 use crate::ast::{AstId, AstIdRange};

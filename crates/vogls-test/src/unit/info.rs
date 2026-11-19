@@ -133,6 +133,8 @@ pub struct TestInfo {
     pub verify_vcd: bool,
     pub verify_diagnostics: bool,
     pub annotate_sdf: bool,
+    /// The module instance that the SDF file applies to, the top-level module by default.
+    pub sdf_scope: Option<String>,
     pub timeout: Option<(u64, TimeUnit)>,
     pub top_level_module: Option<String>,
     pub mode: SelectLogicMode,
@@ -166,6 +168,7 @@ impl TestInfo {
             verify_vcd: false,
             verify_diagnostics: false,
             annotate_sdf: false,
+            sdf_scope: None,
             top_level_module: None,
             timeout: None,
             mode: SelectLogicMode::All,
@@ -190,6 +193,9 @@ impl TestInfo {
                 "verify-vcd" => info.verify_vcd = true,
                 "verify-diagnostics" => info.verify_diagnostics = true,
                 "annotate-sdf" => info.annotate_sdf = true,
+                _ if line.starts_with("sdf-scope=") => {
+                    info.sdf_scope = Some(line["sdf-scope=".len()..].trim().to_string());
+                }
                 "panic" => info.expect_panic = true,
                 "no-cadence-ifnone-edge" => info.parser_options.cadence_ifnone_edge = false,
                 "no-data-sourceless-edge-path" => {

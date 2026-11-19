@@ -1,0 +1,24 @@
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DIVIDER .)
+  (TIMESCALE 1ns)
+  (CELL
+    (CELLTYPE "chip")
+    (INSTANCE)
+    (DELAY
+      (ABSOLUTE
+        (IOPATH a c (3))
+        (INTERCONNECT u1.b u2.a (3))
+      )
+    )
+  )
+  (CELL
+    (CELLTYPE "buffer")
+    (INSTANCE *)
+    (DELAY
+      (ABSOLUTE
+        (IOPATH a b (2))
+      )
+    )
+  )
+)

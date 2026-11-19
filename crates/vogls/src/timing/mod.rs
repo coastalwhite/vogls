@@ -27,8 +27,9 @@ fn display_ident(ident_table: &IdentTable, ident: &HierarchicalIdent) -> String 
 
 /// Resolve an SDF hierarchical identifier.
 ///
-/// With a `scope`, the identifier is resolved relative to that scope. Without a `scope`, it is an
-/// `INSTANCE` path, which is resolved relative to the top-level module.
+/// With a `scope`, the identifier is resolved relative to that scope, which is a cell or the module
+/// instance that the SDF file applies to. Without a `scope`, it is an `INSTANCE` path of an SDF file
+/// that applies to the top-level module.
 fn resolve_ident<'a>(
     ctx: &LowerContext<'a, '_>,
     divider: HierarchyDivider,
@@ -83,6 +84,18 @@ fn resolve_ident<'a>(
         cell_sid = new_cell_sid;
     }
     Ok(cell_sid)
+}
+
+/// Whether `sid` is `scope` or lies somewhere below it in the hierarchy.
+fn is_within(ctx: &LowerContext<'_, '_>, sid: SymbolId, scope: SymbolId) -> bool {
+    let mut sid = Some(sid);
+    while let Some(s) = sid {
+        if s == scope {
+            return true;
+        }
+        sid = ctx.table[s].parent();
+    }
+    false
 }
 
 /// Check that the cell at `cell_sid` is an instance of the module named by the SDF `CELLTYPE`.
@@ -225,10 +238,12 @@ fn parse_delvallist(
     Ok(delay_ptr)
 }
 
+/// Collects the delays of `sdf` into the path delays of the driver resolution.
 pub fn lower_sdf<'a>(
     ctx: &mut LowerContext<'a, '_>,
     mctx: &mut MutLowerContext<'a>,
     sdf: &DelayFile<'_>,
+    scope: Option<SymbolId>,
 ) -> Result<(), ()> {
     let timescale = match &sdf.header.timescale {
         // IEEE Std 1497-2001 (p. 17)
@@ -292,14 +307,16 @@ pub fn lower_sdf<'a>(
         let cell_sid;
         let cell_sids: &[SymbolId] = match instance {
             Instance::Empty => {
-                let roots = ctx.table.roots();
-                if roots.len() != 1 {
-                    mctx.diagnostics
-                        .not_yet_implemented(TokenRange::default(), "ambiguous top-level");
-                    error = true;
-                    continue;
-                }
-                cell_sid = roots[0];
+                cell_sid = match (scope, ctx.table.roots()) {
+                    (Some(scope), _) => scope,
+                    (None, &[root]) => root,
+                    (None, _) => {
+                        mctx.diagnostics
+                            .not_yet_implemented(TokenRange::default(), "ambiguous top-level");
+                        error = true;
+                        continue;
+                    }
+                };
                 let path = || ctx.arenas.ident_table[ctx.table[cell_sid].name()].to_string();
                 if check_celltype(ctx, cell_sid, *celltype, path, &mut mctx.diagnostics).is_err() {
                     error = true;
@@ -320,11 +337,10 @@ pub fn lower_sdf<'a>(
                 };
 
                 if instances.is_empty() {
-                    instances.extend(
-                        ctx.table
-                            .symbol_id_iter()
-                            .filter(|&sid| matches!(ctx.table[sid].content, VSymbol::Module(_))),
-                    );
+                    instances.extend(ctx.table.symbol_id_iter().filter(|&sid| {
+                        matches!(ctx.table[sid].content, VSymbol::Module(_))
+                            && scope.is_none_or(|scope| is_within(ctx, sid, scope))
+                    }));
                     instances.sort_unstable_by_key(|&sid| module_of(sid));
 
                     let mut offset = 0;
@@ -339,7 +355,7 @@ pub fn lower_sdf<'a>(
                     .map_or(&[], |range| &instances[range.clone()])
             }
             Instance::HierarchicalIdent(hident) => {
-                let Ok(sid) = resolve_ident(ctx, divider, None, hident, &mut mctx.diagnostics)
+                let Ok(sid) = resolve_ident(ctx, divider, scope, hident, &mut mctx.diagnostics)
                 else {
                     error = true;
                     continue;
