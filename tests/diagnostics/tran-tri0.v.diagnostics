@@ -1,0 +1,8 @@
+error: not yet implemented or no specialized error: `tri0`, `tri1`, `supply0` and `supply1` nets connected bidirectionally
+  --> {path}:7
+ 5 | module tb();
+ 6 |     reg a;
+ 7 >     tri0 t;
+              ^
+ 8 |     wire w;
+ 9 |     assign w = a;

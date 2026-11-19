@@ -26,6 +26,7 @@ pub enum LowerErrorReason {
     ZeroWidthNet,
     IfnoneWithUnconditionalPath,
     MixedNetResolution(NetResolution, NetResolution),
+    UwireMultipleDrivers,
     MemoryNotAVariable(&'static str),
     SdfParse(String, String),
     SdfNotAnInstance(String),
@@ -149,6 +150,10 @@ impl Diagnostics {
             Vec::new(),
         ));
     }
+    pub fn uwire_multiple_drivers(&mut self, at: TokenRange) {
+        self.errors
+            .push((at, LowerErrorReason::UwireMultipleDrivers, Vec::new()));
+    }
     pub fn memory_not_a_variable(&mut self, at: TokenRange, task: &'static str) {
         self.errors
             .push((at, LowerErrorReason::MemoryNotAVariable(task), Vec::new()));
@@ -271,6 +276,9 @@ impl<'a> fmt::Display for LowerErrorDisplay<'a> {
                 f,
                 "this `{net}` net is connected bidirectionally to a `{other}` net, nets of different types cannot be resolved together"
             ),
+            LowerErrorReason::UwireMultipleDrivers => {
+                write!(f, "a `uwire` net cannot have multiple drivers")
+            }
             LowerErrorReason::MemoryNotAVariable(task) => {
                 write!(f, "the memory of `{task}` must be a variable, not a net")
             }
