@@ -1487,21 +1487,22 @@ impl BytecodeInstruction for HeapFill {
             size,
         } = self;
         let size = size.get(pc, code);
-        let mut num_words = size.get().div_ceil(64) as usize;
+        let num_plane_words = size.get().div_ceil(64) as usize;
+        let mut num_total_words = num_plane_words;
         if fv {
-            num_words *= 2;
+            num_total_words *= 2;
         }
         let dst = state
             .heap
-            .get_mut_u64_slice(regs.get_as_addr(rd), num_words);
+            .get_mut_u64_slice(regs.get_as_addr(rd), num_total_words);
 
         let mut offset = 0;
         if fv {
-            dst[..num_words].fill(u64::from(!spc).wrapping_sub(1));
+            dst[..num_plane_words].fill(u64::from(!spc).wrapping_sub(1));
             if size.get() % 64 != 0 {
-                dst[num_words - 1] &= (1u64 << (size.get() % 64)) - 1;
+                dst[num_plane_words - 1] &= (1u64 << (size.get() % 64)) - 1;
             }
-            offset += num_words;
+            offset += num_plane_words;
         }
         dst[offset..].fill(u64::from(!val).wrapping_sub(1));
 
