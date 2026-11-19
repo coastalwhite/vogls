@@ -1,0 +1,12 @@
+// vogls: verify-stdout
+//
+// Binary literals were parsed as hexadecimal.
+signal[tv] o: 1
+
+proc initial {
+*TR0:
+  %a = fv.const 8'b1x0z_0101
+  %b = tv.const 6'b101101
+  %_0 = vogls.display "{} {}\n", %a, %b
+  halt
+}

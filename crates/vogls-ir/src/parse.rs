@@ -1220,7 +1220,7 @@ fn parse_imm(c: &mut Cursor) -> Result<Bits, Box<ParseError>> {
                 .find(|c| !matches!(c, '0' | '1' | 'x' | 'z' | '_'))
                 .unwrap_or(s.len());
             c.offset += length;
-            Bits::parse_hexadecimal(&s[..length], size).map_err(|_| {
+            Bits::parse_binary(&s[..length], size).map_err(|_| {
                 Box::new(ParseError {
                     at: c.offset,
                     error: "invalid binary".to_string(),
