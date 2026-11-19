@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
@@ -15,6 +17,7 @@ use crate::ast::specify::{
 use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::VSymbol;
 use crate::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
+use crate::lower::drivers::DriveOutputFn;
 use crate::lower::expression::lower_expr;
 use crate::lower::{eval_constant_expr, try_resolve_hident, unwrap_get_signal_mut};
 
@@ -73,9 +76,9 @@ pub struct SpecifyPath<'a> {
     pub span: TokenRange,
 }
 
-/// Scratch buffers for [`lower_iopath`], kept between calls to avoid reallocating them.
+/// Scratch buffers for [`lower_specify_delay`], kept between the bits of an output.
 #[derive(Default)]
-pub struct LowerIoPathScratches {
+struct LowerIoPathScratches {
     /// The index into `inputs_before` of each input with an edge-sensitive path.
     input_before_lut: VgHashMap<SignalKey, usize>,
     /// Each input with an edge-sensitive path, its value before the last change and the signal
@@ -320,38 +323,73 @@ pub fn lower_specify<'a>(
         }
     }
 
-    let mut scratches = LowerIoPathScratches::default();
-    // let mut condition_orsum = VgHashMap::<SignalKey, VariableKey>::default();
-
+    let delays = Rc::<[Time]>::from(delays.as_slice());
     outs_lut.clear();
     for (output, specify) in outs.drain(..) {
-        lower_iopath(ctx, mctx, scope, output, specify, delays, &mut scratches)?;
+        lower_iopath(ctx, mctx, scope, output, specify, &delays)?;
     }
 
     Ok(())
 }
 
+/// The module path delays of `output`, whose `delays` the paths of `specify` point into.
+pub struct SpecifyDelay<'a> {
+    pub scope: SymbolId,
+    pub output: SignalKey,
+    pub specify: SpecifyOutput<'a>,
+    pub delays: Rc<[Time]>,
+}
+
+/// Puts the module path delays of `specify` in front of `output`, which its drivers drive from now
+/// on.
 pub fn lower_iopath<'a>(
     ctx: &mut LowerContext<'a, '_>,
     mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
     output: SignalKey,
     specify: SpecifyOutput<'a>,
-    delays: &[Time],
-    scratches: &mut LowerIoPathScratches,
+    delays: &Rc<[Time]>,
 ) -> Result<(), ()> {
-    let LowerIoPathScratches {
-        input_before_lut,
-        inputs_before,
-        conditions,
-    } = scratches;
-
     let mut proxy = mctx.gl.signals.get(output).unwrap().clone();
     proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
     let proxy = mctx.gl.signals.insert(proxy);
     let symbol = unwrap_get_signal_mut(&mut ctx.table, specify.sid);
     let prev = symbol.terminals.set_specify(proxy);
     assert!(prev.is_none());
+
+    let reads = specify.paths.iter().map(|(input, _)| *input).collect();
+    let delay = SpecifyDelay {
+        scope,
+        output,
+        specify,
+        delays: delays.clone(),
+    };
+    mctx.driver_resolution
+        .push_specify_delay(&mut mctx.gl, proxy, delay, reads);
+    Ok(())
+}
+
+/// Lowers the module path delays of `delay` to one process per bit of its output, which drives the
+/// value of that bit of `proxy` with `drive` after the delay of the path that applies.
+pub(crate) fn lower_specify_delay<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext<'a>,
+    delay: &SpecifyDelay<'a>,
+    proxy: SignalKey,
+    drive: &DriveOutputFn<'a, '_>,
+) -> Result<(), ()> {
+    let SpecifyDelay {
+        scope,
+        output,
+        specify,
+        delays,
+    } = delay;
+    let (scope, output) = (*scope, *output);
+    let LowerIoPathScratches {
+        mut input_before_lut,
+        mut inputs_before,
+        mut conditions,
+    } = LowerIoPathScratches::default();
 
     for output_bitidx in 0..mctx.gl.signals[output].size.get() {
         input_before_lut.clear();
@@ -577,7 +615,7 @@ pub fn lower_iopath<'a>(
         (builder, false_builder) = builder.double_branch(mctx.gl(), do_while_condition);
         false_builder.temporal_jump_to(mctx.gl(), wait_loop_tr);
 
-        builder.drive_partial_constant(mctx.gl(), output, new_proxy_value, output_bitidx);
+        drive(mctx, &mut builder, output_bitidx, new_proxy_value);
         builder.watch_to(mctx.gl(), vec![proxy], wait_loop_tr);
         proc_builder.finalize(mctx.gl());
     }

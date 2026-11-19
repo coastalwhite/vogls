@@ -16,7 +16,6 @@ vogls-codegen.workspace = true
 vogls-codegen-clif = { workspace = true, optional = true }
 vogls-runtime.workspace = true
 vogls-vcd.workspace = true
-vogls-fuse-signals.workspace = true
 vogls-sdf.workspace = true
 vogls-world.workspace = true
 

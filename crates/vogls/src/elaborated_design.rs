@@ -1,11 +1,9 @@
 use std::fmt;
-use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId, SymbolTable};
-use vogls_fuse_signals::{FuseGraph, FuseGraphOptimizer, FuseTarget};
 use vogls_ir::time::TimeResolution;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{GlobalContext, LogicMode, ProcessKey, SignalFlags, SignalKey};
@@ -14,7 +12,7 @@ use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, NonPortModuleItem, TimeScale};
 use vogls_verilog::ast::udp::UdpDeclaration;
 use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable, determine_module_context};
-use vogls_verilog::lower::multidriver::MultidriverResolution;
+use vogls_verilog::lower::drivers::{DriverResolution, FinalizeOptions, FuseTarget};
 use vogls_verilog::lower::{
     Diagnostics, LowerContext, LowerErrorReason, MutLowerContext, WarningsReport,
     lower_module_to_ir,
@@ -40,13 +38,16 @@ pub struct ElaboratedDesign<'a> {
     pub(crate) udps: VgHashMap<IdentId, AstId<'a, UdpDeclaration<'a>>>,
     pub(crate) gl: GlobalContext,
     pub(crate) nbas: IndexMap<SignalKey, (ProcessKey, SignalKey, Option<SignalKey>)>,
-    pub(crate) multidriver: MultidriverResolution,
+    pub(crate) driver_resolution: DriverResolution<'a>,
 
     pub(crate) warnings: Vec<(TokenRange, String)>,
 
     pub(crate) unoptimized_fgs: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>>,
     pub(crate) optimized_fgs: Option<Arc<Mutex<dyn std::io::Write + Send + Sync>>>,
-    pub max_fuse_signals_rounds: usize,
+    /// Maximum number of rounds to simplify a subgraph of the drive graph.
+    pub drive_graph_rounds: usize,
+    /// Whether the drive graph is optimized at all, see [`FinalizeOptions::optimize`].
+    pub drive_graph_opt: bool,
     pub time_resolution: TimeResolution,
 }
 
@@ -245,13 +246,11 @@ impl<'a> ElaboratedDesign<'a> {
             gl: std::mem::take(&mut self.gl),
             nbas: std::mem::take(&mut self.nbas),
             diagnostics: Diagnostics::default(),
-            connections: Vec::new(),
             fuse_dsts_scratch: Vec::new(),
             fuse_srcs_scratch: Vec::new(),
             has_vcd: false,
             monitor: None,
-            multidriver: std::mem::take(&mut self.multidriver),
-            _marker: PhantomData,
+            driver_resolution: std::mem::take(&mut self.driver_resolution),
         };
 
         let result = f(&mut ctx, &mut mctx, &self.module_lut);
@@ -261,7 +260,7 @@ impl<'a> ElaboratedDesign<'a> {
         self.gl = mctx.gl;
         self.nbas = mctx.nbas;
         self.warnings = mctx.diagnostics.warnings;
-        self.multidriver = mctx.multidriver;
+        self.driver_resolution = mctx.driver_resolution;
         result
     }
 
@@ -378,7 +377,7 @@ impl<'a> ElaboratedDesign<'a> {
             udps,
             gl,
             nbas,
-            multidriver,
+            driver_resolution,
 
             logic_mode,
 
@@ -386,10 +385,11 @@ impl<'a> ElaboratedDesign<'a> {
             token_buffer,
             arenas,
 
-            mut unoptimized_fgs,
-            mut optimized_fgs,
+            unoptimized_fgs,
+            optimized_fgs,
 
-            max_fuse_signals_rounds,
+            drive_graph_rounds,
+            drive_graph_opt,
             time_resolution,
 
             warnings: _,
@@ -409,13 +409,11 @@ impl<'a> ElaboratedDesign<'a> {
             gl,
             nbas,
             diagnostics: Diagnostics::default(),
-            connections: Vec::new(),
             fuse_dsts_scratch: Vec::new(),
             fuse_srcs_scratch: Vec::new(),
             has_vcd: false,
             monitor: None,
-            multidriver,
-            _marker: PhantomData,
+            driver_resolution,
         };
 
         // @TODO: Iterate over the modules instead.
@@ -486,12 +484,13 @@ impl<'a> ElaboratedDesign<'a> {
                     udps,
                     gl: mctx.gl,
                     nbas: mctx.nbas,
-                    multidriver: mctx.multidriver,
+                    driver_resolution: mctx.driver_resolution,
 
                     unoptimized_fgs,
                     optimized_fgs,
 
-                    max_fuse_signals_rounds,
+                    drive_graph_rounds,
+                    drive_graph_opt,
                     time_resolution,
 
                     warnings: Vec::new(),
@@ -509,6 +508,26 @@ impl<'a> ElaboratedDesign<'a> {
             ctx.time_scale = module_id.time_scale;
             let module_key = lower_module_to_ir(module_id, &ctx, &mut mctx, key);
             error |= module_key.is_err();
+        }
+
+        let mut fuse_maps = None;
+        if !error {
+            let mut unoptimized_fgs = unoptimized_fgs.as_ref().map(|w| w.lock().unwrap());
+            let mut optimized_fgs = optimized_fgs.as_ref().map(|w| w.lock().unwrap());
+            let options = FinalizeOptions {
+                max_rounds: drive_graph_rounds,
+                optimize: drive_graph_opt,
+                unoptimized_dot: unoptimized_fgs
+                    .as_deref_mut()
+                    .map(|w| w as &mut dyn std::io::Write),
+                optimized_dot: optimized_fgs
+                    .as_deref_mut()
+                    .map(|w| w as &mut dyn std::io::Write),
+            };
+            match std::mem::take(&mut mctx.driver_resolution).finalize(&ctx, &mut mctx, options) {
+                Ok(maps) => fuse_maps = Some(maps),
+                Err(()) => error = true,
+            }
         }
 
         if error {
@@ -534,12 +553,13 @@ impl<'a> ElaboratedDesign<'a> {
                     udps,
                     gl: mctx.gl,
                     nbas: mctx.nbas,
-                    multidriver: mctx.multidriver,
+                    driver_resolution: mctx.driver_resolution,
 
                     unoptimized_fgs,
                     optimized_fgs,
 
-                    max_fuse_signals_rounds,
+                    drive_graph_rounds,
+                    drive_graph_opt,
                     time_resolution,
 
                     warnings: Vec::new(),
@@ -549,31 +569,7 @@ impl<'a> ElaboratedDesign<'a> {
             }));
         }
 
-        std::mem::take(&mut mctx.multidriver).finalize(&mut mctx.gl, &mut mctx.connections);
-
-        let mut opt = FuseGraphOptimizer::new(FuseGraph::from_connections(
-            max_fuse_signals_rounds,
-            &mctx.gl,
-            &mctx.connections,
-        ));
-        if let Some(unoptimized_fgs) = unoptimized_fgs.as_mut() {
-            writeln!(
-                unoptimized_fgs.lock().unwrap(),
-                "{}",
-                opt.graph().display_dot(&mctx.gl.signals)
-            )
-            .unwrap();
-        }
-        opt.optimize();
-        if let Some(optimized_fgs) = optimized_fgs.as_mut() {
-            writeln!(
-                optimized_fgs.lock().unwrap(),
-                "{}",
-                opt.graph().display_dot(&mctx.gl.signals)
-            )
-            .unwrap();
-        }
-        let (prb_fuse, drv_fuse) = opt.finalize(mctx.gl());
+        let (prb_fuse, write_fuse) = fuse_maps.expect("drivers are resolved without errors");
 
         let mut table: FrozenSymbolTable<Symbol> = ctx.table.into();
         for symbol in table.symbol_id_iter() {
@@ -587,17 +583,20 @@ impl<'a> ElaboratedDesign<'a> {
                             }
                             sym.value = SignalValue::Constant(value.clone());
                         } else {
+                            // Drives are mapped first: `map_drv` starts from the unmapped probe
+                            // signal. The writes of a net connected by a `tran` go to the value
+                            // that the net drives into it, see `WriteFuseMap`.
+                            s.map_drv(|s| match write_fuse.get(&s) {
+                                None => (s, None),
+                                Some(&(r, slice)) => {
+                                    (r, Some(NonMaxU32::new(slice.lsb()).unwrap()))
+                                }
+                            });
                             s.map_prb(|s| match prb_fuse.get(&s) {
                                 None => (s, None),
                                 Some(FuseTarget::Constant(_)) => unreachable!(),
                                 Some(FuseTarget::Signal(r, slice)) => {
                                     mctx.gl.signals.remove(s);
-                                    (*r, slice.map(|s| NonMaxU32::new(s.lsb()).unwrap()))
-                                }
-                            });
-                            s.map_drv(|s| match drv_fuse.get(&s) {
-                                None => (s, None),
-                                Some((r, slice)) => {
                                     (*r, slice.map(|s| NonMaxU32::new(s.lsb()).unwrap()))
                                 }
                             });

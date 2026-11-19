@@ -1,22 +1,17 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, ProcessBuilder, ProcessKind, SignalSlice, VariableKey};
-use vogls_utils::OrderedSet;
+use vogls_ir::SignalSlice;
 
 use crate::ast::AstId;
 use crate::ast::expr::Expr;
 use crate::ast::module::{ModuleOrGenerateItemDeclaration, NetDeclAssignment, NetDeclarationNets};
 use crate::ast::statement::Delay3;
-use crate::elaborate::{SignalSymbol, VSymbol};
-use crate::lower::expression::{self, get_used_signals, lower_expr};
+use crate::elaborate::{SignalKind, VSymbol};
 use crate::lower::fuse::{
-    DestinationSite, DestinationSiteContent, FuseFailure, FuseResult, RequiredSignalKind,
-    SiteTerminal, expr_to_src_sites, try_fuse_srcs_to_dsts,
+    DestinationSite, DestinationSiteContent, RequiredSignalKind, SiteTerminal, SiteType,
+    expr_to_src_sites,
 };
-use crate::lower::{Diagnostics, resolve_hident};
+use crate::lower::resolve_hident;
 use crate::lower::{LowerContext, MutLowerContext};
-
-use super::continuous_assign::lower_assign_delay3;
-use super::gate_instantiation::{AssignOutputFn, GateDelayFn, lower_delayed_drive};
 
 /// Lower a Verilog net assignment construct to Vogls IR.
 ///
@@ -98,118 +93,79 @@ fn assign_net<'a>(
         return Err(());
     }
 
-    // Optimization: Try to alias LValue and RValue. This allows a future pass to eliminate the
-    // marshalling process. An alias cannot be delayed.
-    if delay3.is_none() && try_fuse_net_assignment(ctx, mctx, scope, net_symbol, rvalue).is_ok() {
-        return Ok(());
-    }
-
-    let mut sensitivity_list = OrderedSet::new();
-    get_used_signals(ctx, mctx, scope, &mut sensitivity_list, rvalue)?;
-    let sensitivity_list = sensitivity_list.items;
-
-    let net_bit_length = net_symbol.ty.bit_length();
-
-    let span = ctx.arenas.get_span(rvalue);
-    let (proc_builder, mut bb_builder) =
-        ProcessBuilder::new(&mut mctx.gl, ProcessKind::Assign, span);
-    let entry_tr = proc_builder.entry();
-
-    let (rvalue, rvalue_ty) = lower_expr(
-        ctx,
-        mctx,
-        scope,
-        &mut bb_builder,
-        rvalue,
-        Some(net_bit_length),
-    )?;
-
-    let v = expression::coerce_to(mctx.gl(), &mut bb_builder, rvalue, rvalue_ty, net_symbol.ty);
-
     // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 71
     //
     // """
     // When there is a continuous assignment in a declaration, the delay is part of the continuous
     // assignment and is not a net delay.
     // """
-    let delay = delay3.map(|delay3| {
-        move |mctx: &mut MutLowerContext<'a>,
-              builder: &mut BasicBlockBuilder,
-              new_value: VariableKey,
-              driven_value: VariableKey| {
-            lower_assign_delay3(
-                ctx,
-                mctx,
-                scope,
-                builder,
-                delay3,
-                new_value,
-                driven_value,
-                net_bit_length,
-            )
-        }
-    });
-    let assign = |mctx: &mut MutLowerContext<'a>, builder: &mut BasicBlockBuilder, value| {
-        net_symbol
-            .terminals
-            .drive_blocking(mctx.gl(), builder, value, None);
-        Ok(())
-    };
-    lower_delayed_drive(
-        mctx,
-        &mut bb_builder,
-        span,
-        delay.as_ref().map(|delay| delay as &GateDelayFn),
-        &assign as &AssignOutputFn,
-        v,
-        net_bit_length,
-    )?;
-    bb_builder.watch_to(mctx.gl(), sensitivity_list, entry_tr);
-
-    proc_builder.finalize(mctx.gl());
-
-    Ok(())
-}
-
-pub fn try_fuse_net_assignment<'a>(
-    ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext<'a>,
-    scope: SymbolId,
-    symbol: &SignalSymbol,
-    rvalue: AstId<'a, Expr<'a>>,
-) -> FuseResult {
-    mctx.fuse_srcs_scratch.clear();
     mctx.fuse_dsts_scratch.clear();
+    mctx.fuse_srcs_scratch.clear();
 
-    // Destinations
+    let bit_length = net_symbol.ty.bit_length();
+
+    // Destinations, from least to most significant.
     mctx.fuse_dsts_scratch.push(DestinationSite {
         content: DestinationSiteContent::Signal {
-            signal: symbol.terminals.blocking_drive_signal(),
-            slice: SignalSlice::with_end(symbol.ty.bit_length()),
+            signal: net_symbol.terminals.blocking_drive_signal(),
+            slice: SignalSlice::with_end(bit_length),
+            kind: net_symbol.kind,
         },
-        ty: symbol.ty.into(),
+        ty: net_symbol.ty.into(),
     });
 
-    // Sources
-    if expr_to_src_sites(
+    // A delayed assignment assigns the input of a delay in front of the destinations.
+    if let Some(delay3) = delay3 {
+        let input = mctx.driver_resolution.push_delay(
+            &mut mctx.gl,
+            ctx.logic_mode,
+            delay3,
+            scope,
+            &mctx.fuse_dsts_scratch,
+            bit_length,
+        );
+        mctx.fuse_dsts_scratch.clear();
+        mctx.fuse_dsts_scratch.push(DestinationSite {
+            content: DestinationSiteContent::Signal {
+                signal: input,
+                slice: SignalSlice::with_end(bit_length),
+                kind: SignalKind::Net,
+            },
+            ty: SiteType::from(net_symbol.ty),
+        });
+    }
+
+    // Sources, from least to most significant.
+    expr_to_src_sites(
         ctx,
         &mctx.gl,
         &mut mctx.fuse_srcs_scratch,
         scope,
-        &mut Diagnostics::default(),
+        &mut mctx.diagnostics,
         rvalue,
         SiteTerminal::Probe,
         RequiredSignalKind::None,
-    )
-    .is_err()
-    {
-        return Err(FuseFailure);
-    };
+    )?;
 
-    try_fuse_srcs_to_dsts(
-        &mctx.gl,
-        &mut mctx.connections,
-        &mctx.fuse_srcs_scratch,
-        &mctx.fuse_dsts_scratch,
-    )
+    // The right-hand side is context-determined by the destinations, unless it is a concatenation
+    // or only a part of it is assigned.
+    let is_context_determined = !matches!(&*rvalue, Expr::Concatenation(_) | Expr::Replication(_));
+    let context = is_context_determined.then_some((rvalue, scope, net_symbol.ty));
+    if mctx
+        .driver_resolution
+        .push_sites(
+            &mut mctx.gl,
+            &mut mctx.fuse_srcs_scratch,
+            &mut mctx.fuse_dsts_scratch,
+            context,
+        )
+        .is_err()
+    {
+        mctx.diagnostics.not_yet_implemented(
+            ctx.arenas.get_span(rvalue),
+            "assigning a real as part of a concatenation",
+        );
+        return Err(());
+    }
+    Ok(())
 }

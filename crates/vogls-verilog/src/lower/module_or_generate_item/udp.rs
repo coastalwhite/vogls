@@ -1,7 +1,13 @@
 use vogls_frontend::symbol_table::SymbolId;
+use vogls_ir::SCALAR_VSIZE;
+use vogls_utils::OrderedSet;
 
+use super::gate_instantiation::net_lvalue_to_dsts;
 use crate::ast::AstId;
 use crate::ast::udp::{UdpInstance, UdpInstantiation};
+use crate::lower::drivers::ExprSource;
+use crate::lower::expression::get_used_signals;
+use crate::lower::udp::sequential_udp_state;
 use crate::lower::{LowerContext, MutLowerContext};
 
 pub fn lower<'a>(
@@ -50,7 +56,27 @@ pub fn lower<'a>(
             return Err(());
         }
 
-        crate::lower::udp::lower_udp(ctx, mctx, scope, *udp, *output_terminal, *input_terminals)?;
+        let mut reads = OrderedSet::new();
+        for input in input_terminals.iter() {
+            get_used_signals(ctx, mctx, scope, &mut reads, input)?;
+        }
+
+        let state = sequential_udp_state(ctx, mctx, scope, *udp)?;
+        net_lvalue_to_dsts(ctx, mctx, scope, *output_terminal)?;
+        mctx.driver_resolution.push_primitive(
+            &mut mctx.gl,
+            ctx.logic_mode,
+            ExprSource::Udp {
+                udp: *udp,
+                scope,
+                instance,
+                state,
+            },
+            &mctx.fuse_dsts_scratch,
+            SCALAR_VSIZE,
+            None,
+            reads.items,
+        );
     }
 
     Ok(())

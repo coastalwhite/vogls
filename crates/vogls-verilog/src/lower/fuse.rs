@@ -1,11 +1,5 @@
-use std::cmp;
-
-use slotmap::SlotMap;
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_fuse_signals::{Driver, InputEdge};
-use vogls_ir::{
-    Bits, GlobalContext, SCALAR_VSIZE, Signal, SignalKey, SignalSlice, VSIZE_64, VectorSize,
-};
+use vogls_ir::{Bits, GlobalContext, SCALAR_VSIZE, SignalKey, SignalSlice, VSIZE_64, VectorSize};
 
 use crate::ast::constant_expr::ConstantExpr;
 use crate::ast::expr::{Expr, Replication};
@@ -17,9 +11,10 @@ use crate::lower::try_resolve_hident;
 use crate::number::Sign;
 
 use super::addressing::{ConstantAddressingContext, RangeExpr};
+use super::expression::get_expr_type;
 use super::{Diagnostics, LowerContext, VType, eval_constant_expr, hident_span};
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct FuseFailure;
 pub type FuseResult = Result<(), FuseFailure>;
 
@@ -30,16 +25,26 @@ pub enum SiteType {
     Real,
 }
 
-pub enum SourceSiteContent {
+pub enum SourceSiteContent<'a> {
     Constant(Bits),
     Signal {
         signal: SignalKey,
         slice: SignalSlice,
+        kind: SignalKind,
     },
     /// A read from out-of-bounds bits of a signal.
     OutOfBounds {
         signal: SignalKey,
         bit_length: VectorSize,
+    },
+    /// A read from `slice` of an expression that is not just wiring.
+    ///
+    /// The value of the expression is converted to `ty`.
+    Expr {
+        expr: AstId<'a, Expr<'a>>,
+        scope: SymbolId,
+        ty: VType,
+        slice: SignalSlice,
     },
 }
 
@@ -47,6 +52,7 @@ pub enum DestinationSiteContent {
     Signal {
         signal: SignalKey,
         slice: SignalSlice,
+        kind: SignalKind,
     },
 
     /// A drive on out-of-bounds bits of a signal.
@@ -56,8 +62,8 @@ pub enum DestinationSiteContent {
     },
 }
 
-pub struct SourceSite {
-    pub content: SourceSiteContent,
+pub struct SourceSite<'a> {
+    pub content: SourceSiteContent<'a>,
     pub ty: SiteType,
 }
 
@@ -78,11 +84,12 @@ pub enum RequiredSignalKind {
     Net,
 }
 
-impl SourceSite {
+impl SourceSite<'_> {
     pub fn bit_length(&self) -> VectorSize {
         match &self.content {
             SourceSiteContent::Constant(bits) => bits.size(),
-            SourceSiteContent::Signal { signal: _, slice } => slice.width(),
+            SourceSiteContent::Signal { slice, .. } => slice.width(),
+            SourceSiteContent::Expr { slice, .. } => slice.width(),
             SourceSiteContent::OutOfBounds {
                 signal: _,
                 bit_length,
@@ -92,9 +99,17 @@ impl SourceSite {
 
     fn to_destination(&self) -> Option<DestinationSite> {
         match self.content {
-            SourceSiteContent::Constant(_) => None,
-            SourceSiteContent::Signal { signal, slice } => Some(DestinationSite {
-                content: DestinationSiteContent::Signal { signal, slice },
+            SourceSiteContent::Constant(_) | SourceSiteContent::Expr { .. } => None,
+            SourceSiteContent::Signal {
+                signal,
+                slice,
+                kind,
+            } => Some(DestinationSite {
+                content: DestinationSiteContent::Signal {
+                    signal,
+                    slice,
+                    kind,
+                },
                 ty: self.ty,
             }),
             SourceSiteContent::OutOfBounds { signal, bit_length } => Some(DestinationSite {
@@ -118,7 +133,7 @@ impl From<VType> for SiteType {
 impl DestinationSite {
     pub fn bit_length(&self) -> VectorSize {
         match &self.content {
-            DestinationSiteContent::Signal { signal: _, slice } => slice.width(),
+            DestinationSiteContent::Signal { slice, .. } => slice.width(),
             DestinationSiteContent::OutOfBounds {
                 signal: _,
                 bit_length,
@@ -127,181 +142,10 @@ impl DestinationSite {
     }
 }
 
-#[inline(always)]
-fn signal_slice_to_opt(
-    signals: &SlotMap<SignalKey, Signal>,
-    signal: SignalKey,
-    slice: SignalSlice,
-) -> Option<SignalSlice> {
-    ((slice.lsb() != 0) | (signals[signal].size != slice.width())).then_some(slice)
-}
-
-pub fn try_fuse_srcs_to_dsts(
-    gl: &GlobalContext,
-    connections: &mut Vec<InputEdge>,
-
-    // Source sites from least significant bits to most significant bits.
-    srcs: &[SourceSite],
-
-    // Destination sites from least significant bits to most significant bits.
-    dsts: &[DestinationSite],
-) -> FuseResult {
-    if cfg!(debug_assertions) {
-        for src in srcs {
-            let SourceSiteContent::Signal { signal, slice } = src.content else {
-                continue;
-            };
-
-            assert!(slice.msb() < gl.signals[signal].size.get());
-        }
-        for dst in dsts {
-            let DestinationSiteContent::Signal { signal, slice } = dst.content else {
-                continue;
-            };
-            assert!(slice.msb() < gl.signals[signal].size.get());
-        }
-    }
-
-    // Fast path and base case: both sides consist of 1 signal that has the same bit length and
-    // type.
-    if let [src] = srcs
-        && let [dst] = dsts
-        && src.bit_length() == dst.bit_length()
-        && (src.ty == T::Real) == (dst.ty == T::Real)
-    {
-        let driver = match &src.content {
-            SourceSiteContent::Constant(bits) => Driver::Constant(bits.clone()),
-            SourceSiteContent::Signal { signal, slice } => {
-                Driver::Signal(*signal, signal_slice_to_opt(&gl.signals, *signal, *slice))
-            }
-            SourceSiteContent::OutOfBounds {
-                signal: _,
-                bit_length,
-            } => Driver::Constant(Bits::new_unknown(*bit_length)),
-        };
-        match dst.content {
-            DestinationSiteContent::Signal { signal, slice } => connections.push(InputEdge {
-                driver,
-                drivee: signal,
-                drivee_slice: signal_slice_to_opt(&gl.signals, signal, slice),
-            }),
-            DestinationSiteContent::OutOfBounds { .. } => {
-                // No-op
-            }
-        }
-
-        return FuseResult::Ok(());
-    }
-
-    use SiteType as T;
-    let start_connections_len = connections.len();
-
-    let mut src_i = 0;
-    let mut dst_i = 0;
-    let mut src_bit_offset = 0u32;
-    let mut dst_bit_offset = 0u32;
-    while let Some(src) = srcs.get(src_i)
-        && let Some(dst) = dsts.get(dst_i)
-    {
-        // Don't do any kind of fusing if only one side is a real.
-        if (src.ty == T::Real) ^ (dst.ty == T::Real) {
-            connections.truncate(start_connections_len);
-            return FuseResult::Err(FuseFailure);
-        }
-
-        let src_bit_length = src.bit_length();
-        let dst_bit_length = dst.bit_length();
-
-        debug_assert!(src_bit_offset < src_bit_length.get());
-        debug_assert!(dst_bit_offset < dst_bit_length.get());
-
-        let src_rem_bit_length = VectorSize::new(src_bit_length.get() - src_bit_offset).unwrap();
-        let dst_rem_bit_length = VectorSize::new(dst_bit_length.get() - dst_bit_offset).unwrap();
-
-        let step_bit_length = cmp::min(src_rem_bit_length, dst_rem_bit_length);
-
-        let driver = match &src.content {
-            SourceSiteContent::Constant(bits) => {
-                Driver::Constant(bits.slicez(src_bit_offset, step_bit_length))
-            }
-            SourceSiteContent::Signal { signal, slice } => {
-                let offset_slice =
-                    SignalSlice::from_width(src_bit_offset, step_bit_length).unwrap();
-                let slice = slice.subslice(offset_slice).unwrap();
-                Driver::Signal(*signal, signal_slice_to_opt(&gl.signals, *signal, slice))
-            }
-            SourceSiteContent::OutOfBounds { .. } => {
-                Driver::Constant(Bits::new_unknown(step_bit_length))
-            }
-        };
-        match dst.content {
-            DestinationSiteContent::Signal { signal, slice } => {
-                let offset_slice =
-                    SignalSlice::from_width(dst_bit_offset, step_bit_length).unwrap();
-                let dst_slice = slice.subslice(offset_slice).unwrap();
-                connections.push(InputEdge {
-                    driver,
-                    drivee: signal,
-                    drivee_slice: signal_slice_to_opt(&gl.signals, signal, dst_slice),
-                });
-            }
-            DestinationSiteContent::OutOfBounds { .. } => {
-                // No-op
-            }
-        }
-
-        src_bit_offset += step_bit_length.get();
-        dst_bit_offset += step_bit_length.get();
-
-        if src_bit_offset >= src_bit_length.get() {
-            src_i += 1;
-            src_bit_offset = 0;
-        }
-        if dst_bit_offset >= dst_bit_length.get() {
-            dst_i += 1;
-            dst_bit_offset = 0;
-        }
-    }
-
-    // We don't sign-extend, we only zero-extend.
-    //
-    // @Performance:
-    // 1. This is somewhat conservative. For example, `assign wide_net = {signed_scalar_net, 1'b0}`
-    //    is rejected here, but could still zero-extend.
-    // 2. For sign-extensions, we would make all remaining bit be driven by the last source bit. For
-    //    that it would make sense to have some kind of repeated driver.
-    if dst_i < dsts.len() && srcs.last().is_some_and(|src| src.ty == T::Signed) {
-        connections.truncate(start_connections_len);
-        return FuseResult::Err(FuseFailure);
-    }
-
-    // Zero-extend the destination.
-    for dst in &dsts[dst_i..] {
-        let DestinationSiteContent::Signal { signal, slice } = dst.content else {
-            continue;
-        };
-
-        let dst_bit_length = dst.bit_length();
-        let dst_rem_bit_length = VectorSize::new(dst_bit_length.get() - dst_bit_offset).unwrap();
-        let offset_slice = SignalSlice::from_width(dst_bit_offset, dst_rem_bit_length).unwrap();
-        let dst_slice = slice.subslice(offset_slice).unwrap();
-
-        connections.push(InputEdge {
-            driver: Driver::Constant(Bits::new_zeroed(dst_rem_bit_length)),
-            drivee: signal,
-            drivee_slice: signal_slice_to_opt(&gl.signals, signal, dst_slice),
-        });
-
-        dst_bit_offset = 0;
-    }
-
-    FuseResult::Ok(())
-}
-
 pub fn convert_src_sites_to_dsts(
     srcs_start_length: usize,
     dst_sites: &mut Vec<DestinationSite>,
-    src_sites: &mut Vec<SourceSite>,
+    src_sites: &mut Vec<SourceSite<'_>>,
 ) -> FuseResult {
     let mut failed_conversion = false;
     let dsts_start_length = dst_sites.len();
@@ -330,16 +174,19 @@ pub fn convert_src_sites_to_dsts(
     FuseResult::Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn expr_to_src_sites<'a>(
     ctx: &LowerContext<'a, '_>,
     gl: &GlobalContext,
-    fuse_srcs: &mut Vec<SourceSite>,
+    fuse_srcs: &mut Vec<SourceSite<'a>>,
     scope: SymbolId,
     diagnostics: &mut Diagnostics,
     expr: AstId<'a, Expr<'a>>,
     side: SiteTerminal,
     required_signal_kind: RequiredSignalKind,
 ) -> Result<(), ()> {
+    let is_concatenation = matches!(&*expr, Expr::Concatenation(_) | Expr::Replication(_));
+    let start = fuse_srcs.len();
     let mut error = false;
     let mut expr_stack = Vec::new();
 
@@ -354,6 +201,7 @@ pub fn expr_to_src_sites<'a>(
                     fuse_srcs,
                     scope,
                     diagnostics,
+                    Some(expr),
                     *ident,
                     exprs.into_constant(),
                     *range_expr,
@@ -375,7 +223,6 @@ pub fn expr_to_src_sites<'a>(
                 });
             }
             Expr::Concatenation(exprs) => {
-                // @TODO: Handle zero-sized replications.
                 expr_stack.extend(exprs.iter());
             }
             Expr::Replication(Replication {
@@ -395,7 +242,8 @@ pub fn expr_to_src_sites<'a>(
                     continue;
                 };
 
-                let Some(repetitions) = repetitions.as_integer().filter(|v| *v > 0) else {
+                // A zero replication contributes no bits.
+                let Some(repetitions) = repetitions.as_integer().filter(|v| *v >= 0) else {
                     diagnostics.not_yet_implemented(
                         ctx.arenas.get_span(*constant_expr),
                         "cannot be used for number of repetitions",
@@ -409,8 +257,7 @@ pub fn expr_to_src_sites<'a>(
                 }
             }
             _ => {
-                diagnostics.output_expr_not_allowed(ctx.arenas.get_span(expr));
-                error = true;
+                error |= push_expr_site_of(ctx, gl, diagnostics, fuse_srcs, scope, expr).is_err();
             }
         }
     }
@@ -418,15 +265,26 @@ pub fn expr_to_src_sites<'a>(
     if error {
         return Err(());
     }
+
+    // The result of a concatenation is unsigned.
+    if is_concatenation {
+        for site in &mut fuse_srcs[start..] {
+            if site.ty == SiteType::Signed {
+                site.ty = SiteType::Unsigned;
+            }
+        }
+    }
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn ident_to_src_sites<'a, R>(
     ctx: &LowerContext<'a, '_>,
     gl: &GlobalContext,
-    fuse_srcs: &mut Vec<SourceSite>,
+    fuse_srcs: &mut Vec<SourceSite<'a>>,
     scope: SymbolId,
     diagnostics: &mut Diagnostics,
+    expr: Option<AstId<'a, Expr<'a>>>,
     ident: HIdent<'_>,
     exprs: AstIdRange<'a, ConstantExpr<'a>>,
     range_expr: Option<R>,
@@ -436,9 +294,32 @@ pub fn ident_to_src_sites<'a, R>(
 where
     R: for<'b> Into<RangeExpr<ConstantAddressingContext<'a, 'b>>>,
 {
+    // Only values may be expressions, not destinations or bidirectional terminals.
+    let expr = match required_signal_kind {
+        RequiredSignalKind::None => expr,
+        RequiredSignalKind::Net => None,
+    };
+
     let symbol_id = try_resolve_hident(scope, &ctx.table, ctx.arenas, ident, diagnostics)?;
     let symbol = match &ctx.table[symbol_id].content {
         VSymbol::Signal(n) => n,
+        VSymbol::Parameter(_) if let Some(expr) = expr => {
+            let value = eval_constant_expr(
+                gl,
+                ctx.arenas,
+                &ctx.table,
+                scope,
+                diagnostics,
+                expr.into_constant(),
+                None,
+            )?;
+            let ty = SiteType::from(value.ty());
+            fuse_srcs.push(SourceSite {
+                content: SourceSiteContent::Constant(value.into_bits()),
+                ty,
+            });
+            return Ok(());
+        }
         _ => {
             diagnostics
                 .not_yet_implemented(hident_span(ctx.arenas, ident), "cannot be used as signal");
@@ -476,22 +357,28 @@ where
             content: SourceSiteContent::Signal {
                 signal,
                 slice: SignalSlice::with_end(bit_length),
+                kind: symbol.kind,
             },
             ty,
         });
         return Ok(());
     }
 
+    // A select with an index that is not constant reads different bits over time, so it is an
+    // expression. An index that is not constant fails to be addressed as a constant.
+    let mut address_diagnostics = Diagnostics::default();
     let mut actx = ConstantAddressingContext {
         gl,
         arenas: ctx.arenas,
         table: &ctx.table,
         scope,
-        diagnostics,
+        diagnostics: match expr {
+            Some(_) => &mut address_diagnostics,
+            None => diagnostics,
+        },
         loc: 0,
         _pd: std::marker::PhantomData,
     };
-
     let address = lower_addressing(
         &mut actx,
         symbol.ty.bit_length(),
@@ -499,7 +386,14 @@ where
         symbol.transform,
         exprs.iter(),
         range_expr.map(Into::into),
-    )?;
+    );
+    let address = match (address, expr) {
+        (Ok(address), _) => address,
+        (Err(()), Some(expr)) => {
+            return push_expr_site_of(ctx, gl, diagnostics, fuse_srcs, scope, expr);
+        }
+        (Err(()), None) => return Err(()),
+    };
 
     let ty = if symbol.ty.is_real() {
         SiteType::Real
@@ -579,7 +473,11 @@ where
     };
 
     fuse_srcs.push(SourceSite {
-        content: SourceSiteContent::Signal { signal, slice },
+        content: SourceSiteContent::Signal {
+            signal,
+            slice,
+            kind: symbol.kind,
+        },
         ty,
     });
 
@@ -594,31 +492,107 @@ where
     Ok(())
 }
 
-pub fn try_net_flat_lvalue_to_dsts<'a>(
+pub fn net_flat_lvalue_to_dsts<'a>(
     ctx: &LowerContext<'a, '_>,
     gl: &GlobalContext,
     dst_sites: &mut Vec<DestinationSite>,
-    src_sites: &mut Vec<SourceSite>,
+    src_sites: &mut Vec<SourceSite<'a>>,
+    diagnostics: &mut Diagnostics,
     scope: SymbolId,
     net_lvalue: AstId<'a, NetLValueFlat<'a>>,
-) -> FuseResult {
+) -> Result<(), ()> {
     let srcs_start_length = src_sites.len();
-    if ident_to_src_sites(
+    ident_to_src_sites(
         ctx,
         gl,
         src_sites,
         scope,
-        &mut Diagnostics::default(),
+        diagnostics,
+        None,
         net_lvalue.ident,
         net_lvalue.constant_exprs,
         net_lvalue.constant_range_expression.map(|r| *r),
         SiteTerminal::BlockingDrive,
         RequiredSignalKind::Net,
-    )
-    .is_err()
-    {
-        return Err(FuseFailure);
-    };
+    )?;
 
-    convert_src_sites_to_dsts(srcs_start_length, dst_sites, src_sites)
+    // Signals always convert to destinations.
+    if convert_src_sites_to_dsts(srcs_start_length, dst_sites, src_sites).is_err() {
+        diagnostics.output_expr_not_allowed(ctx.arenas.get_span(net_lvalue));
+        return Err(());
+    }
+
+    Ok(())
+}
+
+fn push_expr_site_of<'a>(
+    ctx: &LowerContext<'a, '_>,
+    gl: &GlobalContext,
+    diagnostics: &mut Diagnostics,
+    fuse_srcs: &mut Vec<SourceSite<'a>>,
+    scope: SymbolId,
+    expr: AstId<'a, Expr<'a>>,
+) -> Result<(), ()> {
+    let ty = get_expr_type(gl, ctx.arenas, &ctx.table, scope, diagnostics, expr)?;
+    fuse_srcs.push(SourceSite {
+        content: SourceSiteContent::Expr {
+            expr,
+            scope,
+            ty,
+            slice: SignalSlice::with_end(ty.bit_length()),
+        },
+        ty: SiteType::from(ty),
+    });
+    Ok(())
+}
+
+/// Restricts `srcs`, given from least to most significant bit, to the bits in `slice`.
+pub fn slice_src_sites(srcs: &mut Vec<SourceSite<'_>>, slice: SignalSlice) -> Result<(), ()> {
+    // Expression slice is [lo, hi)
+    let (lo, hi) = (slice.lsb(), slice.msb() + 1);
+
+    let mut failed = false;
+    let mut bit_offset = 0u32;
+
+    srcs.retain_mut(|src| {
+        let src_offset = bit_offset;
+        bit_offset += src.bit_length().get();
+
+        // Entire source is included.
+        if lo <= src_offset && hi >= bit_offset {
+            return true;
+        }
+
+        // Source slice is [src_lo, src_hi)
+        let src_lo = lo.max(src_offset);
+        let src_hi = hi.min(bit_offset);
+
+        // Entire source is excluded.
+        if src_lo >= src_hi {
+            return false;
+        }
+
+        // We cannot partially slice a real.
+        failed |= src.ty == SiteType::Real;
+
+        let sub = SignalSlice::from_width(
+            src_lo - src_offset,
+            VectorSize::new(src_hi - src_lo).unwrap(),
+        )
+        .unwrap();
+        match &mut src.content {
+            SourceSiteContent::Constant(bits) => *bits = bits.slicez(sub.lsb(), sub.width()),
+            SourceSiteContent::Signal { slice, .. } | SourceSiteContent::Expr { slice, .. } => {
+                *slice = slice.subslice(sub).unwrap();
+            }
+            SourceSiteContent::OutOfBounds { bit_length, .. } => *bit_length = sub.width(),
+        }
+        true
+    });
+
+    if failed {
+        return Err(());
+    }
+
+    Ok(())
 }

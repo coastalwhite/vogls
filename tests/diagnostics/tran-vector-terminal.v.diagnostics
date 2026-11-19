@@ -1,0 +1,7 @@
+error: not yet implemented or no specialized error: `tran` terminals of different widths are not yet supported
+  --> {path}:8
+ 6 |     wire [1:0] v;
+ 7 |     wire s;
+ 8 >     tran t (v, s);
+                    ^
+ 9 | endmodule

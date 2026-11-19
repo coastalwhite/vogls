@@ -1169,7 +1169,6 @@ dependencies = [
  "vogls-codegen",
  "vogls-codegen-clif",
  "vogls-frontend",
- "vogls-fuse-signals",
  "vogls-ir",
  "vogls-runtime",
  "vogls-sdf",
@@ -1247,18 +1246,6 @@ version = "0.0.1"
 dependencies = [
  "foldhash 0.2.0",
  "hashbrown 0.17.1",
- "vogls-ir",
- "vogls-utils",
-]
-
-[[package]]
-name = "vogls-fuse-signals"
-version = "0.0.1"
-dependencies = [
- "foldhash 0.2.0",
- "hashbrown 0.17.1",
- "slotmap",
- "vogls-bits",
  "vogls-ir",
  "vogls-utils",
 ]
@@ -1378,9 +1365,9 @@ dependencies = [
  "bumpalo",
  "foldhash 0.2.0",
  "hashbrown 0.17.1",
+ "proptest",
  "slotmap",
  "vogls-frontend",
- "vogls-fuse-signals",
  "vogls-ir",
  "vogls-utils",
  "vogls-world",

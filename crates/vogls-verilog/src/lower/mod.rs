@@ -3,10 +3,10 @@ mod assign;
 mod delay;
 pub mod delay_pointer;
 mod diagnostics;
+pub mod drivers;
 pub mod expression;
 mod fuse;
 pub mod module_or_generate_item;
-pub mod multidriver;
 pub mod specify;
 mod statement;
 pub mod udp;
@@ -37,18 +37,14 @@ pub struct MutLowerContext<'a> {
     pub gl: GlobalContext,
     pub nbas: IndexMap<SignalKey, (ProcessKey, SignalKey, Option<SignalKey>)>,
     pub diagnostics: Diagnostics,
-    pub connections: Vec<vogls_fuse_signals::InputEdge>,
 
-    pub fuse_srcs_scratch: Vec<SourceSite>,
+    pub fuse_srcs_scratch: Vec<SourceSite<'a>>,
     pub fuse_dsts_scratch: Vec<DestinationSite>,
 
     pub has_vcd: bool,
     pub monitor: Option<MonitorSignals>,
 
-    pub multidriver: MultidriverResolution,
-
-    /// The lifetime of the AST that is lowered.
-    pub _marker: PhantomData<&'a ()>,
+    pub driver_resolution: DriverResolution<'a>,
 }
 
 pub struct MonitorSignals {
@@ -443,8 +439,6 @@ pub fn try_resolve_constant<'a, 's>(
     Ok(value)
 }
 
-use std::marker::PhantomData;
-
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::bits::arithmetic::FvLogicValue;
@@ -473,10 +467,10 @@ use crate::parser::AstArenas;
 use crate::tokenizer::Tokenized;
 
 use self::addressing::{Address, LValueAddressingContext, lower_addressing};
+use self::drivers::DriverResolution;
 pub use self::expression::eval_constant_expr;
 use self::expression::lower_expr;
 use self::fuse::{DestinationSite, SourceSite};
-use self::multidriver::MultidriverResolution;
 pub use self::vtype::VType;
 pub use self::vvalue::VValue;
 pub use diagnostics::{Diagnostics, LowerErrorReason, WarningsReport};
