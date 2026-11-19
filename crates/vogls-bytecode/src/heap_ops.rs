@@ -110,7 +110,7 @@ pub struct HeapCaseEq {
     rs2: Reg,
     fv: bool,
     ne: bool,
-    size: InlineNBitSize<12>,
+    size: InlineNBitSize<10>,
 }
 pub struct HeapBinaryShift {
     rd: Reg,
