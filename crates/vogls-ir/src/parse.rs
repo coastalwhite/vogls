@@ -856,6 +856,10 @@ fn parse_instr<'a>(
                 c.trim_cursor();
                 if c.is_next_equal_to('%') {
                     let offset = parse_var(c, symbols, gl)?;
+                    symbols.var_sizes.insert(
+                        dst.identifier(),
+                        VarSize::Resolved(LogicMode::FourValue, size),
+                    );
                     Instruction::ProbeSlice(dst, signal, offset)
                 } else {
                     let offset = parse_u32(c)?;
