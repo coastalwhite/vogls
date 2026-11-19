@@ -1713,9 +1713,16 @@ impl BytecodeEncoder {
         let base_elem = alignment.to_elem_offset(base);
 
         if base_elem >= 1u64 << 32 || offset >= 1u64 << 12 {
-            self.load_u64(scratch, 0);
-            let (roff, offset) = InlineAddrOffset::new(offset as i64, self, scratch, scratch);
-            self.fv_set1rel(rd, rs, roff, base, offset, 0..=0, spread);
+            self.load_u64(scratch, offset);
+            self.fv_set1rel(
+                rd,
+                rs,
+                scratch,
+                base,
+                InlineAddrOffset::ZERO,
+                0..=spread.get() - 1,
+                spread,
+            );
             return;
         }
 
