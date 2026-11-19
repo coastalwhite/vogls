@@ -41,9 +41,9 @@ use std::sync::Arc;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    BasicBlockBuilder, Bits, GlobalContext, LogicMode, ProcessBuilder, ProcessKind, SCALAR_VSIZE,
-    Signal, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize, WatchCondition,
-    WatchEdge,
+    BasicBlockBuilder, BasicBlockKey, Bits, GlobalContext, LogicMode, ProcessBuilder, ProcessKind,
+    SCALAR_VSIZE, Signal, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize,
+    WatchCondition, WatchEdge,
 };
 use vogls_utils::{Bitset, OrderedSet, SeenSet, Table, VgHashMap, VgHashSet, new_table_key};
 
@@ -466,6 +466,9 @@ pub struct DriverResolution<'a> {
     edge_proxies: VgHashMap<DriveEdgeKey, SignalKey>,
     /// `(variable, net, slice)` of every variable that drives `net[slice]` directly.
     inverted_variables: Vec<(SignalKey, SignalKey, SignalSlice)>,
+    /// How signals are observed by processes that are lowered after the drivers are resolved,
+    /// see [`Self::observe_watch`].
+    observed: Vec<(SignalKey, NodeFlags)>,
 }
 
 /// Identifies a net assignment. All expressions of an assignment are evaluated by one process.
@@ -657,6 +660,18 @@ impl<'a> DriverResolution<'a> {
                 None => right_iter.next(),
             };
         }
+    }
+
+    /// Records that `signal` is watched by a process that is lowered after the drivers are
+    /// resolved, i.e. that is not yet in the IR when [`Self::finalize`] looks for watches.
+    pub fn observe_watch(&mut self, signal: SignalKey) {
+        self.observed.push((signal, NodeFlags::WATCH));
+    }
+
+    /// Records that the last update time of `signal` is taken by a process that is lowered after
+    /// the drivers are resolved, see [`Self::observe_watch`].
+    pub fn observe_lupdt(&mut self, signal: SignalKey) {
+        self.observed.push((signal, NodeFlags::LUPDT));
     }
 
     /// Declares the net `signal` of `kind`, before it is connected bidirectionally, so that its
@@ -1666,15 +1681,17 @@ impl<'a> DriverResolution<'a> {
     ///    [`alias`]).
     /// 3. The processes of all expressions, primitives and delays and of all remaining driven nets,
     ///    which resolve their drivers, are lowered.
-    /// 4. All probes and drives of aliased signals are rewritten.
     ///
-    /// Returns the aliased signals for probing and driving, and where external writes of nets go.
+    /// The processes that are lowered afterwards must not drive nets, and the signals that they
+    /// watch or take the last update time of must have been recorded beforehand (see
+    /// [`Self::observe_watch`]). The probes and drives of aliased signals are only rewritten by
+    /// [`ResolvedDrivers::apply`], once all processes are lowered.
     pub fn finalize(
         mut self,
         ctx: &LowerContext<'a, '_>,
         mctx: &mut MutLowerContext<'a>,
         options: FinalizeOptions<'_>,
-    ) -> Result<(ProbeFuseMap, WriteFuseMap), ()> {
+    ) -> Result<ResolvedDrivers<'a>, ()> {
         let mut error = self.push_reads(ctx, mctx).is_err();
 
         if self.has_uwires {
@@ -1720,44 +1737,19 @@ impl<'a> DriverResolution<'a> {
             self.lower_drivers(mctx, &mut scratch, node);
         }
 
-        // Only the writes of variables are redirected in the IR: the drive graph drives a net
-        // itself, also if its external writes are redirected.
-        let is_variable = |signal| {
-            self.signal_lut
-                .get(&signal)
-                .is_some_and(|&node| matches!(self.nodes[node], DriveNode::Variable { .. }))
-        };
-        rewrite::apply_fuse_maps(
-            &mut mctx.gl,
-            &self.probe_fuse,
-            &self.write_fuse,
-            is_variable,
-        );
-
-        // The input of a delay that is aliased is no longer referenced.
-        for node in self.nodes.iter() {
-            if let DriveNode::Delay {
-                kind: DelayKind::Assign { .. } | DelayKind::Gate { .. },
-                input,
-                ..
-            } = node
-                && self.probe_fuse.contains_key(input)
-            {
-                mctx.gl.signals.remove(*input);
-            }
-        }
-        // As is a drive or pull proxy that is aliased.
-        for proxy in self.drive_proxies.iter().chain(&self.pull_proxies) {
-            if self.probe_fuse.contains_key(proxy) {
-                mctx.gl.signals.remove(*proxy);
-            }
-        }
-
         if error {
             return Err(());
         }
 
-        Ok((self.probe_fuse, self.write_fuse))
+        // The blocks that exist now are checked by `collect_flags`, or are those of the drive
+        // graph itself.
+        let resolved_bbs = cfg!(debug_assertions)
+            .then(|| mctx.gl.bbs.keys().collect())
+            .unwrap_or_default();
+        Ok(ResolvedDrivers {
+            resolution: self,
+            resolved_bbs,
+        })
     }
 
     /// Returns where the process of `node` drives the bits of each of its outgoing edges: the
@@ -2367,6 +2359,61 @@ fn resolve_alias(
         }
     }
     Ok((key, offset))
+}
+
+/// A drive graph whose drivers are resolved, see [`DriverResolution::finalize`].
+pub struct ResolvedDrivers<'a> {
+    resolution: DriverResolution<'a>,
+    /// The basic blocks that existed when the drivers were resolved (debug builds only).
+    resolved_bbs: VgHashSet<BasicBlockKey>,
+}
+
+impl ResolvedDrivers<'_> {
+    /// Rewrites all probes and drives of aliased signals, once all processes are lowered, and
+    /// removes the signals that are no longer referenced.
+    ///
+    /// Returns the aliased signals for probing and driving, and where external writes of nets go.
+    pub fn apply(self, gl: &mut GlobalContext) -> (ProbeFuseMap, WriteFuseMap) {
+        let Self {
+            resolution: this,
+            resolved_bbs,
+        } = self;
+
+        if cfg!(debug_assertions) {
+            let bbs = gl.bbs.iter().filter(|(k, _)| !resolved_bbs.contains(k));
+            this.assert_nets_not_driven(bbs.map(|(_, bb)| bb));
+        }
+
+        // Only the writes of variables are redirected in the IR: the drive graph drives a net
+        // itself, also if its external writes are redirected.
+        let is_variable = |signal| {
+            this.signal_lut
+                .get(&signal)
+                .is_some_and(|&node| matches!(this.nodes[node], DriveNode::Variable { .. }))
+        };
+        rewrite::apply_fuse_maps(gl, &this.probe_fuse, &this.write_fuse, is_variable);
+
+        // The input of a delay that is aliased is no longer referenced.
+        for node in this.nodes.iter() {
+            if let DriveNode::Delay {
+                kind: DelayKind::Assign { .. } | DelayKind::Gate { .. },
+                input,
+                ..
+            } = node
+                && this.probe_fuse.contains_key(input)
+            {
+                gl.signals.remove(*input);
+            }
+        }
+        // As is a drive or pull proxy that is aliased.
+        for proxy in this.drive_proxies.iter().chain(&this.pull_proxies) {
+            if this.probe_fuse.contains_key(proxy) {
+                gl.signals.remove(*proxy);
+            }
+        }
+
+        (this.probe_fuse, this.write_fuse)
+    }
 }
 
 pub struct FinalizeOptions<'w> {

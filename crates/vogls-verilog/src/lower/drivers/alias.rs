@@ -18,8 +18,8 @@ use std::io::{self, Write};
 use std::ops::{BitOr, BitOrAssign};
 
 use vogls_ir::{
-    BasicBlockTerminator, Bits, GlobalContext, Instruction, IntrinsicOp, SignalFlags, SignalKey,
-    SignalSlice,
+    BasicBlock, BasicBlockTerminator, Bits, GlobalContext, Instruction, IntrinsicOp, SignalFlags,
+    SignalKey, SignalSlice,
 };
 use vogls_utils::{TableKey, VgHashMap, VgHashSet};
 
@@ -337,43 +337,52 @@ impl<'a> DriverResolution<'a> {
             }
         }
 
+        for (signal, flag) in std::mem::take(&mut self.observed) {
+            self.mark(signal, flag);
+        }
+
         if cfg!(debug_assertions) {
-            for bb in gl.bbs.values() {
-                for i in &bb.instrs {
-                    use Instruction as I;
-                    match &i {
-                        I::Drive(_, s, _, _) | I::DriveSlice(_, s, _, _) => {
-                            if let Some(&node) = self.signal_lut.get(s) {
+            self.assert_nets_not_driven(gl.bbs.values());
+        }
+    }
+
+    /// Asserts that no instruction of `bbs` drives a net, which only the drive graph does.
+    pub(super) fn assert_nets_not_driven<'b>(&self, bbs: impl Iterator<Item = &'b BasicBlock>) {
+        for bb in bbs {
+            for i in &bb.instrs {
+                use Instruction as I;
+                match &i {
+                    I::Drive(_, s, _, _) | I::DriveSlice(_, s, _, _) => {
+                        if let Some(&node) = self.signal_lut.get(s) {
+                            assert!(
+                                !matches!(self.nodes[node], DriveNode::Net { .. }),
+                                "nets are only driven through the drive graph"
+                            );
+                        }
+                    }
+                    I::Intrinsic(_, i, _) => match i.as_ref() {
+                        IntrinsicOp::Time
+                        | IntrinsicOp::Finish
+                        | IntrinsicOp::Random(_)
+                        | IntrinsicOp::Display(..)
+                        | IntrinsicOp::Assert(..)
+                        | IntrinsicOp::VcdOpenFile(..)
+                        | IntrinsicOp::VcdAppendModule(..)
+                        | IntrinsicOp::VcdPause
+                        | IntrinsicOp::BlackBox
+                        | IntrinsicOp::VcdResume
+                        | IntrinsicOp::SetTimeFormat(_) => {}
+
+                        IntrinsicOp::ReadMem(read_mem) => {
+                            if let Some(&node) = self.signal_lut.get(&read_mem.signal) {
                                 assert!(
                                     !matches!(self.nodes[node], DriveNode::Net { .. }),
                                     "nets are only driven through the drive graph"
                                 );
                             }
                         }
-                        I::Intrinsic(_, i, _) => match i.as_ref() {
-                            IntrinsicOp::Time
-                            | IntrinsicOp::Finish
-                            | IntrinsicOp::Random(_)
-                            | IntrinsicOp::Display(..)
-                            | IntrinsicOp::Assert(..)
-                            | IntrinsicOp::VcdOpenFile(..)
-                            | IntrinsicOp::VcdAppendModule(..)
-                            | IntrinsicOp::VcdPause
-                            | IntrinsicOp::BlackBox
-                            | IntrinsicOp::VcdResume
-                            | IntrinsicOp::SetTimeFormat(_) => {}
-
-                            IntrinsicOp::ReadMem(read_mem) => {
-                                if let Some(&node) = self.signal_lut.get(&read_mem.signal) {
-                                    assert!(
-                                        !matches!(self.nodes[node], DriveNode::Net { .. }),
-                                        "nets are only driven through the drive graph"
-                                    );
-                                }
-                            }
-                        },
-                        _ => {}
-                    }
+                    },
+                    _ => {}
                 }
             }
         }

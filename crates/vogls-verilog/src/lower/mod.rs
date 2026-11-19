@@ -7,6 +7,7 @@ pub mod drivers;
 pub mod expression;
 mod fuse;
 pub mod module_or_generate_item;
+pub mod observed;
 pub mod specify;
 mod statement;
 pub mod udp;
@@ -475,11 +476,13 @@ pub use self::vtype::VType;
 pub use self::vvalue::VValue;
 pub use diagnostics::{Diagnostics, LowerErrorReason, WarningsReport};
 
-pub fn lower_module_to_ir<'a>(
+/// Calls `f` for every module or generate item of the module `root` instantiated at `scope`,
+/// including those of its generate blocks, with the scope that the item is in.
+pub fn for_each_module_item<'a>(
     root: AstId<'a, Module<'a>>,
     ctx: &LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
+    mut f: impl FnMut(SymbolId, AstId<'a, ModuleOrGenerateItem<'a>>) -> Result<(), ()>,
 ) -> Result<(), ()> {
     let Module {
         attribute_instances: _,
@@ -491,40 +494,39 @@ pub fn lower_module_to_ir<'a>(
         time_scale: _,
     } = &*root;
 
-    let mut scopes = Vec::new();
-    scopes.extend(ctx.table[scope].children().iter().filter(|c| {
+    let is_generate_scope = |c: &&SymbolId| {
         matches!(
             ctx.table[**c].content,
             VSymbol::GenerateBlock(_) | VSymbol::GenerateBlocks
         )
-    }));
+    };
+    let mut scopes = Vec::new();
+    scopes.extend(ctx.table[scope].children().iter().filter(is_generate_scope));
     while let Some(scope_key) = scopes.pop() {
         if let VSymbol::GenerateBlock(offset) = &ctx.table[scope_key].content {
             for id in ctx.table_ast_refs.gen_blocks[*offset].iter() {
-                module_or_generate_item::lower(ctx, mctx, scope_key, id)?;
+                f(scope_key, id)?;
             }
         }
-        scopes.extend(ctx.table[scope_key].children().iter().filter(|c| {
-            matches!(
-                ctx.table[**c].content,
-                VSymbol::GenerateBlock(_) | VSymbol::GenerateBlocks
-            )
-        }));
+        scopes.extend(
+            ctx.table[scope_key]
+                .children()
+                .iter()
+                .filter(is_generate_scope),
+        );
     }
 
     for module_item in module_items.iter() {
         match &*module_item {
             ModuleItem::PortDeclaration(_) => {}
             ModuleItem::NonPortModuleItem(p) => match &**p {
-                NonPortModuleItem::ModuleOrGenerateItem(id) => {
-                    module_or_generate_item::lower(ctx, mctx, scope, *id)?
-                }
+                NonPortModuleItem::ModuleOrGenerateItem(id) => f(scope, *id)?,
                 NonPortModuleItem::GenerateRegion(region) => {
                     let GenerateRegion {
                         module_or_generate_item,
                     } = region;
                     for id in module_or_generate_item.iter() {
-                        module_or_generate_item::lower(ctx, mctx, scope, id)?;
+                        f(scope, id)?;
                     }
                 }
                 NonPortModuleItem::SpecifyBlock(_) => {}
