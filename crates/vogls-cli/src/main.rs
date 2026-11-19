@@ -61,8 +61,13 @@ struct Args {
 
     #[arg(long = "vcd")]
     vcd: Option<PathBuf>,
-    #[arg(long = "sdf")]
-    sdf: Option<PathBuf>,
+    /// An SDF file to annotate, as `[SCOPE=]FILE`.
+    ///
+    /// `SCOPE` is the hierarchical name of the module instance that the file applies to (e.g.
+    /// `tb.dut`), the top-level module by default. Can be given more than once; later files
+    /// override earlier ones.
+    #[arg(long = "sdf", value_name = "[SCOPE=]FILE")]
+    sdf: Vec<String>,
 
     #[arg(short = 'D')]
     defines: Vec<String>,
@@ -271,8 +276,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("{}", elaborate.display_hierarchy());
         }
 
-        if let Some(sdf_path) = sdf.as_deref() {
-            if let Err(err) = elaborate.annotate_sdf(sdf_path) {
+        for sdf in &sdf {
+            let (scope, sdf_path) = match sdf.split_once('=') {
+                Some((scope, path)) => (Some(scope), path),
+                None => (None, sdf.as_str()),
+            };
+            if let Err(err) = elaborate.annotate_sdf(sdf_path, scope) {
                 eprintln!("{err}");
                 return Err("failed to annotate sdf".into());
             }

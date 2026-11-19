@@ -1,0 +1,2 @@
+error: SDF scope `tb.missing` is not a module instance in the design
+  --> {path}:7

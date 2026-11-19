@@ -272,6 +272,7 @@ impl<'a> ElaboratedDesign<'a> {
     pub fn annotate_sdf<'b>(
         &'b mut self,
         path: impl AsRef<Path>,
+        scope: Option<&str>,
     ) -> Result<&'b mut Self, AnnotationError<'a, 'b>> {
         let path = path.as_ref();
         let mut diagnostics = Diagnostics::default();
@@ -299,12 +300,30 @@ impl<'a> ElaboratedDesign<'a> {
             });
         };
 
-        match self.with_context(
-            |ctx, mctx, _| match crate::timing::lower_sdf(ctx, mctx, &sdf) {
+        match self.with_context(|ctx, mctx, _| {
+            let scope = match scope {
+                None => None,
+                Some(scope) => {
+                    match crate::find_symbol_from_path(&ctx.table, &ctx.arenas.ident_table, scope) {
+                        Some(sid) if matches!(ctx.table[sid].content, VSymbol::Module(_)) => {
+                            Some(sid)
+                        }
+                        Some(_) | None => {
+                            mctx.diagnostics.errors.push((
+                                TokenRange::default(),
+                                LowerErrorReason::SdfUnknownScope(scope.to_string()),
+                                Vec::new(),
+                            ));
+                            return Err(std::mem::take(&mut mctx.diagnostics));
+                        }
+                    }
+                }
+            };
+            match crate::timing::lower_sdf(ctx, mctx, &sdf, scope) {
                 Ok(_) => Ok(()),
                 Err(_) => Err(std::mem::take(&mut mctx.diagnostics)),
-            },
-        ) {
+            }
+        }) {
             Ok(_) => Ok(self),
             Err(diagnostics) => Err(AnnotationError {
                 design: self,

@@ -476,7 +476,10 @@ fn run_test(
                     }
                 };
             if let Some(sdf) = sdf.as_deref() {
-                if elab.annotate_sdf(sdf).is_err() {
+                if elab
+                    .annotate_sdf(sdf, test_information.sdf_scope.as_deref())
+                    .is_err()
+                {
                     return Err(FailureInfo::CompileFailure(
                         TestPhase::LOWERING,
                         "failed to annotate sdf".into(),
@@ -610,7 +613,8 @@ fn run_test(
                     }
                 };
                 if let Some(sdf) = sdf.as_deref() {
-                    if let Err(err) = elab.annotate_sdf(sdf) {
+                    if let Err(err) = elab.annotate_sdf(sdf, test_information.sdf_scope.as_deref())
+                    {
                         if let Some(d) = gotten_diagnostics.as_mut() {
                             d.push_str(&err.to_string());
                         }
@@ -762,7 +766,8 @@ fn run_test(
             .elaborate(logic_mode, test_information.top_level_module.as_deref())
             .expect("failed to elaborate");
         if let Some(sdf) = sdf.as_deref() {
-            elab.annotate_sdf(sdf).expect("failed to annotate SDF");
+            elab.annotate_sdf(sdf, test_information.sdf_scope.as_deref())
+                .expect("failed to annotate SDF");
         }
         elab.annotate_specify().expect("failed to annotate specify");
         let mut design = match elab.lower(vec![]) {
