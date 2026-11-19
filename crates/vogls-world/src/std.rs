@@ -138,6 +138,15 @@ impl World for StdWorld {
         }
         .map_err(WorldError::from)
     }
+
+    fn read(&mut self, path: &'_ Path) -> WorldResult<Vec<u8>> {
+        match self.file_table.cwd.as_ref() {
+            None => std::fs::read(path),
+            Some(_) if path.is_absolute() => std::fs::read(path),
+            Some(cwd) => std::fs::read(cwd.join(path)),
+        }
+        .map_err(WorldError::from)
+    }
 }
 
 #[derive(Default, Clone)]
@@ -227,5 +236,13 @@ impl World for StdWorldCaptured {
 
     fn file_read(&mut self, handle: FileId) -> Option<&mut dyn io::Read> {
         self.inner.file_read(handle)
+    }
+
+    fn read_to_string(&mut self, path: &'_ Path) -> WorldResult<String> {
+        self.inner.read_to_string(path)
+    }
+
+    fn read(&mut self, path: &'_ Path) -> WorldResult<Vec<u8>> {
+        self.inner.read(path)
     }
 }

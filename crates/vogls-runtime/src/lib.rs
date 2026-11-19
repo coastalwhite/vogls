@@ -1,14 +1,62 @@
-use std::io;
+use std::{fmt, io};
 
 use vogls_codegen::Heap;
 use vogls_ir::time::TimeFormat;
 use vogls_utils::{TableKey, new_table_key};
+use vogls_world::WorldError;
 
 pub mod plugins;
 pub mod random;
 pub mod readmem;
 
 new_table_key! { pub struct RtSignalKey; }
+
+/// An error that ends the simulation.
+///
+/// The backends store it in their cold context when it occurs, stop the simulation and report it
+/// once the run returns.
+#[derive(Debug)]
+pub enum RuntimeError {
+    ReadMem(readmem::ReadMemError),
+    World(WorldError),
+    /// An assertion failed. Its message was written when it failed.
+    AssertionFailed,
+    VcdSecondFile,
+    VcdDumpVarsOverTime,
+    /// An event was scheduled beyond the end of time.
+    TimeOverflow,
+}
+
+impl fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReadMem(err) => err.fmt(f),
+            Self::World(err) => err.fmt(f),
+            Self::AssertionFailed => f.write_str("assertion failed"),
+            Self::VcdSecondFile => f.write_str("VCD opened a second file"),
+            Self::VcdDumpVarsOverTime => f.write_str("dumping vars over several simulation times"),
+            Self::TimeOverflow => f.write_str("time overflow"),
+        }
+    }
+}
+
+impl std::error::Error for RuntimeError {}
+
+impl From<readmem::ReadMemError> for RuntimeError {
+    fn from(err: readmem::ReadMemError) -> Self {
+        Self::ReadMem(err)
+    }
+}
+impl From<WorldError> for RuntimeError {
+    fn from(err: WorldError) -> Self {
+        Self::World(err)
+    }
+}
+impl From<io::Error> for RuntimeError {
+    fn from(err: io::Error) -> Self {
+        Self::World(err.into())
+    }
+}
 
 impl RtSignalKey {
     pub fn as_usize(self) -> usize {

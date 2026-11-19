@@ -4,6 +4,7 @@
 )]
 
 use std::fmt::{self, Debug};
+use std::io::Write as _;
 use std::path::PathBuf;
 
 mod control_flow;
@@ -35,7 +36,7 @@ use vogls_codegen::{Heap, HeapOffset, HeapRef, SixBitSize};
 use vogls_ir::time::TimeResolution;
 use vogls_ir::{Bits, LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
-use vogls_runtime::{RtSignalKey, RuntimeState};
+use vogls_runtime::{RtSignalKey, RuntimeError, RuntimeState};
 use vogls_utils::{IndexSet, NonMaxU32};
 
 pub use control_flow::*;
@@ -112,7 +113,8 @@ pub struct ColdContext<'a> {
     plugins: &'a mut [RuntimePluginState],
     heap_scratch: Vec<u64>,
 
-    return_value: u32,
+    /// The error that ended the simulation.
+    error: Option<RuntimeError>,
     time_resolution: TimeResolution,
 }
 
@@ -132,7 +134,7 @@ impl<'a> ColdContext<'a> {
             watchers,
             heap_scratch: Vec::new(),
             plugins,
-            return_value: 0,
+            error: None,
             time_resolution,
         }
     }
@@ -1161,7 +1163,7 @@ impl Tracer for ICountTracer {
 }
 
 impl Design {
-    pub fn execute(&self, state: &mut State, world: &mut dyn World) -> Result<(), ()> {
+    pub fn execute(&self, state: &mut State, world: &mut dyn World) -> Result<(), RuntimeError> {
         self.execute_with_tracer(&mut (), state, world)
     }
 
@@ -1170,7 +1172,7 @@ impl Design {
         tracer: &mut impl Tracer,
         state: &mut State,
         world: &mut dyn World,
-    ) -> Result<(), ()> {
+    ) -> Result<(), RuntimeError> {
         let code = &self.bytecode;
         let Some(entry) = state
             .schedule
@@ -1240,11 +1242,10 @@ impl Design {
             &state.listeners,
         );
 
-        if cldctx.return_value != 0 {
-            return Err(());
+        match cldctx.error {
+            None => Ok(()),
+            Some(err) => Err(err),
         }
-
-        Ok(())
     }
 
     #[cfg(feature = "tailcall")]
@@ -1252,7 +1253,7 @@ impl Design {
         &self,
         state: &mut State,
         world: &mut dyn World,
-    ) -> Result<(), ()> {
+    ) -> Result<(), RuntimeError> {
         #[cfg(not(nightly))]
         {
             self.execute(state, world)
@@ -1293,11 +1294,10 @@ impl Design {
                 &mut cldctx,
             );
 
-            if cldctx.return_value != 0 {
-                return Err(());
+            match cldctx.error {
+                None => Ok(()),
+                Some(err) => Err(err),
             }
-
-            Ok(())
         }
     }
 

@@ -1,0 +1,5 @@
+mem[0] = a0
+mem[1] = a1
+mem[2] = a2
+mem[3] = a3
+before = 11, after = 22

@@ -8,7 +8,7 @@ use vogls_ir::vcd::VcdVariableKey;
 use vogls_ir::{
     Bits, LogicMode, Mode, RandomKind, SCALAR_VSIZE, SignalSlice, VSIZE_32, VSIZE_64, VectorSize,
 };
-use vogls_runtime::{RtSignalKey, RuntimeState};
+use vogls_runtime::{RtSignalKey, RuntimeError, RuntimeState};
 use vogls_utils::{NonMaxU16, SecondaryTable};
 use vogls_vcd::VcdScopeItem;
 
@@ -154,8 +154,8 @@ impl BytecodeInstruction for Intrinsic {
         regs: &mut Regs,
         pc: &mut u64,
         state: &mut RuntimeState,
-        _schedule: &mut Schedule,
-        _listeners: &mut BytecodeListeners,
+        schedule: &mut Schedule,
+        listeners: &mut BytecodeListeners,
         cldctx: &mut ColdContext,
     ) {
         let Self { rd, id } = self;
@@ -170,294 +170,11 @@ impl BytecodeInstruction for Intrinsic {
         );
         let intrinsic = &cldctx.intrinsics[id as usize];
 
-        use IntrinsicOp as O;
-        match intrinsic {
-            O::Time => regs[rd] = state.time,
-            O::Finish => {
-                cldctx.return_value = 0;
-                *pc = u64::MAX;
-                for plugin in cldctx.plugins.iter_mut() {
-                    plugin.finish(state);
-                }
-                cldctx.world.stdout().write_all(b"[FINISH]\n").unwrap();
-            }
-            O::Random(kind) => {
-                let mut has_fv = false;
-                let mut stack_arg = 0;
-                let mut stack_offset = 0;
-                macro_rules! get_long {
-                    () => {{
-                        let (size, mode) = cldctx.stack_args[stack_arg];
-                        #[allow(unused_assignments)]
-                        {
-                            stack_arg += 1;
-                        }
-                        assert_eq!(size, VSIZE_32);
-                        match mode {
-                            LogicMode::TwoValue => {
-                                let value = cldctx.stack[stack_offset] as u32 as i32;
-                                #[allow(unused_assignments)]
-                                {
-                                    stack_offset += 1;
-                                }
-                                value
-                            }
-                            LogicMode::FourValue => {
-                                has_fv = true;
-                                let spc = cldctx.stack[stack_offset];
-                                let val = cldctx.stack[stack_offset + 1];
-                                #[allow(unused_assignments)]
-                                {
-                                    stack_offset += 2;
-                                }
-                                if spc != u32::MAX as u64 {
-                                    cldctx.stack_args.clear();
-                                    cldctx.stack.clear();
-                                    let (spc, val) = rd.to_spc_and_val();
-                                    regs[spc] = 0;
-                                    regs[val] = 0;
-                                    return;
-                                }
-                                val as u32 as i32
-                            }
-                        }
-                    }};
-                }
-
-                let mut seed = get_long!();
-                let mut warning = None;
-                let result = match kind {
-                    RandomKind::Uniform => {
-                        let start = get_long!();
-                        let end = get_long!();
-                        vogls_runtime::random::rtl_dist_uniform(&mut seed, start, end)
-                    }
-                    RandomKind::Normal => {
-                        let mean = get_long!();
-                        let deviation = get_long!();
-                        vogls_runtime::random::rtl_dist_normal(&mut seed, mean, deviation)
-                    }
-                    RandomKind::Exponential => {
-                        let mean = get_long!();
-                        vogls_runtime::random::rtl_dist_exponential(&mut seed, mean, &mut warning)
-                    }
-                    RandomKind::Poisson => {
-                        let mean = get_long!();
-                        vogls_runtime::random::rtl_dist_poisson(&mut seed, mean, &mut warning)
-                    }
-                    RandomKind::ChiSquare => {
-                        let dof = get_long!();
-                        vogls_runtime::random::rtl_dist_chi_square(&mut seed, dof, &mut warning)
-                    }
-                    RandomKind::T => {
-                        let dof = get_long!();
-                        vogls_runtime::random::rtl_dist_t(&mut seed, dof, &mut warning)
-                    }
-                    RandomKind::Erlang => {
-                        let k_stage = get_long!();
-                        let mean = get_long!();
-                        vogls_runtime::random::rtl_dist_erlang(
-                            &mut seed,
-                            k_stage,
-                            mean,
-                            &mut warning,
-                        )
-                    }
-                };
-
-                if let Some(warning) = warning {
-                    use std::io::Write;
-                    writeln!(&mut cldctx.world.stderr(), "WARNING: {}", warning.as_str()).unwrap();
-                }
-
-                let result =
-                    (u64::from(seed.cast_unsigned()) << 32) | u64::from(result.cast_unsigned());
-                if has_fv {
-                    let (spc, val) = rd.to_spc_and_val();
-                    regs[spc] = u64::MAX;
-                    regs[val] = result;
-                } else {
-                    regs[rd] = result;
-                }
-            }
-            O::Display(f) => {
-                let mut stack_offset = 0;
-                let mut stdout = cldctx.world.stdout();
-                f.write_to(
-                    &mut stdout,
-                    cldctx.stack_args.iter().map(|&(size, mode)| match mode {
-                        LogicMode::TwoValue if size <= VSIZE_64 => {
-                            let value = cldctx.stack[stack_offset];
-                            stack_offset += 1;
-                            Bits::from_u64(size, value)
-                        }
-                        LogicMode::TwoValue => {
-                            let value = cldctx.stack[stack_offset];
-                            let value = value_to_heap_ref(value, size, mode);
-                            stack_offset += 1;
-                            state.heap.load_tv_bits(value)
-                        }
-                        LogicMode::FourValue if size <= VSIZE_32 => {
-                            let spc = cldctx.stack[stack_offset];
-                            let val = cldctx.stack[stack_offset + 1];
-                            stack_offset += 2;
-                            Bits::from_four_value_u64(size, spc as u32, val as u32)
-                        }
-                        LogicMode::FourValue if size <= VSIZE_64 => {
-                            let spc = cldctx.stack[stack_offset];
-                            let val = cldctx.stack[stack_offset + 1];
-                            stack_offset += 2;
-                            Bits::from_boxed_slice(Mode::FourValue, size, [spc, val].into())
-                        }
-                        LogicMode::FourValue => {
-                            let value = cldctx.stack[stack_offset];
-                            let value = value_to_heap_ref(value, size, mode);
-                            stack_offset += 1;
-                            state.heap.load_fv_bits(value)
-                        }
-                    }),
-                    &state.time_format,
-                    cldctx.time_resolution,
-                )
-                .unwrap();
-            }
-            O::Assert(f) => {
-                let mut stack_offset = 0usize;
-                let (cond_size, cond_mode) = cldctx.stack_args[0];
-                assert_eq!(cond_size, SCALAR_VSIZE);
-                let condition = match cond_mode {
-                    LogicMode::TwoValue => {
-                        stack_offset += 1;
-                        cldctx.stack[0] != 0
-                    }
-                    LogicMode::FourValue => {
-                        stack_offset += 2;
-                        FvLogicValue::from_spc_and_val(cldctx.stack[0] != 0, cldctx.stack[1] != 0)
-                            == FvLogicValue::L1
-                    }
-                };
-
-                if !condition {
-                    let mut stderr = cldctx.world.stderr();
-                    f.write_to(
-                        &mut stderr,
-                        cldctx.stack_args[1..]
-                            .iter()
-                            .map(|&(size, mode)| match mode {
-                                LogicMode::TwoValue if size <= VSIZE_64 => {
-                                    let value = cldctx.stack[stack_offset];
-                                    stack_offset += 1;
-                                    Bits::from_u64(size, value)
-                                }
-                                LogicMode::TwoValue => {
-                                    let value = cldctx.stack[stack_offset];
-                                    let value = value_to_heap_ref(value, size, mode);
-                                    stack_offset += 1;
-                                    state.heap.load_tv_bits(value)
-                                }
-                                LogicMode::FourValue if size <= VSIZE_32 => {
-                                    let spc = cldctx.stack[stack_offset];
-                                    let val = cldctx.stack[stack_offset + 1];
-                                    stack_offset += 2;
-                                    Bits::from_four_value_u64(size, spc as u32, val as u32)
-                                }
-                                LogicMode::FourValue if size <= VSIZE_64 => {
-                                    let spc = cldctx.stack[stack_offset];
-                                    let val = cldctx.stack[stack_offset + 1];
-                                    stack_offset += 2;
-                                    Bits::from_boxed_slice(Mode::FourValue, size, [spc, val].into())
-                                }
-                                LogicMode::FourValue => {
-                                    let value = cldctx.stack[stack_offset];
-                                    let value = value_to_heap_ref(value, size, mode);
-                                    stack_offset += 1;
-                                    state.heap.load_fv_bits(value)
-                                }
-                            }),
-                        &state.time_format,
-                        cldctx.time_resolution,
-                    )
-                    .unwrap();
-                    cldctx.return_value = 1;
-                    *pc = u64::MAX;
-                }
-            }
-            O::VcdOpenFile(path) => {
-                let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
-                    .downcast_mut::<vogls_vcd::RtVcdOutput>()
-                    .unwrap();
-                if !vcd.children.is_empty() {
-                    let mut stderr = cldctx.world.stderr();
-                    writeln!(&mut stderr, "ERR! VCD opened a second file").unwrap();
-                    cldctx.return_value = 1;
-                    *pc = u64::MAX;
-                    return;
-                }
-
-                vcd.writer = Box::new(std::fs::File::create(path).unwrap());
-            }
-            O::VcdAppendModule(v) => {
-                let (children, map) = v.as_ref();
-                let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
-                    .downcast_mut::<vogls_vcd::RtVcdOutput>()
-                    .unwrap();
-
-                if vcd.start_ts != state.time {
-                    let mut stderr = cldctx.world.stderr();
-                    writeln!(
-                        &mut stderr,
-                        "ERR! Dumping vars over several simulation times"
-                    )
-                    .unwrap();
-                    cldctx.return_value = 1;
-                    *pc = u64::MAX;
-                    return;
-                }
-
-                for child in children {
-                    child.extend_into(&mut vcd.tracked, &mut vcd.updated_this_time_step);
-                }
-                vcd.children = children.clone();
-                vcd.map = map.clone();
-            }
-            O::VcdPause => {
-                let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
-                    .downcast_mut::<vogls_vcd::RtVcdOutput>()
-                    .unwrap();
-                vcd.paused = true;
-            }
-            O::VcdResume => {
-                let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
-                    .downcast_mut::<vogls_vcd::RtVcdOutput>()
-                    .unwrap();
-                vcd.paused = false;
-            }
-            O::ReadMem(readmem) => {
-                let ReadMem {
-                    offset,
-                    size,
-                    mode,
-                    inner: readmem,
-                } = readmem.as_ref();
-                let dst = HeapOffset {
-                    bit_offset: *offset as usize,
-                }
-                .to_ref(*size);
-
-                vogls_runtime::readmem::read_mem(
-                    &readmem.path,
-                    cldctx.world,
-                    state.heap.0.as_mut(),
-                    dst,
-                    (*mode).into(),
-                    readmem.offset,
-                    readmem.limit,
-                    readmem.stride,
-                    readmem.binary,
-                )
-                .unwrap()
-            }
-            O::SetTimeFormat(fmt) => state.time_format = fmt.clone(),
+        if let Err(err) = execute_intrinsic(
+            intrinsic, rd, code, regs, pc, state, schedule, listeners, cldctx,
+        ) {
+            cldctx.error = Some(err);
+            *pc = u64::MAX;
         }
         cldctx.stack_args.clear();
         cldctx.stack.clear();
@@ -465,6 +182,284 @@ impl BytecodeInstruction for Intrinsic {
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
     fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+}
+
+#[inline(always)]
+fn execute_intrinsic(
+    intrinsic: &IntrinsicOp,
+    rd: Reg,
+    _code: &[Bytecode],
+    regs: &mut Regs,
+    pc: &mut u64,
+    state: &mut RuntimeState,
+    _schedule: &mut Schedule,
+    _listeners: &mut BytecodeListeners,
+    cldctx: &mut ColdContext,
+) -> Result<(), RuntimeError> {
+    use IntrinsicOp as O;
+    match intrinsic {
+        O::Time => regs[rd] = state.time,
+        O::Finish => {
+            *pc = u64::MAX;
+            for plugin in cldctx.plugins.iter_mut() {
+                plugin.finish(state);
+            }
+            cldctx.world.stdout().write_all(b"[FINISH]\n")?;
+        }
+        O::Random(kind) => {
+            let mut has_fv = false;
+            let mut stack_arg = 0;
+            let mut stack_offset = 0;
+            macro_rules! get_long {
+                () => {{
+                    let (size, mode) = cldctx.stack_args[stack_arg];
+                    #[allow(unused_assignments)]
+                    {
+                        stack_arg += 1;
+                    }
+                    assert_eq!(size, VSIZE_32);
+                    match mode {
+                        LogicMode::TwoValue => {
+                            let value = cldctx.stack[stack_offset] as u32 as i32;
+                            #[allow(unused_assignments)]
+                            {
+                                stack_offset += 1;
+                            }
+                            value
+                        }
+                        LogicMode::FourValue => {
+                            has_fv = true;
+                            let spc = cldctx.stack[stack_offset];
+                            let val = cldctx.stack[stack_offset + 1];
+                            #[allow(unused_assignments)]
+                            {
+                                stack_offset += 2;
+                            }
+                            if spc != u32::MAX as u64 {
+                                let (spc, val) = rd.to_spc_and_val();
+                                regs[spc] = 0;
+                                regs[val] = 0;
+                                return Ok(());
+                            }
+                            val as u32 as i32
+                        }
+                    }
+                }};
+            }
+
+            let mut seed = get_long!();
+            let mut warning = None;
+            let result = match kind {
+                RandomKind::Uniform => {
+                    let start = get_long!();
+                    let end = get_long!();
+                    vogls_runtime::random::rtl_dist_uniform(&mut seed, start, end)
+                }
+                RandomKind::Normal => {
+                    let mean = get_long!();
+                    let deviation = get_long!();
+                    vogls_runtime::random::rtl_dist_normal(&mut seed, mean, deviation)
+                }
+                RandomKind::Exponential => {
+                    let mean = get_long!();
+                    vogls_runtime::random::rtl_dist_exponential(&mut seed, mean, &mut warning)
+                }
+                RandomKind::Poisson => {
+                    let mean = get_long!();
+                    vogls_runtime::random::rtl_dist_poisson(&mut seed, mean, &mut warning)
+                }
+                RandomKind::ChiSquare => {
+                    let dof = get_long!();
+                    vogls_runtime::random::rtl_dist_chi_square(&mut seed, dof, &mut warning)
+                }
+                RandomKind::T => {
+                    let dof = get_long!();
+                    vogls_runtime::random::rtl_dist_t(&mut seed, dof, &mut warning)
+                }
+                RandomKind::Erlang => {
+                    let k_stage = get_long!();
+                    let mean = get_long!();
+                    vogls_runtime::random::rtl_dist_erlang(&mut seed, k_stage, mean, &mut warning)
+                }
+            };
+
+            // A warning that cannot be written does not end the simulation.
+            if let Some(warning) = warning
+                && let Ok(mut f) = cldctx.world.runtime_warn()
+            {
+                _ = writeln!(f, "{}", warning.as_str());
+            }
+
+            let result =
+                (u64::from(seed.cast_unsigned()) << 32) | u64::from(result.cast_unsigned());
+            if has_fv {
+                let (spc, val) = rd.to_spc_and_val();
+                regs[spc] = u64::MAX;
+                regs[val] = result;
+            } else {
+                regs[rd] = result;
+            }
+        }
+        O::Display(f) => {
+            let mut stack_offset = 0;
+            let mut stdout = cldctx.world.stdout();
+            f.write_to(
+                &mut stdout,
+                cldctx.stack_args.iter().map(|&(size, mode)| match mode {
+                    LogicMode::TwoValue if size <= VSIZE_64 => {
+                        let value = cldctx.stack[stack_offset];
+                        stack_offset += 1;
+                        Bits::from_u64(size, value)
+                    }
+                    LogicMode::TwoValue => {
+                        let value = cldctx.stack[stack_offset];
+                        let value = value_to_heap_ref(value, size, mode);
+                        stack_offset += 1;
+                        state.heap.load_tv_bits(value)
+                    }
+                    LogicMode::FourValue if size <= VSIZE_32 => {
+                        let spc = cldctx.stack[stack_offset];
+                        let val = cldctx.stack[stack_offset + 1];
+                        stack_offset += 2;
+                        Bits::from_four_value_u64(size, spc as u32, val as u32)
+                    }
+                    LogicMode::FourValue if size <= VSIZE_64 => {
+                        let spc = cldctx.stack[stack_offset];
+                        let val = cldctx.stack[stack_offset + 1];
+                        stack_offset += 2;
+                        Bits::from_boxed_slice(Mode::FourValue, size, [spc, val].into())
+                    }
+                    LogicMode::FourValue => {
+                        let value = cldctx.stack[stack_offset];
+                        let value = value_to_heap_ref(value, size, mode);
+                        stack_offset += 1;
+                        state.heap.load_fv_bits(value)
+                    }
+                }),
+                &state.time_format,
+                cldctx.time_resolution,
+            )?;
+        }
+        O::Assert(f) => {
+            let mut stack_offset = 0usize;
+            let (cond_size, cond_mode) = cldctx.stack_args[0];
+            assert_eq!(cond_size, SCALAR_VSIZE);
+            let condition = match cond_mode {
+                LogicMode::TwoValue => {
+                    stack_offset += 1;
+                    cldctx.stack[0] != 0
+                }
+                LogicMode::FourValue => {
+                    stack_offset += 2;
+                    FvLogicValue::from_spc_and_val(cldctx.stack[0] != 0, cldctx.stack[1] != 0)
+                        == FvLogicValue::L1
+                }
+            };
+
+            if !condition {
+                let mut stderr = cldctx.world.stderr();
+                f.write_to(
+                    &mut stderr,
+                    cldctx.stack_args[1..]
+                        .iter()
+                        .map(|&(size, mode)| match mode {
+                            LogicMode::TwoValue if size <= VSIZE_64 => {
+                                let value = cldctx.stack[stack_offset];
+                                stack_offset += 1;
+                                Bits::from_u64(size, value)
+                            }
+                            LogicMode::TwoValue => {
+                                let value = cldctx.stack[stack_offset];
+                                let value = value_to_heap_ref(value, size, mode);
+                                stack_offset += 1;
+                                state.heap.load_tv_bits(value)
+                            }
+                            LogicMode::FourValue if size <= VSIZE_32 => {
+                                let spc = cldctx.stack[stack_offset];
+                                let val = cldctx.stack[stack_offset + 1];
+                                stack_offset += 2;
+                                Bits::from_four_value_u64(size, spc as u32, val as u32)
+                            }
+                            LogicMode::FourValue if size <= VSIZE_64 => {
+                                let spc = cldctx.stack[stack_offset];
+                                let val = cldctx.stack[stack_offset + 1];
+                                stack_offset += 2;
+                                Bits::from_boxed_slice(Mode::FourValue, size, [spc, val].into())
+                            }
+                            LogicMode::FourValue => {
+                                let value = cldctx.stack[stack_offset];
+                                let value = value_to_heap_ref(value, size, mode);
+                                stack_offset += 1;
+                                state.heap.load_fv_bits(value)
+                            }
+                        }),
+                    &state.time_format,
+                    cldctx.time_resolution,
+                )?;
+                return Err(RuntimeError::AssertionFailed);
+            }
+        }
+        O::VcdOpenFile(path) => {
+            let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
+                .downcast_mut::<vogls_vcd::RtVcdOutput>()
+                .unwrap();
+            if !vcd.children.is_empty() {
+                return Err(RuntimeError::VcdSecondFile);
+            }
+
+            vcd.writer = Box::new(std::fs::File::create(path).unwrap());
+        }
+        O::VcdAppendModule(v) => {
+            let (children, map) = v.as_ref();
+            let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
+                .downcast_mut::<vogls_vcd::RtVcdOutput>()
+                .unwrap();
+
+            if vcd.start_ts != state.time {
+                return Err(RuntimeError::VcdDumpVarsOverTime);
+            }
+
+            for child in children {
+                child.extend_into(&mut vcd.tracked, &mut vcd.updated_this_time_step);
+            }
+            vcd.children = children.clone();
+            vcd.map = map.clone();
+        }
+        O::VcdPause => {
+            let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
+                .downcast_mut::<vogls_vcd::RtVcdOutput>()
+                .unwrap();
+            vcd.paused = true;
+        }
+        O::VcdResume => {
+            let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
+                .downcast_mut::<vogls_vcd::RtVcdOutput>()
+                .unwrap();
+            vcd.paused = false;
+        }
+        O::ReadMem(readmem) => {
+            let ReadMem {
+                offset,
+                size,
+                mode,
+                inner: readmem,
+            } = readmem.as_ref();
+            let signal = HeapOffset {
+                bit_offset: *offset as usize,
+            }
+            .to_ref(*size);
+
+            vogls_runtime::readmem::read_mem(
+                cldctx.world,
+                state.heap.0.as_mut(),
+                signal,
+                (*mode).into(),
+                readmem,
+            )?;
+        }
+        O::SetTimeFormat(fmt) => state.time_format = fmt.clone(),
+    }
+    Ok(())
 }
 
 impl BytecodeEncoder {

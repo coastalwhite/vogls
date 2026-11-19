@@ -78,8 +78,30 @@ pub trait World {
         let file_id = self.file_open(path, FileOpenOptions::READ)?;
         let reader = self.file_read(file_id).expect("Not closed before");
         let mut buf = String::new();
-        reader.read_to_string(&mut buf)?;
+        let result = reader.read_to_string(&mut buf);
+        self.file_close(file_id)?;
+        result?;
         Ok(buf)
+    }
+
+    /// Convenience method to read the file at `path` into a byte vector.
+    fn read(&mut self, path: &'_ Path) -> WorldResult<Vec<u8>> {
+        let file_id = self.file_open(path, FileOpenOptions::READ)?;
+        let reader = self.file_read(file_id).expect("Not closed before");
+        let mut buf = Vec::new();
+        let result = reader.read_to_end(&mut buf);
+        self.file_close(file_id)?;
+        result?;
+        Ok(buf)
+    }
+
+    /// Writer for warnings.
+    ///
+    /// By default, this outputs into the stderr with a `WARNING: ` prefix.
+    fn runtime_warn(&mut self) -> WorldResult<Box<dyn io::Write>> {
+        let mut stderr = self.stderr();
+        stderr.write_all(b"WARNING: ")?;
+        Ok(stderr)
     }
 }
 

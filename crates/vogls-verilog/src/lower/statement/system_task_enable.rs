@@ -3,17 +3,19 @@ use vogls_ir::bits::arithmetic::FvLogicValue;
 use vogls_ir::dyn_format_string::{Base, DynFormatArgument, DynFormatString, Padding};
 use vogls_ir::time::{TimeFormat, TimeResolution, TimeSize, TimeUnit};
 use vogls_ir::{
-    BasicBlockBuilder, Bits, IntrinsicOp, ProcessBuilder, ProcessKind, ReadMem, SCALAR_VSIZE,
-    Signal, SignalFlags, VariableKey, WatchCondition,
+    BasicBlockBuilder, Bits, IntrinsicOp, ProcessBuilder, ProcessKind, ReadMem, ReadMemVariant,
+    SCALAR_VSIZE, Signal, SignalFlags, VariableKey, WatchCondition,
 };
 use vogls_utils::{NonMaxU32, OrderedSet};
 
 use crate::ast::AstId;
 use crate::ast::expr::{Expr, UnaryOperator};
 use crate::ast::statement::SystemTaskEnable;
-use crate::elaborate::{VSymbol, determine_module_context};
+use crate::elaborate::{SignalKind, VSymbol, determine_module_context};
 use crate::lower::expression::{get_expr_type, lower_expr, to_real};
-use crate::lower::{LowerContext, MonitorSignals, MutLowerContext, Region, try_resolve_hident};
+use crate::lower::{
+    LowerContext, MonitorSignals, MutLowerContext, Region, eval_constant_expr, try_resolve_hident,
+};
 use crate::lower::{expression, hident_span, try_resolve_signal};
 
 pub fn lower_system_task_enable<'a>(
@@ -555,7 +557,13 @@ pub fn lower_system_task_enable<'a>(
         }
 
         "readmemb" | "readmemh" => {
-            assert!((2..=4).contains(&expressions.len()));
+            if !(2..=4).contains(&expressions.len()) {
+                mctx.diagnostics.invalid_num_arguments(
+                    ctx.arenas.get_span(system_task_enable),
+                    "expected a file, a memory and optionally a start and finish address",
+                );
+                return Err(());
+            }
             let path = match &*expressions.get(0) {
                 Some(Expr::String(s)) => ctx.arenas.text[s.0.start..s.0.end].to_string(),
                 Some(Expr::Ident(ident, exprs, range_exprs))
@@ -606,6 +614,18 @@ pub fn lower_system_task_enable<'a>(
             }
             let symbol =
                 try_resolve_signal(scope, &ctx.table, ctx.arenas, *ident, &mut mctx.diagnostics)?;
+            // IEEE Std 1364-2005, 17.2.9: the data is loaded into a memory, which is a variable.
+            if symbol.kind != SignalKind::Variable {
+                mctx.diagnostics.memory_not_a_variable(
+                    hident_span(ctx.arenas, *ident),
+                    if system_task_ident == "readmemb" {
+                        "$readmemb"
+                    } else {
+                        "$readmemh"
+                    },
+                );
+                return Err(());
+            }
             if symbol.dims.len() != 1 {
                 mctx.diagnostics.not_yet_implemented(
                     hident_span(ctx.arenas, *ident),
@@ -614,32 +634,52 @@ pub fn lower_system_task_enable<'a>(
                 return Err(());
             }
 
-            if expressions.len() > 2 {
-                mctx.diagnostics.warn_not_yet_implemented(
-                    ctx.arenas.get_span(expressions.get(2)),
-                    "ignored at the moment",
-                );
+            // The start and finish addresses.
+            let mut addresses = [None, None];
+            for (i, address) in addresses.iter_mut().enumerate() {
+                let Some(expr) = (expressions.len() > i + 2)
+                    .then(|| AstId::transpose_option(expressions.get(i + 2)))
+                    .flatten()
+                else {
+                    continue;
+                };
+                let value = eval_constant_expr(
+                    &mctx.gl,
+                    ctx.arenas,
+                    &ctx.table,
+                    scope,
+                    &mut mctx.diagnostics,
+                    expr.into_constant(),
+                    None,
+                )?;
+                let Some(value) = value.into_bits().as_i64() else {
+                    mctx.diagnostics.not_yet_implemented(
+                        ctx.arenas.get_span(expr),
+                        "only addresses without x or z are supported",
+                    );
+                    return Err(());
+                };
+                *address = Some(value);
             }
-            if expressions.len() > 3 {
-                mctx.diagnostics.warn_not_yet_implemented(
-                    ctx.arenas.get_span(expressions.get(3)),
-                    "ignored at the moment",
-                );
-            }
+            let [start_address, finish_address] = addresses;
 
-            let stride = symbol.ty.bit_length();
-            let offset = 0;
-            let limit = symbol.dims[0].num_elements.get();
+            let dim = symbol.dims[0];
             let signal = symbol.terminals.blocking_drive_signal();
-
-            let binary = system_task_ident == "readmemb";
+            let variant = if system_task_ident == "readmemb" {
+                ReadMemVariant::Binary
+            } else {
+                ReadMemVariant::Hexadecimal
+            };
             let readmem = ReadMem {
                 path,
                 signal,
-                offset,
-                stride,
-                limit,
-                binary,
+                offset: 0,
+                limit: dim.num_elements.get(),
+                stride: symbol.ty.bit_length(),
+                variant,
+                base_address: dim.offset,
+                start_address,
+                finish_address,
             };
 
             builder.intrinsic(

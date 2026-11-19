@@ -1303,6 +1303,7 @@ dependencies = [
 name = "vogls-runtime"
 version = "0.0.1"
 dependencies = [
+ "proptest",
  "vogls-bits",
  "vogls-codegen",
  "vogls-ir",

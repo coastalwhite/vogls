@@ -467,6 +467,12 @@ pub enum IntrinsicOp {
     ReadMem(Box<ReadMem>),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ReadMemVariant {
+    Binary,
+    Hexadecimal,
+}
+
 #[derive(Debug, Clone)]
 pub struct ReadMem {
     pub path: String,
@@ -474,7 +480,20 @@ pub struct ReadMem {
     pub offset: u32,
     pub limit: u32,
     pub stride: VectorSize,
-    pub binary: bool,
+    pub variant: ReadMemVariant,
+
+    pub base_address: i64,
+    pub start_address: Option<i64>,
+    pub finish_address: Option<i64>,
+}
+
+impl ReadMemVariant {
+    pub fn task_name(self) -> &'static str {
+        match self {
+            Self::Binary => "$readmemb",
+            Self::Hexadecimal => "$readmemh",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

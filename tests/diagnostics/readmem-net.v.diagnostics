@@ -1,0 +1,7 @@
+error: the memory of `$readmemh` must be a variable, not a net
+  --> {path}:8
+ 6 |   wire [7:0] mem [0:3];
+ 7 | 
+ 8 >   initial $readmemh("mem.hex", mem);
+                                    ^^^
+ 9 | endmodule

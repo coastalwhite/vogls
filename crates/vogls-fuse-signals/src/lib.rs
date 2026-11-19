@@ -474,14 +474,24 @@ impl FuseGraphOptimizer {
                     }
                     I::Intrinsic(dst, op, srcs) => match op.as_ref() {
                         IntrinsicOp::ReadMem(readmem) => {
-                            if self.fused_signals.get(&readmem.signal).is_some() {
+                            if let Some((to, slice)) = self.drive_map.get(&readmem.signal) {
+                                let mut readmem = readmem.as_ref().clone();
+                                readmem.signal = *to;
+                                if let Some(slice) = slice {
+                                    readmem.offset += slice.lsb();
+                                }
+                                builder.push_raw_instruction(I::Intrinsic(
+                                    *dst,
+                                    Box::new(IntrinsicOp::ReadMem(Box::new(readmem))),
+                                    srcs.clone(),
+                                ));
+                                continue;
+                            }
+
+                            if self.fused_signals.contains_key(&readmem.signal) {
                                 // You are only allowed to fuse items that don't have an external
                                 // driver.
                                 unreachable!("Implementation error");
-                            }
-
-                            if self.drive_map.get(&readmem.signal).is_some() {
-                                todo!()
                             }
                         }
                         IntrinsicOp::VcdAppendModule(module) => {

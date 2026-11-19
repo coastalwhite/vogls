@@ -1,0 +1,9 @@
+narrow[0] = 1fffffffff
+narrow[1] = 0000000001
+narrow[2] = 123456789a
+narrow[3] = 0000000000
+narrow[4] = 1555555555
+narrow[5] = 0aaaaaaaaa
+wide[0] = fffffffffffffffffffffffff
+wide[1] = 123456789abcdef0123456789
+wide[2] = 0000000000000000000000abc

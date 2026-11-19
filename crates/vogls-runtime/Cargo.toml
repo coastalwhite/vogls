@@ -10,5 +10,8 @@ vogls-bits.workspace = true
 vogls-ir.workspace = true
 vogls-world.workspace = true
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true

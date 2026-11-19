@@ -1,5 +1,5 @@
 use vogls_ir::LogicMode;
-use vogls_runtime::RuntimeState;
+use vogls_runtime::{RuntimeError, RuntimeState};
 
 use std::fmt;
 
@@ -74,7 +74,7 @@ impl BytecodeInstruction for RescheduleWait {
         }
 
         let Some(time) = state.time.checked_add(time) else {
-            return time_overflow(cldctx);
+            return time_overflow(pc, cldctx);
         };
         schedule.next_time = schedule.next_time.min(time);
         schedule.future.push(TimedEvent {
@@ -99,9 +99,9 @@ impl BytecodeInstruction for RescheduleWait {
 }
 
 #[cold]
-fn time_overflow(cldctx: &mut ColdContext) {
-    cldctx.return_value = 1;
-    cldctx.world.stderr().write_all(b"Time overflow!").unwrap();
+fn time_overflow(pc: &mut u64, cldctx: &mut ColdContext) {
+    cldctx.error = Some(RuntimeError::TimeOverflow);
+    *pc = u64::MAX;
 }
 
 impl BytecodeInstruction for RescheduleRegion {
