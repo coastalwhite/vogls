@@ -154,9 +154,9 @@ fn assign_net<'a>(
     if mctx
         .driver_resolution
         .push_sites(
-            &mut mctx.gl,
-            &mut mctx.fuse_srcs_scratch,
-            &mut mctx.fuse_dsts_scratch,
+            &mctx.gl,
+            &mctx.fuse_srcs_scratch,
+            &mctx.fuse_dsts_scratch,
             context,
         )
         .is_err()

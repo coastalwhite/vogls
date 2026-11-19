@@ -8,6 +8,12 @@ pub struct SeenSet<T> {
     seen: VgHashSet<T>,
 }
 
+impl<T> Default for SeenSet<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> SeenSet<T> {
     pub fn new() -> Self {
         Self {

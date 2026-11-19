@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
@@ -323,7 +323,7 @@ pub fn lower_specify<'a>(
         }
     }
 
-    let delays = Rc::<[Time]>::from(delays.as_slice());
+    let delays = Arc::<[Time]>::from(delays.as_slice());
     outs_lut.clear();
     for (output, specify) in outs.drain(..) {
         lower_iopath(ctx, mctx, scope, output, specify, &delays)?;
@@ -337,7 +337,7 @@ pub struct SpecifyDelay<'a> {
     pub scope: SymbolId,
     pub output: SignalKey,
     pub specify: SpecifyOutput<'a>,
-    pub delays: Rc<[Time]>,
+    pub delays: Arc<[Time]>,
 }
 
 /// Puts the module path delays of `specify` in front of `output`, which its drivers drive from now
@@ -348,7 +348,7 @@ pub fn lower_iopath<'a>(
     scope: SymbolId,
     output: SignalKey,
     specify: SpecifyOutput<'a>,
-    delays: &Rc<[Time]>,
+    delays: &Arc<[Time]>,
 ) -> Result<(), ()> {
     let mut proxy = mctx.gl.signals.get(output).unwrap().clone();
     proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
