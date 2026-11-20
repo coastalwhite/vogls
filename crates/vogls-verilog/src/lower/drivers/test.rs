@@ -416,6 +416,7 @@ fn build<'a>(spec: &GraphSpec, ast: &Ast<'a>) -> (DriverResolution<'a>, GlobalCo
                             paths: Vec::new(),
                         },
                         delays: Arc::from([]),
+                        conds: Arc::default(),
                     })),
                 };
                 let key = dr.nodes.insert(DriveNode::Delay {

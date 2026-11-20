@@ -377,6 +377,84 @@ impl DelayReader<'_> {
     }
 }
 
+/// A delay value that leaves the delay of its transitions as it was, like the empty `()` value of an
+/// SDF delay (see [`DelayPtr::overlay`]).
+pub const UNCHANGED: Time = Time(u64::MAX);
+
+impl DelayPtr {
+    /// For each delay of `self`, the delay of the six transitions `01, 10, 0z, z1, 1z, z0` that it
+    /// gives, after Chapter 14 of IEEE Std 1364-2005.
+    fn transition_sources(self) -> [usize; 6] {
+        use DelayPtrVariant as V;
+        match self.variant() {
+            V::One => [0; 6],
+            V::Two => [0, 1, 0, 0, 1, 1],
+            V::Three => [0, 1, 2, 0, 2, 1],
+            V::Six | V::Twelve => [0, 1, 2, 3, 4, 5],
+        }
+    }
+
+    /// The delays of all twelve transitions `01, 10, 0z, z1, 1z, z0, 0x, x1, 1x, x0, xz, zx`, where
+    /// a delay of [`UNCHANGED`] stays as it is. The `x` transitions are only given for
+    /// [`DelayPtrVariant::Twelve`].
+    fn transitions(self, delays: &[Time]) -> ([Time; 6], Option<[Time; 6]>) {
+        let mut reader = self.reader(delays);
+        let values = (0..self.num_delays())
+            .map(|_| reader.get())
+            .collect::<Vec<_>>();
+        let six = self.transition_sources().map(|i| values[i]);
+        let x = (self.variant() == DelayPtrVariant::Twelve)
+            .then(|| std::array::from_fn(|i| values[6 + i]));
+        (six, x)
+    }
+
+    /// The delays of `self`, where the [`UNCHANGED`] ones are those of `old`, or zero without
+    /// `old`, appended to `delays` if they differ from `self`.
+    ///
+    /// IEEE Std 1497-2001, 5.3: an empty value in an SDF delay leaves the delay of its transitions
+    /// unchanged.
+    pub fn overlay(self, old: Option<DelayPtr>, delays: &mut Vec<Time>) -> DelayPtr {
+        let mut reader = self.reader(delays);
+        if !(0..self.num_delays()).any(|_| reader.get().0 == UNCHANGED.0) {
+            return self;
+        }
+
+        let (new_six, new_x) = self.transitions(delays);
+        let (old_six, old_x) = match old {
+            Some(old) => old.transitions(delays),
+            None => ([Time(0); 6], None),
+        };
+        let pick = |new: Time, old: Time| if new.0 == UNCHANGED.0 { old } else { new };
+        let six: [Time; 6] = std::array::from_fn(|i| pick(new_six[i], old_six[i]));
+
+        let offset = delays.len() as u64;
+        delays.extend(six);
+        // The `x` transitions are only kept if the new delay gives them. Otherwise they are derived
+        // from the six others, like for any delay of six values.
+        if let Some(new_x) = new_x {
+            let old_x = old_x.unwrap_or_else(|| derive_x_transitions(&old_six));
+            delays.extend(std::array::from_fn::<_, 6, _>(|i| pick(new_x[i], old_x[i])));
+            return DelayPtr::new(offset, DelayPtrVariant::Twelve, 0);
+        }
+        DelayPtr::new(offset, DelayPtrVariant::Six, 0)
+    }
+}
+
+/// The delays of the six `x` transitions `0x, x1, 1x, x0, xz, zx` that follow from the delays of
+/// the six transitions `01, 10, 0z, z1, 1z, z0`, as in [`DelayPtr::calculate`].
+fn derive_x_transitions(six: &[Time; 6]) -> [Time; 6] {
+    let [t01, t10, t0z, tz1, t1z, tz0] = six.map(|t| t.0);
+    [
+        t0z.min(t01),
+        tz1.max(t01),
+        t1z.min(t10),
+        tz0.max(t10),
+        t1z.max(t0z),
+        tz1.min(tz0),
+    ]
+    .map(Time)
+}
+
 impl DelayPtrVariant {
     /// How many delay values this variant names.
     pub fn num_delays(self) -> usize {
