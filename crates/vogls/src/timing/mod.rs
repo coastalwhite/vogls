@@ -6,14 +6,16 @@ use vogls_ir::time::{TimeResolution, TimeSize, TimeUnit};
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{SignalSlice, Time};
 use vogls_sdf::{
-    AbsoluteDelayType, DelVal, DelValList, DelayFile, DelaySpec, HierarchicalIdent,
-    HierarchyDivider, Instance, Integer, InterconnectDef, IoPathDef, Port, PortInstance, PortSpec,
-    RTriple, RValue, SignedRealNumberOrRTriple, Timescale, TimescaleNumber, TimescaleUnit,
-    TimingSpec,
+    AbsoluteDelayType, BinaryOp, DelVal, DelValList, DelayFile, DelaySpec, Expression,
+    HierarchicalIdent, HierarchyDivider, Instance, Integer, InterconnectDef, IoPathDef, Port,
+    PortInstance, PortSpec, RTriple, RValue, ScalarConstant, SignedRealNumberOrRTriple, Timescale,
+    TimescaleNumber, TimescaleUnit, TimingSpec, UnaryOp,
 };
 use vogls_utils::VgHashMap;
 use vogls_verilog::elaborate::{SignalSymbol, VSymbol};
-use vogls_verilog::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
+use vogls_verilog::lower::delay_pointer::{DelayPtr, DelayPtrVariant, UNCHANGED};
+use vogls_verilog::lower::cond_expr::{CondExpr, CondExprBuilder};
+use vogls_verilog::lower::specify::SdfCondition;
 use vogls_verilog::lower::{Diagnostics, LowerContext, LowerErrorReason, MutLowerContext};
 
 /// Format an SDF hierarchical identifier for diagnostics.
@@ -94,6 +96,7 @@ fn push_sdf_path<'a>(
     divider: HierarchyDivider,
     cell_sid: SymbolId,
     (from, to): (&PortInstance, &PortInstance),
+    condition: SdfCondition,
     delval_list: &DelValList,
     delay_values: &mut Vec<Time>,
     timescale: TimeResolution,
@@ -118,7 +121,9 @@ fn push_sdf_path<'a>(
     let delays = parse_delvallist(delval_list, delay_values, timescale, ctx.time_resolution)?;
 
     if from_bits.is_some() || to_bits.is_some() {
-        let is_zero = delay_values[before..].iter().all(|t| t.0 == 0);
+        let is_zero = delay_values[before..]
+            .iter()
+            .all(|&t| t.0 == 0 || t.0 == UNCHANGED.0);
         delay_values.truncate(before);
         // A zero delay adds no delay, also between the bits of a port, e.g. those of the pads of a
         // padring that connect to the bits of the ports of the top-level module.
@@ -136,8 +141,136 @@ fn push_sdf_path<'a>(
     let to = to_net.terminals.probe_signal();
     mctx.driver_resolution
         .path_delays
-        .push_sdf(from, to, to_sid, delays);
+        .push_sdf(from, to, to_sid, condition, delays);
     Ok(())
+}
+
+/// Adds the delay of the SDF `IOPATH` `iopath` in the cell `cell_sid`, which applies under
+/// `condition`.
+#[allow(clippy::too_many_arguments)]
+fn push_iopath<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext<'a>,
+    divider: HierarchyDivider,
+    cell_sid: SymbolId,
+    iopath: &IoPathDef,
+    condition: SdfCondition,
+    delay_values: &mut Vec<Time>,
+    timescale: TimeResolution,
+) -> Result<(), ()> {
+    let IoPathDef {
+        port_spec,
+        port_instance: to,
+        retain_defs,
+        delval_list,
+    } = iopath;
+
+    if !retain_defs.is_empty() {
+        todo!();
+    }
+
+    let PortSpec::Instance(from) = port_spec else {
+        todo!();
+    };
+
+    push_sdf_path(
+        ctx,
+        mctx,
+        divider,
+        cell_sid,
+        (from, to),
+        condition,
+        delval_list,
+        delay_values,
+        timescale,
+    )
+}
+
+fn lower_unary(builder: &mut CondExprBuilder, a: CondExpr, op: UnaryOp) -> CondExpr {
+    use UnaryOp as U;
+    match op {
+        U::ArithmeticIdentity => a,
+        U::ArithmeticNegation => builder.arithmetic_neg(a),
+        U::LogicalNegation => builder.logical_not(a),
+        U::BitwiseUnaryNegation => builder.bitwise_not(a),
+        U::ReductionAnd => builder.reduce_and(a),
+        U::ReductionNand => builder.reduce_nand(a),
+        U::ReductionOr => builder.reduce_or(a),
+        U::ReductionNor => builder.reduce_nor(a),
+        U::ReductionXor => builder.reduce_xor(a),
+        U::ReductionXnor => builder.reduce_xnor(a),
+    }
+}
+
+/// Converts the condition of an SDF `COND` to a [`PathCond`], if it only combines scalar ports
+/// and constants with logical, bit-wise and equality operators.
+fn sdf_expr_to_cond_expr(expr: &Expression, builder: &mut CondExprBuilder<'_>) -> Option<CondExpr> {
+    use BinaryOp as B;
+    use UnaryOp as U;
+    let port = |port: &Port| {
+        let Port { hident, b1, b2 } = port;
+        (b1.is_none() && b2.is_none() && hident.next.is_empty())
+            .then_some(CondExpr::net(hident.fst))
+    };
+    let scalar = |scalar: &ScalarConstant| CondExpr::constant(matches!(scalar, ScalarConstant::L1));
+
+    use Expression as E;
+    Some(match expr {
+        E::Parenthese(a) => sdf_expr_to_cond_expr(a, builder)?,
+        E::Unary(op, a) => {
+            let a = sdf_expr_to_cond_expr(a, builder)?;
+            lower_unary(builder, a, *op)
+        }
+        E::UnaryPort(op, p) => {
+            let p = port(p)?;
+            lower_unary(builder, p, *op)
+        }
+        E::UnaryScalar(op, c) => {
+            let value = matches!(c, ScalarConstant::L1);
+            let value = match op {
+                U::ArithmeticNegation => return None,
+                U::ArithmeticIdentity | U::ReductionAnd | U::ReductionOr | U::ReductionXor => value,
+                U::LogicalNegation
+                | U::BitwiseUnaryNegation
+                | U::ReductionNand
+                | U::ReductionNor
+                | U::ReductionXnor => !value,
+            };
+            CondExpr::constant(value)
+        }
+        E::Port(p) => port(p)?,
+        E::Scalar(c) => scalar(c),
+        E::Binary(op, a, b) => {
+            let a = sdf_expr_to_cond_expr(a, builder)?;
+            let b = sdf_expr_to_cond_expr(b, builder)?;
+            match op {
+                B::LogicalAnd | B::BitwiseAnd => builder.and(a, b),
+                B::LogicalOr | B::BitwiseOr => builder.or(a, b),
+                B::BitwiseXor => builder.xor(a, b),
+                B::BitwiseEquiv => builder.bitwise_equiv(a, b),
+                B::LogicalEquality => builder.eq(a, b),
+                B::CaseEquality => builder.case_eq(a, b),
+                B::LogicalInequality => builder.neq(a, b),
+                B::CaseInequality => builder.case_neq(a, b),
+                _ => return None,
+            }
+        }
+        E::Ternary(c, a, b) => {
+            let c = sdf_expr_to_cond_expr(c, builder)?;
+            let a = sdf_expr_to_cond_expr(a, builder)?;
+            let b = sdf_expr_to_cond_expr(b, builder)?;
+            builder.mux(c, a, b)
+        }
+        E::Concat(exprs) => {
+            let mut accum = sdf_expr_to_cond_expr(exprs.first()?, builder)?;
+            for expr in &exprs[1..] {
+                let a = sdf_expr_to_cond_expr(expr, builder)?;
+                accum = builder.concat(accum, a);
+            }
+            accum
+        }
+        E::Replicate(_, _) => return None,
+    })
 }
 
 /// Returns the bits of `net` that the bit select `[b1]` or part select `[b1:b2]` of the SDF `port`
@@ -282,9 +415,10 @@ fn push_delval(
     sdf_timescale: TimeResolution,
     resolution: TimeResolution,
 ) -> Result<(), ()> {
-    // This should be represented as a no-override...
+    // IEEE Std 1497-2001, 5.3: an empty value leaves the delay of its transitions unchanged.
     let Some(value) = &delval.delay.0 else {
-        todo!();
+        delays.push(UNCHANGED);
+        return Ok(());
     };
 
     use SignedRealNumberOrRTriple as R;
@@ -475,6 +609,7 @@ pub fn lower_sdf<'a>(
             }
         };
 
+        let mut pathcond_scratch = Vec::new();
         for &cell_sid in cell_sids {
             for timing_spec in timing_specs.iter() {
                 match timing_spec {
@@ -487,28 +622,52 @@ pub fn lower_sdf<'a>(
                                     for def in defs {
                                         match def {
                                             vogls_sdf::DelayDef::IoPath(iopath) => {
-                                                let IoPathDef {
-                                                    port_spec,
-                                                    port_instance: to,
-                                                    retain_defs,
-                                                    delval_list,
-                                                } = iopath;
-
-                                                if !retain_defs.is_empty() {
-                                                    todo!();
-                                                }
-
-                                                let PortSpec::Instance(from) = port_spec else {
-                                                    todo!();
-                                                };
-
-                                                error |= push_sdf_path(
+                                                error |= push_iopath(
                                                     ctx,
                                                     mctx,
                                                     divider,
                                                     cell_sid,
-                                                    (from, to),
-                                                    delval_list,
+                                                    iopath,
+                                                    SdfCondition::None,
+                                                    &mut delay_values,
+                                                    timescale,
+                                                )
+                                                .is_err();
+                                            }
+                                            vogls_sdf::DelayDef::Cond(cond) => {
+                                                let mut builder = mctx
+                                                    .driver_resolution
+                                                    .path_delays
+                                                    .conds
+                                                    .builder_with_scratch(std::mem::take(
+                                                        &mut pathcond_scratch,
+                                                    ));
+                                                let condition =
+                                                    SdfCondition::Cond(sdf_expr_to_cond_expr(
+                                                        &cond.conditional_port_expr,
+                                                        &mut builder,
+                                                    ));
+                                                pathcond_scratch = builder.take_scratch();
+                                                error |= push_iopath(
+                                                    ctx,
+                                                    mctx,
+                                                    divider,
+                                                    cell_sid,
+                                                    &cond.io_path,
+                                                    condition,
+                                                    &mut delay_values,
+                                                    timescale,
+                                                )
+                                                .is_err();
+                                            }
+                                            vogls_sdf::DelayDef::CondElse(cond_else) => {
+                                                error |= push_iopath(
+                                                    ctx,
+                                                    mctx,
+                                                    divider,
+                                                    cell_sid,
+                                                    &cond_else.0,
+                                                    SdfCondition::Else,
                                                     &mut delay_values,
                                                     timescale,
                                                 )
@@ -517,8 +676,6 @@ pub fn lower_sdf<'a>(
 
                                             // @TODO: These should all be implemented in time.
                                             vogls_sdf::DelayDef::Retain(_) => todo!(),
-                                            vogls_sdf::DelayDef::Cond(_) => todo!(),
-                                            vogls_sdf::DelayDef::CondElse(_) => todo!(),
                                             vogls_sdf::DelayDef::Port(_) => todo!(),
                                             vogls_sdf::DelayDef::Interconnect(interconnect) => {
                                                 let InterconnectDef {
@@ -533,6 +690,7 @@ pub fn lower_sdf<'a>(
                                                     divider,
                                                     cell_sid,
                                                     (from, to),
+                                                    SdfCondition::None,
                                                     delval_list,
                                                     &mut delay_values,
                                                     timescale,

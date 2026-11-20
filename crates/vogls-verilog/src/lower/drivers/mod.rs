@@ -185,7 +185,7 @@ pub enum DelayKind<'a> {
         scope: SymbolId,
     },
     /// The module path delays of an output with a specify block.
-    Specify(Arc<SpecifyDelay<'a>>),
+    Specify(Arc<SpecifyDelay>),
 }
 
 #[derive(Clone, Copy)]
@@ -471,7 +471,7 @@ pub struct DriverResolution<'a> {
     observed: Vec<(SignalKey, NodeFlags)>,
     /// The path delays of specify blocks and SDF files, until they are put in front of their
     /// outputs (see [`Self::insert_path_delays`]).
-    pub path_delays: PathDelays<'a>,
+    pub path_delays: PathDelays,
 }
 
 /// Identifies a net assignment. All expressions of an assignment are evaluated by one process.
@@ -1068,7 +1068,17 @@ impl<'a> DriverResolution<'a> {
             return;
         }
 
-        for specify in self.path_delays.take_merged() {
+        let (merged, num_unmatched) = self.path_delays.take_merged();
+        if num_unmatched != 0 {
+            mctx.diagnostics.warnings.push((
+                TokenRange::default(),
+                format!(
+                    "{num_unmatched} SDF COND or CONDELSE delays match no module path and are \
+                     ignored"
+                ),
+            ));
+        }
+        for specify in merged {
             let output = specify.output;
             let sid = specify.specify.sid;
             let mut proxy = mctx.gl.signals[output].clone();
@@ -2111,7 +2121,7 @@ impl<'a> DriverResolution<'a> {
                     )
                 }
                 DelayKind::Specify(specify) => {
-                    lower_specify_delay(ctx, mctx, &specify, input, &drive)
+                    lower_specify_delay(mctx, &specify, input, &drive)
                 }
             };
             error |= res.is_err();

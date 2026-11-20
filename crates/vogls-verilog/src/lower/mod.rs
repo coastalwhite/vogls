@@ -8,6 +8,7 @@ pub mod expression;
 mod fuse;
 pub mod module_or_generate_item;
 pub mod observed;
+pub mod cond_expr;
 pub mod specify;
 mod statement;
 pub mod udp;

@@ -1,0 +1,27 @@
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DIVIDER .)
+  (TIMESCALE 1ns)
+  (CELL
+    (CELLTYPE "xor2")
+    (INSTANCE u)
+    (DELAY
+      (ABSOLUTE
+        (IOPATH a y (9))
+        (IOPATH c y (1))
+        (COND c==1'b0 (IOPATH a y (2)))
+        (CONDELSE (IOPATH a y (4)))
+        (COND c===1'b1 (IOPATH a y (7)))
+      )
+    )
+  )
+  (CELL
+    (CELLTYPE "dffe")
+    (INSTANCE f)
+    (DELAY
+      (ABSOLUTE
+        (COND 1'b1===e (IOPATH clk q (6)))
+      )
+    )
+  )
+)
