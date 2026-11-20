@@ -11,12 +11,12 @@ use vogls_utils::{IndexMap, NonMaxU32, VgHashMap};
 use vogls_verilog::ast::AstId;
 use vogls_verilog::ast::module::{Module, ModuleItem, NonPortModuleItem, TimeScale};
 use vogls_verilog::ast::udp::UdpDeclaration;
-use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable, determine_module_context};
+use vogls_verilog::elaborate::{SymbolAstRefs, VSymbol, VSymbolTable};
 use vogls_verilog::lower::drivers::{DriverResolution, FinalizeOptions, FuseTarget};
 use vogls_verilog::lower::for_each_module_item;
+use vogls_verilog::lower::module_or_generate_item::{self, function};
 use vogls_verilog::lower::{
-    Diagnostics, LowerContext, LowerErrorReason, MutLowerContext, WarningsReport,
-    module_or_generate_item, observed::Scan,
+    Diagnostics, LowerContext, LowerErrorReason, MutLowerContext, WarningsReport, observed::Scan,
 };
 use vogls_verilog::parser::{Ast, AstArenas, ReportKind, SpanError};
 use vogls_verilog::tokenizer::Tokenized;
@@ -272,6 +272,7 @@ impl<'a> ElaboratedDesign<'a> {
     pub fn annotate_sdf<'b>(
         &'b mut self,
         path: impl AsRef<Path>,
+        scope: Option<&str>,
     ) -> Result<&'b mut Self, AnnotationError<'a, 'b>> {
         let path = path.as_ref();
         let mut diagnostics = Diagnostics::default();
@@ -299,12 +300,30 @@ impl<'a> ElaboratedDesign<'a> {
             });
         };
 
-        match self.with_context(
-            |ctx, mctx, _| match crate::timing::lower_sdf(ctx, mctx, &sdf) {
+        match self.with_context(|ctx, mctx, _| {
+            let scope = match scope {
+                None => None,
+                Some(scope) => {
+                    match crate::find_symbol_from_path(&ctx.table, &ctx.arenas.ident_table, scope) {
+                        Some(sid) if matches!(ctx.table[sid].content, VSymbol::Module(_)) => {
+                            Some(sid)
+                        }
+                        Some(_) | None => {
+                            mctx.diagnostics.errors.push((
+                                TokenRange::default(),
+                                LowerErrorReason::SdfUnknownScope(scope.to_string()),
+                                Vec::new(),
+                            ));
+                            return Err(std::mem::take(&mut mctx.diagnostics));
+                        }
+                    }
+                }
+            };
+            match crate::timing::lower_sdf(ctx, mctx, &sdf, scope) {
                 Ok(_) => Ok(()),
                 Err(_) => Err(std::mem::take(&mut mctx.diagnostics)),
-            },
-        ) {
+            }
+        }) {
             Ok(_) => Ok(self),
             Err(diagnostics) => Err(AnnotationError {
                 design: self,
@@ -316,10 +335,6 @@ impl<'a> ElaboratedDesign<'a> {
     pub fn annotate_specify<'b>(&'b mut self) -> Result<&'b mut Self, AnnotationError<'a, 'b>> {
         let result = self.with_context(|ctx, mctx, module_lut| {
             let mut error = false;
-            let mut delays = Vec::new();
-            let mut outs_lut = VgHashMap::default();
-            let mut outs = Vec::new();
-
             for key in ctx.table.symbol_id_iter() {
                 if let VSymbol::Module(i) = &ctx.table[key].content {
                     let module = module_lut[&i.module];
@@ -338,9 +353,6 @@ impl<'a> ElaboratedDesign<'a> {
                                 mctx,
                                 key,
                                 specify_block.items,
-                                &mut delays,
-                                &mut outs_lut,
-                                &mut outs,
                             )
                             .is_err();
                         }
@@ -417,52 +429,51 @@ impl<'a> ElaboratedDesign<'a> {
             driver_resolution,
         };
 
-        // @TODO: Iterate over the modules instead.
         let mut error = false;
-        for key in ctx.table.symbol_id_iter() {
-            match &ctx.table[key].content {
-                // VSymbol::Module(i) => {
-                //     let module = module_lut[&i.module];
-                //     ctx.time_scale = module.time_scale;
-                //
-                //     error |= vogls_verilog::lower::instantiate_nba_signals(
-                //         &mut mctx.gl,
-                //         &mut ctx,
-                //         key,
-                //         module,
-                //         &mut mctx.diagnostics,
-                //         &mut nba_signals,
-                //     )
-                //     .is_err();
-                // }
-                VSymbol::Function(i) => {
-                    let fn_decl = ctx.table_ast_refs.fns[i.ast_id];
-                    error |= vogls_verilog::lower::module_or_generate_item::function::lower(
-                        &mut ctx, &mut mctx, key, fn_decl,
-                    )
-                    .is_err();
-                }
-                VSymbol::Task(i) => {
-                    let (_, ms) = determine_module_context(key, &ctx.table);
-                    ctx.time_scale = ms.time_scale;
-                    let task_decl = ctx.table_ast_refs.tasks[i.ast_id];
-                    error |= vogls_verilog::lower::module_or_generate_item::function::lower_task(
-                        &mut ctx, &mut mctx, key, task_decl,
-                    )
-                    .is_err();
-                }
-                _ => {}
+        let modules = ctx
+            .table
+            .symbol_id_iter()
+            .filter_map(|key| match &ctx.table[key].content {
+                VSymbol::Module(m) => Some((key, module_lut[&m.module])),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let mut scan = Scan::default();
+        for &(key, module_id) in &modules {
+            ctx.time_scale = module_id.time_scale;
+            error |= for_each_module_item(module_id, &ctx, key, |scope, id| {
+                module_or_generate_item::lower_structural(&ctx, &mut mctx, scope, &mut scan, id)
+            })
+            .is_err();
+        }
+        function::observe_all(&ctx, &mut mctx);
+
+        let mut resolved = None;
+        if !error {
+            let mut unoptimized_fgs = unoptimized_fgs.as_ref().map(|w| w.lock().unwrap());
+            let mut optimized_fgs = optimized_fgs.as_ref().map(|w| w.lock().unwrap());
+            let options = FinalizeOptions {
+                max_rounds: drive_graph_rounds,
+                optimize: drive_graph_opt,
+                unoptimized_dot: unoptimized_fgs
+                    .as_deref_mut()
+                    .map(|w| w as &mut dyn std::io::Write),
+                optimized_dot: optimized_fgs
+                    .as_deref_mut()
+                    .map(|w| w as &mut dyn std::io::Write),
+            };
+            match std::mem::take(&mut mctx.driver_resolution).finalize(&mut ctx, &mut mctx, options)
+            {
+                Ok(r) => resolved = Some(r),
+                Err(()) => error = true,
             }
         }
-        // for (sid, (signal, needs_mask)) in nba_signals.into_iter() {
-        //     let (process, nba, mask) = create_nba_process(mctx.gl(), signal, needs_mask);
-        //     let VSymbol::Signal(net) = &mut ctx.table[sid].content else {
-        //         unreachable!();
-        //     };
-        //     net.net.nba = Some((process, nba, mask));
-        // }
 
-        if error {
+        // Functions and tasks, and so the procedural code that calls them, are lowered also when
+        // the drivers could not be resolved, so that their errors are reported too.
+        function::discard_all(&mut ctx, &mut mctx.gl);
+        if function::lower_all(&mut ctx, &mut mctx).is_err() {
             let LowerContext {
                 logic_mode,
                 table,
@@ -501,45 +512,6 @@ impl<'a> ElaboratedDesign<'a> {
             }));
         }
 
-        let modules = ctx
-            .table
-            .symbol_id_iter()
-            .filter_map(|key| match &ctx.table[key].content {
-                VSymbol::Module(m) => Some((key, module_lut[&m.module])),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-
-        let mut scan = Scan::default();
-        for &(key, module_id) in &modules {
-            ctx.time_scale = module_id.time_scale;
-            error |= for_each_module_item(module_id, &ctx, key, |scope, id| {
-                module_or_generate_item::lower_structural(&ctx, &mut mctx, scope, &mut scan, id)
-            })
-            .is_err();
-        }
-
-        let mut resolved = None;
-        if !error {
-            let mut unoptimized_fgs = unoptimized_fgs.as_ref().map(|w| w.lock().unwrap());
-            let mut optimized_fgs = optimized_fgs.as_ref().map(|w| w.lock().unwrap());
-            let options = FinalizeOptions {
-                max_rounds: drive_graph_rounds,
-                optimize: drive_graph_opt,
-                unoptimized_dot: unoptimized_fgs
-                    .as_deref_mut()
-                    .map(|w| w as &mut dyn std::io::Write),
-                optimized_dot: optimized_fgs
-                    .as_deref_mut()
-                    .map(|w| w as &mut dyn std::io::Write),
-            };
-            match std::mem::take(&mut mctx.driver_resolution).finalize(&ctx, &mut mctx, options) {
-                Ok(r) => resolved = Some(r),
-                Err(()) => error = true,
-            }
-        }
-
-        // Also when the drivers could not be resolved, so that their errors are reported too.
         for &(key, module_id) in &modules {
             ctx.time_scale = module_id.time_scale;
             error |= for_each_module_item(module_id, &ctx, key, |scope, id| {

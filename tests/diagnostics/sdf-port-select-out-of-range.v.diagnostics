@@ -1,0 +1,2 @@
+error: SDF port `in[4]` selects bits outside of the net
+  --> {path}:6

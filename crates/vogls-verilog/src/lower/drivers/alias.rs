@@ -781,7 +781,19 @@ impl<'a> DriverResolution<'a> {
                     .drivee_signal()
                     .is_some_and(|s| gl.signals[s].mode.is_four_value());
 
-            if suc == n || skips_conversion || s2.lsb() > s3.msb() {
+            if suc == n || skips_conversion || s2.lsb() > s3.msb() || {
+                // A process that also reads `B`, e.g. that of a specify delay taking the last update
+                // time of its input, must be driven through `B`. Driven by `A`, it could run before `B`
+                // is updated and see its old value and last update time.
+                let mut next = self.nodes[suc].fst_read_in();
+                while let Some(edge) = next {
+                    if self.read_edges[edge].from == n {
+                        return true;
+                    }
+                    next = self.read_edges[edge].next_in;
+                }
+                false
+            } {
                 o += 1;
             } else if s3.lsb() > s2.msb() {
                 i += 1;

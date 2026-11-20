@@ -31,7 +31,12 @@ pub fn lower_function_call<'a>(
         return Err(());
     };
 
-    let lowered = fn_symbol.lowered.as_ref().unwrap();
+    // Only a recursive call is lowered before the function itself.
+    let Some(lowered) = fn_symbol.lowered.as_ref() else {
+        mctx.diagnostics
+            .not_yet_implemented(hident_span(ctx.arenas, ident), "recursive function call");
+        return Err(());
+    };
     if fn_symbol.inputs.len() != arguments.len() {
         mctx.diagnostics
             .not_yet_implemented(ctx.arenas.get_span(expr), "invalid number of arguments");
@@ -132,7 +137,12 @@ pub fn lower_task_enable<'a>(
         return Err(());
     };
 
-    let lowered = task_symbol.lowered.as_ref().unwrap();
+    // Only a recursive enable is lowered before the task itself.
+    let Some(lowered) = task_symbol.lowered.as_ref() else {
+        mctx.diagnostics
+            .not_yet_implemented(ctx.arenas.get_item_span(ident), "recursive task enable");
+        return Err(());
+    };
     if task_symbol.io.len() != exprs.len() {
         mctx.diagnostics.not_yet_implemented(
             ctx.arenas.get_item_span(ident),

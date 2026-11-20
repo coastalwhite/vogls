@@ -1,7 +1,7 @@
 //! Finds the signals that procedural code observes, before it is lowered.
 //!
-//! Functions and tasks are lowered before the drive graph is resolved, so their watches and last
-//! update times are found in the IR instead.
+//! Procedural code, including the bodies of functions and tasks, is lowered after the drive graph
+//! is resolved, so their watches and last update times must be known beforehand.
 
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::SignalKey;
@@ -23,12 +23,45 @@ use super::{LowerContext, MutLowerContext, expression, resolve_hident};
 pub struct Scan {
     pub watched: OrderedSet<SignalKey>,
     pub lupdt: OrderedSet<SignalKey>,
+    pub calls: OrderedSet<SymbolId>,
 }
 
 impl Scan {
     pub fn clear(&mut self) {
         self.watched.clear();
         self.lupdt.clear();
+        self.calls.clear();
+    }
+
+    /// Scans the body of the function or task `sid`.
+    pub fn subroutine<'a>(
+        &mut self,
+        ctx: &LowerContext<'a, '_>,
+        mctx: &mut MutLowerContext<'a>,
+        sid: SymbolId,
+    ) {
+        match &ctx.table[sid].content {
+            VSymbol::Function(f) => {
+                let statement = ctx.table_ast_refs.fns[f.ast_id].statement;
+                self.stmt(ctx, mctx, sid, statement);
+            }
+            VSymbol::Task(t) => {
+                let statement_or_null = ctx.table_ast_refs.tasks[t.ast_id].statement_or_null;
+                self.stmt_or_null(ctx, mctx, sid, statement_or_null);
+            }
+            _ => unreachable!("not a function or task"),
+        }
+    }
+
+    /// Records the watched signals and the signals whose last update time is taken in the driver
+    /// resolution.
+    pub fn observe(&self, mctx: &mut MutLowerContext<'_>) {
+        for &signal in &self.watched.items {
+            mctx.driver_resolution.observe_watch(signal);
+        }
+        for &signal in &self.lupdt.items {
+            mctx.driver_resolution.observe_lupdt(signal);
+        }
     }
 
     fn stmt_or_null<'a>(
@@ -189,6 +222,11 @@ impl Scan {
                 }
             }
             StatementContent::TaskEnable(id) => {
+                if let Some(sid) = resolve_hident(scope, &ctx.table, id.ident)
+                    && matches!(ctx.table[sid].content, VSymbol::Task(_))
+                {
+                    self.calls.insert(sid);
+                }
                 id.exprs.iter().for_each(|e| self.expr(ctx, scope, e));
             }
             StatementContent::WaitStatement(id) => {
@@ -220,16 +258,20 @@ impl Scan {
             flat.exprs.iter().for_each(|e| self.expr(ctx, scope, e));
             if let Some(range_expression) = flat.range_expression {
                 match &*range_expression {
-                    BitSlice::PlusWidth(base, _) | BitSlice::MinusWidth(base, _) => {
-                        self.expr(ctx, scope, *base)
+                    BitSlice::PlusWidth(base, width) | BitSlice::MinusWidth(base, width) => {
+                        self.expr(ctx, scope, *base);
+                        self.expr(ctx, scope, width.into_expr());
                     }
-                    BitSlice::MsbLsb(..) => {}
+                    BitSlice::MsbLsb(msb, lsb) => {
+                        self.expr(ctx, scope, msb.into_expr());
+                        self.expr(ctx, scope, lsb.into_expr());
+                    }
                 }
             }
         }
     }
 
-    /// Finds the signals of every `$vogls_lupdt` in `expr`.
+    /// Finds the signals of every `$vogls_lupdt` and the functions that are called in `expr`.
     fn expr<'a>(&mut self, ctx: &LowerContext<'a, '_>, scope: SymbolId, expr: AstId<'a, Expr<'a>>) {
         let mut stack = vec![expr];
         while let Some(expr) = stack.pop() {
@@ -237,10 +279,19 @@ impl Scan {
                 Expr::Unary(_, c) => stack.push(*c),
                 Expr::Binary(_, l, r) => stack.extend([*l, *r]),
                 Expr::Ternary(c, t, f) => stack.extend([*c, *t, *f]),
-                Expr::Concatenation(exprs) | Expr::FunctionCall(_, exprs) => {
+                Expr::Concatenation(exprs) => stack.extend(exprs.iter()),
+                Expr::FunctionCall(ident, exprs) => {
+                    if let Some(sid) = resolve_hident(scope, &ctx.table, *ident)
+                        && matches!(ctx.table[sid].content, VSymbol::Function(_))
+                    {
+                        self.calls.insert(sid);
+                    }
                     stack.extend(exprs.iter())
                 }
-                Expr::Replication(replication) => stack.extend(replication.exprs.iter()),
+                Expr::Replication(replication) => {
+                    stack.push(replication.constant_expr.into_expr());
+                    stack.extend(replication.exprs.iter())
+                }
                 Expr::SystemFunctionCall(ident, arguments) => {
                     let Some(arguments) = arguments else {
                         continue;
@@ -258,10 +309,13 @@ impl Scan {
                 Expr::Ident(_, exprs, range_expression) => {
                     stack.extend(exprs.iter());
                     match range_expression {
-                        Some(BitSlice::PlusWidth(base, _) | BitSlice::MinusWidth(base, _)) => {
-                            stack.push(*base)
+                        Some(
+                            BitSlice::PlusWidth(base, width) | BitSlice::MinusWidth(base, width),
+                        ) => stack.extend([*base, width.into_expr()]),
+                        Some(BitSlice::MsbLsb(msb, lsb)) => {
+                            stack.extend([msb.into_expr(), lsb.into_expr()])
                         }
-                        Some(BitSlice::MsbLsb(..)) | None => {}
+                        None => {}
                     }
                 }
                 Expr::Real(_) | Expr::Decimal(_) | Expr::Sized(_) | Expr::String(_) => {}

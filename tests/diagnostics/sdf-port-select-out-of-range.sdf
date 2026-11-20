@@ -1,0 +1,9 @@
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DIVIDER .)
+  (CELL
+    (CELLTYPE "top")
+    (INSTANCE)
+    (DELAY (ABSOLUTE (INTERCONNECT in[4] u.a (0))))
+  )
+)

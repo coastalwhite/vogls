@@ -17,6 +17,7 @@ use crate::number::Sign;
 use crate::parser::AstArenas;
 pub use constant_expr::eval_constant_expr;
 pub use ty::get_expr_type;
+pub use condition::lower_expr_to_cond_expr;
 
 use super::LowerContext;
 use super::{Diagnostics, MutLowerContext};
@@ -25,7 +26,9 @@ mod constant_expr;
 pub mod function_call;
 mod system_function_call;
 mod ty;
+mod condition;
 
+#[derive(Clone)]
 struct StackItem<'a> {
     expr: AstId<'a, Expr<'a>>,
     /// Context determined width for this expression.

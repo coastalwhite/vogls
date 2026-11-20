@@ -32,6 +32,8 @@ pub enum LowerErrorReason {
     SdfNotAnInstance(String),
     SdfCelltypeMismatch(String, IdentId, IdentId),
     SdfDividerMismatch(char, char),
+    SdfUnknownScope(String),
+    SdfPortSelectOutOfRange(String),
 }
 
 #[derive(Debug, Default)]
@@ -297,6 +299,15 @@ impl<'a> fmt::Display for LowerErrorDisplay<'a> {
                 f,
                 "SDF hierarchical path uses divider `{found}`, but the header DIVIDER is `{expected}`"
             ),
+            LowerErrorReason::SdfPortSelectOutOfRange(port) => {
+                write!(f, "SDF port `{port}` selects bits outside of the net")
+            }
+            LowerErrorReason::SdfUnknownScope(scope) => {
+                write!(
+                    f,
+                    "SDF scope `{scope}` is not a module instance in the design"
+                )
+            }
         }
     }
 }

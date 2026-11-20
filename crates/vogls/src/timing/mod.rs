@@ -1,32 +1,22 @@
 use std::ops::Range;
-use std::sync::Arc;
 
-use hashbrown::hash_map::Entry;
 use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::time::{TimeResolution, TimeSize, TimeUnit};
 use vogls_ir::token_range::TokenRange;
-use vogls_ir::{SignalKey, Time};
+use vogls_ir::{SignalSlice, Time};
 use vogls_sdf::{
-    AbsoluteDelayType, DelVal, DelValList, DelayFile, DelaySpec, HierarchicalIdent,
-    HierarchyDivider, Instance, InterconnectDef, IoPathDef, Port, PortInstance, PortSpec, RTriple,
-    RValue, SignedRealNumberOrRTriple, Timescale, TimescaleNumber, TimescaleUnit, TimingSpec,
+    AbsoluteDelayType, BinaryOp, DelVal, DelValList, DelayFile, DelaySpec, Expression,
+    HierarchicalIdent, HierarchyDivider, Instance, Integer, InterconnectDef, IoPathDef, Port,
+    PortInstance, PortSpec, RTriple, RValue, ScalarConstant, SignedRealNumberOrRTriple, Timescale,
+    TimescaleNumber, TimescaleUnit, TimingSpec, UnaryOp,
 };
-use vogls_utils::{IterSliceContinguous, VgHashMap};
-use vogls_verilog::elaborate::VSymbol;
-use vogls_verilog::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
-use vogls_verilog::lower::specify::{Condition, SpecifyOutput, SpecifyPath, lower_iopath};
+use vogls_utils::VgHashMap;
+use vogls_verilog::elaborate::{SignalSymbol, VSymbol};
+use vogls_verilog::lower::delay_pointer::{DelayPtr, DelayPtrVariant, UNCHANGED};
+use vogls_verilog::lower::cond_expr::{CondExpr, CondExprBuilder};
+use vogls_verilog::lower::specify::SdfCondition;
 use vogls_verilog::lower::{Diagnostics, LowerContext, LowerErrorReason, MutLowerContext};
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-struct TimingProperty {
-    from: SignalKey,
-    to: SignalKey,
-}
-
-struct TimingContent {
-    delays: DelayPtr,
-}
 
 /// Format an SDF hierarchical identifier for diagnostics.
 fn display_ident(ident_table: &IdentTable, ident: &HierarchicalIdent) -> String {
@@ -40,8 +30,9 @@ fn display_ident(ident_table: &IdentTable, ident: &HierarchicalIdent) -> String 
 
 /// Resolve an SDF hierarchical identifier.
 ///
-/// With a `scope`, the identifier is resolved relative to that scope. Without a `scope`, it is an
-/// `INSTANCE` path, which is resolved relative to the top-level module.
+/// With a `scope`, the identifier is resolved relative to that scope, which is a cell or the module
+/// instance that the SDF file applies to. Without a `scope`, it is an `INSTANCE` path of an SDF file
+/// that applies to the top-level module.
 fn resolve_ident<'a>(
     ctx: &LowerContext<'a, '_>,
     divider: HierarchyDivider,
@@ -98,6 +89,256 @@ fn resolve_ident<'a>(
     Ok(cell_sid)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn push_sdf_path<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext<'a>,
+    divider: HierarchyDivider,
+    cell_sid: SymbolId,
+    (from, to): (&PortInstance, &PortInstance),
+    condition: SdfCondition,
+    delval_list: &DelValList,
+    delay_values: &mut Vec<Time>,
+    timescale: TimeResolution,
+) -> Result<(), ()> {
+    let from_sid = resolve_port_instance(ctx, divider, cell_sid, from, &mut mctx.diagnostics);
+    let to_sid = resolve_port_instance(ctx, divider, cell_sid, to, &mut mctx.diagnostics);
+    let (from_sid, to_sid) = (from_sid?, to_sid?);
+
+    let (VSymbol::Signal(from_net), VSymbol::Signal(to_net)) =
+        (&ctx.table[from_sid].content, &ctx.table[to_sid].content)
+    else {
+        mctx.diagnostics
+            .not_yet_implemented(TokenRange::default(), "Not a net");
+        return Err(());
+    };
+
+    let from_bits = port_bits(ctx, from_net, from, &mut mctx.diagnostics);
+    let to_bits = port_bits(ctx, to_net, to, &mut mctx.diagnostics);
+    let (from_bits, to_bits) = (from_bits?, to_bits?);
+
+    let before = delay_values.len();
+    let delays = parse_delvallist(delval_list, delay_values, timescale, ctx.time_resolution)?;
+
+    if from_bits.is_some() || to_bits.is_some() {
+        let is_zero = delay_values[before..]
+            .iter()
+            .all(|&t| t.0 == 0 || t.0 == UNCHANGED.0);
+        delay_values.truncate(before);
+        // A zero delay adds no delay, also between the bits of a port, e.g. those of the pads of a
+        // padring that connect to the bits of the ports of the top-level module.
+        if is_zero {
+            return Ok(());
+        }
+        mctx.diagnostics.not_yet_implemented(
+            TokenRange::default(),
+            "a non-zero SDF delay from or to a bit or part select of a port",
+        );
+        return Err(());
+    }
+
+    let from = from_net.terminals.probe_signal();
+    let to = to_net.terminals.probe_signal();
+    mctx.driver_resolution
+        .path_delays
+        .push_sdf(from, to, to_sid, condition, delays);
+    Ok(())
+}
+
+/// Adds the delay of the SDF `IOPATH` `iopath` in the cell `cell_sid`, which applies under
+/// `condition`.
+#[allow(clippy::too_many_arguments)]
+fn push_iopath<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext<'a>,
+    divider: HierarchyDivider,
+    cell_sid: SymbolId,
+    iopath: &IoPathDef,
+    condition: SdfCondition,
+    delay_values: &mut Vec<Time>,
+    timescale: TimeResolution,
+) -> Result<(), ()> {
+    let IoPathDef {
+        port_spec,
+        port_instance: to,
+        retain_defs,
+        delval_list,
+    } = iopath;
+
+    if !retain_defs.is_empty() {
+        todo!();
+    }
+
+    let PortSpec::Instance(from) = port_spec else {
+        todo!();
+    };
+
+    push_sdf_path(
+        ctx,
+        mctx,
+        divider,
+        cell_sid,
+        (from, to),
+        condition,
+        delval_list,
+        delay_values,
+        timescale,
+    )
+}
+
+fn lower_unary(builder: &mut CondExprBuilder, a: CondExpr, op: UnaryOp) -> CondExpr {
+    use UnaryOp as U;
+    match op {
+        U::ArithmeticIdentity => a,
+        U::ArithmeticNegation => builder.arithmetic_neg(a),
+        U::LogicalNegation => builder.logical_not(a),
+        U::BitwiseUnaryNegation => builder.bitwise_not(a),
+        U::ReductionAnd => builder.reduce_and(a),
+        U::ReductionNand => builder.reduce_nand(a),
+        U::ReductionOr => builder.reduce_or(a),
+        U::ReductionNor => builder.reduce_nor(a),
+        U::ReductionXor => builder.reduce_xor(a),
+        U::ReductionXnor => builder.reduce_xnor(a),
+    }
+}
+
+/// Converts the condition of an SDF `COND` to a [`PathCond`], if it only combines scalar ports
+/// and constants with logical, bit-wise and equality operators.
+fn sdf_expr_to_cond_expr(expr: &Expression, builder: &mut CondExprBuilder<'_>) -> Option<CondExpr> {
+    use BinaryOp as B;
+    use UnaryOp as U;
+    let port = |port: &Port| {
+        let Port { hident, b1, b2 } = port;
+        (b1.is_none() && b2.is_none() && hident.next.is_empty())
+            .then_some(CondExpr::net(hident.fst))
+    };
+    let scalar = |scalar: &ScalarConstant| CondExpr::constant(matches!(scalar, ScalarConstant::L1));
+
+    use Expression as E;
+    Some(match expr {
+        E::Parenthese(a) => sdf_expr_to_cond_expr(a, builder)?,
+        E::Unary(op, a) => {
+            let a = sdf_expr_to_cond_expr(a, builder)?;
+            lower_unary(builder, a, *op)
+        }
+        E::UnaryPort(op, p) => {
+            let p = port(p)?;
+            lower_unary(builder, p, *op)
+        }
+        E::UnaryScalar(op, c) => {
+            let value = matches!(c, ScalarConstant::L1);
+            let value = match op {
+                U::ArithmeticNegation => return None,
+                U::ArithmeticIdentity | U::ReductionAnd | U::ReductionOr | U::ReductionXor => value,
+                U::LogicalNegation
+                | U::BitwiseUnaryNegation
+                | U::ReductionNand
+                | U::ReductionNor
+                | U::ReductionXnor => !value,
+            };
+            CondExpr::constant(value)
+        }
+        E::Port(p) => port(p)?,
+        E::Scalar(c) => scalar(c),
+        E::Binary(op, a, b) => {
+            let a = sdf_expr_to_cond_expr(a, builder)?;
+            let b = sdf_expr_to_cond_expr(b, builder)?;
+            match op {
+                B::LogicalAnd | B::BitwiseAnd => builder.and(a, b),
+                B::LogicalOr | B::BitwiseOr => builder.or(a, b),
+                B::BitwiseXor => builder.xor(a, b),
+                B::BitwiseEquiv => builder.bitwise_equiv(a, b),
+                B::LogicalEquality => builder.eq(a, b),
+                B::CaseEquality => builder.case_eq(a, b),
+                B::LogicalInequality => builder.neq(a, b),
+                B::CaseInequality => builder.case_neq(a, b),
+                _ => return None,
+            }
+        }
+        E::Ternary(c, a, b) => {
+            let c = sdf_expr_to_cond_expr(c, builder)?;
+            let a = sdf_expr_to_cond_expr(a, builder)?;
+            let b = sdf_expr_to_cond_expr(b, builder)?;
+            builder.mux(c, a, b)
+        }
+        E::Concat(exprs) => {
+            let mut accum = sdf_expr_to_cond_expr(exprs.first()?, builder)?;
+            for expr in &exprs[1..] {
+                let a = sdf_expr_to_cond_expr(expr, builder)?;
+                accum = builder.concat(accum, a);
+            }
+            accum
+        }
+        E::Replicate(_, _) => return None,
+    })
+}
+
+/// Returns the bits of `net` that the bit select `[b1]` or part select `[b1:b2]` of the SDF `port`
+/// selects, or `None` if it selects the whole net.
+fn port_bits(
+    ctx: &LowerContext<'_, '_>,
+    net: &SignalSymbol,
+    port: &PortInstance,
+    diagnostics: &mut Diagnostics,
+) -> Result<Option<SignalSlice>, ()> {
+    let Port { hident, b1, b2 } = &port.port;
+    let Some(b1) = b1 else {
+        return Ok(None);
+    };
+
+    if !net.dims.is_empty() {
+        diagnostics.not_yet_implemented(TokenRange::default(), "SDF port of an array");
+        return Err(());
+    }
+
+    // The bit of a declared index, as in `lower_addressing`.
+    let width = net.ty.bit_length().get();
+    let transform = net.transform;
+    let bit = |index: &Integer| -> Option<u32> {
+        let index = index.0.parse::<i64>().ok()?;
+        let offset = u32::try_from(index.checked_sub(transform.lsb)?).ok()?;
+        (offset < width).then(|| {
+            if transform.bit_reversed {
+                width - 1 - offset
+            } else {
+                offset
+            }
+        })
+    };
+    let (Some(bit1), Some(bit2)) = (bit(b1), bit(b2.as_ref().unwrap_or(b1))) else {
+        let mut path = display_ident(&ctx.arenas.ident_table, hident);
+        if let Some(hident) = &port.hident {
+            path = format!("{}.{path}", display_ident(&ctx.arenas.ident_table, hident));
+        }
+        path = match b2 {
+            None => format!("{path}[{}]", b1.0),
+            Some(b2) => format!("{path}[{}:{}]", b1.0, b2.0),
+        };
+        diagnostics.errors.push((
+            TokenRange::default(),
+            LowerErrorReason::SdfPortSelectOutOfRange(path),
+            Vec::new(),
+        ));
+        return Err(());
+    };
+
+    let slice =
+        SignalSlice::new(bit1.max(bit2), bit1.min(bit2)).expect("the bits are within the net");
+    Ok((slice.width().get() != width).then_some(slice))
+}
+
+/// Whether `sid` is `scope` or lies somewhere below it in the hierarchy.
+fn is_within(ctx: &LowerContext<'_, '_>, sid: SymbolId, scope: SymbolId) -> bool {
+    let mut sid = Some(sid);
+    while let Some(s) = sid {
+        if s == scope {
+            return true;
+        }
+        sid = ctx.table[s].parent();
+    }
+    false
+}
+
 /// Check that the cell at `cell_sid` is an instance of the module named by the SDF `CELLTYPE`.
 fn check_celltype<'a>(
     ctx: &LowerContext<'a, '_>,
@@ -145,11 +386,8 @@ fn resolve_port_instance<'a>(
         None => scope,
         Some(hident) => resolve_ident(ctx, divider, Some(scope), hident, diagnostics)?,
     };
-    let Port { hident, b1, b2 } = port;
-    if b1.is_some() || b2.is_some() {
-        todo!();
-    }
-    resolve_ident(ctx, divider, Some(scope), hident, diagnostics)
+    // The bit or part select of the port is handled by `port_bits`.
+    resolve_ident(ctx, divider, Some(scope), &port.hident, diagnostics)
 }
 
 fn parse_signed_real_number(s: &str) -> Result<f64, ()> {
@@ -177,9 +415,10 @@ fn push_delval(
     sdf_timescale: TimeResolution,
     resolution: TimeResolution,
 ) -> Result<(), ()> {
-    // This should be represented as a no-override...
+    // IEEE Std 1497-2001, 5.3: an empty value leaves the delay of its transitions unchanged.
     let Some(value) = &delval.delay.0 else {
-        todo!();
+        delays.push(UNCHANGED);
+        return Ok(());
     };
 
     use SignedRealNumberOrRTriple as R;
@@ -238,10 +477,12 @@ fn parse_delvallist(
     Ok(delay_ptr)
 }
 
+/// Collects the delays of `sdf` into the path delays of the driver resolution.
 pub fn lower_sdf<'a>(
     ctx: &mut LowerContext<'a, '_>,
     mctx: &mut MutLowerContext<'a>,
     sdf: &DelayFile<'_>,
+    scope: Option<SymbolId>,
 ) -> Result<(), ()> {
     let timescale = match &sdf.header.timescale {
         // IEEE Std 1497-2001 (p. 17)
@@ -276,10 +517,9 @@ pub fn lower_sdf<'a>(
             }
         }
     };
-    let mut output_paths = VgHashMap::<SignalKey, SymbolId>::default();
-    let mut properties = Vec::<(TimingProperty, TimingContent)>::new();
-    let mut property_to_content = VgHashMap::<TimingProperty, usize>::default();
-    let mut delays = Vec::<Time>::new();
+    // The paths are only collected here, the driver resolution puts them in front of their
+    // outputs together with the module paths of the specify blocks.
+    let mut delay_values = std::mem::take(&mut mctx.driver_resolution.path_delays.delays);
 
     // IEEE Std 1497-2001 (p. 16)
     //
@@ -306,14 +546,16 @@ pub fn lower_sdf<'a>(
         let cell_sid;
         let cell_sids: &[SymbolId] = match instance {
             Instance::Empty => {
-                let roots = ctx.table.roots();
-                if roots.len() != 1 {
-                    mctx.diagnostics
-                        .not_yet_implemented(TokenRange::default(), "ambiguous top-level");
-                    error = true;
-                    continue;
-                }
-                cell_sid = roots[0];
+                cell_sid = match (scope, ctx.table.roots()) {
+                    (Some(scope), _) => scope,
+                    (None, &[root]) => root,
+                    (None, _) => {
+                        mctx.diagnostics
+                            .not_yet_implemented(TokenRange::default(), "ambiguous top-level");
+                        error = true;
+                        continue;
+                    }
+                };
                 let path = || ctx.arenas.ident_table[ctx.table[cell_sid].name()].to_string();
                 if check_celltype(ctx, cell_sid, *celltype, path, &mut mctx.diagnostics).is_err() {
                     error = true;
@@ -334,11 +576,10 @@ pub fn lower_sdf<'a>(
                 };
 
                 if instances.is_empty() {
-                    instances.extend(
-                        ctx.table
-                            .symbol_id_iter()
-                            .filter(|&sid| matches!(ctx.table[sid].content, VSymbol::Module(_))),
-                    );
+                    instances.extend(ctx.table.symbol_id_iter().filter(|&sid| {
+                        matches!(ctx.table[sid].content, VSymbol::Module(_))
+                            && scope.is_none_or(|scope| is_within(ctx, sid, scope))
+                    }));
                     instances.sort_unstable_by_key(|&sid| module_of(sid));
 
                     let mut offset = 0;
@@ -353,7 +594,7 @@ pub fn lower_sdf<'a>(
                     .map_or(&[], |range| &instances[range.clone()])
             }
             Instance::HierarchicalIdent(hident) => {
-                let Ok(sid) = resolve_ident(ctx, divider, None, hident, &mut mctx.diagnostics)
+                let Ok(sid) = resolve_ident(ctx, divider, scope, hident, &mut mctx.diagnostics)
                 else {
                     error = true;
                     continue;
@@ -368,6 +609,7 @@ pub fn lower_sdf<'a>(
             }
         };
 
+        let mut pathcond_scratch = Vec::new();
         for &cell_sid in cell_sids {
             for timing_spec in timing_specs.iter() {
                 match timing_spec {
@@ -380,89 +622,60 @@ pub fn lower_sdf<'a>(
                                     for def in defs {
                                         match def {
                                             vogls_sdf::DelayDef::IoPath(iopath) => {
-                                                let IoPathDef {
-                                                    port_spec,
-                                                    port_instance: to,
-                                                    retain_defs,
-                                                    delval_list,
-                                                } = iopath;
-
-                                                if !retain_defs.is_empty() {
-                                                    todo!();
-                                                }
-
-                                                let PortSpec::Instance(from) = port_spec else {
-                                                    todo!();
-                                                };
-
-                                                let (Ok(from_sid), Ok(to_sid)) = (
-                                                    resolve_port_instance(
-                                                        ctx,
-                                                        divider,
-                                                        cell_sid,
-                                                        from,
-                                                        &mut mctx.diagnostics,
-                                                    ),
-                                                    resolve_port_instance(
-                                                        ctx,
-                                                        divider,
-                                                        cell_sid,
-                                                        to,
-                                                        &mut mctx.diagnostics,
-                                                    ),
-                                                ) else {
-                                                    error = true;
-                                                    continue;
-                                                };
-
-                                                let (
-                                                    vogls_verilog::elaborate::VSymbol::Signal(
-                                                        from_net,
-                                                    ),
-                                                    vogls_verilog::elaborate::VSymbol::Signal(
-                                                        to_net,
-                                                    ),
-                                                ) = (
-                                                    &ctx.table[from_sid].content,
-                                                    &ctx.table[to_sid].content,
-                                                )
-                                                else {
-                                                    mctx.diagnostics.not_yet_implemented(
-                                                        TokenRange::default(),
-                                                        "Not a net",
-                                                    );
-                                                    error = true;
-                                                    continue;
-                                                };
-
-                                                let from = from_net.terminals.probe_signal();
-                                                let to = to_net.terminals.blocking_drive_signal();
-                                                let property = TimingProperty { from, to };
-                                                let delays = parse_delvallist(
-                                                    delval_list,
-                                                    &mut delays,
+                                                error |= push_iopath(
+                                                    ctx,
+                                                    mctx,
+                                                    divider,
+                                                    cell_sid,
+                                                    iopath,
+                                                    SdfCondition::None,
+                                                    &mut delay_values,
                                                     timescale,
-                                                    ctx.time_resolution,
-                                                )?;
-                                                let content = TimingContent { delays };
-
-                                                output_paths.insert(to, to_sid);
-                                                match property_to_content.entry(property) {
-                                                    Entry::Occupied(entry) => {
-                                                        properties[*entry.get()].1 = content;
-                                                    }
-                                                    Entry::Vacant(entry) => {
-                                                        let idx = properties.len();
-                                                        properties.push((property, content));
-                                                        entry.insert(idx);
-                                                    }
-                                                }
+                                                )
+                                                .is_err();
+                                            }
+                                            vogls_sdf::DelayDef::Cond(cond) => {
+                                                let mut builder = mctx
+                                                    .driver_resolution
+                                                    .path_delays
+                                                    .conds
+                                                    .builder_with_scratch(std::mem::take(
+                                                        &mut pathcond_scratch,
+                                                    ));
+                                                let condition =
+                                                    SdfCondition::Cond(sdf_expr_to_cond_expr(
+                                                        &cond.conditional_port_expr,
+                                                        &mut builder,
+                                                    ));
+                                                pathcond_scratch = builder.take_scratch();
+                                                error |= push_iopath(
+                                                    ctx,
+                                                    mctx,
+                                                    divider,
+                                                    cell_sid,
+                                                    &cond.io_path,
+                                                    condition,
+                                                    &mut delay_values,
+                                                    timescale,
+                                                )
+                                                .is_err();
+                                            }
+                                            vogls_sdf::DelayDef::CondElse(cond_else) => {
+                                                error |= push_iopath(
+                                                    ctx,
+                                                    mctx,
+                                                    divider,
+                                                    cell_sid,
+                                                    &cond_else.0,
+                                                    SdfCondition::Else,
+                                                    &mut delay_values,
+                                                    timescale,
+                                                )
+                                                .is_err();
                                             }
 
                                             // @TODO: These should all be implemented in time.
                                             vogls_sdf::DelayDef::Retain(_) => todo!(),
-                                            vogls_sdf::DelayDef::Cond(_) => todo!(),
-                                            vogls_sdf::DelayDef::CondElse(_) => todo!(),
                                             vogls_sdf::DelayDef::Port(_) => todo!(),
                                             vogls_sdf::DelayDef::Interconnect(interconnect) => {
                                                 let InterconnectDef {
@@ -471,68 +684,18 @@ pub fn lower_sdf<'a>(
                                                     delval_list,
                                                 } = interconnect;
 
-                                                let (Ok(from_sid), Ok(to_sid)) = (
-                                                    resolve_port_instance(
-                                                        ctx,
-                                                        divider,
-                                                        cell_sid,
-                                                        from,
-                                                        &mut mctx.diagnostics,
-                                                    ),
-                                                    resolve_port_instance(
-                                                        ctx,
-                                                        divider,
-                                                        cell_sid,
-                                                        to,
-                                                        &mut mctx.diagnostics,
-                                                    ),
-                                                ) else {
-                                                    error = true;
-                                                    continue;
-                                                };
-
-                                                let (
-                                                    vogls_verilog::elaborate::VSymbol::Signal(
-                                                        from_net,
-                                                    ),
-                                                    vogls_verilog::elaborate::VSymbol::Signal(
-                                                        to_net,
-                                                    ),
-                                                ) = (
-                                                    &ctx.table[from_sid].content,
-                                                    &ctx.table[to_sid].content,
-                                                )
-                                                else {
-                                                    mctx.diagnostics.not_yet_implemented(
-                                                        TokenRange::default(),
-                                                        "Not a net",
-                                                    );
-                                                    error = true;
-                                                    continue;
-                                                };
-
-                                                let from = from_net.terminals.probe_signal();
-                                                let to = to_net.terminals.blocking_drive_signal();
-                                                let property = TimingProperty { from, to };
-                                                let delays = parse_delvallist(
+                                                error |= push_sdf_path(
+                                                    ctx,
+                                                    mctx,
+                                                    divider,
+                                                    cell_sid,
+                                                    (from, to),
+                                                    SdfCondition::None,
                                                     delval_list,
-                                                    &mut delays,
+                                                    &mut delay_values,
                                                     timescale,
-                                                    ctx.time_resolution,
-                                                )?;
-                                                let content = TimingContent { delays };
-
-                                                output_paths.insert(to, to_sid);
-                                                match property_to_content.entry(property) {
-                                                    Entry::Occupied(entry) => {
-                                                        properties[*entry.get()].1 = content;
-                                                    }
-                                                    Entry::Vacant(entry) => {
-                                                        let idx = properties.len();
-                                                        properties.push((property, content));
-                                                        entry.insert(idx);
-                                                    }
-                                                }
+                                                )
+                                                .is_err();
                                             }
                                             vogls_sdf::DelayDef::NetDelay(_) => todo!(),
                                             vogls_sdf::DelayDef::Device(_) => todo!(),
@@ -555,38 +718,9 @@ pub fn lower_sdf<'a>(
         }
     }
 
+    mctx.driver_resolution.path_delays.delays = delay_values;
     if error {
         return Err(());
     }
-
-    // Drop here. Since we are about to mess up all the references.
-    drop(property_to_content);
-    properties.sort_unstable_by_key(|(p, _)| (p.to, p.from));
-
-    let delays = Arc::<[Time]>::from(delays);
-    let outputs = IterSliceContinguous::new(&properties, |(p, _)| &p.to);
-    for paths_to_output in outputs {
-        let output = paths_to_output[0].0.to;
-        let sid = output_paths[&output];
-        let mut inputs = VgHashMap::default();
-        let mut paths = Vec::new();
-
-        for (p, c) in paths_to_output {
-            inputs.insert(p.from, paths.len());
-            paths.push((
-                p.from,
-                vec![SpecifyPath {
-                    condition: Condition::None,
-                    delays: c.delays,
-                    span: TokenRange::default(),
-                }],
-            ));
-        }
-
-        let specify = SpecifyOutput { sid, inputs, paths };
-
-        lower_iopath(ctx, mctx, sid, output, specify, &delays)?;
-    }
-
     Ok(())
 }

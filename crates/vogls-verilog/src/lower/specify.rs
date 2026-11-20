@@ -18,11 +18,13 @@ use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::VSymbol;
 use crate::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
 use crate::lower::drivers::DriveOutputFn;
-use crate::lower::expression::lower_expr;
-use crate::lower::{eval_constant_expr, try_resolve_hident, unwrap_get_signal_mut};
+use crate::lower::expression::lower_expr_to_cond_expr;
+use crate::lower::cond_expr::{CondExpr, CondExprLowerScratch, CondExprs};
+use crate::lower::{eval_constant_expr, try_resolve_hident};
 
 use super::{LowerContext, MutLowerContext, VValue};
 
+#[derive(Clone)]
 pub enum Condition<'a> {
     None,
 
@@ -38,7 +40,23 @@ pub enum Condition<'a> {
     InputNegedgeExpr(AstId<'a, Expr<'a>>),
 }
 
-impl Condition<'_> {
+#[derive(Clone)]
+pub enum CECondition {
+    None,
+
+    InputPosedge,
+    InputNegedge,
+    NoOtherCondition,
+
+    InputPosedgeNoOtherCondition,
+    InputNegedgeNoOtherCondition,
+
+    Expr(CondExpr),
+    InputPosedgeExpr(CondExpr),
+    InputNegedgeExpr(CondExpr),
+}
+impl CECondition {
+
     fn is_posedge(&self) -> bool {
         matches!(
             self,
@@ -62,16 +80,28 @@ impl Condition<'_> {
                 | Self::InputNegedgeNoOtherCondition
         )
     }
+
+    /// The state-dependent condition of the path, if it has one.
+    fn expr(&self) -> Option<CondExpr> {
+        match self {
+            Self::Expr(expr) | Self::InputPosedgeExpr(expr) | Self::InputNegedgeExpr(expr) => {
+                Some(*expr)
+            }
+            _ => None,
+        }
+    }
 }
 
-pub struct SpecifyOutput<'a> {
+#[derive(Clone)]
+pub struct SpecifyOutput {
     pub sid: SymbolId,
     pub inputs: VgHashMap<SignalKey, usize>,
-    pub paths: Vec<(SignalKey, Vec<SpecifyPath<'a>>)>,
+    pub paths: Vec<(SignalKey, Vec<SpecifyPath>)>,
 }
 
-pub struct SpecifyPath<'a> {
-    pub condition: Condition<'a>,
+#[derive(Clone)]
+pub struct SpecifyPath {
+    pub condition: CECondition,
     pub delays: DelayPtr,
     pub span: TokenRange,
 }
@@ -142,18 +172,15 @@ fn push_delay<'a>(
     }
 }
 
+/// Collects the module path delays of the specify block `items` of the module instance `scope`
+/// into the [`PathDelays`] of the driver resolution, which puts them in front of their outputs.
 pub fn lower_specify<'a>(
-    ctx: &mut LowerContext<'a, '_>,
+    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext<'a>,
     scope: SymbolId,
-
     items: AstIdRange<'a, SpecifyBlockItem<'a>>,
-    delays: &mut Vec<Time>,
-    outs_lut: &mut VgHashMap<SignalKey, usize>,
-    outs: &mut Vec<(SignalKey, SpecifyOutput<'a>)>,
 ) -> Result<(), ()> {
-    delays.clear();
-
+    let mut condexpr_scratch = Vec::new();
     for item in items.iter() {
         match &*item {
             SpecifyBlockItem::SpecParamDeclaration => todo!(),
@@ -241,7 +268,7 @@ pub fn lower_specify<'a>(
                     );
                     return Err(());
                 };
-                let output = output_net.terminals.blocking_drive_signal();
+                let output = output_net.terminals.probe_signal();
 
                 if matches!(variant, PathDeclarationVariant::Full)
                     && input_net.ty.bit_length() != output_net.ty.bit_length()
@@ -285,37 +312,74 @@ pub fn lower_specify<'a>(
                     // The parser only accepts these counts.
                     n => unreachable!("{n} path delays"),
                 };
+                let mut delays = std::mem::take(&mut mctx.driver_resolution.path_delays.delays);
                 let offset = delays.len() as u64;
                 let mut triple_mask = 0u16;
+                let mut result = Ok(());
                 for (i, expr) in exprs.iter().enumerate() {
-                    let is_triple = push_delay(ctx, mctx, scope, expr, delays)?;
-                    triple_mask |= u16::from(is_triple) << i;
+                    match push_delay(ctx, mctx, scope, expr, &mut delays) {
+                        Ok(is_triple) => triple_mask |= u16::from(is_triple) << i,
+                        Err(()) => result = Err(()),
+                    }
                 }
+                mctx.driver_resolution.path_delays.delays = delays;
+                result?;
                 let delays = DelayPtr::new(offset, delay_variant, triple_mask);
 
-                let out = *outs_lut.entry(output).or_insert_with(|| {
-                    let idx = outs.len();
-                    outs.push((
-                        output,
-                        SpecifyOutput {
-                            sid: output_sid,
-                            inputs: Default::default(),
-                            paths: Default::default(),
-                        },
-                    ));
-                    idx
-                });
-                let out = &mut outs[out].1;
-                let paths_idx = *out.inputs.entry(input).or_insert_with(|| {
-                    let idx = out.paths.len();
-                    out.paths.push((input, Vec::new()));
-                    idx
-                });
-                out.paths[paths_idx].1.push(SpecifyPath {
-                    condition,
-                    delays,
-                    span: ctx.arenas.get_span(item),
-                });
+                let mut builder = mctx
+                    .driver_resolution
+                    .path_delays
+                    .conds
+                    .builder_with_scratch(std::mem::take(&mut condexpr_scratch));
+                let mut lower_ce_expr = |e: AstId<'a, Expr<'a>>| {
+                    let cond = lower_expr_to_cond_expr(
+                        ctx,
+                        &mctx.gl,
+                        &mut builder,
+                        scope,
+                        e,
+                        Some(SCALAR_VSIZE),
+                    );
+                    let Some(cond) = cond else {
+                        mctx.diagnostics.not_yet_implemented(
+                            ctx.arenas.get_span(e),
+                            "this state-dependent path condition",
+                        );
+                        return Err(());
+                    };
+                    Ok(cond)
+                };
+                let condition = match condition {
+                    Condition::None => CECondition::None,
+                    Condition::InputPosedge => CECondition::InputPosedge,
+                    Condition::InputNegedge => CECondition::InputNegedge,
+                    Condition::NoOtherCondition => CECondition::NoOtherCondition,
+                    Condition::InputPosedgeNoOtherCondition => {
+                        CECondition::InputPosedgeNoOtherCondition
+                    }
+                    Condition::InputNegedgeNoOtherCondition => {
+                        CECondition::InputNegedgeNoOtherCondition
+                    }
+                    Condition::Expr(id) => CECondition::Expr(lower_ce_expr(id)?),
+                    Condition::InputPosedgeExpr(id) => {
+                        CECondition::InputPosedgeExpr(lower_ce_expr(id)?)
+                    }
+                    Condition::InputNegedgeExpr(id) => {
+                        CECondition::InputNegedgeExpr(lower_ce_expr(id)?)
+                    }
+                };
+                condexpr_scratch = builder.take_scratch();
+                mctx.driver_resolution.path_delays.push_specify(
+                    scope,
+                    output_sid,
+                    output,
+                    input,
+                    SpecifyPath {
+                        condition,
+                        delays,
+                        span: ctx.arenas.get_span(item),
+                    },
+                );
             }
             SpecifyBlockItem::SystemTimingCheck(_) => {
                 // @TODO: Don't ignore these.
@@ -323,74 +387,229 @@ pub fn lower_specify<'a>(
         }
     }
 
-    let delays = Arc::<[Time]>::from(delays.as_slice());
-    outs_lut.clear();
-    for (output, specify) in outs.drain(..) {
-        lower_iopath(ctx, mctx, scope, output, specify, &delays)?;
-    }
-
     Ok(())
 }
 
 /// The module path delays of `output`, whose `delays` the paths of `specify` point into.
-pub struct SpecifyDelay<'a> {
+pub struct SpecifyDelay {
     pub scope: SymbolId,
     pub output: SignalKey,
-    pub specify: SpecifyOutput<'a>,
+    pub specify: SpecifyOutput,
     pub delays: Arc<[Time]>,
+    /// The conditions that the paths of `specify` are lowered from.
+    pub conds: Arc<CondExprs>,
 }
 
-/// Puts the module path delays of `specify` in front of `output`, which its drivers drive from now
-/// on.
-pub fn lower_iopath<'a>(
-    ctx: &mut LowerContext<'a, '_>,
-    mctx: &mut MutLowerContext<'a>,
-    scope: SymbolId,
-    output: SignalKey,
-    specify: SpecifyOutput<'a>,
-    delays: &Arc<[Time]>,
-) -> Result<(), ()> {
-    let mut proxy = mctx.gl.signals.get(output).unwrap().clone();
-    proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
-    let proxy = mctx.gl.signals.insert(proxy);
-    let symbol = unwrap_get_signal_mut(&mut ctx.table, specify.sid);
-    let prev = symbol.terminals.set_specify(proxy);
-    assert!(prev.is_none());
-    let kind = symbol.kind;
+/// The condition under which an SDF delay applies.
+#[derive(Clone)]
+pub enum SdfCondition {
+    /// An `IOPATH` or `INTERCONNECT`, which annotates every module path between its ports.
+    None,
+    /// The `COND` of an `IOPATH`, which annotates the module paths with the same condition. `None`
+    /// if the condition cannot be compared, so that it annotates no module path.
+    Cond(Option<CondExpr>),
+    /// The `CONDELSE` of an `IOPATH`, which annotates the `ifnone` module paths.
+    Else,
+}
 
-    let reads = specify.paths.iter().map(|(input, _)| *input).collect();
-    let delay = SpecifyDelay {
-        scope,
-        output,
-        specify,
-        delays: delays.clone(),
-    };
-    mctx.driver_resolution
-        .push_specify_delay(&mut mctx.gl, proxy, delay, reads, kind);
-    Ok(())
+/// An SDF delay from `from` to `to`, which annotates the module paths between them, or is a path
+/// of its own if there are none.
+#[derive(Clone)]
+struct SdfPath {
+    from: SignalKey,
+    to: SignalKey,
+    to_sid: SymbolId,
+    condition: SdfCondition,
+    delays: DelayPtr,
+}
+
+/// All path delays of a design, collected from its specify blocks and SDF files before they are
+/// put in front of their outputs in one go (see [`PathDelays::take_merged`]).
+#[derive(Default, Clone)]
+pub struct PathDelays {
+    /// The delay values that every [`DelayPtr`] of the paths points into.
+    pub delays: Vec<Time>,
+    /// The index of the module paths of each output in `specify`.
+    specify_lut: VgHashMap<SignalKey, usize>,
+    /// The module paths of specify blocks per output, with the module instance they are in.
+    specify: Vec<(SymbolId, SignalKey, SpecifyOutput)>,
+    /// The SDF delays, in the order they are read: a later delay overrides an earlier one.
+    sdf: Vec<SdfPath>,
+    /// The operands of the conditions of the module paths and the SDF delays.
+    pub conds: CondExprs,
+}
+
+impl<'a> PathDelays {
+    pub fn is_empty(&self) -> bool {
+        self.specify.is_empty() && self.sdf.is_empty()
+    }
+
+    /// The index in `specify` of the module paths of `output`, which are added if there are none.
+    fn output_paths(&mut self, scope: SymbolId, output_sid: SymbolId, output: SignalKey) -> usize {
+        *self.specify_lut.entry(output).or_insert_with(|| {
+            self.specify.push((
+                scope,
+                output,
+                SpecifyOutput {
+                    sid: output_sid,
+                    inputs: Default::default(),
+                    paths: Default::default(),
+                },
+            ));
+            self.specify.len() - 1
+        })
+    }
+
+    /// Adds the module path `path` from `input` to `output` of a specify block in `scope`.
+    pub fn push_specify(
+        &mut self,
+        scope: SymbolId,
+        output_sid: SymbolId,
+        output: SignalKey,
+        input: SignalKey,
+        path: SpecifyPath,
+    ) {
+        let idx = self.output_paths(scope, output_sid, output);
+        let out = &mut self.specify[idx].2;
+        let idx = *out.inputs.entry(input).or_insert_with(|| {
+            out.paths.push((input, Vec::new()));
+            out.paths.len() - 1
+        });
+        out.paths[idx].1.push(path);
+    }
+
+    /// Adds an SDF delay from `from` to `to`, whose values `delays` points into
+    /// [`Self::delays`].
+    pub fn push_sdf(
+        &mut self,
+        from: SignalKey,
+        to: SignalKey,
+        to_sid: SymbolId,
+        condition: SdfCondition,
+        delays: DelayPtr,
+    ) {
+        self.sdf.push(SdfPath {
+            from,
+            to,
+            to_sid,
+            condition,
+            delays,
+        });
+    }
+
+    /// Takes the path delays of every output, where the SDF delays annotate the module paths of
+    /// the specify blocks.
+    ///
+    /// IEEE Std 1364-2005, 16.2.1: an `IOPATH` without an edge or condition annotates every module
+    /// path between its ports, whatever its edge or condition. An SDF delay without such module
+    /// paths becomes an unconditional path of its own. A `COND` annotates the module paths with
+    /// the same condition and a `CONDELSE` the `ifnone` ones.
+    ///
+    /// Also returns the number of `COND` and `CONDELSE` delays that annotate no module path, which
+    /// are ignored.
+    pub fn take_merged(&mut self) -> (Vec<SpecifyDelay>, usize) {
+        let mut num_unmatched = 0;
+        let mut eq_scratch = Vec::new();
+        for SdfPath {
+            from,
+            to,
+            to_sid,
+            condition,
+            delays,
+        } in std::mem::take(&mut self.sdf)
+        {
+            if !matches!(condition, SdfCondition::None) {
+                // A conditional delay can only annotate an existing module path.
+                let paths = self
+                    .specify_lut
+                    .get(&to)
+                    .map(|&idx| &mut self.specify[idx].2)
+                    .and_then(|out| {
+                        let idx = *out.inputs.get(&from)?;
+                        Some(&mut out.paths[idx].1)
+                    });
+                let mut is_matched = false;
+                for path in paths.into_iter().flatten() {
+                    let matches = match &condition {
+                        SdfCondition::None => unreachable!(),
+                        SdfCondition::Cond(cond) => {
+                            path.condition.expr().zip(*cond).is_some_and(|(a, b)| {
+                                self.conds.exprs_cmp(&mut eq_scratch, a, b).is_eq()
+                            })
+                        }
+                        SdfCondition::Else => path.condition.is_ifnone(),
+                    };
+                    if matches {
+                        path.delays = delays.overlay(Some(path.delays), &mut self.delays);
+                        is_matched = true;
+                    }
+                }
+                num_unmatched += usize::from(!is_matched);
+                continue;
+            }
+
+            let idx = self.output_paths(to_sid, to_sid, to);
+            let out = &mut self.specify[idx].2;
+            let delay_values = &mut self.delays;
+            match out.inputs.get(&from) {
+                Some(&idx) => out.paths[idx]
+                    .1
+                    .iter_mut()
+                    .for_each(|path| path.delays = delays.overlay(Some(path.delays), delay_values)),
+                None => {
+                    let delays = delays.overlay(None, delay_values);
+                    out.inputs.insert(from, out.paths.len());
+                    out.paths.push((
+                        from,
+                        vec![SpecifyPath {
+                            condition: CECondition::None,
+                            delays,
+                            span: TokenRange::default(),
+                        }],
+                    ));
+                }
+            }
+        }
+
+        let delays = Arc::<[Time]>::from(std::mem::take(&mut self.delays));
+        let conds = Arc::new(std::mem::take(&mut self.conds));
+        self.specify_lut.clear();
+        let merged = std::mem::take(&mut self.specify)
+            .into_iter()
+            .map(|(scope, output, specify)| SpecifyDelay {
+                scope,
+                output,
+                specify,
+                delays: delays.clone(),
+                conds: conds.clone(),
+            })
+            .collect();
+        (merged, num_unmatched)
+    }
 }
 
 /// Lowers the module path delays of `delay` to one process per bit of its output, which drives the
 /// value of that bit of `proxy` with `drive` after the delay of the path that applies.
 pub(crate) fn lower_specify_delay<'a>(
-    ctx: &LowerContext<'a, '_>,
     mctx: &mut MutLowerContext<'a>,
-    delay: &SpecifyDelay<'a>,
+    delay: &SpecifyDelay,
     proxy: SignalKey,
     drive: &DriveOutputFn<'a, '_>,
 ) -> Result<(), ()> {
     let SpecifyDelay {
-        scope,
+        scope: _,
         output,
         specify,
         delays,
+        conds,
     } = delay;
-    let (scope, output) = (*scope, *output);
+    let output = *output;
     let LowerIoPathScratches {
         mut input_before_lut,
         mut inputs_before,
         mut conditions,
     } = LowerIoPathScratches::default();
+    let mut cond_scratch = CondExprLowerScratch::default();
 
     for output_bitidx in 0..mctx.gl.signals[output].size.get() {
         input_before_lut.clear();
@@ -470,11 +689,11 @@ pub(crate) fn lower_specify_delay<'a>(
                     condition = Some(builder.negedge(mctx.gl(), before, after));
                 }
 
-                if let Condition::Expr(expr)
-                | Condition::InputPosedgeExpr(expr)
-                | Condition::InputNegedgeExpr(expr) = path.condition
+                if let CECondition::Expr(cond)
+                | CECondition::InputPosedgeExpr(cond)
+                | CECondition::InputNegedgeExpr(cond) = path.condition
                 {
-                    let (expr, _) = lower_expr(ctx, mctx, scope, &mut builder, expr, None)?;
+                    let expr = conds.lower(mctx.gl(), &mut builder, &mut cond_scratch, cond);
 
                     // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 215
                     //

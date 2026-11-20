@@ -58,13 +58,7 @@ pub fn lower_structural<'a>(
         let diagnostics = std::mem::take(&mut mctx.diagnostics);
         scan.stmt(ctx, mctx, scope, stmt);
         mctx.diagnostics = diagnostics;
-
-        for &signal in &scan.watched.items {
-            mctx.driver_resolution.observe_watch(signal);
-        }
-        for &signal in &scan.lupdt.items {
-            mctx.driver_resolution.observe_lupdt(signal);
-        }
+        scan.observe(mctx);
     }
 
     Ok(())
