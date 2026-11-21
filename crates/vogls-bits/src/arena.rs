@@ -13,6 +13,7 @@ use crate::{Bits, BitsDataRef, Mode, VectorSize};
 pub struct BitsArenaPtr(u64);
 
 /// An append only container for two or four-value bits.
+#[derive(Clone)]
 pub struct BitsArena {
     spc: Box<[u64]>,
     val: Box<[u64]>,
@@ -29,6 +30,14 @@ impl BitsArenaPtr {
 
     fn offset(self) -> u64 {
         self.0 >> 8
+    }
+
+    pub fn into_raw(self) -> u64 {
+        self.0
+    }
+
+    pub fn from_raw(raw: u64) -> Self {
+        Self(raw)
     }
 }
 
@@ -174,6 +183,7 @@ impl BitsArena {
 ///   Each class holds at most one free block (the upper half left over from a split).
 /// - `6`: bump pointer, always 64-bit aligned. Items over 32 bits are allocated here
 ///   in whole words.
+#[derive(Clone)]
 struct OffsetTable([u64; 7]);
 
 impl OffsetTable {

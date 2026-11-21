@@ -1,0 +1,15 @@
+(DELAYFILE
+  (SDFVERSION "3.0")
+  (DIVIDER .)
+  (TIMESCALE 1ns)
+  (CELL
+    (CELLTYPE "g")
+    (INSTANCE u)
+    (DELAY (ABSOLUTE (COND c==1'b1 (IOPATH a y (5)))))
+  )
+  (CELL
+    (CELLTYPE "h")
+    (INSTANCE v)
+    (DELAY (ABSOLUTE (COND c==1'b1 (IOPATH a y (5)))))
+  )
+)

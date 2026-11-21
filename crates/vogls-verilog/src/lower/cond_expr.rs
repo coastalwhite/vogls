@@ -6,7 +6,11 @@
 //! The main structure is [`CondExpr`].
 
 use std::cmp::Ordering;
+use std::hash::BuildHasher;
 
+use foldhash::fast::RandomState;
+use hashbrown::HashTable;
+use vogls_ir::bits::arena::{BitsArena, BitsArenaPtr};
 use vogls_ir::{
     BasicBlockBuilder, Bits, GlobalContext, SCALAR_VSIZE, SignalKey, SignalSlice, VariableKey,
     VectorSize,
@@ -62,7 +66,7 @@ macro_rules! kinds {
 kinds! {
     /// Data encodes 0 / 1.
     ScalarConstant,
-    /// Data encodes the index of the constant in `constants`.
+    /// Data encodes the raw `BitsArenaPtr` of the constant in `constants`.
     Constant,
     /// Data encodes the `TerminalKey` of a slice of a signal.
     Terminal,
@@ -139,6 +143,12 @@ impl CondExpr {
         self.data() as usize
     }
 
+    /// The constant of a [`CondExprKind::Constant`] in [`CondExprs`].
+    fn as_constant(self) -> BitsArenaPtr {
+        debug_assert_eq!(self.kind(), CondExprKind::Constant);
+        BitsArenaPtr::from_raw(self.data())
+    }
+
     pub fn constant(value: bool) -> Self {
         Self::new(CondExprKind::ScalarConstant, u64::from(value))
     }
@@ -159,8 +169,10 @@ pub struct CondExprs {
     path_conds: Vec<CondExpr>,
     terminals: Table<TerminalKey, (SignalKey, SignalSlice)>,
     terminal_lut: VgHashMap<(SignalKey, SignalSlice), TerminalKey>,
-    constants: Vec<Bits>,
-    constant_lut: VgHashMap<Bits, u32>,
+    constants: BitsArena,
+    /// The constants in `constants` by the hash of their value, to intern them.
+    constant_lut: HashTable<BitsArenaPtr>,
+    constant_hasher: RandomState,
 }
 
 /// The result of narrowing the operands of a comparison (see [`CondExprBuilder::narrow`]).
@@ -399,16 +411,24 @@ impl<'a> CondExprBuilder<'a> {
             return CondExpr::constant(!value.is_equal_to_zero());
         }
 
-        let constants = &mut self.conds.constants;
-        let index = *self
-            .conds
-            .constant_lut
-            .entry(value.clone())
-            .or_insert_with(|| {
-                constants.push(value.clone());
-                (constants.len() - 1) as u32
-            });
-        CondExpr::new(CondExprKind::Constant, u64::from(index))
+        let CondExprs {
+            constants,
+            constant_lut,
+            constant_hasher,
+            ..
+        } = &mut *self.conds;
+        let hash = constant_hasher.hash_one(value);
+        let ptr = match constant_lut.find(hash, |&ptr| constants.get(ptr) == *value) {
+            Some(&ptr) => ptr,
+            None => {
+                let ptr = constants.push(value);
+                constant_lut.insert_unique(hash, ptr, |&ptr| {
+                    constant_hasher.hash_one(constants.get(ptr))
+                });
+                ptr
+            }
+        };
+        CondExpr::new(CondExprKind::Constant, ptr.into_raw())
     }
 
     pub fn terminal(&mut self, signal: SignalKey, slice: SignalSlice) -> CondExpr {
@@ -428,7 +448,7 @@ impl CondExprs {
         let child = |i: usize| self.path_conds[expr.index() + i];
         match expr.kind() {
             K::ScalarConstant => 1,
-            K::Constant => self.constants[expr.index()].size().get(),
+            K::Constant => self.constants.bit_length(expr.as_constant()).get(),
             K::Terminal => {
                 let key = TerminalKey::from_usize(expr.index()).expect("a terminal is a valid key");
                 self.terminals[key].1.width().get()
@@ -471,7 +491,7 @@ impl CondExprs {
     fn constant_value(&self, expr: CondExpr) -> Option<Bits> {
         match expr.kind() {
             CondExprKind::ScalarConstant => Some(Bits::from(expr.data() != 0)),
-            CondExprKind::Constant => Some(self.constants[expr.index()].clone()),
+            CondExprKind::Constant => Some(self.constants.get(expr.as_constant())),
             _ => None,
         }
     }
@@ -589,7 +609,7 @@ impl CondExprs {
             let operand = |i: usize| values[operands_start + i];
             let value = match kind {
                 K::ScalarConstant => builder.constant(gl, Bits::from(expr.data() != 0)),
-                K::Constant => builder.constant(gl, self.constants[expr.index()].clone()),
+                K::Constant => builder.constant(gl, self.constants.get(expr.as_constant())),
                 K::Terminal => {
                     let key =
                         TerminalKey::from_usize(expr.index()).expect("a terminal is a valid key");
