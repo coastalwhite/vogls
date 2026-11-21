@@ -15,6 +15,7 @@ use self::set_subslice::set_with_mask;
 use self::truncate::{fv_l_truncate, tv_l_truncate};
 use self::util::{mask_size_1to64, saturating_rem, wrapping_u64_pow};
 
+pub mod arena;
 pub mod arithmetic;
 pub mod bitwise_not;
 pub mod comparison;

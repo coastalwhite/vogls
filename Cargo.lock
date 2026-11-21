@@ -1185,6 +1185,7 @@ dependencies = [
  "bytemuck",
  "proptest",
  "rand 0.10.0",
+ "vogls-utils",
 ]
 
 [[package]]
