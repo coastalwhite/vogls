@@ -10,6 +10,7 @@ use std::hash::BuildHasher;
 
 use foldhash::fast::RandomState;
 use hashbrown::HashTable;
+use vogls_ir::bits::BitsRef;
 use vogls_ir::bits::arena::{BitsArena, BitsArenaPtr};
 use vogls_ir::{
     BasicBlockBuilder, Bits, GlobalContext, SCALAR_VSIZE, SignalKey, SignalSlice, VariableKey,
@@ -336,22 +337,27 @@ impl<'a> CondExprBuilder<'a> {
             (_, CondExprKind::ZeroExtend) => (b, a),
             _ => return Narrowed::No,
         };
-        let Some(value) = self.conds.constant_value(constant) else {
-            return Narrowed::No;
-        };
         let inner = self.conds.path_conds[extended.index()];
         let width = VectorSize::new(self.conds.width(inner)).expect("a width is not zero");
-        let upper = VectorSize::new(value.size().get() - width.get()).expect("it is extended");
 
-        // The bits that the extension adds are zero.
-        let upper = value.slicez(width.get(), upper);
-        if upper.contains_special() {
-            return Narrowed::No;
-        }
-        if !upper.is_equal_to_zero() {
-            return Narrowed::Mismatch;
-        }
-        let value = self.constant(&value.truncate(width));
+        // `value` borrows `self.conds` until the end of this block.
+        let truncated = {
+            let Some(value) = self.conds.constant_value(constant) else {
+                return Narrowed::No;
+            };
+            let upper = VectorSize::new(value.size().get() - width.get()).expect("it is extended");
+
+            // The bits that the extension adds are zero.
+            let upper = value.slicez(width.get(), upper);
+            if upper.contains_special() {
+                return Narrowed::No;
+            }
+            if !upper.is_equal_to_zero() {
+                return Narrowed::Mismatch;
+            }
+            value.truncate(width)
+        };
+        let value = self.constant(truncated);
         Narrowed::To(inner, value)
     }
 
@@ -370,12 +376,13 @@ impl<'a> CondExprBuilder<'a> {
         if child_width == width.get() {
             return child;
         }
-        if let Some(value) = self.conds.constant_value(child) {
-            let value = match kind {
-                CondExprKind::ZeroExtend => value.zero_extend(width),
-                _ => value.sign_extend(width),
-            };
-            return self.constant(&value);
+        // Extending gives an owned value, so the borrow of `self.conds` ends with the `map`.
+        let extended = self.conds.constant_value(child).map(|value| match kind {
+            CondExprKind::ZeroExtend => value.zero_extend(width),
+            _ => value.sign_extend(width),
+        });
+        if let Some(value) = extended {
+            return self.constant(value);
         }
         self.push(kind, &[child, CondExpr::width_entry(width)])
     }
@@ -406,7 +413,7 @@ impl<'a> CondExprBuilder<'a> {
     }
 
     /// The constant `value`, which is interned unless it is a single `0` or `1`.
-    pub fn constant(&mut self, value: &Bits) -> CondExpr {
+    pub fn constant(&mut self, value: BitsRef<'_>) -> CondExpr {
         if value.size() == SCALAR_VSIZE && !value.contains_special() {
             return CondExpr::constant(!value.is_equal_to_zero());
         }
@@ -417,8 +424,8 @@ impl<'a> CondExprBuilder<'a> {
             constant_hasher,
             ..
         } = &mut *self.conds;
-        let hash = constant_hasher.hash_one(value);
-        let ptr = match constant_lut.find(hash, |&ptr| constants.get(ptr) == *value) {
+        let hash = constant_hasher.hash_one(&value);
+        let ptr = match constant_lut.find(hash, |&ptr| constants.get(ptr) == value) {
             Some(&ptr) => ptr,
             None => {
                 let ptr = constants.push(value);
@@ -488,7 +495,7 @@ impl CondExprs {
     }
 
     /// The value of `expr` if it is a constant.
-    fn constant_value(&self, expr: CondExpr) -> Option<Bits> {
+    fn constant_value(&self, expr: CondExpr) -> Option<BitsRef<'_>> {
         match expr.kind() {
             CondExprKind::ScalarConstant => Some(Bits::from(expr.data() != 0)),
             CondExprKind::Constant => Some(self.constants.get(expr.as_constant())),
@@ -609,7 +616,9 @@ impl CondExprs {
             let operand = |i: usize| values[operands_start + i];
             let value = match kind {
                 K::ScalarConstant => builder.constant(gl, Bits::from(expr.data() != 0)),
-                K::Constant => builder.constant(gl, self.constants.get(expr.as_constant())),
+                K::Constant => {
+                    builder.constant(gl, self.constants.get(expr.as_constant()).into_owned())
+                }
                 K::Terminal => {
                     let key =
                         TerminalKey::from_usize(expr.index()).expect("a terminal is a valid key");
@@ -637,8 +646,8 @@ impl CondExprs {
                 K::ReduceNor => builder.reduce_nor(gl, operand(0)),
                 K::ReduceXnor => builder.reduce_xnor(gl, operand(0)),
                 K::ZeroExtend | K::SignExtend => {
-                    let width = VectorSize::new(self.extension_width(expr))
-                        .expect("a width is not zero");
+                    let width =
+                        VectorSize::new(self.extension_width(expr)).expect("a width is not zero");
                     if kind == K::ZeroExtend {
                         builder.zero_extend(gl, operand(0), width)
                     } else {

@@ -7,8 +7,8 @@ use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, Expr, UnaryOperator};
 use crate::elaborate::VSymbol;
 use crate::lower::addressing::{ConstantAddressingContext, lower_addressing};
-use crate::lower::expression::{coerce_to_max_size_ty, get_expr_type};
 use crate::lower::cond_expr::{CondExpr, CondExprBuilder};
+use crate::lower::expression::{coerce_to_max_size_ty, get_expr_type};
 use crate::lower::{Diagnostics, LowerContext, VType, eval_constant_expr, try_resolve_hident};
 use crate::number::Sign;
 
@@ -59,7 +59,7 @@ pub fn lower_expr_to_cond_expr<'a>(
                 )
                 .ok()?;
                 let ty = value.ty();
-                (builder.constant(&value.into_bits()), ty)
+                (builder.constant(value.into_bits()), ty)
             }
             Ok(v) => v,
         };
@@ -395,20 +395,26 @@ fn lower_subexpr_to_cond_expr<'a>(
                         .and_then(|lsb| SignalSlice::from_width(lsb, address.output_width))
                         .filter(|slice| slice.msb() < width.get())
                         .ok_or(StepErr::Unsupported)?;
-                    (slice, VType::net(address.output_width, !address.is_unsigned))
+                    (
+                        slice,
+                        VType::net(address.output_width, !address.is_unsigned),
+                    )
                 }
             };
             (builder.terminal(signal, slice), ty)
         }
         Expr::Decimal(decimal) => {
             let decimal = &ctx.arenas.decimals[decimal.at];
-            (builder.constant(decimal), VType::SignedNet(INTEGER_VSIZE))
+            (
+                builder.constant(decimal.borrow()),
+                VType::SignedNet(INTEGER_VSIZE),
+            )
         }
         Expr::Sized(sized) => {
             let sized = &ctx.arenas.sized_numbers[sized.item.at];
             let signed = matches!(sized.sign, Sign::Signed);
             let size = sized.value.size();
-            let var = builder.constant(&sized.value);
+            let var = builder.constant(sized.value.borrow());
             (var, VType::net(size, signed))
         }
 
