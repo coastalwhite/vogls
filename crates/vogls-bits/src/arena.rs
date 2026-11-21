@@ -1,22 +1,21 @@
 use vogls_utils::VgHashMap;
 
-use crate::util::mask_size_1to64;
-use crate::{Bits, BitsDataRef, Mode, VectorSize};
+use crate::{BitsDataRef, BitsRef, Mode, VectorSize};
 
 /// A pointer to a BitsArena item.
 //
-// Composed off `(offset << 8) | inline_bit_length`.
+// Composed of `(offset << 9) | (inline_bit_length << 1) | mode`.
 //
-// - `offset`: 56-bits an offset into the BitsArena.
-// - `inline_width`: 8-bits to encode the bit_length of the item (0 if outlined).
+// - `offset`: 55-bits, the bit offset of the item into the BitsArena.
+// - `inline_bit_length`: 8-bits to encode the bit_length of the item (0 if outlined).
+// - `mode`: 1-bit, 0 for `Mode::TwoValue` and 1 for `Mode::FourValue`.
 #[derive(Clone, Copy)]
 pub struct BitsArenaPtr(u64);
 
-/// An append only container for two or four-value bits.
+/// An append only container for two or four-valued bits.
 #[derive(Clone)]
 pub struct BitsArena {
-    spc: Box<[u64]>,
-    val: Box<[u64]>,
+    data: Box<[u64]>,
 
     /// Offset -> Size
     outlined_bit_lengths: VgHashMap<u64, VectorSize>,
@@ -24,24 +23,54 @@ pub struct BitsArena {
 }
 
 impl BitsArenaPtr {
+    const INLINE_BIT_LENGTH_SHIFT: u32 = 1;
+    const OFFSET_SHIFT: u32 = 9;
+
+    fn new(offset: u64, inline_bit_length: u8, mode: Mode) -> Self {
+        assert!(
+            offset < 1 << (64 - Self::OFFSET_SHIFT),
+            "BitsArena offset overflow"
+        );
+        let mode = match mode {
+            Mode::TwoValue => 0,
+            Mode::FourValue => 1,
+        };
+        Self(
+            (offset << Self::OFFSET_SHIFT)
+                | (u64::from(inline_bit_length) << Self::INLINE_BIT_LENGTH_SHIFT)
+                | mode,
+        )
+    }
+
+    #[inline(always)]
+    pub fn mode(self) -> Mode {
+        if self.0 & 1 == 0 {
+            Mode::TwoValue
+        } else {
+            Mode::FourValue
+        }
+    }
+
     fn inline_bit_length(self) -> Option<VectorSize> {
-        VectorSize::new((self.0 & 0xFF) as u32)
+        VectorSize::new(((self.0 >> Self::INLINE_BIT_LENGTH_SHIFT) & 0xFF) as u32)
     }
 
+    #[inline(always)]
     fn offset(self) -> u64 {
-        self.0 >> 8
+        self.0 >> Self::OFFSET_SHIFT
     }
 
+    #[inline(always)]
     pub fn into_raw(self) -> u64 {
         self.0
     }
 
+    #[inline(always)]
     pub fn from_raw(raw: u64) -> Self {
         Self(raw)
     }
 }
 
-const VSIZE_32: VectorSize = VectorSize::new(32).unwrap();
 const VSIZE_64: VectorSize = VectorSize::new(64).unwrap();
 const VSIZE_256: VectorSize = VectorSize::new(256).unwrap();
 
@@ -54,58 +83,32 @@ impl Default for BitsArena {
 impl BitsArena {
     pub fn new() -> Self {
         Self {
-            spc: Box::new([]),
-            val: Box::new([]),
+            data: Box::new([]),
             outlined_bit_lengths: VgHashMap::default(),
             offsets: OffsetTable::new(),
         }
     }
 
-    pub fn get(&self, ptr: BitsArenaPtr) -> Bits {
-        let bit_length = self.bit_length(ptr);
+    pub fn get(&self, ptr: BitsArenaPtr) -> BitsRef<'_> {
+        let mode = ptr.mode();
+        let size = self.bit_length(ptr);
         let offset = ptr.offset();
-
         let woff = (offset / 64) as usize;
-        if bit_length <= VSIZE_64 {
-            let boff = offset % 64;
 
-            let mask = mask_size_1to64(bit_length.get());
-
-            let word_spc = self.spc[woff];
-            let word_val = self.val[woff];
-
-            let word_spc = (word_spc >> boff) & mask;
-            let word_val = (word_val >> boff) & mask;
-
-            if word_spc == mask {
-                Bits::from_u64(bit_length, word_val)
-            } else if bit_length <= VSIZE_32 {
-                Bits::from_four_value_u64(bit_length, word_spc as u32, word_val as u32)
-            } else {
-                Bits::from_boxed_slice(Mode::FourValue, bit_length, [word_spc, word_val].into())
-            }
-        } else {
-            let num_words = bit_length.get().div_ceil(64) as usize;
-
-            let spc = &self.spc[woff..woff + num_words];
-            let val = &self.val[woff..woff + num_words];
-
-            let num_full_words = (bit_length.get() / 64) as usize;
-            let mut is_tv = spc[..num_full_words].iter().all(|&w| w == u64::MAX);
-            if let Some(rem_bit_length) = VectorSize::new(bit_length.get() % 64) {
-                is_tv &= spc[num_words - 1] == mask_size_1to64(rem_bit_length.get());
-            }
-
-            if is_tv {
-                Bits::from_boxed_slice(Mode::TwoValue, bit_length, val.to_vec().into_boxed_slice())
-            } else {
-                Bits::from_boxed_slice(
-                    Mode::FourValue,
-                    bit_length,
-                    spc.iter().chain(val).copied().collect::<Box<[u64]>>(),
-                )
-            }
+        if size <= mode.max_inline_size() {
+            // The slot is at most 64 bits and naturally aligned, so it lies within one word.
+            // The constructors mask off the bits above `size`.
+            let word = self.data[woff] >> (offset % 64);
+            return match mode {
+                Mode::TwoValue => BitsRef::from_u64(size, word),
+                Mode::FourValue => {
+                    BitsRef::from_four_value_u64(size, word as u32, (word >> size.get()) as u32)
+                }
+            };
         }
+
+        let nwords = mode.mul_nwords(size.get().div_ceil(64) as usize);
+        BitsRef::from_borrowed_slice(mode, size, &self.data[woff..woff + nwords])
     }
 
     pub fn bit_length(&self, ptr: BitsArenaPtr) -> VectorSize {
@@ -116,60 +119,66 @@ impl BitsArena {
         self.outlined_bit_lengths[&ptr.offset()]
     }
 
-    pub fn push(&mut self, bits: &Bits) -> BitsArenaPtr {
-        let bit_length = bits.size();
-        let offset = self.offsets.push_slot(bit_length);
+    pub fn push(&mut self, bits: BitsRef<'_>) -> BitsArenaPtr {
+        let mode = bits.mode;
+        let size = bits.size();
 
-        let inline_bit_length = if bit_length >= VSIZE_256 {
-            self.outlined_bit_lengths.insert(offset, bit_length);
-            0u64
-        } else {
-            (bit_length.get() & 0xFF) as u64
+        let slot_size = match mode {
+            Mode::TwoValue => size,
+            Mode::FourValue if size <= Mode::FourValue.max_inline_size() => VSIZE_64,
+            Mode::FourValue => {
+                let nwords = Mode::FourValue.mul_nwords(size.get().div_ceil(64) as usize);
+                u32::try_from(nwords * 64)
+                    .ok()
+                    .and_then(VectorSize::new)
+                    .expect("Bits too large for BitsArena")
+            }
         };
+        let offset = self.offsets.push_slot(slot_size);
+
+        let inline_bit_length = if size >= VSIZE_256 {
+            self.outlined_bit_lengths.insert(offset, size);
+            0
+        } else {
+            size.get() as u8
+        };
+
+        let required_len = (offset + u64::from(slot_size.get())).div_ceil(64) as usize;
+        if required_len > self.data.len() {
+            std::hint::cold_path();
+            let mut data = std::mem::take(&mut self.data).into_vec();
+            // Amortized growth, and all of the capacity is zeroed and usable.
+            data.reserve(required_len - data.len());
+            data.resize(data.capacity(), 0);
+            self.data = data.into_boxed_slice();
+        }
 
         let woff = (offset / 64) as usize;
         let boff = offset % 64;
 
-        let required_len = (offset + bit_length.get() as u64).div_ceil(64) as usize;
-        if (required_len > self.spc.len()) | (required_len > self.val.len()) {
-            std::hint::cold_path();
-            let mut spc = std::mem::take(&mut self.spc).into_vec();
-            let mut val = std::mem::take(&mut self.val).into_vec();
-            spc.reserve(required_len.saturating_sub(self.spc.len()));
-            val.reserve(required_len.saturating_sub(self.val.len()));
-            spc.resize(spc.capacity(), 0u64);
-            val.resize(val.capacity(), 0u64);
-            self.spc = spc.into_boxed_slice();
-            self.val = val.into_boxed_slice();
-        }
-
+        // Slots are never reused, so the bits of a packed slot are still zero.
         use BitsDataRef as R;
         match bits.as_data_ref() {
-            R::InlineTv(val) => {
-                let mask = mask_size_1to64(bit_length.get());
-                self.spc[woff] |= mask << boff;
-                self.val[woff] |= val << boff;
-            }
-            R::InlineFv(spc, val) => {
-                self.spc[woff] |= spc << boff;
-                self.val[woff] |= val << boff;
-            }
-            R::SeparateTv(data) => {
-                let nwords = data.len();
-                self.spc[woff..woff + nwords].fill(u64::MAX);
-                if let Some(rem_bit_length) = VectorSize::new(bit_length.get() % 64) {
-                    self.spc[woff + (nwords - 1)] &= mask_size_1to64(rem_bit_length.get());
-                }
-                self.val[woff..woff + nwords].copy_from_slice(data);
-            }
-            R::SeparateFv(data) => {
-                let nwords = data.len() / 2;
-                self.spc[woff..woff + nwords].copy_from_slice(&data[..nwords]);
-                self.val[woff..woff + nwords].copy_from_slice(&data[nwords..]);
+            R::InlineTv(val) => self.data[woff] |= val << boff,
+            R::InlineFv(spc, val) => self.data[woff] |= (spc | (val << size.get())) << boff,
+            R::SeparateTv(words) | R::SeparateFv(words) => {
+                self.data[woff..woff + words.len()].copy_from_slice(words);
             }
         }
 
-        BitsArenaPtr((offset << 8) | inline_bit_length)
+        BitsArenaPtr::new(offset, inline_bit_length, mode)
+    }
+
+    pub fn reset(&mut self) {
+        std::mem::take(&mut self.data);
+        std::mem::take(&mut self.outlined_bit_lengths);
+        self.offsets = OffsetTable::new();
+    }
+
+    pub fn clear(&mut self) {
+        self.data.fill(0);
+        self.outlined_bit_lengths.clear();
+        self.offsets = OffsetTable::new();
     }
 }
 
@@ -239,7 +248,7 @@ mod tests {
 
     use super::{BitsArena, OffsetTable};
     use crate::proptest::{BitsParams, any_bits_size};
-    use crate::{Bits, Mode, VectorSize};
+    use crate::{Bits, BitsFlags, VectorSize};
 
     fn any_size() -> impl Strategy<Value = u32> {
         any_bits_size(&BitsParams::default().size_range(1..=512))
@@ -255,18 +264,19 @@ mod tests {
             let mut arena = BitsArena::new();
             // Read back only after all pushes, so a later push clobbering an earlier slot
             // is caught.
-            let ptrs: Vec<_> = items.iter().map(|b| arena.push(b)).collect();
+            let ptrs: Vec<_> = items.iter().map(|b| arena.push(b.borrow())).collect();
 
             for (expected, ptr) in items.iter().zip(ptrs) {
                 prop_assert_eq!(arena.bit_length(ptr), expected.size());
 
+                prop_assert_eq!(ptr.mode(), expected.mode);
+
                 let got = arena.get(ptr);
                 prop_assert_eq!(&got, expected);
-
-                // The arena normalizes: four-value without x/z comes back as two-value.
-                let expected_mode =
-                    if expected.contains_special() { Mode::FourValue } else { Mode::TwoValue };
-                prop_assert_eq!(got.mode, expected_mode);
+                prop_assert_eq!(got.mode, expected.mode);
+                // Items too large to be inline are borrowed from the arena.
+                let heap = expected.size() > expected.mode.max_inline_size();
+                prop_assert_eq!(got.flags.contains(BitsFlags::BORROWED), heap);
             }
         }
     }
