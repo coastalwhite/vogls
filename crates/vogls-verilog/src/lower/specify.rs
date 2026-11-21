@@ -677,15 +677,22 @@ pub(crate) fn lower_specify_delay<'a>(
             conditions.clear();
             for path in paths {
                 let mut condition = None;
-                if path.condition.is_posedge() {
+                if path.condition.is_posedge() || path.condition.is_negedge() {
                     let before = inputs_before[input_before_lut[input]].1;
                     let after = builder.probe(mctx.gl(), *input);
-                    condition = Some(builder.posedge(mctx.gl(), before, after));
-                }
-                if path.condition.is_negedge() {
-                    let before = inputs_before[input_before_lut[input]].1;
-                    let after = builder.probe(mctx.gl(), *input);
-                    condition = Some(builder.negedge(mctx.gl(), before, after));
+                    let edge = if path.condition.is_posedge() {
+                        builder.posedge(mctx.gl(), before, after)
+                    } else {
+                        builder.negedge(mctx.gl(), before, after)
+                    };
+                    let edge = builder.select_bit_constant(mctx.gl(), edge, 0);
+                    let after_lsb = builder.select_bit_constant(mctx.gl(), after, 0);
+                    let is_edge_value = builder.case_equals_constant(
+                        mctx.gl(),
+                        after_lsb,
+                        Bits::from(path.condition.is_posedge()),
+                    );
+                    condition = Some(builder.or(mctx.gl(), is_edge_value, edge));
                 }
 
                 if let CECondition::Expr(cond)
