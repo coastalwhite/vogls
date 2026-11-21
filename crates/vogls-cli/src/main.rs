@@ -230,7 +230,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
 
         let mut arena = Arena::default();
-        let design = match builder.parse(&arena) {
+        let design = match timers.timed("parsing", |_| builder.parse(&arena)) {
             Ok(design) => design,
             Err(err) => {
                 eprintln!("{err}");
@@ -249,7 +249,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        let mut elaborate = match design.elaborate(logic_mode, top_level_module) {
+        let mut elaborate = match timers.timed("elaboration", |_| {
+            design.elaborate(logic_mode, top_level_module)
+        }) {
             Ok(v) => v,
             Err(err) => {
                 eprintln!("{err}");
@@ -276,6 +278,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("{}", elaborate.display_hierarchy());
         }
 
+        timers.start("annotate SDF");
         for sdf in &sdf {
             let (scope, sdf_path) = match sdf.split_once('=') {
                 Some((scope, path)) => (Some(scope), path),
@@ -289,8 +292,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprint!("{}", elaborate.report_warnings());
             }
         }
+        timers.stop();
 
-        timers.start("lower_specify_blocks");
+        timers.start("annotate specify blocks");
         if let Err(err) = elaborate.annotate_specify() {
             eprintln!("{err}");
             return Err("failed to annotate specify".into());
@@ -300,7 +304,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         timers.stop();
 
-        let lowered = match elaborate.lower(vec![]) {
+        let lowered = match timers.timed("lower", |_| elaborate.lower(vec![])) {
             Ok(v) => v,
             Err(err) => {
                 eprintln!("{err}");
@@ -364,11 +368,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     lowered.emit_disassembly = emit_disasm.then(|| emit_writer.clone().unwrap());
     lowered.profile = profile;
 
-    timers.start("compilation");
     let (design, mut state) = if compile {
         #[cfg(feature = "native")]
         {
-            lowered.to_cranelift()
+            timers.timed("cranelift compilation", |_| lowered.to_cranelift())
         }
 
         #[cfg(not(feature = "native"))]
@@ -377,9 +380,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     } else {
-        lowered.to_bytecode()
+        timers.timed("bytecode generation", |_| lowered.to_bytecode())
     }?;
-    timers.stop();
 
     if let Some(writer) = &emit_writer {
         writer.lock().unwrap().flush()?;
