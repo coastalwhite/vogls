@@ -84,7 +84,7 @@ fn msb(word: u64) -> u32 {
     63 - word.leading_zeros()
 }
 
-impl crate::Bits {
+impl<'a> crate::BitsRef<'a> {
     /// The most significant bit.
     fn sign_bit(&self) -> FvLogicValue {
         self.select_value(self.size().get() - 1)
