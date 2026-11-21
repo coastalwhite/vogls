@@ -7,7 +7,7 @@ use crate::ast::AstId;
 use crate::ast::expr::{BinaryOperator, Expr, UnaryOperator};
 use crate::elaborate::VSymbol;
 use crate::lower::addressing::{ConstantAddressingContext, lower_addressing};
-use crate::lower::expression::get_expr_type;
+use crate::lower::expression::{coerce_to_max_size_ty, get_expr_type};
 use crate::lower::cond_expr::{CondExpr, CondExprBuilder};
 use crate::lower::{Diagnostics, LowerContext, VType, eval_constant_expr, try_resolve_hident};
 use crate::number::Sign;
@@ -36,6 +36,7 @@ pub fn lower_expr_to_cond_expr<'a>(
     dispatch_stack.push(StackItem::new(expr, context_width));
 
     while let Some(item) = dispatch_stack.pop() {
+        let (item_expr, item_context_width) = (item.expr, item.context_width);
         let (cond_expr, vtype) = match lower_subexpr_to_cond_expr(
             ctx,
             gl,
@@ -53,8 +54,8 @@ pub fn lower_expr_to_cond_expr<'a>(
                     &ctx.table,
                     scope,
                     &mut Diagnostics::default(),
-                    expr.into_constant(),
-                    context_width,
+                    item_expr.into_constant(),
+                    item_context_width,
                 )
                 .ok()?;
                 let ty = value.ty();
@@ -68,6 +69,38 @@ pub fn lower_expr_to_cond_expr<'a>(
     assert_eq!(result_stack.len(), 1);
     let (value, _ty) = result_stack.pop().unwrap();
     Some(value)
+}
+
+/// `expr` of `ty` extended to `width`, by the signedness of `ty`, as `zero_or_sign_extend`.
+fn extend(
+    builder: &mut CondExprBuilder<'_>,
+    expr: CondExpr,
+    ty: VType,
+    width: VectorSize,
+) -> (CondExpr, VType) {
+    let expr = if ty.is_signed() {
+        builder.sign_extend(expr, width)
+    } else {
+        builder.zero_extend(expr, width)
+    };
+    (expr, ty.zero_or_sign_extend(width))
+}
+
+/// The operands `l` and `r` extended to the same type, as `coerce_bin_arithmetic` for nets.
+fn coerce(
+    builder: &mut CondExprBuilder<'_>,
+    l: CondExpr,
+    l_ty: VType,
+    r: CondExpr,
+    r_ty: VType,
+) -> (CondExpr, CondExpr, VType) {
+    if l_ty == r_ty {
+        return (l, r, l_ty);
+    }
+    let ty = coerce_to_max_size_ty(l_ty, r_ty);
+    let (l, _) = extend(builder, l, l_ty, ty.bit_length());
+    let (r, _) = extend(builder, r, r_ty, ty.bit_length());
+    (l, r, ty)
 }
 
 fn lower_subexpr_to_cond_expr<'a>(
@@ -92,14 +125,14 @@ fn lower_subexpr_to_cond_expr<'a>(
                 return Err(StepErr::Continue);
             }
 
-            let (child, ty) = result_stack.pop().unwrap();
+            let (mut child, mut ty) = result_stack.pop().unwrap();
 
             if let Some(context_width) = item.context_width
                 && !ty.is_real()
                 && !op.is_self_determined()
                 && context_width > ty.bit_length()
             {
-                return Err(StepErr::Unsupported);
+                (child, ty) = extend(builder, child, ty, context_width);
             }
 
             let (variable, ty) = match op {
@@ -175,33 +208,35 @@ fn lower_subexpr_to_cond_expr<'a>(
                 return Err(StepErr::Continue);
             }
 
-            let (r, r_ty) = result_stack.pop().unwrap();
-            let (l, l_ty) = result_stack.pop().unwrap();
+            let (mut r, mut r_ty) = result_stack.pop().unwrap();
+            let (mut l, mut l_ty) = result_stack.pop().unwrap();
 
             let (l_is_self_det, r_is_self_det) = op.is_self_determined();
             if let Some(context_width) = item.context_width {
                 if !l_is_self_det && !l_ty.is_real() && context_width > l_ty.bit_length() {
-                    return Err(StepErr::Unsupported);
+                    (l, l_ty) = extend(builder, l, l_ty, context_width);
                 }
                 if !r_is_self_det && !r_ty.is_real() && context_width > r_ty.bit_length() {
-                    return Err(StepErr::Unsupported);
+                    (r, r_ty) = extend(builder, r, r_ty, context_width);
                 }
             }
 
             macro_rules! logical_op {
                 ($f:ident) => {{
-                    if l_ty != r_ty || l_ty.bit_length() != SCALAR_VSIZE || l_ty.is_real() {
+                    if l_ty.is_real() || r_ty.is_real() {
                         return Err(StepErr::Unsupported);
                     }
+                    let (l, r, _) = coerce(builder, l, l_ty, r, r_ty);
                     (builder.$f(l, r), VType::SCALAR_NET)
                 }};
             }
             macro_rules! bitwise_op {
                 ($f:ident) => {{
-                    if l_ty != r_ty || l_ty.is_real() {
+                    if l_ty.is_real() || r_ty.is_real() {
                         return Err(StepErr::Unsupported);
                     }
-                    (builder.$f(l, r), l_ty)
+                    let (l, r, ty) = coerce(builder, l, l_ty, r, r_ty);
+                    (builder.$f(l, r), ty)
                 }};
             }
 
@@ -279,25 +314,25 @@ fn lower_subexpr_to_cond_expr<'a>(
             let truthy = result_stack.pop().unwrap();
             let falsy = result_stack.pop().unwrap();
 
-            let ((c, c_ty), (t, t_ty), (f, f_ty)) = (condition, truthy, falsy);
+            let ((c, c_ty), (mut t, mut t_ty), (mut f, mut f_ty)) = (condition, truthy, falsy);
 
             if t_ty.is_real() || f_ty.is_real() {
                 return Err(StepErr::Unsupported);
             } else {
                 let size = t_ty.bit_length().max(f_ty.bit_length());
                 if size > t_ty.bit_length() {
-                    return Err(StepErr::Unsupported);
+                    (t, t_ty) = extend(builder, t, t_ty, size);
                 }
                 if size > f_ty.bit_length() {
-                    return Err(StepErr::Unsupported);
+                    (f, f_ty) = extend(builder, f, f_ty, size);
                 }
 
                 if let Some(context_width) = item.context_width {
                     if context_width > t_ty.bit_length() {
-                        return Err(StepErr::Unsupported);
+                        (t, t_ty) = extend(builder, t, t_ty, context_width);
                     }
                     if context_width > f_ty.bit_length() {
-                        return Err(StepErr::Unsupported);
+                        (f, _) = extend(builder, f, f_ty, context_width);
                     }
                 }
             }

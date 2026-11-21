@@ -4,7 +4,7 @@ use vogls_frontend::ident_table::{IdentId, IdentTable};
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::time::{TimeResolution, TimeSize, TimeUnit};
 use vogls_ir::token_range::TokenRange;
-use vogls_ir::{SignalSlice, Time};
+use vogls_ir::{SignalKey, SignalSlice, Time};
 use vogls_sdf::{
     AbsoluteDelayType, BinaryOp, DelVal, DelValList, DelayFile, DelaySpec, Expression,
     HierarchicalIdent, HierarchyDivider, Instance, Integer, InterconnectDef, IoPathDef, Port,
@@ -204,25 +204,33 @@ fn lower_unary(builder: &mut CondExprBuilder, a: CondExpr, op: UnaryOp) -> CondE
 
 /// Converts the condition of an SDF `COND` to a [`PathCond`], if it only combines scalar ports
 /// and constants with logical, bit-wise and equality operators.
-fn sdf_expr_to_cond_expr(expr: &Expression, builder: &mut CondExprBuilder<'_>) -> Option<CondExpr> {
+fn sdf_expr_to_cond_expr(
+    ctx: &LowerContext<'_, '_>,
+    divider: HierarchyDivider,
+    cell_sid: SymbolId,
+    expr: &Expression,
+    builder: &mut CondExprBuilder<'_>,
+) -> Option<CondExpr> {
     use BinaryOp as B;
     use UnaryOp as U;
-    let port = |port: &Port| {
-        let Port { hident, b1, b2 } = port;
-        (b1.is_none() && b2.is_none() && hident.next.is_empty())
-            .then_some(CondExpr::net(hident.fst))
+    let port = |builder: &mut CondExprBuilder<'_>, port: &Port| {
+        let (signal, slice) = resolve_port_terminal(ctx, divider, cell_sid, port)?;
+        Some(builder.terminal(signal, slice))
     };
     let scalar = |scalar: &ScalarConstant| CondExpr::constant(matches!(scalar, ScalarConstant::L1));
+    let cond = |builder: &mut CondExprBuilder<'_>, expr| {
+        sdf_expr_to_cond_expr(ctx, divider, cell_sid, expr, builder)
+    };
 
     use Expression as E;
     Some(match expr {
-        E::Parenthese(a) => sdf_expr_to_cond_expr(a, builder)?,
+        E::Parenthese(a) => cond(builder, a)?,
         E::Unary(op, a) => {
-            let a = sdf_expr_to_cond_expr(a, builder)?;
+            let a = cond(builder, a)?;
             lower_unary(builder, a, *op)
         }
         E::UnaryPort(op, p) => {
-            let p = port(p)?;
+            let p = port(builder, p)?;
             lower_unary(builder, p, *op)
         }
         E::UnaryScalar(op, c) => {
@@ -238,14 +246,16 @@ fn sdf_expr_to_cond_expr(expr: &Expression, builder: &mut CondExprBuilder<'_>) -
             };
             CondExpr::constant(value)
         }
-        E::Port(p) => port(p)?,
+        E::Port(p) => port(builder, p)?,
         E::Scalar(c) => scalar(c),
         E::Binary(op, a, b) => {
-            let a = sdf_expr_to_cond_expr(a, builder)?;
-            let b = sdf_expr_to_cond_expr(b, builder)?;
+            let a = cond(builder, a)?;
+            let b = cond(builder, b)?;
             match op {
-                B::LogicalAnd | B::BitwiseAnd => builder.and(a, b),
-                B::LogicalOr | B::BitwiseOr => builder.or(a, b),
+                B::LogicalAnd => builder.logical_and(a, b),
+                B::BitwiseAnd => builder.and(a, b),
+                B::LogicalOr => builder.logical_or(a, b),
+                B::BitwiseOr => builder.or(a, b),
                 B::BitwiseXor => builder.xor(a, b),
                 B::BitwiseEquiv => builder.bitwise_equiv(a, b),
                 B::LogicalEquality => builder.eq(a, b),
@@ -256,15 +266,15 @@ fn sdf_expr_to_cond_expr(expr: &Expression, builder: &mut CondExprBuilder<'_>) -
             }
         }
         E::Ternary(c, a, b) => {
-            let c = sdf_expr_to_cond_expr(c, builder)?;
-            let a = sdf_expr_to_cond_expr(a, builder)?;
-            let b = sdf_expr_to_cond_expr(b, builder)?;
+            let c = cond(builder, c)?;
+            let a = cond(builder, a)?;
+            let b = cond(builder, b)?;
             builder.mux(c, a, b)
         }
         E::Concat(exprs) => {
-            let mut accum = sdf_expr_to_cond_expr(exprs.first()?, builder)?;
+            let mut accum = cond(builder, exprs.first()?)?;
             for expr in &exprs[1..] {
-                let a = sdf_expr_to_cond_expr(expr, builder)?;
+                let a = cond(builder, expr)?;
                 accum = builder.concat(accum, a);
             }
             accum
@@ -291,21 +301,7 @@ fn port_bits(
         return Err(());
     }
 
-    // The bit of a declared index, as in `lower_addressing`.
-    let width = net.ty.bit_length().get();
-    let transform = net.transform;
-    let bit = |index: &Integer| -> Option<u32> {
-        let index = index.0.parse::<i64>().ok()?;
-        let offset = u32::try_from(index.checked_sub(transform.lsb)?).ok()?;
-        (offset < width).then(|| {
-            if transform.bit_reversed {
-                width - 1 - offset
-            } else {
-                offset
-            }
-        })
-    };
-    let (Some(bit1), Some(bit2)) = (bit(b1), bit(b2.as_ref().unwrap_or(b1))) else {
+    let Some(slice) = select_bits(net, Some(b1), b2.as_ref()) else {
         let mut path = display_ident(&ctx.arenas.ident_table, hident);
         if let Some(hident) = &port.hident {
             path = format!("{}.{path}", display_ident(&ctx.arenas.ident_table, hident));
@@ -321,10 +317,57 @@ fn port_bits(
         ));
         return Err(());
     };
+    Ok((slice.width() != net.ty.bit_length()).then_some(slice))
+}
 
-    let slice =
-        SignalSlice::new(bit1.max(bit2), bit1.min(bit2)).expect("the bits are within the net");
-    Ok((slice.width().get() != width).then_some(slice))
+/// Returns the bits of `net` that the bit select `[b1]` or part select `[b1:b2]` selects, or all
+/// of its bits without `b1`. `None` if the select is outside of the net or `net` is an array.
+fn select_bits(
+    net: &SignalSymbol,
+    b1: Option<&Integer>,
+    b2: Option<&Integer>,
+) -> Option<SignalSlice> {
+    if !net.dims.is_empty() {
+        return None;
+    }
+    let Some(b1) = b1 else {
+        return Some(SignalSlice::with_end(net.ty.bit_length()));
+    };
+
+    // The bit of a declared index, as in `lower_addressing`.
+    let width = net.ty.bit_length().get();
+    let transform = net.transform;
+    let bit = |index: &Integer| -> Option<u32> {
+        let index = index.0.parse::<i64>().ok()?;
+        let offset = u32::try_from(index.checked_sub(transform.lsb)?).ok()?;
+        (offset < width).then(|| {
+            if transform.bit_reversed {
+                width - 1 - offset
+            } else {
+                offset
+            }
+        })
+    };
+    let (bit1, bit2) = (bit(b1)?, bit(b2.unwrap_or(b1))?);
+    SignalSlice::new(bit1.max(bit2), bit1.min(bit2))
+}
+
+/// Resolves the port `port` of an SDF `COND` in the cell `cell_sid` to the bits of the signal it
+/// names.
+fn resolve_port_terminal(
+    ctx: &LowerContext<'_, '_>,
+    divider: HierarchyDivider,
+    cell_sid: SymbolId,
+    port: &Port,
+) -> Option<(SignalKey, SignalSlice)> {
+    let Port { hident, b1, b2 } = port;
+    let sid =
+        resolve_ident(ctx, divider, Some(cell_sid), hident, &mut Diagnostics::default()).ok()?;
+    let VSymbol::Signal(net) = &ctx.table[sid].content else {
+        return None;
+    };
+    let slice = select_bits(net, b1.as_ref(), b2.as_ref())?;
+    Some((net.terminals.probe_signal(), slice))
 }
 
 /// Whether `sid` is `scope` or lies somewhere below it in the hierarchy.
@@ -644,6 +687,9 @@ pub fn lower_sdf<'a>(
                                                     ));
                                                 let condition =
                                                     SdfCondition::Cond(sdf_expr_to_cond_expr(
+                                                        ctx,
+                                                        divider,
+                                                        cell_sid,
                                                         &cond.conditional_port_expr,
                                                         &mut builder,
                                                     ));
