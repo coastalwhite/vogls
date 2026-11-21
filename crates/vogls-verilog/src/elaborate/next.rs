@@ -8,7 +8,7 @@ use vogls_ir::{
     ConnectionDirection, GlobalContext, INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, Signal,
     SignalFlags, SignalKey, TIME_VSIZE,
 };
-use vogls_utils::{IndexMap, VgHashMap, VgHashSet};
+use vogls_utils::{IndexMap, ScratchMap, ScratchSet, VgHashMap, VgHashSet};
 
 use crate::ast::constant_expr::{ConstantExpr, ConstantMinTypMaxExpression};
 use crate::ast::expr::{Expr, Replication};
@@ -96,10 +96,10 @@ pub struct PortInLevelSymbol<'a> {
 }
 
 pub struct ElaborationState<'a, 'b> {
-    lvl_symbols: IndexMap<SymbolId, InLevelSymbol<'a>>,
+    lvl_symbols: ScratchMap<SymbolId, InLevelSymbol<'a>>,
     next_levels: VecDeque<(SymbolId, ElabLevel<'a>, Option<DefaultNettype>, TimeScale)>,
     implicit_nets: IndexMap<IdentId, (AstItem<Identifier>, DefaultNettype)>,
-    marked: VgHashSet<SymbolId>,
+    marked: ScratchSet<SymbolId>,
 
     needs_adjacency_list: Vec<(SymbolId, usize, usize)>,
     needs_adjacency_list_items: Vec<SymbolId>,
@@ -116,7 +116,7 @@ pub struct ElaborationState<'a, 'b> {
 
 impl<'a, 'b> ElaborationState<'a, 'b> {
     pub fn insert_lvl_symbol(&mut self, sid: SymbolId, symbol: InLevelSymbol<'a>) {
-        assert!(self.lvl_symbols.insert(sid, symbol).is_ok());
+        assert!(self.lvl_symbols.try_insert(sid, symbol).is_ok());
     }
 
     fn dummy_net(&self) -> Terminals {
@@ -164,7 +164,7 @@ pub fn elaborate<'a>(
         lvl_symbols: Default::default(),
         implicit_nets: Default::default(),
         next_levels: VecDeque::new(),
-        marked: VgHashSet::default(),
+        marked: ScratchSet::default(),
         needs_adjacency_list: Vec::new(),
         needs_adjacency_list_items: Vec::new(),
         dummy_signal,
@@ -309,7 +309,7 @@ pub fn elaborate<'a>(
 
             st.marked.reserve(st.lvl_symbols.len());
             for i in 0..st.lvl_symbols.len() {
-                let (&sid, &symbol) = st.lvl_symbols.at(i);
+                let (sid, symbol) = st.lvl_symbols.as_slice()[i];
                 st.needs_adjacency_list.push((
                     sid,
                     st.needs_adjacency_list_items.len(),
