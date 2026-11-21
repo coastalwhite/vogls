@@ -1,7 +1,7 @@
 use std::fmt::{self, Alignment};
 
 use crate::arithmetic::FvLogicValue;
-use crate::{Bits, VectorSize};
+use crate::{BitsRef, VectorSize};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BitsFormatBase {
@@ -45,7 +45,7 @@ impl Default for BitsFormatOptions {
 }
 
 pub struct BitsDisplay<'a> {
-    pub bits: &'a Bits,
+    pub bits: &'a BitsRef<'a>,
     pub options: &'a BitsFormatOptions,
 }
 
@@ -63,7 +63,7 @@ impl BitsFormatOptions {
 }
 
 impl BitsFormatBase {
-    pub fn num_digits(&self, signed: bool, bits: &Bits) -> usize {
+    pub fn num_digits(&self, signed: bool, bits: &BitsRef<'_>) -> usize {
         match self {
             Self::Binary => (bits.size().get() - bits.leading_zeroes()).max(1) as usize,
             Self::Octal => (bits.size().get() - bits.leading_zeroes())
@@ -148,7 +148,11 @@ impl<'a> fmt::UpperHex for BitsDisplay<'a> {
     }
 }
 
-fn fmt_bits(bits: &Bits, f: &mut impl fmt::Write, options: &BitsFormatOptions) -> fmt::Result {
+fn fmt_bits(
+    bits: &BitsRef<'_>,
+    f: &mut impl fmt::Write,
+    options: &BitsFormatOptions,
+) -> fmt::Result {
     use BitsFormatBase as B;
 
     let num_digits = options.base.num_digits(options.signed, bits);
@@ -210,7 +214,11 @@ fn fmt_bits(bits: &Bits, f: &mut impl fmt::Write, options: &BitsFormatOptions) -
     Ok(())
 }
 
-fn fmt_bits_binary(bits: &Bits, f: &mut impl fmt::Write, separator: Option<char>) -> fmt::Result {
+fn fmt_bits_binary(
+    bits: &BitsRef<'_>,
+    f: &mut impl fmt::Write,
+    separator: Option<char>,
+) -> fmt::Result {
     fn print(
         f: &mut impl fmt::Write,
         val: u64,
@@ -329,7 +337,11 @@ fn fmt_bits_binary(bits: &Bits, f: &mut impl fmt::Write, separator: Option<char>
 
     Ok(())
 }
-fn fmt_bits_octal(bits: &Bits, f: &mut impl fmt::Write, separator: Option<char>) -> fmt::Result {
+fn fmt_bits_octal(
+    bits: &BitsRef<'_>,
+    f: &mut impl fmt::Write,
+    separator: Option<char>,
+) -> fmt::Result {
     fn nimble_to_digit(v: u8, s: Option<u8>, nbits: u32) -> char {
         debug_assert!(nbits <= 3);
         let mask = (1u8 << nbits) - 1;
@@ -398,7 +410,7 @@ fn fmt_bits_octal(bits: &Bits, f: &mut impl fmt::Write, separator: Option<char>)
     Ok(())
 }
 fn fmt_bits_hex(
-    bits: &Bits,
+    bits: &BitsRef<'_>,
     f: &mut impl fmt::Write,
     separator: Option<char>,
     is_upper: bool,
@@ -572,7 +584,7 @@ fn fmt_bits_hex(
     Ok(())
 }
 fn fmt_bits_decimal(
-    bits: &Bits,
+    bits: &BitsRef<'_>,
     f: &mut impl fmt::Write,
     signed: bool,
     _separator: Option<char>,
@@ -611,7 +623,7 @@ fn fmt_bits_decimal(
     }
 }
 
-fn decimal_magnitude(bits: &Bits, signed: bool) -> (Vec<u64>, bool) {
+fn decimal_magnitude(bits: &BitsRef<'_>, signed: bool) -> (Vec<u64>, bool) {
     let mut limbs = value_limbs(bits);
 
     let size = bits.size().get();
@@ -643,7 +655,7 @@ fn num_decimal_digits(size: u32) -> u32 {
     ((size as u128 * C) >> 64) as u32 + 1
 }
 
-fn value_limbs(bits: &Bits) -> Vec<u64> {
+fn value_limbs(bits: &BitsRef<'_>) -> Vec<u64> {
     // The value words of `bits` as little-endian `u64` limbs, with the unused high
     // bits of the most-significant word masked off.
     let data_ref = bits.as_data_ref();

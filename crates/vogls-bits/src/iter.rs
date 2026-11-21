@@ -1,8 +1,8 @@
-use crate::Bits;
+use crate::BitsRef;
 use crate::arithmetic::FvLogicValue;
 
 pub struct ValueIter<'a> {
-    pub(super) bits: &'a Bits,
+    pub(super) bits: &'a BitsRef<'a>,
     pub(super) start: u32,
     pub(super) end: u32,
 }

@@ -1,10 +1,10 @@
 use std::cell::Cell;
 use std::fmt;
 
+use vogls_bits::BitsDataRef;
 use vogls_bits::arithmetic::{FvLogicValue, fv_pack_u64, fv_set_no_special, fv_unpack_u64};
 use vogls_bits::load::load_partial_u64;
 use vogls_bits::store::store_partial_u64;
-use vogls_bits::{BitsDataRef, get_disjoint_dst_s1_s2, get_disjoint_dst_src};
 use vogls_ir::{Bits, INTEGER_VSIZE, LogicMode, SCALAR_VSIZE, TIME_VSIZE, VectorSize};
 
 #[derive(Default)]
@@ -295,76 +295,6 @@ impl Heap {
         }
     }
 
-    pub fn get_disjoint_u64_dst_src(
-        &mut self,
-        dst: (HeapOffset, usize),
-        src: (HeapOffset, usize),
-    ) -> (&mut [u64], &[u64]) {
-        debug_assert_eq!(dst.0.bit_offset % 64, 0);
-        debug_assert_eq!(src.0.bit_offset % 64, 0);
-        get_disjoint_dst_src(
-            &mut self.0,
-            dst.0.bit_offset / 64,
-            dst.1,
-            src.0.bit_offset / 64,
-            src.1,
-        )
-    }
-
-    pub fn get_disjoint_u64_dst_s1_s2(
-        &mut self,
-        dst: (HeapOffset, usize),
-        src1: (HeapOffset, usize),
-        src2: (HeapOffset, usize),
-    ) -> (&mut [u64], &[u64], &[u64]) {
-        debug_assert_eq!(dst.0.bit_offset % 64, 0);
-        debug_assert_eq!(src1.0.bit_offset % 64, 0);
-        debug_assert_eq!(src2.0.bit_offset % 64, 0);
-        get_disjoint_dst_s1_s2(
-            &mut self.0,
-            dst.0.bit_offset / 64,
-            dst.1,
-            src1.0.bit_offset / 64,
-            src1.1,
-            src2.0.bit_offset / 64,
-            src2.1,
-        )
-    }
-
-    pub fn get_disjoint_u8_dst_src(&mut self, dst: HeapRef, src: HeapRef) -> (&mut [u8], &[u8]) {
-        debug_assert_eq!(dst.offset.bit_offset % 8, 0);
-        debug_assert_eq!(src.offset.bit_offset % 8, 0);
-        let dst_bytes = dst.size.get().div_ceil(8) as usize;
-        let src_bytes = src.size.get().div_ceil(8) as usize;
-        get_disjoint_dst_src(
-            bytemuck::cast_slice_mut(&mut self.0),
-            dst.offset.bit_offset / 8,
-            dst_bytes,
-            src.offset.bit_offset / 8,
-            src_bytes,
-        )
-    }
-
-    pub fn get_disjoint_u8_dst_s1_s2(
-        &mut self,
-        dst: HeapRef,
-        src1: HeapRef,
-        src2: HeapRef,
-    ) -> (&mut [u8], &[u8], &[u8]) {
-        debug_assert_eq!(dst.offset.bit_offset % 8, 0);
-        debug_assert_eq!(src1.offset.bit_offset % 8, 0);
-        debug_assert_eq!(src2.offset.bit_offset % 8, 0);
-        get_disjoint_dst_s1_s2(
-            bytemuck::cast_slice_mut(&mut self.0),
-            dst.offset.bit_offset / 8,
-            dst.size.get().div_ceil(8) as usize,
-            src1.offset.bit_offset / 8,
-            src1.size.get().div_ceil(8) as usize,
-            src2.offset.bit_offset / 8,
-            src2.size.get().div_ceil(8) as usize,
-        )
-    }
-
     pub fn load_tv_bits(&self, at: HeapRef) -> Bits {
         // @Performance: We should make a specialized path for u64
         Bits::load_from_slice(self.get(at).as_slice(), at.size)
@@ -483,28 +413,6 @@ impl Heap {
         } else {
             let nwords = 2 * dst.size.get().div_ceil(64) as usize;
             self.get_mut_u64_slice(dst.offset, nwords).fill(0u64);
-        }
-    }
-
-    pub fn tv_copy(&mut self, size: VectorSize, dst: HeapOffset, src: HeapOffset) {
-        if size < Heap::TV_U64_MIN_SIZE {
-            let value = self.get_tv_u64(src.to_ref(size));
-            self.set_tv_u64(dst.to_ref(size), value);
-        } else {
-            let nwords = size.get().div_ceil(64) as usize;
-            let (dst, src) = self.get_disjoint_u64_dst_src((dst, nwords), (src, nwords));
-            dst.copy_from_slice(src);
-        }
-    }
-
-    pub fn fv_copy(&mut self, size: VectorSize, dst: HeapOffset, src: HeapOffset) {
-        if size < Heap::FV_U64_MIN_SIZE {
-            let (spc, val) = self.get_fv_u64(src.to_ref(size));
-            self.set_fv_u64(dst.to_ref(size), spc, val);
-        } else {
-            let nwords = 2 * (size.get().div_ceil(64) as usize);
-            let (dst, src) = self.get_disjoint_u64_dst_src((dst, nwords), (src, nwords));
-            dst.copy_from_slice(src);
         }
     }
 
