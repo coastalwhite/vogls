@@ -52,7 +52,7 @@ impl TimerStack {
     pub fn timed<T>(
         &mut self,
         name: impl Into<Cow<'static, str>>,
-        mut f: impl FnMut(&mut Self) -> T,
+        f: impl FnOnce(&mut Self) -> T,
     ) -> T {
         self.start(name);
         let result = f(self);
