@@ -8,6 +8,7 @@ proptest.workspace = true
 
 [dependencies]
 bytemuck.workspace = true
+vogls-utils = { workspace = true }
 rand = { workspace = true, optional = true }
 
 [features]
