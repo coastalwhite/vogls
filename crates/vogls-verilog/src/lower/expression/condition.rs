@@ -375,7 +375,7 @@ fn lower_subexpr_to_cond_expr<'a>(
             let Ok(address) = lower_addressing(
                 &mut actx,
                 ty.bit_length(),
-                &dims,
+                dims,
                 transform,
                 exprs.iter().map(|e| e.into_constant()),
                 range_expression.map(Into::into),

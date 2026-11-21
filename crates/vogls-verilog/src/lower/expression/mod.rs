@@ -15,18 +15,18 @@ use crate::lower::addressing::{Address, AddressingContext, RangeExpr, lower_addr
 use crate::lower::{VType, hident_span, try_resolve_hident};
 use crate::number::Sign;
 use crate::parser::AstArenas;
+pub use condition::lower_expr_to_cond_expr;
 pub use constant_expr::eval_constant_expr;
 pub use ty::get_expr_type;
-pub use condition::lower_expr_to_cond_expr;
 
 use super::LowerContext;
 use super::{Diagnostics, MutLowerContext};
 
+mod condition;
 mod constant_expr;
 pub mod function_call;
 mod system_function_call;
 mod ty;
-mod condition;
 
 #[derive(Clone)]
 struct StackItem<'a> {

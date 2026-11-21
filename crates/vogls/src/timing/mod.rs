@@ -13,8 +13,8 @@ use vogls_sdf::{
 };
 use vogls_utils::VgHashMap;
 use vogls_verilog::elaborate::{SignalSymbol, VSymbol};
-use vogls_verilog::lower::delay_pointer::{DelayPtr, DelayPtrVariant, UNCHANGED};
 use vogls_verilog::lower::cond_expr::{CondExpr, CondExprBuilder};
+use vogls_verilog::lower::delay_pointer::{DelayPtr, DelayPtrVariant, UNCHANGED};
 use vogls_verilog::lower::specify::SdfCondition;
 use vogls_verilog::lower::{Diagnostics, LowerContext, LowerErrorReason, MutLowerContext};
 
@@ -361,8 +361,14 @@ fn resolve_port_terminal(
     port: &Port,
 ) -> Option<(SignalKey, SignalSlice)> {
     let Port { hident, b1, b2 } = port;
-    let sid =
-        resolve_ident(ctx, divider, Some(cell_sid), hident, &mut Diagnostics::default()).ok()?;
+    let sid = resolve_ident(
+        ctx,
+        divider,
+        Some(cell_sid),
+        hident,
+        &mut Diagnostics::default(),
+    )
+    .ok()?;
     let VSymbol::Signal(net) = &ctx.table[sid].content else {
         return None;
     };

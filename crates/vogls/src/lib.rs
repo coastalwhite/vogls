@@ -54,11 +54,10 @@ pub fn find_symbol_from_path(
     ident_table: &IdentTable,
     scope: &str,
 ) -> Option<SymbolId> {
-    fn take_segment<'a>(s: &'a str) -> (&'a str, &'a str) {
+    fn take_segment(s: &str) -> (&str, &str) {
         let s = s.trim_start();
 
-        if s.starts_with('\\') {
-            let s = &s[1..];
+        if let Some(s) = s.strip_prefix('\\') {
             return s
                 .split_once(|c: char| c.is_ascii_whitespace())
                 .unwrap_or((s, ""));

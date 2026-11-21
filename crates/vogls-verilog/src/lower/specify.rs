@@ -16,10 +16,10 @@ use crate::ast::specify::{
 };
 use crate::ast::{AstId, AstIdRange};
 use crate::elaborate::VSymbol;
+use crate::lower::cond_expr::{CondExpr, CondExprLowerScratch, CondExprs};
 use crate::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
 use crate::lower::drivers::DriveOutputFn;
 use crate::lower::expression::lower_expr_to_cond_expr;
-use crate::lower::cond_expr::{CondExpr, CondExprLowerScratch, CondExprs};
 use crate::lower::{eval_constant_expr, try_resolve_hident};
 
 use super::{LowerContext, MutLowerContext, VValue};
@@ -56,7 +56,6 @@ pub enum CECondition {
     InputNegedgeExpr(CondExpr),
 }
 impl CECondition {
-
     fn is_posedge(&self) -> bool {
         matches!(
             self,
@@ -439,7 +438,7 @@ pub struct PathDelays {
     pub conds: CondExprs,
 }
 
-impl<'a> PathDelays {
+impl PathDelays {
     pub fn is_empty(&self) -> bool {
         self.specify.is_empty() && self.sdf.is_empty()
     }
