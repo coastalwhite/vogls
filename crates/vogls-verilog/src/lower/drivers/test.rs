@@ -408,15 +408,12 @@ fn build<'a>(spec: &GraphSpec, ast: &Ast<'a>) -> (DriverResolution<'a>, GlobalCo
                         scope: ast.scope,
                     },
                     _ => DelayKind::Specify(Arc::new(SpecifyDelay {
-                        scope: ast.scope,
                         output: input,
                         specify: SpecifyOutput {
                             sid: ast.scope,
                             inputs: VgHashMap::default(),
                             paths: Vec::new(),
                         },
-                        delays: Arc::from([]),
-                        conds: Arc::default(),
                     })),
                 };
                 let key = dr.nodes.insert(DriveNode::Delay {
