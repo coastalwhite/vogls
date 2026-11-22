@@ -2,7 +2,7 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
     BasicBlockBuilder, Bits, ProcessBuilder, ProcessKind, SCALAR_VSIZE, Signal, SignalFlags,
-    SignalKey, SignalSlice, VariableKey, VectorSize, WatchCondition,
+    SignalKey, SignalSlice, Time, VariableKey, VectorSize, WatchCondition,
 };
 use vogls_utils::OrderedSet;
 
@@ -15,7 +15,9 @@ use crate::ast::module::{
 };
 use crate::ast::statement::{Delay2, Delay3, DelayValue, MinTypMaxExpression, NetLValue};
 use crate::lower::assign::net_lvalue_bit_length;
-use crate::lower::drivers::{BidirKind, DriveOutputFn, ExprSource, GateDelay};
+use crate::lower::delay::{DelayExpr, try_push_const_delays};
+use crate::lower::delay_pointer::DelayPtr;
+use crate::lower::drivers::{BidirKind, DelayKind, DriveOutputFn, ExprSource, GateDelay};
 use crate::lower::expression::{get_used_signals, lower_expr, truncate_or_extend};
 use crate::lower::fuse::{
     RequiredSignalKind, SiteTerminal, SiteType, SourceSite, SourceSiteContent, expr_to_src_sites,
@@ -224,6 +226,9 @@ fn push_gate<'a>(
     }
 
     let bit_length = net_lvalue_bit_length(ctx, mctx, scope, output_terminal)?;
+    let delay = delay
+        .map(|delay| gate_delay_kind(ctx, mctx, scope, delay, bit_length))
+        .transpose()?;
     net_lvalue_to_dsts(ctx, mctx, scope, output_terminal)?;
     let primitive = ExprSource::Gate {
         gate,
@@ -726,29 +731,131 @@ impl<'a> TransitionDelays<'a> {
             .turn_off
             .map(|t| lower_min_typ_max_delay(ctx, mctx, scope, builder, t))
             .transpose()?;
-
-        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 101 (Table 7-9)
-        //
-        // Transitions to 1 take the rise delay and transitions to 0 take the fall delay.
-        // Transitions to z take the turn-off delay, or the smaller of the rise and fall delay when
-        // there is none. Transitions to x take the smallest of all delays.
-        let min_rise_fall = builder.min(mctx.gl(), rise, fall);
-        let (to_z, to_x) = match turn_off {
-            None => (min_rise_fall, min_rise_fall),
-            Some(turn_off) => (turn_off, builder.min(mctx.gl(), min_rise_fall, turn_off)),
-        };
-
-        let is_one = builder.case_equals_constant(mctx.gl(), new_value, Bits::from(true));
-        let is_zero = builder.case_equals_constant(mctx.gl(), new_value, Bits::from(false));
-        let is_z = builder.case_equals_constant(
-            mctx.gl(),
-            new_value,
-            Bits::new_high_impedance(SCALAR_VSIZE),
-        );
-        let delay = builder.select(mctx.gl(), is_z, to_z, to_x);
-        let delay = builder.select(mctx.gl(), is_zero, fall, delay);
-        Ok(builder.select(mctx.gl(), is_one, rise, delay))
+        Ok(select_gate_delay(
+            mctx, builder, rise, fall, turn_off, new_value,
+        ))
     }
+}
+
+/// The delay of the transition of a scalar gate output to `new_value`, given its `rise`, `fall`
+/// and `turn_off` delays.
+pub(crate) fn select_gate_delay(
+    mctx: &mut MutLowerContext<'_>,
+    builder: &mut BasicBlockBuilder,
+    rise: VariableKey,
+    fall: VariableKey,
+    turn_off: Option<VariableKey>,
+    new_value: VariableKey,
+) -> VariableKey {
+    // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 101 (Table 7-9)
+    //
+    // Transitions to 1 take the rise delay and transitions to 0 take the fall delay. Transitions
+    // to z take the turn-off delay, or the smaller of the rise and fall delay when there is none.
+    // Transitions to x take the smallest of all delays.
+    let min_rise_fall = builder.min(mctx.gl(), rise, fall);
+    let (to_z, to_x) = match turn_off {
+        None => (min_rise_fall, min_rise_fall),
+        Some(turn_off) => (turn_off, builder.min(mctx.gl(), min_rise_fall, turn_off)),
+    };
+
+    let is_one = builder.case_equals_constant(mctx.gl(), new_value, Bits::from(true));
+    let is_zero = builder.case_equals_constant(mctx.gl(), new_value, Bits::from(false));
+    let is_z =
+        builder.case_equals_constant(mctx.gl(), new_value, Bits::new_high_impedance(SCALAR_VSIZE));
+    let delay = builder.select(mctx.gl(), is_z, to_z, to_x);
+    let delay = builder.select(mctx.gl(), is_zero, fall, delay);
+    builder.select(mctx.gl(), is_one, rise, delay)
+}
+
+/// The delay of an output of `bit_length` bits of a gate in `scope`: constant if all of its delays
+/// are (see [`try_push_const_delays`]).
+fn gate_delay_kind<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext<'a>,
+    scope: SymbolId,
+    delay: GateDelay<'a>,
+    bit_length: VectorSize,
+) -> Result<DelayKind<'a>, ()> {
+    use DelayExpr as E;
+    let (ptr, span) = match delay {
+        GateDelay::Delay2(delay2) => {
+            let ptr = match &*delay2 {
+                Delay2::Value(value) => {
+                    try_push_const_delays(ctx, mctx, scope, &[E::Value(*value)])
+                }
+                Delay2::Tuple(delay, None) => {
+                    try_push_const_delays(ctx, mctx, scope, &[E::MinTypMax(*delay)])
+                }
+                Delay2::Tuple(rise, Some(fall)) => try_push_const_delays(
+                    ctx,
+                    mctx,
+                    scope,
+                    &[E::MinTypMax(*rise), E::MinTypMax(*fall)],
+                ),
+            }?;
+            (ptr, ctx.arenas.get_span(delay2))
+        }
+        GateDelay::Delay3(delay3) => (
+            try_push_delay3(ctx, mctx, scope, delay3)?,
+            ctx.arenas.get_span(delay3),
+        ),
+    };
+    let Some(delays) = ptr else {
+        return Ok(DelayKind::Gate {
+            delay,
+            scope,
+            time_scale: ctx.time_scale,
+        });
+    };
+    if delays.num_delays() > 1 && bit_length != SCALAR_VSIZE {
+        mctx.diagnostics
+            .not_yet_implemented(span, "rise and fall delays on non-scalar gate outputs");
+        return Err(());
+    }
+    Ok(DelayKind::ConstGate { delays, span })
+}
+
+/// Pushes the delays of `delay3` in `scope` if they are constant (see [`try_push_const_delays`]).
+pub(crate) fn try_push_delay3<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext<'a>,
+    scope: SymbolId,
+    delay3: AstId<'a, Delay3<'a>>,
+) -> Result<Option<DelayPtr>, ()> {
+    use DelayExpr as E;
+    let exprs: &[DelayExpr<'a>] = match &*delay3 {
+        Delay3::Value(value) => &[E::Value(*value)],
+        Delay3::Single(delay) => &[E::MinTypMax(*delay)],
+        Delay3::Double(rise, fall) => &[E::MinTypMax(*rise), E::MinTypMax(*fall)],
+        Delay3::Triple(rise, fall, turn_off) => &[
+            E::MinTypMax(*rise),
+            E::MinTypMax(*fall),
+            E::MinTypMax(*turn_off),
+        ],
+    };
+    try_push_const_delays(ctx, mctx, scope, exprs)
+}
+
+/// Lowers the constant delay `ptr` into `delays` of a scalar gate output for its transition to
+/// `new_value`. A single delay applies to every transition.
+pub(crate) fn lower_const_gate_delay(
+    mctx: &mut MutLowerContext<'_>,
+    builder: &mut BasicBlockBuilder,
+    delays: &[Time],
+    ptr: DelayPtr,
+    new_value: VariableKey,
+) -> VariableKey {
+    let mut reader = ptr.reader(delays);
+    let mut next = |mctx: &mut MutLowerContext<'_>, builder: &mut BasicBlockBuilder| {
+        builder.constant_u64(mctx.gl(), reader.get().0)
+    };
+    let rise = next(mctx, builder);
+    if ptr.num_delays() == 1 {
+        return rise;
+    }
+    let fall = next(mctx, builder);
+    let turn_off = (ptr.num_delays() == 3).then(|| next(mctx, builder));
+    select_gate_delay(mctx, builder, rise, fall, turn_off, new_value)
 }
 
 /// Assigns a value to the output of a [`lower_delay_process`].

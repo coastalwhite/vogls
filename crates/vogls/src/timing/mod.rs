@@ -568,7 +568,7 @@ pub fn lower_sdf<'a>(
     };
     // The paths are only collected here, the driver resolution puts them in front of their
     // outputs together with the module paths of the specify blocks.
-    let mut delay_values = std::mem::take(&mut mctx.driver_resolution.path_delays.delays);
+    let mut delay_values = std::mem::take(&mut mctx.driver_resolution.delays);
 
     // IEEE Std 1497-2001 (p. 16)
     //
@@ -770,7 +770,7 @@ pub fn lower_sdf<'a>(
         }
     }
 
-    mctx.driver_resolution.path_delays.delays = delay_values;
+    mctx.driver_resolution.delays = delay_values;
     if error {
         return Err(());
     }

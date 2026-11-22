@@ -1123,7 +1123,11 @@ impl<'a> DriverResolution<'a> {
             // driver, the expression or the gate. The input of a specify delay is an ordinary net,
             // which can have several drivers or be driven partially.
             if let DriveNode::Delay {
-                kind: DelayKind::Assign { .. } | DelayKind::Gate { .. },
+                kind:
+                    DelayKind::Assign { .. }
+                    | DelayKind::ConstAssign { .. }
+                    | DelayKind::Gate { .. }
+                    | DelayKind::ConstGate { .. },
                 bit_length,
                 ..
             } = self.nodes[n]
@@ -1181,8 +1185,12 @@ impl<'a> DriverResolution<'a> {
                 }
                 .to_string(),
                 DriveNode::Delay { kind, .. } => match kind {
-                    DelayKind::Assign { .. } => "assign delay".to_string(),
-                    DelayKind::Gate { .. } => "gate delay".to_string(),
+                    DelayKind::Assign { .. } | DelayKind::ConstAssign { .. } => {
+                        "assign delay".to_string()
+                    }
+                    DelayKind::Gate { .. } | DelayKind::ConstGate { .. } => {
+                        "gate delay".to_string()
+                    }
                     DelayKind::Specify(_) => "specify delay".to_string(),
                 },
             };

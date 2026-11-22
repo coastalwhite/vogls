@@ -13,6 +13,8 @@ use crate::lower::fuse::{
 use crate::lower::resolve_hident;
 use crate::lower::{LowerContext, MutLowerContext};
 
+use super::continuous_assign::assign_delay_kind;
+
 /// Lower a Verilog net assignment construct to Vogls IR.
 ///
 /// This only lowers the assignment part (which is equivalent to a continous assignment), as the nets/symbols are already defined during
@@ -116,11 +118,11 @@ fn assign_net<'a>(
 
     // A delayed assignment assigns the input of a delay in front of the destinations.
     if let Some(delay3) = delay3 {
+        let kind = assign_delay_kind(ctx, mctx, scope, delay3)?;
         let input = mctx.driver_resolution.push_delay(
             &mut mctx.gl,
             ctx.logic_mode,
-            delay3,
-            scope,
+            kind,
             &mctx.fuse_dsts_scratch,
             bit_length,
         );

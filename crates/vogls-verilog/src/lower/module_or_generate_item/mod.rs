@@ -16,10 +16,10 @@ mod module_instantiation;
 mod net_assignment;
 mod udp;
 
-pub(crate) use continuous_assign::lower_assign_delay3;
+pub(crate) use continuous_assign::{lower_assign_delay3, lower_const_assign_delay};
 pub(crate) use gate_instantiation::{
-    AssignOutputFn, GateDelayFn, lower_delay_process, lower_delay2, lower_delay3,
-    lower_gate_primitive,
+    AssignOutputFn, GateDelayFn, lower_const_gate_delay, lower_delay_process, lower_delay2,
+    lower_delay3, lower_gate_primitive,
 };
 
 /// Lower a Verilog module or generate item into the drive graph.
