@@ -1,0 +1,8 @@
+[T=1000] mid=0 out=0 late=x q=x
+[T=11000] mid=1 out=1 late=0 q=x
+[T=13000] mid=1 out=1 late=1 q=x
+[T=16000] mid=1 out=1 late=1 q=1
+[T=21000] mid=0 out=0 late=1 q=1
+[T=23000] mid=0 out=0 late=0 q=1
+[T=31000] mid=0 out=0 late=0 q=0
+[FINISH]

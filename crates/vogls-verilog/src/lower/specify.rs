@@ -480,6 +480,21 @@ impl PathDelays {
         self.group_paths.push((group, path));
     }
 
+    /// Whether every module path of the merged `delay` has a delay of zero in `delay_values`, so
+    /// that the delay only postpones its output by a delta cycle.
+    ///
+    /// An `ifnone` path next to an unconditional path between the same ports is an error that
+    /// `lower_specify_delay` reports, so such a delay is not zero.
+    pub fn is_zero(&self, delay: &SpecifyDelay, delay_values: &[Time]) -> bool {
+        self.inputs(delay).all(|(_, paths)| {
+            let has_ifnone = paths.iter().any(|path| path.condition.is_ifnone());
+            paths.iter().all(|path| {
+                path.delays.is_zero(delay_values)
+                    && !(has_ifnone && matches!(path.condition, CECondition::None))
+            })
+        })
+    }
+
     /// The inputs of the merged `delay`, each with its module paths to the output.
     pub fn inputs(
         &self,

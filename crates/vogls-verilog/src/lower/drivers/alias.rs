@@ -8,6 +8,7 @@
 //! | Neighbour Merge  | A[0] -> B[0], A[1] -> B[1] | A[1:0] -> B[1:0]     |
 //! | Cyclic           | A -> A                     |                      |
 //! | Subset Inversion | A -> B[0], C -> B[1]       | B[0] -> A, B[1] -> C |
+//! | Zero Delay       | A -> #0 -> B               | A -> B               |
 //!
 //! Afterwards, many nodes only have a single incoming edge. The driver of that edge is used as an
 //! alias for the node's signal. A process that is the only driver of some bits drives them
@@ -702,6 +703,7 @@ impl<'a> DriverResolution<'a> {
             round += 1;
 
             for &n in active {
+                self.zero_delay(gl, n, scratch, &mut reached_fixed_point);
                 // Transitive Transform
                 if !self.transitive(gl, n, scratch, &mut reached_fixed_point) {
                     continue;
@@ -809,6 +811,78 @@ impl<'a> DriverResolution<'a> {
         }
 
         true
+    }
+
+    /// `A -> #0 -> B` ~> `A -> B`
+    ///
+    /// An assign or gate delay whose constant delays are all zero only passes its input on, so its
+    /// drivers drive its outputs instead. The delay is left without edges, which keeps it from
+    /// being lowered.
+    ///
+    /// Like for the transitive transform, this skips the conversion to the mode of the input of the
+    /// delay, so it is only done if that is lossless.
+    fn zero_delay(
+        &mut self,
+        gl: &GlobalContext,
+        n: DriveNodeKey,
+        scratch: &mut AliasScratch,
+        reached_fixed_point: &mut bool,
+    ) {
+        let DriveNode::Delay {
+            kind: DelayKind::ConstAssign { delays, .. } | DelayKind::ConstGate { delays, .. },
+            input,
+            ..
+        } = self.nodes[n]
+        else {
+            return;
+        };
+        if !delays.is_zero(&self.delays) {
+            return;
+        }
+        // Without drivers, the delay passes on the initial value of its input.
+        if self.nodes[n].fst_in().is_none() || self.nodes[n].fst_read_out().is_some() {
+            return;
+        }
+
+        let AliasScratch { ins, outs, .. } = scratch;
+        self.collect_out(n, outs);
+        let is_two_value = gl.signals[input].mode.is_two_value();
+        if is_two_value
+            && outs.iter().any(|&e| {
+                self.nodes[self.edges[e].to]
+                    .drivee_signal()
+                    .is_some_and(|s| gl.signals[s].mode.is_four_value())
+            })
+        {
+            return;
+        }
+
+        // The incoming edges tile the input of the delay, so every bit of an outgoing edge has
+        // exactly one driver.
+        self.collect_in(n, ins);
+        for &oe in outs.iter() {
+            let (to, to_offset) = (self.edges[oe].to, self.edges[oe].to_offset);
+            let src = self.src_slice(oe);
+            for &ie in ins.iter() {
+                let Some(overlap) = self.dst_slice(ie).overlapping_slice(src) else {
+                    continue;
+                };
+                let edge = &self.edges[ie];
+                let (from, assignment) = (edge.from, edge.assignment);
+                let from_offset = edge.from_offset + (overlap.lsb() - edge.to_offset);
+                let e = self.push_edge(
+                    (from, from_offset),
+                    (to, to_offset + (overlap.lsb() - src.lsb())),
+                    overlap.width(),
+                );
+                self.edges[e].assignment = assignment;
+            }
+            self.remove_edge(oe);
+        }
+        for &ie in ins.iter() {
+            self.remove_edge(ie);
+        }
+        *reached_fixed_point = false;
     }
 
     /// `A -> A` ~> ``

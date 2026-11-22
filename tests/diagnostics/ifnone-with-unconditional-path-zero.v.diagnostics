@@ -1,0 +1,8 @@
+error: `ifnone` path combined with an unconditional path for the same module path
+   --> {path}:11
+  9 |     specify
+ 10 |         ifnone (a => out) = 0;
+ 11 >         (a => out) = 0;
+              ^^^^^^^^^^^^^^^
+ 12 |     endspecify
+ 13 | endmodule
