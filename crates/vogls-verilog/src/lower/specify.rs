@@ -3,8 +3,8 @@ use std::ops::Range;
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
-    Bits, ProcessBuilder, ProcessKind, SCALAR_VSIZE, Signal, SignalFlags, SignalKey, TIME_VSIZE,
-    Time, VariableKey,
+    BasicBlockBuilder, Bits, ProcessBuilder, ProcessKind, SCALAR_VSIZE, Signal, SignalFlags,
+    SignalKey, TIME_VSIZE, TemporalRegionKey, Time, VariableKey,
 };
 use vogls_utils::VgHashMap;
 
@@ -674,6 +674,20 @@ pub(crate) fn lower_specify_delay<'a>(
 ) -> Result<(), ()> {
     let conds = &path_delays.conds;
     let output = delay.output;
+    let num_inputs = path_delays.inputs(delay).count();
+
+    // The paths of most cells are a single unconditional path, which needs no conditions and no
+    // edges of the inputs.
+    if num_inputs == 1
+        && let Some((input, [path])) = path_delays.inputs(delay).next()
+        && matches!(
+            path.condition,
+            CECondition::None | CECondition::NoOtherCondition
+        )
+    {
+        lower_unconditional_path(mctx, delays, output, input, path.delays, proxy, drive);
+        return Ok(());
+    }
     let LowerIoPathScratches {
         mut input_before_lut,
         mut inputs_before,
@@ -725,20 +739,37 @@ pub(crate) fn lower_specify_delay<'a>(
 
         // active_time = max_{signal} last_update_time(signal)
         // is_active(s) = last_update_time(s) == active_time && active_time != 0xF..F
-        let mut active_time = builder.constant(mctx.gl(), Bits::from_u64(TIME_VSIZE, 1));
-        for (input, _) in path_delays.inputs(delay) {
+        //
+        // The last update time of an input that has not been updated is 0xF..F. With one input,
+        // this is `active_time = last_update_time(s)` and `is_active(s) = active_time != 0xF..F`.
+        // When no input is active, the active time does not matter, as there is no wait.
+        let (active_time, single_is_active) = if num_inputs == 1 {
+            let (input, _) = path_delays.inputs(delay).next().unwrap();
             let lupdt = builder.lupdt(mctx.gl(), input);
-            let lupdt = builder.plus_constant(mctx.gl(), lupdt, Bits::from_u64(TIME_VSIZE, 1));
-            active_time = builder.max(mctx.gl(), active_time, lupdt);
-        }
-        active_time = builder.minus_constant(mctx.gl(), active_time, Bits::from_u64(TIME_VSIZE, 1));
+            (lupdt, Some(is_updated(mctx, &mut builder, lupdt)))
+        } else {
+            let mut active_time = builder.constant(mctx.gl(), Bits::from_u64(TIME_VSIZE, 1));
+            for (input, _) in path_delays.inputs(delay) {
+                let lupdt = builder.lupdt(mctx.gl(), input);
+                let lupdt = builder.plus_constant(mctx.gl(), lupdt, Bits::from_u64(TIME_VSIZE, 1));
+                active_time = builder.max(mctx.gl(), active_time, lupdt);
+            }
+            let active_time =
+                builder.minus_constant(mctx.gl(), active_time, Bits::from_u64(TIME_VSIZE, 1));
+            (active_time, None)
+        };
 
         let mut endwait_time_set = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
         let mut endwait_time = builder.constant(mctx.gl(), Bits::new_ones(TIME_VSIZE));
 
         for (input, paths) in path_delays.inputs(delay) {
-            let lupdt = builder.lupdt(mctx.gl(), input);
-            let is_active = builder.case_equals(mctx.gl(), lupdt, active_time);
+            let is_active = match single_is_active {
+                Some(is_active) => is_active,
+                None => {
+                    let lupdt = builder.lupdt(mctx.gl(), input);
+                    builder.case_equals(mctx.gl(), lupdt, active_time)
+                }
+            };
 
             let mut new_endwait_time_set = Some(endwait_time_set);
             let mut new_wait_time = endwait_time;
@@ -879,43 +910,154 @@ pub(crate) fn lower_specify_delay<'a>(
         let wait_time = builder.minus(mctx.gl(), endwait_time, active_offset);
         let wait_time = builder.select(mctx.gl(), endwait_time_set, wait_time, zero);
 
-        let old_proxy_value = builder.probe(mctx.gl(), proxy);
-        let old_proxy_value =
-            builder.select_bit_constant(mctx.gl(), old_proxy_value, output_bitidx);
-        let mut flags = SignalFlags::EMPTY;
-        flags.set(SignalFlags::POKE_T0, old_proxy_value.mode().is_two_value());
-        let old_proxy_signal = mctx.gl.signals.insert(Signal {
-            name: format!("SPECIFY_OLD_PROXY/{}", mctx.gl.signals.len()),
-            size: mctx.gl.vars.size(old_proxy_value),
-            initialize: None,
-            flags,
-            origin: TokenRange::default(),
-            mode: old_proxy_value.mode(),
-        });
-        builder.drive(mctx.gl(), old_proxy_signal, old_proxy_value);
-        for (input, _, signal) in inputs_before.iter_mut() {
-            let new_value = builder.probe(mctx.gl(), *input);
-            builder.drive(mctx.gl(), *signal, new_value);
-        }
-
-        let after_tr = proc_builder.next_temporal_region(mctx.gl());
-        builder.variable_wait_to(mctx.gl(), wait_time, after_tr);
-        builder.finished_switch_to(mctx.gl(), after_tr.entry());
-
-        // do ... while(...);
-        let new_proxy_value = builder.probe(mctx.gl(), proxy);
-        let new_proxy_value =
-            builder.select_bit_constant(mctx.gl(), new_proxy_value, output_bitidx);
-        let old_proxy_value = builder.probe(mctx.gl(), old_proxy_signal);
-        let do_while_condition = builder.case_equals(mctx.gl(), old_proxy_value, new_proxy_value);
-        let mut false_builder;
-        (builder, false_builder) = builder.double_branch(mctx.gl(), do_while_condition);
-        false_builder.temporal_jump_to(mctx.gl(), wait_loop_tr);
-
-        drive(mctx, &mut builder, output_bitidx, new_proxy_value);
-        builder.watch_to(mctx.gl(), vec![proxy], wait_loop_tr);
-        proc_builder.finalize(mctx.gl());
+        wait_and_drive(
+            mctx,
+            proc_builder,
+            builder,
+            SpecifyBit {
+                proxy,
+                output_bitidx,
+                wait_loop_tr,
+                drive,
+            },
+            wait_time,
+            &inputs_before,
+        );
     }
 
     Ok(())
+}
+
+/// Lowers the module path delays of `output` that are a single unconditional path from `input` to
+/// one process per bit of `output`, which drives the value of that bit of `proxy` with `drive`
+/// after the path delay `path_delays`.
+///
+/// This is what [`lower_specify_delay`] lowers such paths to, without the conditions and edges
+/// that do not apply: the path is always active once `input` has been updated, and it applies
+/// right away before that.
+fn lower_unconditional_path<'a>(
+    mctx: &mut MutLowerContext<'a>,
+    delays: &[Time],
+    output: SignalKey,
+    input: SignalKey,
+    path_delays: DelayPtr,
+    proxy: SignalKey,
+    drive: &DriveOutputFn<'a, '_>,
+) {
+    for output_bitidx in 0..mctx.gl.signals[output].size.get() {
+        let (mut proc_builder, mut builder) =
+            ProcessBuilder::new(mctx.gl(), ProcessKind::Specify, TokenRange::default());
+        let wait_loop_tr = proc_builder.next_temporal_region(mctx.gl());
+        builder.temporal_jump_to(mctx.gl(), wait_loop_tr);
+        builder.finished_switch_to(mctx.gl(), wait_loop_tr.entry());
+
+        // wait_time = is_updated(input)
+        //     ? delay.saturating_sub(time - last_update_time(input))
+        //     : 0
+        let lupdt = builder.lupdt(mctx.gl(), input);
+        let is_active = is_updated(mctx, &mut builder, lupdt);
+        let delay = path_delays.calculate(
+            delays,
+            mctx.gl(),
+            &mut builder,
+            output,
+            proxy,
+            output_bitidx,
+        );
+        let time = builder.time(mctx.gl());
+        let elapsed = builder.minus(mctx.gl(), time, lupdt);
+        let elapsed = builder.min(mctx.gl(), elapsed, delay);
+        let wait_time = builder.minus(mctx.gl(), delay, elapsed);
+        let zero = builder.constant_u64(mctx.gl(), 0);
+        let wait_time = builder.select(mctx.gl(), is_active, wait_time, zero);
+
+        wait_and_drive(
+            mctx,
+            proc_builder,
+            builder,
+            SpecifyBit {
+                proxy,
+                output_bitidx,
+                wait_loop_tr,
+                drive,
+            },
+            wait_time,
+            &[],
+        );
+    }
+}
+
+/// What the process of one bit of the output of a [`SpecifyDelay`] drives.
+struct SpecifyBit<'d, 'a, 'f> {
+    proxy: SignalKey,
+    output_bitidx: u32,
+    /// The temporal region that waits for the next change of `proxy`, where the process restarts.
+    wait_loop_tr: TemporalRegionKey,
+    drive: &'d DriveOutputFn<'a, 'f>,
+}
+
+/// Whether the last update time `lupdt` of an input is that of an update, as opposed to 0xF..F
+/// for an input that has not been updated.
+fn is_updated(
+    mctx: &mut MutLowerContext<'_>,
+    builder: &mut BasicBlockBuilder,
+    lupdt: VariableKey,
+) -> VariableKey {
+    builder.not_case_equals_constant(mctx.gl(), lupdt, Bits::new_ones(TIME_VSIZE))
+}
+
+/// Finishes the process of one bit of the output of a [`SpecifyDelay`]: waits for `wait_time` and
+/// drives the value of the bit of the proxy, unless the bit changes in the meantime, in which case
+/// the delay is determined again.
+///
+/// `inputs_before` holds the signals that keep the values of the inputs of the edge-sensitive
+/// paths before their last change, which are updated before waiting.
+fn wait_and_drive<'a>(
+    mctx: &mut MutLowerContext<'a>,
+    mut proc_builder: ProcessBuilder,
+    mut builder: BasicBlockBuilder,
+    bit: SpecifyBit<'_, 'a, '_>,
+    wait_time: VariableKey,
+    inputs_before: &[(SignalKey, VariableKey, SignalKey)],
+) {
+    let SpecifyBit {
+        proxy,
+        output_bitidx,
+        wait_loop_tr,
+        drive,
+    } = bit;
+    let old_proxy_value = builder.probe(mctx.gl(), proxy);
+    let old_proxy_value = builder.select_bit_constant(mctx.gl(), old_proxy_value, output_bitidx);
+    let mut flags = SignalFlags::EMPTY;
+    flags.set(SignalFlags::POKE_T0, old_proxy_value.mode().is_two_value());
+    let old_proxy_signal = mctx.gl.signals.insert(Signal {
+        name: format!("SPECIFY_OLD_PROXY/{}", mctx.gl.signals.len()),
+        size: mctx.gl.vars.size(old_proxy_value),
+        initialize: None,
+        flags,
+        origin: TokenRange::default(),
+        mode: old_proxy_value.mode(),
+    });
+    builder.drive(mctx.gl(), old_proxy_signal, old_proxy_value);
+    for &(input, _, signal) in inputs_before {
+        let new_value = builder.probe(mctx.gl(), input);
+        builder.drive(mctx.gl(), signal, new_value);
+    }
+
+    let after_tr = proc_builder.next_temporal_region(mctx.gl());
+    builder.variable_wait_to(mctx.gl(), wait_time, after_tr);
+    builder.finished_switch_to(mctx.gl(), after_tr.entry());
+
+    // do ... while(...);
+    let new_proxy_value = builder.probe(mctx.gl(), proxy);
+    let new_proxy_value = builder.select_bit_constant(mctx.gl(), new_proxy_value, output_bitidx);
+    let old_proxy_value = builder.probe(mctx.gl(), old_proxy_signal);
+    let do_while_condition = builder.case_equals(mctx.gl(), old_proxy_value, new_proxy_value);
+    let mut false_builder;
+    (builder, false_builder) = builder.double_branch(mctx.gl(), do_while_condition);
+    false_builder.temporal_jump_to(mctx.gl(), wait_loop_tr);
+
+    drive(mctx, &mut builder, output_bitidx, new_proxy_value);
+    builder.watch_to(mctx.gl(), vec![proxy], wait_loop_tr);
+    proc_builder.finalize(mctx.gl());
 }
