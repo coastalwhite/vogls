@@ -62,6 +62,15 @@ impl DelayPtr {
         self.num_triples() as usize * 2 + self.num_delays()
     }
 
+    /// Whether every delay that this pointer names in `delays` is zero, including the `min` and
+    /// `max` of a `min:typ:max`, so that it stays zero whichever of them is taken.
+    pub fn is_zero(self, delays: &[Time]) -> bool {
+        let start = self.offset() as usize;
+        delays[start..start + self.total_num_entries()]
+            .iter()
+            .all(|delay| delay.0 == 0)
+    }
+
     pub fn offset(self) -> u64 {
         self.0 >> 15
     }

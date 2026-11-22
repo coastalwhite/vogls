@@ -1081,10 +1081,15 @@ impl<'a> DriverResolution<'a> {
     ///     +--> O    ===>        +--> D(P) ~~> O
     /// B --+                 B --+
     /// ```
+    ///
+    /// With `optimize`, an output whose path delays are all zero is left as it is, as its delay
+    /// would only postpone it by a delta cycle (see [`PathDelays::is_zero`]). Most of these come
+    /// from SDF `INTERCONNECT`s without a delay.
     fn insert_path_delays(
         &mut self,
         ctx: &mut LowerContext<'a, '_>,
         mctx: &mut MutLowerContext<'a>,
+        optimize: bool,
     ) {
         if self.path_delays.is_empty() {
             return;
@@ -1101,6 +1106,9 @@ impl<'a> DriverResolution<'a> {
             ));
         }
         for (sid, specify) in merged {
+            if optimize && self.path_delays.is_zero(&specify, &self.delays) {
+                continue;
+            }
             let output = specify.output;
             let mut proxy = mctx.gl.signals[output].clone();
             proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
@@ -1754,7 +1762,7 @@ impl<'a> DriverResolution<'a> {
         mctx: &mut MutLowerContext<'a>,
         options: FinalizeOptions<'_>,
     ) -> Result<ResolvedDrivers<'a>, ()> {
-        self.insert_path_delays(ctx, mctx);
+        self.insert_path_delays(ctx, mctx, options.optimize);
         let mut error = self.push_reads(ctx, mctx).is_err();
 
         if self.has_uwires {
@@ -2075,6 +2083,10 @@ impl<'a> DriverResolution<'a> {
                 continue;
             };
             let (kind, input, bit_length) = (kind.clone(), *input, *bit_length);
+            // A delay without outputs, e.g. one of zero that is bypassed, has no effect.
+            if self.nodes[node].fst_out().is_none() {
+                continue;
+            }
 
             let targets = self.output_targets(&mut mctx.gl, ctx.logic_mode, node, "::DELAY");
             let drive = |mctx: &mut MutLowerContext<'a>,
@@ -2520,7 +2532,8 @@ impl ResolvedDrivers<'_> {
         };
         rewrite::apply_fuse_maps(gl, &this.probe_fuse, &this.write_fuse, is_variable);
 
-        // The input of a delay that is aliased is no longer referenced.
+        // The input of a delay that is aliased or that has no outputs, i.e. is not lowered, is no
+        // longer referenced.
         for node in this.nodes.iter() {
             if let DriveNode::Delay {
                 kind:
@@ -2531,7 +2544,7 @@ impl ResolvedDrivers<'_> {
                 input,
                 ..
             } = node
-                && this.probe_fuse.contains_key(input)
+                && (this.probe_fuse.contains_key(input) || node.fst_out().is_none())
             {
                 gl.signals.remove(*input);
             }
