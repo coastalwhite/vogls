@@ -1,3 +1,4 @@
+use std::ops::Range;
 
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
@@ -88,13 +89,6 @@ impl CECondition {
             _ => None,
         }
     }
-}
-
-#[derive(Clone)]
-pub struct SpecifyOutput {
-    pub sid: SymbolId,
-    pub inputs: VgHashMap<SignalKey, usize>,
-    pub paths: Vec<(SignalKey, Vec<SpecifyPath>)>,
 }
 
 #[derive(Clone)]
@@ -368,7 +362,6 @@ pub fn lower_specify<'a>(
                 };
                 condexpr_scratch = builder.take_scratch();
                 mctx.driver_resolution.path_delays.push_specify(
-                    scope,
                     output_sid,
                     output,
                     input,
@@ -388,11 +381,22 @@ pub fn lower_specify<'a>(
     Ok(())
 }
 
-/// The module path delays of `output`. The delays and conditions of the paths of `specify` point
-/// into [`PathDelays::delays`] and [`PathDelays::conds`].
+/// An index of an output in `PathDelays::outputs`.
+type OutputIdx = u64;
+/// An index of the module paths from an input to an output in `PathDelays::groups`.
+type GroupIdx = u64;
+/// An index of an input of an output in `PathDelays::inputs`.
+pub type InputIdx = u64;
+/// An index of a module path in `PathDelays::paths`.
+type PathIdx = u64;
+
+/// The module path delays of `output`, whose inputs and paths are in a [`PathDelays`] (see
+/// [`PathDelays::inputs`]).
+#[derive(Clone)]
 pub struct SpecifyDelay {
     pub output: SignalKey,
-    pub specify: SpecifyOutput,
+    /// The range of the inputs of `output` in `PathDelays::inputs`.
+    pub inputs: Range<InputIdx>,
 }
 
 /// The condition under which an SDF delay applies.
@@ -424,53 +428,73 @@ struct SdfPath {
 pub struct PathDelays {
     /// The delay values that every [`DelayPtr`] of the paths points into.
     pub delays: Vec<Time>,
-    /// The index of the module paths of each output in `specify`.
-    specify_lut: VgHashMap<SignalKey, usize>,
-    /// The module paths of specify blocks per output, with the module instance they are in.
-    specify: Vec<(SymbolId, SignalKey, SpecifyOutput)>,
-    /// The SDF delays, in the order they are read: a later delay overrides an earlier one.
-    sdf: Vec<SdfPath>,
     /// The operands of the conditions of the module paths and the SDF delays.
     pub conds: CondExprs,
+
+    /// Each output with module paths, with its symbol, in the order it is first seen.
+    outputs: Vec<(SignalKey, SymbolId)>,
+    /// The index of each output in `outputs`.
+    output_lut: VgHashMap<SignalKey, OutputIdx>,
+    /// The output and input of each group of module paths between them, in the order they are
+    /// first seen.
+    groups: Vec<(OutputIdx, SignalKey)>,
+    /// The index in `groups` of each `(output, input)`.
+    group_lut: VgHashMap<(SignalKey, SignalKey), GroupIdx>,
+    /// The module paths with their group, in the order they are added.
+    group_paths: Vec<(GroupIdx, SpecifyPath)>,
+    /// The SDF delays, in the order they are read: a later delay overrides an earlier one.
+    sdf: Vec<SdfPath>,
+
+    /// Each input of the merged outputs, with the range of its module paths in `paths`. The inputs
+    /// of an output are contiguous (see [`SpecifyDelay::inputs`]).
+    inputs: Vec<(SignalKey, Range<PathIdx>)>,
+    /// The merged module paths, where the paths of an input are contiguous.
+    paths: Vec<SpecifyPath>,
 }
 
 impl PathDelays {
     pub fn is_empty(&self) -> bool {
-        self.specify.is_empty() && self.sdf.is_empty()
+        self.groups.is_empty() && self.sdf.is_empty()
     }
 
-    /// The index in `specify` of the module paths of `output`, which are added if there are none.
-    fn output_paths(&mut self, scope: SymbolId, output_sid: SymbolId, output: SignalKey) -> usize {
-        *self.specify_lut.entry(output).or_insert_with(|| {
-            self.specify.push((
-                scope,
-                output,
-                SpecifyOutput {
-                    sid: output_sid,
-                    inputs: Default::default(),
-                    paths: Default::default(),
-                },
-            ));
-            self.specify.len() - 1
+    /// The index in `groups` of the module paths from `input` to `output`, which are added if
+    /// there are none.
+    fn group(&mut self, output_sid: SymbolId, output: SignalKey, input: SignalKey) -> GroupIdx {
+        let output_idx = *self.output_lut.entry(output).or_insert_with(|| {
+            self.outputs.push((output, output_sid));
+            (self.outputs.len() - 1) as OutputIdx
+        });
+        *self.group_lut.entry((output, input)).or_insert_with(|| {
+            self.groups.push((output_idx, input));
+            (self.groups.len() - 1) as GroupIdx
         })
     }
 
-    /// Adds the module path `path` from `input` to `output` of a specify block in `scope`.
+    /// Adds the module path `path` from `input` to `output` of a specify block.
     pub fn push_specify(
         &mut self,
-        scope: SymbolId,
         output_sid: SymbolId,
         output: SignalKey,
         input: SignalKey,
         path: SpecifyPath,
     ) {
-        let idx = self.output_paths(scope, output_sid, output);
-        let out = &mut self.specify[idx].2;
-        let idx = *out.inputs.entry(input).or_insert_with(|| {
-            out.paths.push((input, Vec::new()));
-            out.paths.len() - 1
-        });
-        out.paths[idx].1.push(path);
+        let group = self.group(output_sid, output, input);
+        self.group_paths.push((group, path));
+    }
+
+    /// The inputs of the merged `delay`, each with its module paths to the output.
+    pub fn inputs(
+        &self,
+        delay: &SpecifyDelay,
+    ) -> impl Iterator<Item = (SignalKey, &[SpecifyPath])> + '_ {
+        self.inputs[delay.inputs.start as usize..delay.inputs.end as usize]
+            .iter()
+            .map(|(input, paths)| {
+                (
+                    *input,
+                    &self.paths[paths.start as usize..paths.end as usize],
+                )
+            })
     }
 
     /// Adds an SDF delay from `from` to `to`, whose values `delays` points into
@@ -492,9 +516,9 @@ impl PathDelays {
         });
     }
 
-    /// Takes the path delays of every output, where the SDF delays annotate the module paths of
-    /// the specify blocks. Their delays and conditions stay in [`Self::delays`] and
-    /// [`Self::conds`], which they are lowered with (see [`lower_specify_delay`]).
+    /// Takes the path delays of every output with its symbol, where the SDF delays annotate the
+    /// module paths of the specify blocks. Their inputs, paths, delays and conditions stay in
+    /// `self`, which they are lowered with (see `lower_specify_delay`).
     ///
     /// IEEE Std 1364-2005, 16.2.1: an `IOPATH` without an edge or condition annotates every module
     /// path between its ports, whatever its edge or condition. An SDF delay without such module
@@ -503,77 +527,116 @@ impl PathDelays {
     ///
     /// Also returns the number of `COND` and `CONDELSE` delays that annotate no module path, which
     /// are ignored.
-    pub fn take_merged(&mut self) -> (Vec<SpecifyDelay>, usize) {
-        let mut num_unmatched = 0;
-        let mut eq_scratch = Vec::new();
-        for SdfPath {
-            from,
-            to,
-            to_sid,
-            condition,
-            delays,
-        } in std::mem::take(&mut self.sdf)
-        {
-            if !matches!(condition, SdfCondition::None) {
-                // A conditional delay can only annotate an existing module path.
-                let paths = self
-                    .specify_lut
-                    .get(&to)
-                    .map(|&idx| &mut self.specify[idx].2)
-                    .and_then(|out| {
-                        let idx = *out.inputs.get(&from)?;
-                        Some(&mut out.paths[idx].1)
-                    });
-                let mut is_matched = false;
-                for path in paths.into_iter().flatten() {
-                    let matches = match &condition {
-                        SdfCondition::None => unreachable!(),
-                        SdfCondition::Cond(cond) => {
-                            path.condition.expr().zip(*cond).is_some_and(|(a, b)| {
-                                self.conds.exprs_cmp(&mut eq_scratch, a, b).is_eq()
-                            })
-                        }
-                        SdfCondition::Else => path.condition.is_ifnone(),
-                    };
-                    if matches {
-                        path.delays = delays.overlay(Some(path.delays), &mut self.delays);
-                        is_matched = true;
-                    }
-                }
-                num_unmatched += usize::from(!is_matched);
+    pub fn take_merged(&mut self) -> (Vec<(SymbolId, SpecifyDelay)>, usize) {
+        // An SDF delay without module paths between its ports becomes an unconditional path, which
+        // no `COND` or `CONDELSE` annotates. So only the unconditional delays after the one that
+        // adds it annotate it, and these paths are added before the module paths are laid out,
+        // without changing how they are annotated.
+        let sdf = std::mem::take(&mut self.sdf);
+        let mut is_added = vec![false; sdf.len()];
+        for (sdf, is_added) in sdf.iter().zip(&mut is_added) {
+            let SdfPath {
+                from,
+                to,
+                to_sid,
+                condition: SdfCondition::None,
+                delays,
+            } = *sdf
+            else {
+                continue;
+            };
+            if self.group_lut.contains_key(&(to, from)) {
                 continue;
             }
+            let delays = delays.overlay(None, &mut self.delays);
+            let group = self.group(to_sid, to, from);
+            self.group_paths.push((
+                group,
+                SpecifyPath {
+                    condition: CECondition::None,
+                    delays,
+                    span: TokenRange::default(),
+                },
+            ));
+            *is_added = true;
+        }
 
-            let idx = self.output_paths(to_sid, to_sid, to);
-            let out = &mut self.specify[idx].2;
-            let delay_values = &mut self.delays;
-            match out.inputs.get(&from) {
-                Some(&idx) => out.paths[idx]
-                    .1
-                    .iter_mut()
-                    .for_each(|path| path.delays = delays.overlay(Some(path.delays), delay_values)),
-                None => {
-                    let delays = delays.overlay(None, delay_values);
-                    out.inputs.insert(from, out.paths.len());
-                    out.paths.push((
-                        from,
-                        vec![SpecifyPath {
-                            condition: CECondition::None,
-                            delays,
-                            span: TokenRange::default(),
-                        }],
-                    ));
+        // Lay out the inputs of each output and the paths of each input contiguously. The sort is
+        // stable and the groups are numbered in the order they are first seen, so the outputs, the
+        // inputs of an output and the paths of an input keep the order they are added in.
+        let mut group_paths = std::mem::take(&mut self.group_paths);
+        let groups = &self.groups;
+        group_paths.sort_by_key(|&(group, _)| (groups[group as usize].0, group));
+        let mut group_inputs = vec![InputIdx::MAX; self.groups.len()];
+        let mut output_inputs = vec![0..0; self.outputs.len()];
+        self.paths.reserve(group_paths.len());
+        for (group, path) in group_paths {
+            let group_input = &mut group_inputs[group as usize];
+            if *group_input == InputIdx::MAX {
+                let (output, input) = self.groups[group as usize];
+                *group_input = self.inputs.len() as InputIdx;
+                let inputs: &mut Range<InputIdx> = &mut output_inputs[output as usize];
+                if inputs.is_empty() {
+                    *inputs = *group_input..*group_input;
                 }
+                inputs.end += 1;
+                let paths_start = self.paths.len() as PathIdx;
+                self.inputs.push((input, paths_start..paths_start));
+            }
+            self.paths.push(path);
+            self.inputs.last_mut().unwrap().1.end += 1;
+        }
+
+        let mut num_unmatched = 0;
+        let mut eq_scratch = Vec::new();
+        for (sdf, is_added) in sdf.into_iter().zip(is_added) {
+            if is_added {
+                continue;
+            }
+            let SdfPath {
+                from,
+                to,
+                condition,
+                delays,
+                ..
+            } = sdf;
+            let paths = self.group_lut.get(&(to, from)).map(|&group| {
+                let input = group_inputs[group as usize] as usize;
+                let paths = self.inputs[input].1.clone();
+                &mut self.paths[paths.start as usize..paths.end as usize]
+            });
+            debug_assert!(
+                paths.is_some() || !matches!(condition, SdfCondition::None),
+                "an unconditional SDF delay has module paths"
+            );
+            let mut is_matched = false;
+            for path in paths.into_iter().flatten() {
+                let matches = match &condition {
+                    SdfCondition::None => true,
+                    SdfCondition::Cond(cond) => {
+                        path.condition.expr().zip(*cond).is_some_and(|(a, b)| {
+                            self.conds.exprs_cmp(&mut eq_scratch, a, b).is_eq()
+                        })
+                    }
+                    SdfCondition::Else => path.condition.is_ifnone(),
+                };
+                if matches {
+                    path.delays = delays.overlay(Some(path.delays), &mut self.delays);
+                    is_matched = true;
+                }
+            }
+            if !matches!(condition, SdfCondition::None) {
+                num_unmatched += usize::from(!is_matched);
             }
         }
 
-        self.specify_lut.clear();
-        let merged = std::mem::take(&mut self.specify)
+        self.output_lut.clear();
+        self.groups.clear();
+        self.group_lut.clear();
+        let merged = std::mem::take(&mut self.outputs)
             .into_iter()
-            .map(|(_, output, specify)| SpecifyDelay {
-                output,
-                specify,
-            })
+            .zip(output_inputs)
+            .map(|((output, sid), inputs)| (sid, SpecifyDelay { output, inputs }))
             .collect();
         (merged, num_unmatched)
     }
@@ -582,7 +645,7 @@ impl PathDelays {
 /// Lowers the module path delays of `delay` to one process per bit of its output, which drives the
 /// value of that bit of `proxy` with `drive` after the delay of the path that applies.
 ///
-/// `path_delays` holds the delays and conditions that the paths of `delay` point into (see
+/// `path_delays` holds the inputs, paths, delays and conditions of `delay` (see
 /// [`PathDelays::take_merged`]).
 pub(crate) fn lower_specify_delay<'a>(
     mctx: &mut MutLowerContext<'a>,
@@ -591,12 +654,8 @@ pub(crate) fn lower_specify_delay<'a>(
     proxy: SignalKey,
     drive: &DriveOutputFn<'a, '_>,
 ) -> Result<(), ()> {
-    let SpecifyDelay {
-        output,
-        specify,
-    } = delay;
     let PathDelays { delays, conds, .. } = path_delays;
-    let output = *output;
+    let output = delay.output;
     let LowerIoPathScratches {
         mut input_before_lut,
         mut inputs_before,
@@ -613,10 +672,10 @@ pub(crate) fn lower_specify_delay<'a>(
 
         // @Correctness: This might need something like. `Initial Value of Signal X`. I think
         // this is incorrect if the event does not get triggered first.
-        for (input, paths) in &specify.paths {
+        for (input, paths) in path_delays.inputs(delay) {
             for path in paths {
                 if path.condition.is_posedge() || path.condition.is_negedge() {
-                    let Signal { size, mode, .. } = &mctx.gl.signals[*input];
+                    let Signal { size, mode, .. } = &mctx.gl.signals[input];
                     let (size, mode) = (*size, *mode);
                     let mut flags = SignalFlags::EMPTY;
                     flags.set(SignalFlags::POKE_T0, mode.is_two_value());
@@ -628,11 +687,11 @@ pub(crate) fn lower_specify_delay<'a>(
                         origin: TokenRange::default(),
                         mode,
                     });
-                    let before = builder.probe(mctx.gl(), *input);
+                    let before = builder.probe(mctx.gl(), input);
                     builder.drive(mctx.gl(), signal, before);
                     let idx = inputs_before.len();
-                    input_before_lut.insert(*input, idx);
-                    inputs_before.push((*input, before, signal));
+                    input_before_lut.insert(input, idx);
+                    inputs_before.push((input, before, signal));
                     break;
                 }
             }
@@ -649,8 +708,8 @@ pub(crate) fn lower_specify_delay<'a>(
         // active_time = max_{signal} last_update_time(signal)
         // is_active(s) = last_update_time(s) == active_time && active_time != 0xF..F
         let mut active_time = builder.constant(mctx.gl(), Bits::from_u64(TIME_VSIZE, 1));
-        for (input, _) in &specify.paths {
-            let lupdt = builder.lupdt(mctx.gl(), *input);
+        for (input, _) in path_delays.inputs(delay) {
+            let lupdt = builder.lupdt(mctx.gl(), input);
             let lupdt = builder.plus_constant(mctx.gl(), lupdt, Bits::from_u64(TIME_VSIZE, 1));
             active_time = builder.max(mctx.gl(), active_time, lupdt);
         }
@@ -659,8 +718,8 @@ pub(crate) fn lower_specify_delay<'a>(
         let mut endwait_time_set = builder.constant(mctx.gl(), Bits::new_zeroed(SCALAR_VSIZE));
         let mut endwait_time = builder.constant(mctx.gl(), Bits::new_ones(TIME_VSIZE));
 
-        for (input, paths) in &specify.paths {
-            let lupdt = builder.lupdt(mctx.gl(), *input);
+        for (input, paths) in path_delays.inputs(delay) {
+            let lupdt = builder.lupdt(mctx.gl(), input);
             let is_active = builder.case_equals(mctx.gl(), lupdt, active_time);
 
             let mut new_endwait_time_set = Some(endwait_time_set);
@@ -672,8 +731,8 @@ pub(crate) fn lower_specify_delay<'a>(
             for path in paths {
                 let mut condition = None;
                 if path.condition.is_posedge() || path.condition.is_negedge() {
-                    let before = inputs_before[input_before_lut[input]].1;
-                    let after = builder.probe(mctx.gl(), *input);
+                    let before = inputs_before[input_before_lut[&input]].1;
+                    let after = builder.probe(mctx.gl(), input);
                     let edge = if path.condition.is_posedge() {
                         builder.posedge(mctx.gl(), before, after)
                     } else {

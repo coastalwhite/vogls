@@ -39,7 +39,6 @@ use super::*;
 use crate::ast::AstIdRange;
 use crate::ast::statement::DelayValue;
 use crate::lower::Diagnostics;
-use crate::lower::specify::SpecifyOutput;
 
 // -------------------------------------------------------------------------------------------------
 // Specification
@@ -407,14 +406,10 @@ fn build<'a>(spec: &GraphSpec, ast: &Ast<'a>) -> (DriverResolution<'a>, GlobalCo
                         delay3: ast.delay3,
                         scope: ast.scope,
                     },
-                    _ => DelayKind::Specify(Arc::new(SpecifyDelay {
+                    _ => DelayKind::Specify(SpecifyDelay {
                         output: input,
-                        specify: SpecifyOutput {
-                            sid: ast.scope,
-                            inputs: VgHashMap::default(),
-                            paths: Vec::new(),
-                        },
-                    })),
+                        inputs: 0..0,
+                    }),
                 };
                 let key = dr.nodes.insert(DriveNode::Delay {
                     kind,
