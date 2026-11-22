@@ -2120,7 +2120,9 @@ impl<'a> DriverResolution<'a> {
                         bit_length,
                     )
                 }
-                DelayKind::Specify(specify) => lower_specify_delay(mctx, &specify, input, &drive),
+                DelayKind::Specify(specify) => {
+                    lower_specify_delay(mctx, &self.path_delays, &specify, input, &drive)
+                }
             };
             error |= res.is_err();
         }

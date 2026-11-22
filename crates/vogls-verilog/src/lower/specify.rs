@@ -1,4 +1,3 @@
-use std::sync::Arc;
 
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
@@ -389,14 +388,11 @@ pub fn lower_specify<'a>(
     Ok(())
 }
 
-/// The module path delays of `output`, whose `delays` the paths of `specify` point into.
+/// The module path delays of `output`. The delays and conditions of the paths of `specify` point
+/// into [`PathDelays::delays`] and [`PathDelays::conds`].
 pub struct SpecifyDelay {
-    pub scope: SymbolId,
     pub output: SignalKey,
     pub specify: SpecifyOutput,
-    pub delays: Arc<[Time]>,
-    /// The conditions that the paths of `specify` are lowered from.
-    pub conds: Arc<CondExprs>,
 }
 
 /// The condition under which an SDF delay applies.
@@ -497,7 +493,8 @@ impl PathDelays {
     }
 
     /// Takes the path delays of every output, where the SDF delays annotate the module paths of
-    /// the specify blocks.
+    /// the specify blocks. Their delays and conditions stay in [`Self::delays`] and
+    /// [`Self::conds`], which they are lowered with (see [`lower_specify_delay`]).
     ///
     /// IEEE Std 1364-2005, 16.2.1: an `IOPATH` without an edge or condition annotates every module
     /// path between its ports, whatever its edge or condition. An SDF delay without such module
@@ -570,17 +567,12 @@ impl PathDelays {
             }
         }
 
-        let delays = Arc::<[Time]>::from(std::mem::take(&mut self.delays));
-        let conds = Arc::new(std::mem::take(&mut self.conds));
         self.specify_lut.clear();
         let merged = std::mem::take(&mut self.specify)
             .into_iter()
-            .map(|(scope, output, specify)| SpecifyDelay {
-                scope,
+            .map(|(_, output, specify)| SpecifyDelay {
                 output,
                 specify,
-                delays: delays.clone(),
-                conds: conds.clone(),
             })
             .collect();
         (merged, num_unmatched)
@@ -589,19 +581,21 @@ impl PathDelays {
 
 /// Lowers the module path delays of `delay` to one process per bit of its output, which drives the
 /// value of that bit of `proxy` with `drive` after the delay of the path that applies.
+///
+/// `path_delays` holds the delays and conditions that the paths of `delay` point into (see
+/// [`PathDelays::take_merged`]).
 pub(crate) fn lower_specify_delay<'a>(
     mctx: &mut MutLowerContext<'a>,
+    path_delays: &PathDelays,
     delay: &SpecifyDelay,
     proxy: SignalKey,
     drive: &DriveOutputFn<'a, '_>,
 ) -> Result<(), ()> {
     let SpecifyDelay {
-        scope: _,
         output,
         specify,
-        delays,
-        conds,
     } = delay;
+    let PathDelays { delays, conds, .. } = path_delays;
     let output = *output;
     let LowerIoPathScratches {
         mut input_before_lut,
