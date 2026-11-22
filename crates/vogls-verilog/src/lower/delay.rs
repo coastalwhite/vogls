@@ -7,12 +7,18 @@
 //! - Signed integers sign extend to i64 and are reinterpreted as u64.
 //! - Integers containing `x` and `z` become zero.
 
+use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::time::TimeResolution;
-use vogls_ir::{BasicBlockBuilder, Bits, LogicMode, TIME_VSIZE, VariableKey};
+use vogls_ir::{BasicBlockBuilder, Bits, LogicMode, TIME_VSIZE, Time, VariableKey};
 
+use crate::ast::AstId;
+use crate::ast::expr::Expr;
 use crate::ast::module::TimeScale;
+use crate::ast::statement::{DelayValue, MinTypMaxExpression};
+use crate::lower::delay_pointer::{DelayPtr, DelayPtrVariant};
 use crate::lower::expression::truncate_or_extend;
-use crate::lower::{MutLowerContext, VType, VValue};
+use crate::lower::statement::procedural_timing_control::evaluate_delay_value_as_ticks;
+use crate::lower::{Diagnostics, LowerContext, MutLowerContext, VType, VValue, eval_constant_expr};
 
 impl VValue {
     /// Convert a constant delay to simulation ticks.
@@ -128,4 +134,83 @@ pub fn var_real_delay_to_ticks<'a>(
     // Rounds to the nearest integer and saturates.
     let delay = builder.real_to_u64(mctx.gl(), delay);
     builder.multiply_constant(mctx.gl(), delay, Bits::from_u64(TIME_VSIZE, prec_to_reso))
+}
+
+/// One of the rise, fall and turn-off delays of a gate or net assignment.
+#[derive(Clone, Copy)]
+pub(crate) enum DelayExpr<'a> {
+    Value(AstId<'a, DelayValue>),
+    MinTypMax(AstId<'a, MinTypMaxExpression<'a>>),
+}
+
+/// Evaluates `exprs`, the rise, fall and turn-off delays of a gate or net assignment in `scope`,
+/// to ticks in the delays of the driver resolution, where a `min:typ:max` becomes a triple.
+///
+/// Returns `None`, and leaves the delays of the driver resolution as they are, if an expression is
+/// not constant. Such a delay is evaluated by the process of the delay instead.
+pub(crate) fn try_push_const_delays<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext<'a>,
+    scope: SymbolId,
+    exprs: &[DelayExpr<'a>],
+) -> Result<Option<DelayPtr>, ()> {
+    let variant = match exprs.len() {
+        1 => DelayPtrVariant::One,
+        2 => DelayPtrVariant::Two,
+        3 => DelayPtrVariant::Three,
+        n => unreachable!("{n} gate or net assignment delays"),
+    };
+
+    let offset = mctx.driver_resolution.delays.len();
+    let mut triple_mask = 0u16;
+    for (i, expr) in exprs.iter().enumerate() {
+        let is_pushed = match *expr {
+            // A delay value is a number or a parameter, so it is always constant.
+            DelayExpr::Value(value) => {
+                let ticks = evaluate_delay_value_as_ticks(ctx, mctx, scope, value)?;
+                mctx.driver_resolution.delays.push(Time(ticks));
+                true
+            }
+            DelayExpr::MinTypMax(min_typ_max) => match min_typ_max.min_max {
+                None => try_push_const_delay(ctx, mctx, scope, min_typ_max.typical),
+                Some((min, max)) => {
+                    triple_mask |= 1 << i;
+                    try_push_const_delay(ctx, mctx, scope, min)
+                        && try_push_const_delay(ctx, mctx, scope, min_typ_max.typical)
+                        && try_push_const_delay(ctx, mctx, scope, max)
+                }
+            },
+        };
+        if !is_pushed {
+            mctx.driver_resolution.delays.truncate(offset);
+            return Ok(None);
+        }
+    }
+    Ok(Some(DelayPtr::new(offset as u64, variant, triple_mask)))
+}
+
+/// Pushes the ticks of the delay `expr` in `scope` to the delays of the driver resolution, if it
+/// is constant.
+fn try_push_const_delay<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext<'a>,
+    scope: SymbolId,
+    expr: AstId<'a, Expr<'a>>,
+) -> bool {
+    // The expression is allowed not to be constant, so its errors are not reported.
+    let mut diagnostics = Diagnostics::default();
+    let Ok(value) = eval_constant_expr(
+        &mctx.gl,
+        ctx.arenas,
+        &ctx.table,
+        scope,
+        &mut diagnostics,
+        expr.into_constant(),
+        Some(TIME_VSIZE),
+    ) else {
+        return false;
+    };
+    let ticks = value.delay_to_ticks(ctx.time_scale, ctx.time_resolution);
+    mctx.driver_resolution.delays.push(Time(ticks));
+    true
 }

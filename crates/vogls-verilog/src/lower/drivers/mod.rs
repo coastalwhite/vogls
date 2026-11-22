@@ -41,22 +41,23 @@ use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
 use vogls_ir::{
     BasicBlockBuilder, BasicBlockKey, Bits, GlobalContext, LogicMode, ProcessBuilder, ProcessKind,
-    SCALAR_VSIZE, Signal, SignalFlags, SignalKey, SignalSlice, VariableKey, VectorSize,
+    SCALAR_VSIZE, Signal, SignalFlags, SignalKey, SignalSlice, Time, VariableKey, VectorSize,
     WatchCondition, WatchEdge,
 };
 use vogls_utils::{Bitset, OrderedSet, SeenSet, Table, VgHashMap, VgHashSet, new_table_key};
 
 use crate::ast::AstId;
 use crate::ast::expr::Expr;
-use crate::ast::module::GateInstantiation;
+use crate::ast::module::{GateInstantiation, TimeScale};
 use crate::ast::statement::{Delay2, Delay3};
 use crate::ast::udp::{UdpDeclaration, UdpInstance};
 use crate::elaborate::{NetResolution, SignalKind, VSymbol};
+use crate::lower::delay_pointer::DelayPtr;
 use crate::lower::expression::{coerce_to, get_used_signals, lower_expr};
 use crate::lower::fuse::{DestinationSite, DestinationSiteContent};
 use crate::lower::module_or_generate_item::{
-    AssignOutputFn, GateDelayFn, lower_assign_delay3, lower_delay_process, lower_delay2,
-    lower_delay3, lower_gate_primitive,
+    AssignOutputFn, GateDelayFn, lower_assign_delay3, lower_const_assign_delay,
+    lower_const_gate_delay, lower_delay_process, lower_delay2, lower_delay3, lower_gate_primitive,
 };
 use crate::lower::specify::{PathDelays, SpecifyDelay, lower_specify_delay};
 use crate::lower::udp::lower_udp;
@@ -173,16 +174,26 @@ pub struct BidirNode {
 
 #[derive(Clone)]
 pub enum DelayKind<'a> {
-    /// The delay of a net assignment.
+    /// The delay of a net assignment, which is not constant. It is evaluated in `time_scale`, the
+    /// timescale of its module.
     Assign {
         delay3: AstId<'a, Delay3<'a>>,
         scope: SymbolId,
+        time_scale: TimeScale,
     },
-    /// The delay of an output of a gate.
+    /// The constant delay of a net assignment, whose rise, fall and turn-off delays `delays`
+    /// points into [`DriverResolution::delays`].
+    ConstAssign { delays: DelayPtr, span: TokenRange },
+    /// The delay of an output of a gate, which is not constant. It is evaluated in `time_scale`,
+    /// the timescale of its module.
     Gate {
         delay: GateDelay<'a>,
         scope: SymbolId,
+        time_scale: TimeScale,
     },
+    /// The constant delay of an output of a gate, whose rise, fall and turn-off delays `delays`
+    /// points into [`DriverResolution::delays`].
+    ConstGate { delays: DelayPtr, span: TokenRange },
     /// The module path delays of an output with a specify block.
     Specify(SpecifyDelay),
 }
@@ -468,6 +479,9 @@ pub struct DriverResolution<'a> {
     /// How signals are observed by processes that are lowered after the drivers are resolved,
     /// see [`Self::observe_watch`].
     observed: Vec<(SignalKey, NodeFlags)>,
+    /// The delay values that every [`DelayPtr`] of the constant delays, the module paths and the
+    /// SDF delays points into.
+    pub delays: Vec<Time>,
     /// The path delays of specify blocks and SDF files, until they are put in front of their
     /// outputs (see [`Self::insert_path_delays`]).
     pub path_delays: PathDelays,
@@ -956,21 +970,25 @@ impl<'a> DriverResolution<'a> {
         key
     }
 
-    /// Adds a delay of `delay3` in front of `dsts`, given from least to most significant bit.
+    /// Adds the net assignment delay `kind` in front of `dsts`, given from least to most
+    /// significant bit.
     ///
     /// Returns the input signal of the delay, which spans all destinations.
     pub fn push_delay(
         &mut self,
         gl: &mut GlobalContext,
         mode: LogicMode,
-        delay3: AstId<'a, Delay3<'a>>,
-        scope: SymbolId,
+        kind: DelayKind<'a>,
         dsts: &[DestinationSite],
         bit_length: VectorSize,
     ) -> SignalKey {
+        debug_assert!(matches!(
+            kind,
+            DelayKind::Assign { .. } | DelayKind::ConstAssign { .. }
+        ));
         let input = signal_proxy(gl, "::DELAY_IN".to_string(), bit_length, mode);
         let delay = self.nodes.insert(DriveNode::Delay {
-            kind: DelayKind::Assign { delay3, scope },
+            kind,
             input,
             bit_length,
             fst_in: None,
@@ -993,12 +1011,13 @@ impl<'a> DriverResolution<'a> {
         source: ExprSource<'a>,
         dsts: &[DestinationSite],
         bit_length: VectorSize,
-        delay: Option<GateDelay<'a>>,
+        delay: Option<DelayKind<'a>>,
         reads: Vec<SignalKey>,
     ) {
-        let (ExprSource::Gate { scope, .. } | ExprSource::Udp { scope, .. }) = source else {
-            unreachable!("only gates and user-defined primitives are primitives");
-        };
+        assert!(
+            matches!(source, ExprSource::Gate { .. } | ExprSource::Udp { .. }),
+            "only gates and user-defined primitives are primitives"
+        );
         let node = self.nodes.insert(DriveNode::Expr {
             source,
             bit_length,
@@ -1018,10 +1037,14 @@ impl<'a> DriverResolution<'a> {
             return;
         }
 
-        let Some(delay) = delay else {
+        let Some(kind) = delay else {
             self.push_outputs(gl, node, dsts);
             return;
         };
+        debug_assert!(matches!(
+            kind,
+            DelayKind::Gate { .. } | DelayKind::ConstGate { .. }
+        ));
 
         // The output of a gate is `x` until the gate is first evaluated.
         let mut flags = SignalFlags::EMPTY;
@@ -1035,7 +1058,7 @@ impl<'a> DriverResolution<'a> {
             origin: TokenRange::default(),
         });
         let delay = self.nodes.insert(DriveNode::Delay {
-            kind: DelayKind::Gate { delay, scope },
+            kind,
             input,
             bit_length,
             fst_in: None,
@@ -1067,7 +1090,7 @@ impl<'a> DriverResolution<'a> {
             return;
         }
 
-        let (merged, num_unmatched) = self.path_delays.take_merged();
+        let (merged, num_unmatched) = self.path_delays.take_merged(&mut self.delays);
         if num_unmatched != 0 {
             mctx.diagnostics.warnings.push((
                 TokenRange::default(),
@@ -2035,9 +2058,11 @@ impl<'a> DriverResolution<'a> {
     /// value of its input after the delay.
     fn lower_delays(
         &mut self,
-        ctx: &LowerContext<'a, '_>,
+        ctx: &mut LowerContext<'a, '_>,
         mctx: &mut MutLowerContext<'a>,
     ) -> Result<(), ()> {
+        // The delays that are not constant are evaluated in the timescale of their own module.
+        let outer_time_scale = ctx.time_scale;
         let mut error = false;
         for node in self.nodes.table_key_iter() {
             let DriveNode::Delay {
@@ -2066,7 +2091,13 @@ impl<'a> DriverResolution<'a> {
             };
 
             let res = match kind {
-                DelayKind::Assign { delay3, scope } => {
+                DelayKind::Assign {
+                    delay3,
+                    scope,
+                    time_scale,
+                } => {
+                    ctx.time_scale = time_scale;
+                    let ctx = &*ctx;
                     let delay = |mctx: &mut MutLowerContext<'a>,
                                  builder: &mut BasicBlockBuilder,
                                  new_value: VariableKey,
@@ -2091,7 +2122,13 @@ impl<'a> DriverResolution<'a> {
                         bit_length,
                     )
                 }
-                DelayKind::Gate { delay, scope } => {
+                DelayKind::Gate {
+                    delay,
+                    scope,
+                    time_scale,
+                } => {
+                    ctx.time_scale = time_scale;
+                    let ctx = &*ctx;
                     let span = match delay {
                         GateDelay::Delay2(delay2) => ctx.arenas.get_span(delay2),
                         GateDelay::Delay3(delay3) => ctx.arenas.get_span(delay3),
@@ -2117,12 +2154,62 @@ impl<'a> DriverResolution<'a> {
                         bit_length,
                     )
                 }
-                DelayKind::Specify(specify) => {
-                    lower_specify_delay(mctx, &self.path_delays, &specify, input, &drive)
+                DelayKind::ConstAssign { delays: ptr, span } => {
+                    let delays = &self.delays;
+                    let delay = |mctx: &mut MutLowerContext<'a>,
+                                 builder: &mut BasicBlockBuilder,
+                                 new_value: VariableKey,
+                                 driven_value: VariableKey| {
+                        Ok(lower_const_assign_delay(
+                            mctx,
+                            builder,
+                            delays,
+                            ptr,
+                            new_value,
+                            driven_value,
+                            bit_length,
+                        ))
+                    };
+                    lower_delay_process(
+                        mctx,
+                        span,
+                        &delay as &GateDelayFn,
+                        &assign as &AssignOutputFn,
+                        input,
+                        bit_length,
+                    )
                 }
+                DelayKind::ConstGate { delays: ptr, span } => {
+                    let delays = &self.delays;
+                    let delay = |mctx: &mut MutLowerContext<'a>,
+                                 builder: &mut BasicBlockBuilder,
+                                 new_value: VariableKey,
+                                 _driven_value: VariableKey| {
+                        Ok(lower_const_gate_delay(
+                            mctx, builder, delays, ptr, new_value,
+                        ))
+                    };
+                    lower_delay_process(
+                        mctx,
+                        span,
+                        &delay as &GateDelayFn,
+                        &assign as &AssignOutputFn,
+                        input,
+                        bit_length,
+                    )
+                }
+                DelayKind::Specify(specify) => lower_specify_delay(
+                    mctx,
+                    &self.delays,
+                    &self.path_delays,
+                    &specify,
+                    input,
+                    &drive,
+                ),
             };
             error |= res.is_err();
         }
+        ctx.time_scale = outer_time_scale;
 
         if error {
             return Err(());
@@ -2436,7 +2523,11 @@ impl ResolvedDrivers<'_> {
         // The input of a delay that is aliased is no longer referenced.
         for node in this.nodes.iter() {
             if let DriveNode::Delay {
-                kind: DelayKind::Assign { .. } | DelayKind::Gate { .. },
+                kind:
+                    DelayKind::Assign { .. }
+                    | DelayKind::ConstAssign { .. }
+                    | DelayKind::Gate { .. }
+                    | DelayKind::ConstGate { .. },
                 input,
                 ..
             } = node

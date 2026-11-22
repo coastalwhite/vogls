@@ -405,6 +405,7 @@ fn build<'a>(spec: &GraphSpec, ast: &Ast<'a>) -> (DriverResolution<'a>, GlobalCo
                     KindSpec::Delay => DelayKind::Assign {
                         delay3: ast.delay3,
                         scope: ast.scope,
+                        time_scale: TimeScale::default(),
                     },
                     _ => DelayKind::Specify(SpecifyDelay {
                         output: input,

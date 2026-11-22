@@ -304,7 +304,7 @@ pub fn lower_specify<'a>(
                     // The parser only accepts these counts.
                     n => unreachable!("{n} path delays"),
                 };
-                let mut delays = std::mem::take(&mut mctx.driver_resolution.path_delays.delays);
+                let mut delays = std::mem::take(&mut mctx.driver_resolution.delays);
                 let offset = delays.len() as u64;
                 let mut triple_mask = 0u16;
                 let mut result = Ok(());
@@ -314,7 +314,7 @@ pub fn lower_specify<'a>(
                         Err(()) => result = Err(()),
                     }
                 }
-                mctx.driver_resolution.path_delays.delays = delays;
+                mctx.driver_resolution.delays = delays;
                 result?;
                 let delays = DelayPtr::new(offset, delay_variant, triple_mask);
 
@@ -426,8 +426,6 @@ struct SdfPath {
 /// put in front of their outputs in one go (see [`PathDelays::take_merged`]).
 #[derive(Default, Clone)]
 pub struct PathDelays {
-    /// The delay values that every [`DelayPtr`] of the paths points into.
-    pub delays: Vec<Time>,
     /// The operands of the conditions of the module paths and the SDF delays.
     pub conds: CondExprs,
 
@@ -497,8 +495,8 @@ impl PathDelays {
             })
     }
 
-    /// Adds an SDF delay from `from` to `to`, whose values `delays` points into
-    /// [`Self::delays`].
+    /// Adds an SDF delay from `from` to `to`, whose values `delays` points into the delays of the
+    /// driver resolution.
     pub fn push_sdf(
         &mut self,
         from: SignalKey,
@@ -517,8 +515,9 @@ impl PathDelays {
     }
 
     /// Takes the path delays of every output with its symbol, where the SDF delays annotate the
-    /// module paths of the specify blocks. Their inputs, paths, delays and conditions stay in
-    /// `self`, which they are lowered with (see `lower_specify_delay`).
+    /// module paths of the specify blocks. Their inputs, paths and conditions stay in `self`, and
+    /// the SDF delays overlay their delays in `delay_values`, which they are lowered with (see
+    /// `lower_specify_delay`).
     ///
     /// IEEE Std 1364-2005, 16.2.1: an `IOPATH` without an edge or condition annotates every module
     /// path between its ports, whatever its edge or condition. An SDF delay without such module
@@ -527,7 +526,10 @@ impl PathDelays {
     ///
     /// Also returns the number of `COND` and `CONDELSE` delays that annotate no module path, which
     /// are ignored.
-    pub fn take_merged(&mut self) -> (Vec<(SymbolId, SpecifyDelay)>, usize) {
+    pub fn take_merged(
+        &mut self,
+        delay_values: &mut Vec<Time>,
+    ) -> (Vec<(SymbolId, SpecifyDelay)>, usize) {
         // An SDF delay without module paths between its ports becomes an unconditional path, which
         // no `COND` or `CONDELSE` annotates. So only the unconditional delays after the one that
         // adds it annotate it, and these paths are added before the module paths are laid out,
@@ -548,7 +550,7 @@ impl PathDelays {
             if self.group_lut.contains_key(&(to, from)) {
                 continue;
             }
-            let delays = delays.overlay(None, &mut self.delays);
+            let delays = delays.overlay(None, delay_values);
             let group = self.group(to_sid, to, from);
             self.group_paths.push((
                 group,
@@ -621,7 +623,7 @@ impl PathDelays {
                     SdfCondition::Else => path.condition.is_ifnone(),
                 };
                 if matches {
-                    path.delays = delays.overlay(Some(path.delays), &mut self.delays);
+                    path.delays = delays.overlay(Some(path.delays), delay_values);
                     is_matched = true;
                 }
             }
@@ -645,16 +647,17 @@ impl PathDelays {
 /// Lowers the module path delays of `delay` to one process per bit of its output, which drives the
 /// value of that bit of `proxy` with `drive` after the delay of the path that applies.
 ///
-/// `path_delays` holds the inputs, paths, delays and conditions of `delay` (see
-/// [`PathDelays::take_merged`]).
+/// `path_delays` holds the inputs, paths and conditions of `delay`, and `delays` the delay values
+/// its paths point into (see [`PathDelays::take_merged`]).
 pub(crate) fn lower_specify_delay<'a>(
     mctx: &mut MutLowerContext<'a>,
+    delays: &[Time],
     path_delays: &PathDelays,
     delay: &SpecifyDelay,
     proxy: SignalKey,
     drive: &DriveOutputFn<'a, '_>,
 ) -> Result<(), ()> {
-    let PathDelays { delays, conds, .. } = path_delays;
+    let conds = &path_delays.conds;
     let output = delay.output;
     let LowerIoPathScratches {
         mut input_before_lut,

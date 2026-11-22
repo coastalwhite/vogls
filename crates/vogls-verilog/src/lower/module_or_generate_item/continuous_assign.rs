@@ -1,11 +1,13 @@
 use vogls_frontend::symbol_table::SymbolId;
-use vogls_ir::{BasicBlockBuilder, Bits, SCALAR_VSIZE, SignalSlice, VariableKey, VectorSize};
+use vogls_ir::{BasicBlockBuilder, Bits, SCALAR_VSIZE, SignalSlice, Time, VariableKey, VectorSize};
 
 use crate::ast::AstId;
 use crate::ast::expr::Expr;
 use crate::ast::module::{ContinousAssign, NetAssignment};
 use crate::ast::statement::Delay3;
 use crate::elaborate::{NetResolution, SignalKind};
+use crate::lower::delay_pointer::DelayPtr;
+use crate::lower::drivers::DelayKind;
 use crate::lower::fuse::{
     DestinationSite, DestinationSiteContent, RequiredSignalKind, SiteTerminal, SiteType,
     expr_to_src_sites, net_flat_lvalue_to_dsts,
@@ -13,7 +15,9 @@ use crate::lower::fuse::{
 use crate::lower::statement::procedural_timing_control::lower_min_typ_max_delay;
 use crate::lower::{LowerContext, MutLowerContext, VType};
 
-use super::gate_instantiation::{lower_delay_value, lower_delay3};
+use super::gate_instantiation::{
+    lower_const_gate_delay, lower_delay_value, lower_delay3, try_push_delay3,
+};
 
 /// Lower a Verilog `assign` construct to Vogls IR.
 pub fn lower<'a>(
@@ -94,11 +98,11 @@ fn assign_net_lvalue<'a>(
     // A delayed assignment assigns the input of a delay in front of the destinations.
     if let Some(delay3) = delay3 {
         let bit_length = dsts_ty.bit_length();
+        let kind = assign_delay_kind(ctx, mctx, scope, delay3)?;
         let input = mctx.driver_resolution.push_delay(
             &mut mctx.gl,
             ctx.logic_mode,
-            delay3,
-            scope,
+            kind,
             &mctx.fuse_dsts_scratch,
             bit_length,
         );
@@ -184,12 +188,36 @@ pub(crate) fn lower_assign_delay3<'a>(
 
     let rise = lower_min_typ_max_delay(ctx, mctx, scope, builder, rise)?;
     let fall = lower_min_typ_max_delay(ctx, mctx, scope, builder, fall)?;
+    let turn_off = turn_off
+        .map(|turn_off| lower_min_typ_max_delay(ctx, mctx, scope, builder, turn_off))
+        .transpose()?;
+    Ok(select_vector_assign_delay(
+        mctx,
+        builder,
+        rise,
+        fall,
+        turn_off,
+        new_value,
+        driven_value,
+        width,
+    ))
+}
 
+/// The delay of the transition of a vector net assignment of `width` bits from `driven_value` to
+/// `new_value`, given its `rise`, `fall` and `turn_off` delays.
+#[allow(clippy::too_many_arguments)]
+fn select_vector_assign_delay(
+    mctx: &mut MutLowerContext<'_>,
+    builder: &mut BasicBlockBuilder,
+    rise: VariableKey,
+    fall: VariableKey,
+    turn_off: Option<VariableKey>,
+    new_value: VariableKey,
+    driven_value: VariableKey,
+    width: VectorSize,
+) -> VariableKey {
     // Without a turn-off delay, a transition to z takes the smaller of the rise and fall delay.
-    let turn_off = match turn_off {
-        Some(turn_off) => lower_min_typ_max_delay(ctx, mctx, scope, builder, turn_off)?,
-        None => builder.min(mctx.gl(), rise, fall),
-    };
+    let turn_off = turn_off.unwrap_or_else(|| builder.min(mctx.gl(), rise, fall));
 
     let is_z = builder.case_equals_constant(mctx.gl(), new_value, Bits::new_high_impedance(width));
     let is_zero = builder.case_equals_constant(mctx.gl(), new_value, Bits::new_zeroed(width));
@@ -198,5 +226,65 @@ pub(crate) fn lower_assign_delay3<'a>(
     let is_falling = builder.and(mctx.gl(), is_zero, was_nonzero);
 
     let delay = builder.select(mctx.gl(), is_z, turn_off, rise);
-    Ok(builder.select(mctx.gl(), is_falling, fall, delay))
+    builder.select(mctx.gl(), is_falling, fall, delay)
+}
+
+/// The delay `delay3` of a net assignment in `scope`: constant if all of its delays are (see
+/// [`try_push_delay3`]).
+pub(crate) fn assign_delay_kind<'a>(
+    ctx: &LowerContext<'a, '_>,
+    mctx: &mut MutLowerContext<'a>,
+    scope: SymbolId,
+    delay3: AstId<'a, Delay3<'a>>,
+) -> Result<DelayKind<'a>, ()> {
+    Ok(match try_push_delay3(ctx, mctx, scope, delay3)? {
+        Some(delays) => DelayKind::ConstAssign {
+            delays,
+            span: ctx.arenas.get_span(delay3),
+        },
+        None => DelayKind::Assign {
+            delay3,
+            scope,
+            time_scale: ctx.time_scale,
+        },
+    })
+}
+
+/// Lowers the constant delay `ptr` into `delays` of a net assignment of `width` bits for its
+/// transition from `driven_value` to `new_value`. A single delay applies to every transition.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lower_const_assign_delay(
+    mctx: &mut MutLowerContext<'_>,
+    builder: &mut BasicBlockBuilder,
+    delays: &[Time],
+    ptr: DelayPtr,
+    new_value: VariableKey,
+    driven_value: VariableKey,
+    width: VectorSize,
+) -> VariableKey {
+    // A scalar net assignment is delayed like a gate.
+    if width == SCALAR_VSIZE {
+        return lower_const_gate_delay(mctx, builder, delays, ptr, new_value);
+    }
+
+    let mut reader = ptr.reader(delays);
+    let mut next = |mctx: &mut MutLowerContext<'_>, builder: &mut BasicBlockBuilder| {
+        builder.constant_u64(mctx.gl(), reader.get().0)
+    };
+    let rise = next(mctx, builder);
+    if ptr.num_delays() == 1 {
+        return rise;
+    }
+    let fall = next(mctx, builder);
+    let turn_off = (ptr.num_delays() == 3).then(|| next(mctx, builder));
+    select_vector_assign_delay(
+        mctx,
+        builder,
+        rise,
+        fall,
+        turn_off,
+        new_value,
+        driven_value,
+        width,
+    )
 }
