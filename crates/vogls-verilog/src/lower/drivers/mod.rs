@@ -36,7 +36,6 @@
 
 use std::cmp;
 use std::io::Write;
-use std::sync::Arc;
 
 use vogls_frontend::symbol_table::SymbolId;
 use vogls_ir::token_range::TokenRange;
@@ -185,7 +184,7 @@ pub enum DelayKind<'a> {
         scope: SymbolId,
     },
     /// The module path delays of an output with a specify block.
-    Specify(Arc<SpecifyDelay>),
+    Specify(SpecifyDelay),
 }
 
 #[derive(Clone, Copy)]
@@ -1078,9 +1077,8 @@ impl<'a> DriverResolution<'a> {
                 ),
             ));
         }
-        for specify in merged {
+        for (sid, specify) in merged {
             let output = specify.output;
-            let sid = specify.specify.sid;
             let mut proxy = mctx.gl.signals[output].clone();
             proxy.name = format!("{}::SPECIFY_PROXY", proxy.name);
             let proxy = mctx.gl.signals.insert(proxy);
@@ -1096,18 +1094,17 @@ impl<'a> DriverResolution<'a> {
                 SignalKind::Variable => NetResolution::Wire,
             };
 
-            let reads: Vec<_> = specify
-                .specify
-                .paths
-                .iter()
-                .map(|(input, _)| *input)
+            let reads: Vec<_> = self
+                .path_delays
+                .inputs(&specify)
+                .map(|(input, _)| input)
                 .collect();
             for &input in &reads {
                 self.observed.push((input, NodeFlags::LUPDT));
             }
             let bit_length = mctx.gl.signals[output].size;
             let delay = self.nodes.insert(DriveNode::Delay {
-                kind: DelayKind::Specify(Arc::new(specify)),
+                kind: DelayKind::Specify(specify),
                 input: proxy,
                 bit_length,
                 fst_in: None,
