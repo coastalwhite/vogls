@@ -1447,9 +1447,14 @@ impl<'a> DriverResolution<'a> {
     /// where `P` is the proxy of a closure and `Ad`, `Bd` and `Cd` are the drive proxies of `A`,
     /// `B` and `C`. All incoming edges of a member move to its drive proxy. The drive proxy drives
     /// the bits of the member that are in a closure through the closure's proxy and the other bits
-    /// directly (`Ad --> A`). Only bits that the drive proxy has drivers for are forwarded, so an
-    /// undriven bit is never resolved. This matters in two-valued logic, where an undriven bit
-    /// reads `0` instead of `z`.
+    /// directly (`Ad --> A`).
+    ///
+    /// An undriven bit of a drive proxy is `z` in four-valued logic and `0` in two-valued logic.
+    /// Where that is the identity of the resolution of a closure, the drive proxy drives its whole
+    /// slice of the closure: `z` for every resolution in four-valued logic, and `0` for the OR that
+    /// resolves a two-valued `wire` or `wor`. Otherwise, i.e. for a two-valued `wand` or a
+    /// two-valued member of a four-valued closure, only the bits that the drive proxy has drivers
+    /// for are forwarded, so that an undriven bit is never resolved.
     ///
     /// External writes of a member are redirected to its drive proxy (see [`WriteFuseMap`]): they
     /// write the value that the member drives into its closures, as in Icarus Verilog.
@@ -1585,10 +1590,8 @@ impl<'a> DriverResolution<'a> {
         //     they drive when they update, while a bit that the member does not drive keeps it, as
         //     one more driver of its closures.
         //
-        //     TODO: In two-valued logic, a bit of the drive proxy that is neither driven nor written
-        //     is `0` instead of `z`, so it drives the closures. The members of a closure and the
-        //     nets that drive them should be four-valued, which requires deciding the modes of nets
-        //     before lowering.
+        //     In two-valued logic, it is resolved by an bitwise OR. This generates the current
+        //     output for cases where there are no contending drivers.
         let mut drive_proxies = VgHashMap::<SignalKey, (DriveNodeKey, Vec<(u32, u32)>)>::default();
         let mut ins = Vec::new();
         for (signal, mask) in members {
@@ -1727,7 +1730,20 @@ impl<'a> DriverResolution<'a> {
 
             for &(_, signal, offset) in chunk {
                 if let Some((drive_proxy, driven)) = drive_proxies.get(&signal) {
-                    for (a, b) in intersect_ranges(driven, (offset, offset + bit_length.get())) {
+                    let slice = (offset, offset + bit_length.get());
+                    let whole = [slice];
+                    let ranges = match mode {
+                        LogicMode::TwoValue
+                            if matches!(resolution, NetResolution::Wire | NetResolution::Wor) =>
+                        {
+                            &whole[..]
+                        }
+                        LogicMode::FourValue if gl.signals[signal].mode.is_four_value() => {
+                            &whole[..]
+                        }
+                        _ => &driven[..],
+                    };
+                    for (a, b) in intersect_ranges(ranges, slice) {
                         self.push_edge(
                             (*drive_proxy, a),
                             (proxy, a - offset),
@@ -2358,7 +2374,13 @@ impl<'a> DriverResolution<'a> {
                         | NetResolution::Tri0
                         | NetResolution::Tri1
                         | NetResolution::Supply0
-                        | NetResolution::Supply1 => bb_builder.resolve_wire(mctx.gl(), acc, part),
+                        | NetResolution::Supply1 => {
+                            if mctx.gl.signals[drivee].mode.is_two_value() {
+                                bb_builder.or(mctx.gl(), acc, part)
+                            } else {
+                                bb_builder.resolve_wire(mctx.gl(), acc, part)
+                            }
+                        }
                         NetResolution::Wand => bb_builder.resolve_wand(mctx.gl(), acc, part),
                         NetResolution::Wor => bb_builder.resolve_wor(mctx.gl(), acc, part),
                     },
