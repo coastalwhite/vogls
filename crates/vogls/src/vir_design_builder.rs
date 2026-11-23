@@ -40,8 +40,6 @@ impl<'a> VirDesignBuilder<'a> {
             gl,
             // @TODO: Add plugin support for VIR.
             plugins: vec![],
-            vcd: None,
-            has_vcd: false,
             ident_table,
             token_buffer: Tokenized::default(),
             warnings: Vec::new(),

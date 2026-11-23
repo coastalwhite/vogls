@@ -39,7 +39,7 @@ pub use design_builder::{DesignBuilder, DesignBuilderError};
 pub use elaborated_design::{ElaboratedDesign, ElaborationError, SignalHandle};
 pub use lowered_design::{LowerError, LoweredDesign};
 pub use parsed_design::{ParseError, ParseErrorReason, ParsedDesign};
-pub use plugin::VoglsPlugin;
+pub use plugin::{FinalizeContext, VoglsPlugin};
 pub use vir_design_builder::VirDesignBuilder;
 
 // @TODO: Wrap this in a stable API somehow.

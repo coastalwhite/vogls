@@ -43,7 +43,6 @@ pub struct MutLowerContext<'a> {
     pub fuse_srcs_scratch: Vec<SourceSite<'a>>,
     pub fuse_dsts_scratch: Vec<DestinationSite>,
 
-    pub has_vcd: bool,
     pub monitor: Option<MonitorSignals>,
 
     pub driver_resolution: DriverResolution<'a>,

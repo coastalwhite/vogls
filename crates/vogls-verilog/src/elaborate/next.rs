@@ -112,6 +112,15 @@ pub struct ElaborationState<'a, 'b> {
 
     module_lut: &'b VgHashMap<IdentId, AstId<'a, Module<'a>>>,
     default_nettype: Option<DefaultNettype>,
+
+    /// Whether any procedural code calls `$dumpfile` or `$dumpvars`.
+    has_vcd: bool,
+}
+
+/// What elaboration found out about the design as a whole.
+pub struct ElaborationSummary {
+    /// Whether any procedural code calls `$dumpfile` or `$dumpvars`, and thus needs a VCD output.
+    pub has_vcd: bool,
 }
 
 impl<'a, 'b> ElaborationState<'a, 'b> {
@@ -150,7 +159,7 @@ pub fn elaborate<'a>(
     top_level: AstId<'a, Module<'a>>,
     module_lut: &VgHashMap<IdentId, AstId<'a, Module<'a>>>,
     diagnostics: &mut Diagnostics,
-) -> Result<(), ()> {
+) -> Result<ElaborationSummary, ()> {
     let dummy_signal = gl.signals.insert(vogls_ir::Signal {
         name: "".to_string(),
         size: SCALAR_VSIZE,
@@ -172,6 +181,7 @@ pub fn elaborate<'a>(
         stmt_dispatch_stack: Vec::new(),
         module_lut,
         default_nettype: None,
+        has_vcd: false,
     };
 
     assert!(ctx.table.is_empty());
@@ -379,7 +389,12 @@ pub fn elaborate<'a>(
         }
     }
 
-    if error { Err(()) } else { Ok(()) }
+    if error {
+        return Err(());
+    }
+    Ok(ElaborationSummary {
+        has_vcd: st.has_vcd,
+    })
 }
 
 fn extend_opt_generate_block_sids<'a, 'b>(
@@ -1653,12 +1668,16 @@ fn extend_statements_sids<'a, 'b>(
                     dispatch_stmt_or_null!(id.statement_or_null)
                 }
 
+                StatementContent::SystemTaskEnable(id) => {
+                    let name = &ctx.arenas.ident_table[id.system_task_identifier.item.0];
+                    st.has_vcd |= matches!(name, "dumpfile" | "dumpvars");
+                }
+
                 StatementContent::DisableStatement
                 | StatementContent::EventTrigger
                 | StatementContent::ProceduralContinuousAssignments
                 | StatementContent::BlockingAssignment(_)
                 | StatementContent::NonBlockingAssignment(_)
-                | StatementContent::SystemTaskEnable(_)
                 | StatementContent::TaskEnable(_) => {}
             }
         }
@@ -2556,7 +2575,6 @@ pub fn finalize_symbol<'a>(
                 diagnostics: std::mem::take(diagnostics),
                 fuse_srcs_scratch: Vec::new(),
                 fuse_dsts_scratch: Vec::new(),
-                has_vcd: false,
                 monitor: None,
                 driver_resolution: DriverResolution::default(),
             };

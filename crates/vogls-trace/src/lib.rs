@@ -1,13 +1,60 @@
 use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
-use vogls::design::RtSignal;
-use vogls::{ElaboratedDesign, SignalHandle};
-use vogls_codegen::HeapRef;
+use vogls::{ElaboratedDesign, FinalizeContext, SignalHandle};
+use vogls_codegen::{Heap, HeapRef};
 use vogls_ir::{Bits, LogicMode};
 use vogls_runtime::RtSignalKey;
 
 use vogls_utils::{NonMaxUsize, VgHashMap};
+
+pub struct ShadowHeap {
+    heap: Heap,
+    dirty: Vec<u64>,
+}
+
+fn clean_dirty_words(old: &mut [u64], new: &[u64], dirty: &mut [u64]) {
+    assert_eq!(old.len(), new.len());
+    assert_eq!(old.len().div_ceil(64), dirty.len());
+    assert!(
+        dirty
+            .last()
+            .is_none_or(|d| ((64 - d.trailing_zeros()) as usize) < (old.len() % 64))
+    );
+
+    for (i, dirty_word) in dirty.iter_mut().enumerate() {
+        let mut idx = i * 64;
+        let mut d = std::mem::take(dirty_word);
+        while d != 0 {
+            let lz = d.trailing_zeros();
+            d >>= lz;
+            idx += lz as usize;
+
+            // SAFETY:
+            // - `dirty.len().div_ceil(64) == old.len() == new.len()`
+            // - All bits in the last word of `dirty` with index greater or equal to old.len() are
+            //   zero.
+            let old = unsafe { old.get_unchecked_mut(idx) };
+            let new = unsafe { new.get_unchecked(idx) };
+            *old = *new;
+        }
+    }
+}
+
+impl ShadowHeap {
+    pub fn new(heap: Heap) -> Self {
+        let dirty = vec![0u64; heap.0.len().div_ceil(64) as usize];
+        Self { heap, dirty }
+    }
+
+    pub fn update(&mut self, new_heap: &Heap) {
+        clean_dirty_words(
+            self.heap.0.as_mut(),
+            new_heap.0.as_ref(),
+            self.dirty.as_mut_slice(),
+        );
+    }
+}
 
 /// Simulation plugin to trace signals when they can updated.
 #[derive(Default, Clone)]
@@ -56,19 +103,35 @@ impl vogls::VoglsPlugin for TracePlugin {
     }
 
     fn finalize(
-        &mut self,
-        handle_map: &VgHashMap<SignalHandle, RtSignal>,
-        signal_to_heap: &Arc<[HeapRef]>,
-    ) {
+        mut self: Box<Self>,
+        ctx: &FinalizeContext<'_>,
+    ) -> Box<dyn vogls::runtime::plugins::RuntimePlugin> {
         for handle in self.handles.drain(..) {
-            let signal = handle_map[&handle];
+            let signal = ctx.handle_map[&handle];
             self.tracked.insert(
                 signal.key(),
                 Some(NonMaxUsize::new(self.updated_this_time_step.len()).unwrap()),
             );
             self.updated_this_time_step.push(signal.key());
         }
-        self.signal_to_heap = signal_to_heap.clone();
+        self.signal_to_heap = ctx.signal_to_heap.clone();
+        self
+    }
+}
+
+fn commit_transactions(
+    state: &vogls::runtime::RuntimeState,
+    tracked: &mut VgHashMap<RtSignalKey, Option<NonMaxUsize>>,
+    updated_this_time_step: &mut Vec<RtSignalKey>,
+) {
+    for &tx in &state.txs {
+        if let Some(idx) = tracked.get_mut(&tx) {
+            idx.get_or_insert_with(|| {
+                let idx = NonMaxUsize::new(updated_this_time_step.len()).unwrap();
+                updated_this_time_step.push(tx);
+                idx
+            });
+        }
     }
 }
 
@@ -77,17 +140,9 @@ impl vogls::runtime::plugins::RuntimePlugin for TracePlugin {
         Box::new(Clone::clone(self))
     }
 
-    fn poke_signal(&mut self, signal: RtSignalKey) {
-        if let Some(idx) = self.tracked.get_mut(&signal) {
-            idx.get_or_insert_with(|| {
-                let idx = NonMaxUsize::new(self.updated_this_time_step.len()).unwrap();
-                self.updated_this_time_step.push(signal);
-                idx
-            });
-        }
-    }
-
     fn timestep(&mut self, state: &mut vogls::runtime::RuntimeState) {
+        commit_transactions(state, &mut self.tracked, &mut self.updated_this_time_step);
+
         self.time_offsets.push((state.time, self.trace.len()));
         self.trace
             .extend(self.updated_this_time_step.iter().map(|&s| {
@@ -103,6 +158,8 @@ impl vogls::runtime::plugins::RuntimePlugin for TracePlugin {
     }
 
     fn finish(&mut self, state: &mut vogls::runtime::RuntimeState) {
+        commit_transactions(state, &mut self.tracked, &mut self.updated_this_time_step);
+
         if !self.updated_this_time_step.is_empty() {
             self.time_offsets.push((state.time, self.trace.len()));
         }
@@ -124,18 +181,18 @@ impl vogls::VoglsPlugin for UpdateTrackerPlugin {
     }
 
     fn finalize(
-        &mut self,
-        handle_map: &VgHashMap<SignalHandle, RtSignal>,
-        _signal_to_heap: &Arc<[HeapRef]>,
-    ) {
+        mut self: Box<Self>,
+        ctx: &FinalizeContext<'_>,
+    ) -> Box<dyn vogls::runtime::plugins::RuntimePlugin> {
         for handle in self.handles.drain(..) {
-            let signal = handle_map[&handle];
+            let signal = ctx.handle_map[&handle];
             self.tracked.insert(
                 signal.key(),
                 Some(NonMaxUsize::new(self.updated_this_time_step.len()).unwrap()),
             );
             self.updated_this_time_step.push(signal.key());
         }
+        self
     }
 }
 
@@ -144,22 +201,16 @@ impl vogls::runtime::plugins::RuntimePlugin for UpdateTrackerPlugin {
         Box::new(Clone::clone(self))
     }
 
-    fn poke_signal(&mut self, signal: RtSignalKey) {
-        if let Some(idx) = self.tracked.get_mut(&signal) {
-            idx.get_or_insert_with(|| {
-                let idx = NonMaxUsize::new(self.updated_this_time_step.len()).unwrap();
-                self.updated_this_time_step.push(signal);
-                idx
-            });
-        }
-    }
+    fn timestep(&mut self, state: &mut vogls::runtime::RuntimeState) {
+        commit_transactions(state, &mut self.tracked, &mut self.updated_this_time_step);
 
-    fn timestep(&mut self, _state: &mut vogls::runtime::RuntimeState) {
         self.tracked.iter_mut().for_each(|t| *t.1 = None);
         self.updated_this_time_step.clear();
     }
 
-    fn finish(&mut self, _state: &mut vogls::runtime::RuntimeState) {}
+    fn finish(&mut self, state: &mut vogls::runtime::RuntimeState) {
+        commit_transactions(state, &mut self.tracked, &mut self.updated_this_time_step);
+    }
 }
 
 impl Trace {

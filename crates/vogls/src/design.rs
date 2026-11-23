@@ -3,13 +3,12 @@ use std::sync::Arc;
 
 use vogls_codegen::HeapRef;
 use vogls_frontend::ident_table::IdentTable;
-use vogls_frontend::symbol_table::{FrozenSymbolTable, SymbolId};
+use vogls_frontend::symbol_table::FrozenSymbolTable;
 use vogls_ir::time::TimeResolution;
-use vogls_ir::vcd::{VcdScope, VcdValue, VcdVariableKey};
 use vogls_ir::{Bits, GlobalContext, LogicMode, SignalKey, SignalSlice, VectorSize};
 use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeError, RuntimeState};
-use vogls_utils::{Table, VgHashMap};
+use vogls_utils::VgHashMap;
 pub use vogls_verilog::arena::Arena;
 pub use vogls_verilog::elaborate::{VSymbol, VSymbolTable};
 pub use vogls_verilog::tokenizer::Macro;
@@ -234,110 +233,6 @@ pub struct RtSignal {
 impl RtSignal {
     pub fn key(&self) -> RtSignalKey {
         self.key
-    }
-}
-
-pub fn vcd_scope(
-    symtable: &FrozenSymbolTable<Symbol>,
-    scope: SymbolId,
-    ident_table: &IdentTable,
-) -> vogls_ir::vcd::VcdOutput {
-    let mut key = scope;
-    while let Some(parent) = symtable[key].parent() {
-        key = parent;
-    }
-
-    let mut table = Table::new();
-    let mut signal_map = VgHashMap::default();
-    let mut scope = VcdScope {
-        name: "".to_string(),
-        items: Vec::new(),
-    };
-    extend_symbol_table_to_vcd_scope(
-        &mut scope,
-        &[key],
-        symtable,
-        ident_table,
-        &mut table,
-        &mut signal_map,
-    );
-    vogls_ir::vcd::VcdOutput {
-        table,
-        signal_map,
-        children: scope.items,
-    }
-}
-
-fn extend_symbol_table_to_vcd_scope(
-    scope: &mut VcdScope,
-    symbols: &[SymbolId],
-    table: &FrozenSymbolTable<Symbol>,
-    ident_table: &IdentTable,
-    variable_table: &mut Table<VcdVariableKey, vogls_ir::vcd::VcdVariable>,
-    signal_map: &mut VgHashMap<SignalKey, Vec<VcdVariableKey>>,
-) {
-    for sid in symbols.iter() {
-        let name = &ident_table[table[*sid].name()];
-        match &table[*sid].content {
-            Symbol::Module | Symbol::Block | Symbol::GenerateBlocks | Symbol::Modules => {
-                let mut subscope = VcdScope {
-                    name: name.to_string(),
-                    items: Vec::new(),
-                };
-                extend_symbol_table_to_vcd_scope(
-                    &mut subscope,
-                    table[*sid].children(table),
-                    table,
-                    ident_table,
-                    variable_table,
-                    signal_map,
-                );
-                scope
-                    .items
-                    .push(vogls_ir::vcd::VcdScopeItem::Scope(subscope));
-            }
-            Symbol::Signal(i) => {
-                // @TODO: Property implement this.
-                let lsb = 0;
-                let msb = i.ty.bit_length().get() - 1;
-                let msb_lsb = (msb > 0).then_some((msb, lsb));
-
-                let (value, signal) = match &i.value {
-                    SignalValue::Signal(refs) => {
-                        let (signal, slice) = refs.probe_signal();
-                        (VcdValue::Signal(signal, slice), Some(signal))
-                    }
-                    SignalValue::Constant(bits) => (VcdValue::Constant(bits.clone()), None),
-                };
-                let variable_key = variable_table.insert(vogls_ir::vcd::VcdVariable {
-                    name: ident_table[table[*sid].name()].to_string(),
-                    value,
-                    ty: vogls_ir::vcd::NetType::Wire,
-                    msb_lsb,
-                });
-                scope
-                    .items
-                    .push(vogls_ir::vcd::VcdScopeItem::Variable(variable_key));
-                if let Some(signal) = signal {
-                    signal_map.entry(signal).or_default().push(variable_key);
-                }
-            }
-            Symbol::Parameter(value) => {
-                let msb_lsb =
-                    (value.size() > vogls_ir::SCALAR_VSIZE).then_some((value.size().get() - 1, 0));
-                let value = VcdValue::Constant(value.clone());
-                let variable_key = variable_table.insert(vogls_ir::vcd::VcdVariable {
-                    name: ident_table[table[*sid].name()].to_string(),
-                    value,
-                    ty: vogls_ir::vcd::NetType::Wire,
-                    msb_lsb,
-                });
-                scope
-                    .items
-                    .push(vogls_ir::vcd::VcdScopeItem::Variable(variable_key));
-            }
-            Symbol::Task | Symbol::Function => {}
-        }
     }
 }
 

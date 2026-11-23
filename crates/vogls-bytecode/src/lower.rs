@@ -2564,7 +2564,7 @@ fn lower_instruction(
                 bce.set_lupdt(mask_any, index);
             }
             if let Some(rt_signal) = plugin_rt_index {
-                bce.plugin_poke(mask_any, rt_signal);
+                bce.push_transaction(mask_any, rt_signal);
             }
             if let Some(watcher_range) = watch_map.map().get(signal) {
                 let watchers = watch_map.watchers();
@@ -2809,7 +2809,7 @@ fn lower_instruction(
                 bce.set_lupdt(mask_any, index);
             }
             if let Some(rt_signal) = plugin_rt_index {
-                bce.plugin_poke(mask_any, rt_signal);
+                bce.push_transaction(mask_any, rt_signal);
             }
             if let Some(watcher_range) = watchers {
                 let watchers = watch_map.watchers();

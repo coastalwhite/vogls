@@ -82,9 +82,7 @@ impl BytecodeInstruction for RescheduleWait {
             pc: InstructionPtr(next_pc),
         });
 
-        *pc = schedule
-            .pop(state, cldctx.plugins)
-            .map_or(u64::MAX, |ptr| ptr.0);
+        *pc = schedule.pop(state, cldctx).map_or(u64::MAX, |ptr| ptr.0);
     }
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
@@ -148,9 +146,7 @@ impl BytecodeInstruction for RescheduleRegion {
         }
 
         schedule.regions[region as usize - 1].push(InstructionPtr(next_pc));
-        *pc = schedule
-            .pop(state, cldctx.plugins)
-            .map_or(u64::MAX, |ptr| ptr.0);
+        *pc = schedule.pop(state, cldctx).map_or(u64::MAX, |ptr| ptr.0);
     }
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
@@ -182,9 +178,7 @@ impl BytecodeInstruction for NextEvent {
         _listeners: &mut BytecodeListeners,
         cldctx: &mut ColdContext,
     ) {
-        *pc = schedule
-            .pop(state, cldctx.plugins)
-            .map_or(u64::MAX, |ptr| ptr.0);
+        *pc = schedule.pop(state, cldctx).map_or(u64::MAX, |ptr| ptr.0);
     }
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
@@ -220,9 +214,7 @@ impl BytecodeInstruction for RescheduleListen {
         cldctx: &mut ColdContext,
     ) {
         listeners.arm(self.index as usize);
-        *pc = schedule
-            .pop(state, cldctx.plugins)
-            .map_or(u64::MAX, |ptr| ptr.0);
+        *pc = schedule.pop(state, cldctx).map_or(u64::MAX, |ptr| ptr.0);
     }
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}

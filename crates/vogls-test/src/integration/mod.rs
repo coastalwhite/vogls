@@ -11,11 +11,30 @@ use crate::{ANSI_END, ANSI_GREEN, ANSI_RED, Backend};
 #[derive(clap::Parser, Debug)]
 #[command(version, about, long_about = None)]
 pub struct IntegrationArgs {
+    name: Option<String>,
+
     #[arg(short, long)]
     filter: Option<String>,
 
     #[arg(short = 'n', long, default_value_t = 0)]
     num_threads: usize,
+
+    #[arg(short = 'B', long)]
+    bytecode: bool,
+    #[arg(short = 'C', long)]
+    cranelift: bool,
+
+    #[arg(short = 'T', long)]
+    two_value: bool,
+    #[arg(short = 'F', long)]
+    four_value: bool,
+
+    #[arg(short = 'O', long)]
+    optimized: bool,
+
+    /// Dump a VCD trace of each run to this path.
+    #[arg(long)]
+    vcd: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -118,6 +137,10 @@ impl IntegrationArgs {
             let config = std::fs::read_to_string(test)?;
             let config = toml::from_str::<TestConfig>(&config)?;
 
+            if self.name.as_deref().is_some_and(|name| config.name != name) {
+                continue;
+            }
+
             if let Some(filter) = self.filter.as_ref()
                 && !config.name.contains(filter)
             {
@@ -130,20 +153,37 @@ impl IntegrationArgs {
             }
 
             let opt_rounds = config.opt_rounds.as_slice();
-            let opt_rounds = if opt_rounds.is_empty() {
-                &[10]
+            let mut opt_rounds: Vec<_> = if opt_rounds.is_empty() {
+                vec![10]
             } else {
-                opt_rounds
+                opt_rounds.to_vec()
             };
 
-            let modes = match config.mode {
-                None => &[LogicMode::TwoValue, LogicMode::FourValue] as &[_],
-                Some(mode) => &[mode] as &[_],
+            let mut modes: Vec<LogicMode> = match config.mode {
+                None => vec![LogicMode::TwoValue, LogicMode::FourValue],
+                Some(mode) => vec![mode],
             };
+            let mut backends = vec![Backend::Bytecode, Backend::Cranelift];
 
-            for &rounds in opt_rounds {
-                for &mode in modes {
-                    for backend in [Backend::Bytecode, Backend::Cranelift] {
+            if self.bytecode || self.cranelift {
+                backends.retain(|b| match b {
+                    Backend::Bytecode => self.bytecode,
+                    Backend::Cranelift => self.cranelift,
+                });
+            }
+            if self.optimized {
+                opt_rounds.retain(|o| *o > 0);
+            }
+            if self.two_value || self.four_value {
+                modes.retain(|m| match m {
+                    LogicMode::TwoValue => self.two_value,
+                    LogicMode::FourValue => self.four_value,
+                });
+            }
+
+            for &rounds in &opt_rounds {
+                for &mode in &modes {
+                    for &backend in &backends {
                         collected.push(Test {
                             name: config.name.clone(),
                             test_toml: test.clone(),
@@ -179,20 +219,23 @@ impl IntegrationArgs {
             println!("  skipping {name}: {reason}");
         }
 
-        let fails = if self.num_threads == 1 {
+        let fails = if self.num_threads == 1 || self.name.is_some() {
             let mut fails = Vec::new();
             for test in &collected {
                 let display_name = test.display_name();
                 let padding_len = max_name_length - display_name.len();
                 print!("  {display_name}...{:padding_len$}  ", "");
                 io::stdout().flush()?;
-                match run_test_direct(test) {
-                    Ok(_) => println!(" {ANSI_GREEN}P{ANSI_END}"),
+                let start = std::time::SystemTime::now();
+                match run_test_direct(test, self.vcd.as_deref()) {
+                    Ok(_) => print!(" {ANSI_GREEN}P{ANSI_END}"),
                     Err(err) => {
-                        println!(" {ANSI_RED}F{ANSI_END}");
+                        print!(" {ANSI_RED}F{ANSI_END}");
                         fails.push((display_name, err));
                     }
                 }
+                let end = start.elapsed().unwrap();
+                println!(" {:.02}s", end.as_secs_f64());
             }
             fails
         } else {
@@ -204,7 +247,7 @@ impl IntegrationArgs {
             pool.install(|| {
                 collected
                     .into_par_iter()
-                    .filter_map(|t| match run_test_direct(&t) {
+                    .filter_map(|t| match run_test_direct(&t, self.vcd.as_deref()) {
                         Ok(()) => {
                             io::stdout().write_all(b".").unwrap();
                             io::stdout().flush().unwrap();
@@ -241,7 +284,7 @@ impl IntegrationArgs {
     }
 }
 
-fn run_test_direct(test: &Test) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn run_test_direct(test: &Test, vcd: Option<&str>) -> Result<(), Box<dyn Error + Send + Sync>> {
     let root = test.test_toml.parent().unwrap();
 
     let mut builder = DesignBuilder::new();
@@ -266,6 +309,9 @@ fn run_test_direct(test: &Test) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut design = design
         .elaborate(test.mode, Some(&test.top_module))
         .map_err(|_| <Box<dyn Error + Send + Sync>>::from("elaboration failure"))?;
+    if let Some(vcd) = vcd {
+        design.trace_vcd(vcd);
+    }
     if let Err(err) = design.annotate_specify() {
         eprintln!("{err}");
         return Err("failed to annotate specify".into());

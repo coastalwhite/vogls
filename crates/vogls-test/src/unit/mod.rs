@@ -770,11 +770,11 @@ fn run_test(
                 .expect("failed to annotate SDF");
         }
         elab.annotate_specify().expect("failed to annotate specify");
+        elab.trace_vcd(vcd_path.clone());
         let mut design = match elab.lower(vec![]) {
             Ok(d) => d,
             Err(_) => panic!("failed to lower"),
         };
-        design.trace_vcd(vcd_path.clone());
         design.optimize(opts);
 
         let (design, mut state) = match backend {

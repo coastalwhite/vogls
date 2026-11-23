@@ -1,5 +1,5 @@
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use vogls_frontend::ident_table::{IdentId, IdentTable};
@@ -22,7 +22,7 @@ use vogls_verilog::parser::{Ast, AstArenas, ReportKind, SpanError};
 use vogls_verilog::tokenizer::Tokenized;
 
 use crate::lowered_design::LowerErrorStage;
-use crate::plugin::VoglsPlugin;
+use crate::plugin::{VcdPlugin, VoglsPlugin};
 use crate::symbol::{SignalValue, Symbol};
 use crate::{LowerError, LoweredDesign, ParsedDesign};
 
@@ -50,6 +50,10 @@ pub struct ElaboratedDesign<'a> {
     /// Whether the drive graph is optimized at all, see [`FinalizeOptions::optimize`].
     pub drive_graph_opt: bool,
     pub time_resolution: TimeResolution,
+    /// Path to dump a VCD trace of the whole design to, see [`ElaboratedDesign::trace_vcd`].
+    pub(crate) vcd: Option<PathBuf>,
+    /// Whether the design calls `$dumpfile` or `$dumpvars`, found during elaboration.
+    pub(crate) has_vcd: bool,
 }
 
 pub struct ElaborationError<'a> {
@@ -172,6 +176,19 @@ impl<'a> ElaboratedDesign<'a> {
         Some(SignalHandle { symbol })
     }
 
+    /// Like [`ElaboratedDesign::get_signal_handle`], but for a signal that is only read and never
+    /// written from outside the design, so the drive graph does not need to account for external
+    /// drivers.
+    pub fn get_probe_handle(&mut self, symbol: SymbolId) -> Option<SignalHandle> {
+        let VSymbol::Signal(net) = &self.table[symbol].content else {
+            return None;
+        };
+
+        let signal = net.terminals.probe_signal();
+        self.gl.signals[signal].flags |= SignalFlags::EXT_PROBE;
+        Some(SignalHandle { symbol })
+    }
+
     pub fn table(&self) -> &VSymbolTable {
         &self.table
     }
@@ -249,7 +266,6 @@ impl<'a> ElaboratedDesign<'a> {
             diagnostics: Diagnostics::default(),
             fuse_dsts_scratch: Vec::new(),
             fuse_srcs_scratch: Vec::new(),
-            has_vcd: false,
             monitor: None,
             driver_resolution: std::mem::take(&mut self.driver_resolution),
         };
@@ -375,10 +391,24 @@ impl<'a> ElaboratedDesign<'a> {
         }
     }
 
+    /// Dump a VCD trace of the whole design to `vcd`.
+    ///
+    /// The VCD output is added as a plugin at the start of [`ElaboratedDesign::lower`], after
+    /// the user-supplied plugins. This also happens without a path when the design calls
+    /// `$dumpfile` or `$dumpvars`.
+    pub fn trace_vcd(&mut self, vcd: impl Into<PathBuf>) -> &mut Self {
+        self.vcd = Some(vcd.into());
+        self
+    }
+
     pub fn lower(
         mut self,
         mut plugins: Vec<Box<dyn VoglsPlugin>>,
     ) -> Result<LoweredDesign, Box<LowerError<'a>>> {
+        // Appended last so the indices of the user-supplied plugins are preserved.
+        if self.vcd.is_some() || self.has_vcd {
+            plugins.push(Box::new(VcdPlugin::new(self.vcd.clone())));
+        }
         for plugin in &mut plugins {
             plugin.register_handles(&mut self);
         }
@@ -404,6 +434,8 @@ impl<'a> ElaboratedDesign<'a> {
             drive_graph_rounds,
             drive_graph_opt,
             time_resolution,
+            vcd,
+            has_vcd,
 
             warnings: _,
         } = self;
@@ -424,7 +456,6 @@ impl<'a> ElaboratedDesign<'a> {
             diagnostics: Diagnostics::default(),
             fuse_dsts_scratch: Vec::new(),
             fuse_srcs_scratch: Vec::new(),
-            has_vcd: false,
             monitor: None,
             driver_resolution,
         };
@@ -504,6 +535,8 @@ impl<'a> ElaboratedDesign<'a> {
                     drive_graph_rounds,
                     drive_graph_opt,
                     time_resolution,
+                    vcd,
+                    has_vcd,
 
                     warnings: Vec::new(),
                 },
@@ -551,6 +584,8 @@ impl<'a> ElaboratedDesign<'a> {
                     drive_graph_rounds,
                     drive_graph_opt,
                     time_resolution,
+                    vcd,
+                    has_vcd,
 
                     warnings: Vec::new(),
                 },
@@ -604,8 +639,6 @@ impl<'a> ElaboratedDesign<'a> {
             gl: mctx.gl,
             warnings: mctx.diagnostics.warnings,
             plugins,
-            vcd: None,
-            has_vcd: mctx.has_vcd,
             ident_table: arenas.ident_table,
             token_buffer,
             itrace: false,

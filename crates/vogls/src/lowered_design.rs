@@ -24,8 +24,8 @@ use vogls_utils::{TableKey as _, VgHashMap};
 use vogls_verilog::lower::{Diagnostics, WarningsReport};
 use vogls_verilog::tokenizer::Tokenized;
 
-use crate::design::{Design, DesignBackend, DesignState, RtSignal, vcd_scope};
-use crate::plugin::VoglsPlugin;
+use crate::design::{Design, DesignBackend, DesignState, RtSignal};
+use crate::plugin::{FinalizeContext, VoglsPlugin};
 use crate::symbol::{SignalValue, Symbol};
 use crate::{ElaboratedDesign, SignalHandle};
 
@@ -34,8 +34,6 @@ pub struct LoweredDesign {
     pub(crate) table: FrozenSymbolTable<Symbol>,
     pub(crate) gl: GlobalContext,
     pub(crate) plugins: Vec<Box<dyn VoglsPlugin>>,
-    pub(crate) vcd: Option<PathBuf>,
-    pub(crate) has_vcd: bool,
     // @TODO: This is duplicated in the ParsedDesign. Maybe we can somehow, remove this?
     pub(crate) ident_table: IdentTable,
     pub(crate) token_buffer: Tokenized,
@@ -138,38 +136,18 @@ impl LoweredDesign {
             Some((SignalHandle { symbol: sid }, RtSignal { key, slice }))
         }));
 
-        let mut plugins: Vec<Box<dyn RuntimePlugin>> = std::mem::take(&mut self.plugins)
+        let ctx = FinalizeContext {
+            handle_map: &handle_map,
+            signal_to_heap: &signal_to_heap,
+            signal_mode: &signal_mode,
+            time_resolution: self.time_resolution,
+            table: &self.table,
+            ident_table: &self.ident_table,
+        };
+        let plugins: Vec<Box<dyn RuntimePlugin>> = std::mem::take(&mut self.plugins)
             .into_iter()
-            .map(|mut x| {
-                x.finalize(&handle_map, &signal_to_heap);
-                x as Box<dyn RuntimePlugin>
-            })
+            .map(|plugin| plugin.finalize(&ctx))
             .collect();
-
-        if self.has_vcd() || self.vcd.is_some() {
-            let tlm = self.table.roots()[0];
-            let scope = vcd_scope(&self.table, tlm, &self.ident_table);
-            let (children, map) = vogls_vcd::VcdScope::lower(&scope, &rt_signal_map);
-            let rtvcdoutput = match &self.vcd {
-                Some(path) => vogls_vcd::RtVcdOutput::new_path(
-                    path,
-                    signal_to_heap.clone(),
-                    children,
-                    map,
-                    self.time_resolution,
-                    signal_mode.clone(),
-                ),
-                None => vogls_vcd::RtVcdOutput::new(
-                    Box::new(Vec::new()),
-                    signal_to_heap.clone(),
-                    Vec::new(),
-                    map,
-                    self.time_resolution,
-                    signal_mode.clone(),
-                ),
-            };
-            plugins.push(Box::new(rtvcdoutput));
-        }
 
         CodegenPreparation {
             heap_builder,
@@ -406,15 +384,6 @@ impl LoweredDesign {
             },
             state,
         ))
-    }
-
-    fn has_vcd(&self) -> bool {
-        self.has_vcd
-    }
-
-    pub fn trace_vcd(&mut self, vcd: PathBuf) -> &mut Self {
-        self.vcd = Some(vcd);
-        self
     }
 
     #[cfg(feature = "unstable")]

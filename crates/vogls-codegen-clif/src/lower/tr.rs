@@ -14,17 +14,18 @@ use cranelift_module::{FuncId, Module};
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_codegen::{HeapAlignment, SixBitSize};
 use vogls_ir::{
-    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, Instruction, IntrinsicOp,
-    LogicMode, ResizeOp, SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalSlice, UnaryOp, VSIZE_32,
-    VSIZE_64, VariableKey, VectorSize, WatchEdge,
+    BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction,
+    IntrinsicOp, LogicMode, ResizeOp, SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalKey,
+    SignalSlice, UnaryOp, VSIZE_32, VSIZE_64, VariableKey, VectorSize, WatchEdge,
 };
-use vogls_utils::VgHashMap;
+use vogls_runtime::RtSignalKey;
+use vogls_utils::{VgHashMap, VgHashSet};
 
 use crate::ffi::FfiVec;
 use crate::lower::drive::{load_bit, load_fv_bit, load_var_bit};
 use crate::lower::{
-    F64, I64, PLUGIN_STATE_SIZE, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, cast, dyn_slice_read,
-    fv_load, mask_of, maskv, maskvsbs, mem, nwords, var_words,
+    F64, I64, Params, WIDE_HEAP_THRESHOLD_WORDS, WideLoc, cast, dyn_slice_read, fv_load, mask_of,
+    maskv, maskvsbs, mem, nwords, var_words,
 };
 use crate::runtime::{ColdContextT, EventT, FnTable, ScheduleT, layout};
 
@@ -42,6 +43,11 @@ pub struct TrBuilder<'a, 'b> {
     wide_map: WideMap,
 
     params: Params,
+
+    /// Blocks in a loop of this TR that push transactions (see [`plan_txs`]).
+    txs_cyclic: VgHashSet<BasicBlockKey>,
+    /// Per signal pushed from `txs_cyclic`: whether it was already pushed in this call of the TR.
+    txs_once: VgHashMap<SignalKey, Variable>,
 }
 
 impl<'a, 'b> TrBuilder<'a, 'b> {
@@ -124,6 +130,56 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
 
         let params = Params::from_block_params(&mut b, cl_entry);
 
+        let mut txs_cyclic = VgHashSet::default();
+        let mut txs_once = VgHashMap::default();
+        if compiler.num_plugins > 0 {
+            let cyclic_bbs = cyclic_blocks(&compiler.gl, &order);
+            let mut plan = TxPlan {
+                reserved: 0,
+                cyclic: VgHashSet::default(),
+                once: VgHashSet::default(),
+            };
+            for &k in &order {
+                let is_cyclic = cyclic_bbs.contains(&k);
+                for instr in &compiler.gl.bbs[k].instrs {
+                    // An upper bound: every `Drive` / `DriveSlice` pushes at most one transaction.
+                    let (Instruction::Drive(_, signal, _, _)
+                    | Instruction::DriveSlice(_, signal, _, _)) = instr
+                    else {
+                        continue;
+                    };
+                    if !is_cyclic {
+                        plan.reserved += 1;
+                    } else {
+                        plan.cyclic.insert(k);
+                        if plan.once.insert(*signal) {
+                            plan.reserved += 1;
+                        }
+                    }
+                }
+            }
+            if plan.reserved > 0 {
+                // The IR entry block moves into its own Cranelift block behind the preamble, so
+                // that a loop back to the entry block does not run the check (and possibly
+                // re-enter the TR) again.
+                let body = b.create_block();
+                blocks.insert(entry_bb, body);
+                b.switch_to_block(cl_entry);
+
+                if !plan.once.is_empty() {
+                    let zero = b.ins().iconst(types::I8, 0);
+                    for signal in plan.once {
+                        let flag = b.declare_var(types::I8);
+                        b.def_var(flag, zero);
+                        txs_once.insert(signal, flag);
+                    }
+                }
+                txs_cyclic = plan.cyclic;
+
+                emit_txs_preamble(compiler, &mut b, &params, func_id, plan.reserved, body);
+            }
+        }
+
         Self {
             compiler,
             b,
@@ -133,6 +189,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
             spc_map,
             wide_map,
             params,
+            txs_cyclic,
+            txs_once,
         }
     }
 
@@ -4308,23 +4366,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             b.switch_to_block(poke_bb);
 
                             if num_plugins > 0 {
-                                let ptr = self.compiler.ptr;
-                                let plugins =
-                                    b.ins().load(ptr, mem(), cldctx, layout::CTX_PLUGINS as i32);
-                                let poke = b.ins().load(
-                                    ptr,
-                                    mem(),
-                                    cldctx,
-                                    layout::CTX_PLUGIN_POKE as i32,
-                                );
-                                let sig_ref =
-                                    b.import_signature(self.compiler.sigs.plugin_poke.clone());
-                                let id = b.ins().iconst(I64, rt.as_u64() as i64);
-                                for i in 0..self.compiler.num_plugins {
-                                    let pl =
-                                        b.ins().iadd_imm_u(plugins, (i * PLUGIN_STATE_SIZE) as i64);
-                                    b.ins().call_indirect(sig_ref, poke, &[pl, id]);
-                                }
+                                let once =
+                                    self.txs_cyclic.contains(&k).then(|| self.txs_once[signal]);
+                                emit_push_tx(b, self.compiler.ptr, cldctx, rt, once);
                             }
 
                             if let Some(li) = lupdt {
@@ -4842,23 +4886,9 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             b.switch_to_block(poke_bb);
 
                             if num_plugins > 0 {
-                                let ptr = self.compiler.ptr;
-                                let plugins =
-                                    b.ins().load(ptr, mem(), cldctx, layout::CTX_PLUGINS as i32);
-                                let poke = b.ins().load(
-                                    ptr,
-                                    mem(),
-                                    cldctx,
-                                    layout::CTX_PLUGIN_POKE as i32,
-                                );
-                                let sig_ref =
-                                    b.import_signature(self.compiler.sigs.plugin_poke.clone());
-                                let id = b.ins().iconst(I64, rt.as_u64() as i64);
-                                for i in 0..self.compiler.num_plugins {
-                                    let pl =
-                                        b.ins().iadd_imm_u(plugins, (i * PLUGIN_STATE_SIZE) as i64);
-                                    b.ins().call_indirect(sig_ref, poke, &[pl, id]);
-                                }
+                                let once =
+                                    self.txs_cyclic.contains(&k).then(|| self.txs_once[signal]);
+                                emit_push_tx(b, self.compiler.ptr, cldctx, rt, once);
                             }
 
                             if let Some(li) = lupdt {
@@ -5168,6 +5198,187 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
     pub fn finalize(mut self) {
         self.b.seal_all_blocks();
         self.b.finalize(self.compiler.fe);
+    }
+}
+
+const TXS_LEN: i32 = (layout::CTX_TXS + FfiVec::<RtSignalKey>::LEN_OFFSET) as i32;
+const TXS_CAP: i32 = (layout::CTX_TXS + FfiVec::<RtSignalKey>::CAP_OFFSET) as i32;
+const TXS_PTR: i32 = (layout::CTX_TXS + FfiVec::<RtSignalKey>::PTR_OFFSET) as i32;
+
+/// How the transaction pushes of a TR get their room in `txs`.
+struct TxPlan {
+    /// Upper bound on the pushes in one call of the TR, reserved up front by the preamble.
+    reserved: u64,
+    /// Blocks on a cycle of the TR that contain pushes.
+    cyclic: VgHashSet<BasicBlockKey>,
+    /// Signals pushed from `cyclic` blocks. Each gets a flag so it is pushed at most once per call
+    /// of the TR.
+    once: VgHashSet<SignalKey>,
+}
+
+/// The blocks of a TR that lie on a cycle, i.e. are in a non-trivial strongly connected component
+/// or loop to themselves (an iterative Tarjan over the TR's non-temporal edges).
+fn cyclic_blocks(gl: &GlobalContext, order: &[BasicBlockKey]) -> VgHashSet<BasicBlockKey> {
+    const UNVISITED: usize = usize::MAX;
+
+    let index_of: VgHashMap<BasicBlockKey, usize> =
+        order.iter().enumerate().map(|(i, &k)| (k, i)).collect();
+    let succs: Vec<Vec<usize>> = order
+        .iter()
+        .map(|&k| {
+            let mut s = Vec::new();
+            gl.bbs[k]
+                .terminator
+                .for_each_non_temporal_bb(|t| s.push(index_of[&t]));
+            s
+        })
+        .collect();
+
+    let n = order.len();
+    let mut index = vec![UNVISITED; n];
+    let mut low = vec![0; n];
+    let mut on_stack = vec![false; n];
+    let mut stack = Vec::new();
+    let mut next_index = 0;
+    let mut cyclic = VgHashSet::default();
+
+    // Explicit DFS stack of `(node, index of the next successor to visit)`.
+    let mut dfs: Vec<(usize, usize)> = Vec::new();
+    for root in 0..n {
+        if index[root] != UNVISITED {
+            continue;
+        }
+        index[root] = next_index;
+        low[root] = next_index;
+        next_index += 1;
+        stack.push(root);
+        on_stack[root] = true;
+        dfs.push((root, 0));
+
+        while let Some(top) = dfs.last_mut() {
+            let v = top.0;
+            if let Some(&w) = succs[v].get(top.1) {
+                top.1 += 1;
+                if index[w] == UNVISITED {
+                    index[w] = next_index;
+                    low[w] = next_index;
+                    next_index += 1;
+                    stack.push(w);
+                    on_stack[w] = true;
+                    dfs.push((w, 0));
+                } else if on_stack[w] {
+                    low[v] = low[v].min(index[w]);
+                }
+                continue;
+            }
+
+            dfs.pop();
+            if let Some(&(u, _)) = dfs.last() {
+                low[u] = low[u].min(low[v]);
+            }
+            if low[v] == index[v] {
+                let start = stack.iter().rposition(|&w| w == v).unwrap();
+                let is_cycle = stack.len() - start > 1 || succs[v].contains(&v);
+                for w in stack.drain(start..) {
+                    on_stack[w] = false;
+                    if is_cycle {
+                        cyclic.insert(order[w]);
+                    }
+                }
+            }
+        }
+    }
+    cyclic
+}
+
+/// Emit the TR preamble into the (current) function entry block: when `txs` has fewer than
+/// `reserved` free slots, cold tail-call into `reserve_txs_then_reenter`, which makes room and
+/// enters this TR again. Otherwise, continue into `body`.
+///
+/// Nothing has happened in the TR at this point, so re-entering it from the top is safe, and the
+/// TR keeps no call on its hot path.
+fn emit_txs_preamble(
+    compiler: &mut Compiler,
+    b: &mut FunctionBuilder,
+    params: &Params,
+    func_id: FuncId,
+    reserved: u64,
+    body: Block,
+) {
+    let cldctx = params.cldctx;
+    let reserve_bb = b.create_block();
+    b.set_cold_block(reserve_bb);
+
+    let len = b.ins().load(I64, mem(), cldctx, TXS_LEN);
+    let cap = b.ins().load(I64, mem(), cldctx, TXS_CAP);
+    let free = b.ins().isub(cap, len);
+    let enough = b
+        .ins()
+        .icmp_imm_u(IntCC::UnsignedGreaterThanOrEqual, free, reserved as i64);
+    b.ins().brif(enough, body, &[], reserve_bb, &[]);
+
+    b.switch_to_block(reserve_bb);
+    let additional = b.ins().iconst(I64, reserved as i64);
+    b.ins()
+        .store(mem(), additional, cldctx, layout::CTX_PENDING_TXS as i32);
+    let this_tr = compiler.module.declare_func_in_func(func_id, b.func);
+    let this_tr = b.ins().func_addr(compiler.ptr, this_tr);
+    b.ins()
+        .store(mem(), this_tr, cldctx, layout::CTX_PENDING_EVENT as i32);
+
+    let helper = *compiler.txs_reserve_reenter.get_or_insert_with(|| {
+        compiler
+            .module
+            .declare_function(
+                "reserve_txs_then_reenter",
+                cranelift_module::Linkage::Local,
+                &compiler.sigs.event,
+            )
+            .unwrap()
+    });
+    let helper = compiler.module.declare_func_in_func(helper, b.func);
+    b.ins().return_call(helper, params.as_slice());
+}
+
+/// Push `rt` onto the cold context's transactions vector, without a capacity check: the TR
+/// preamble reserved a slot for it.
+///
+/// A push in a loop passes its signal's `once` flag. It is skipped when the flag is already set
+/// and sets it otherwise, which is what bounds it to one slot per call of the TR.
+fn emit_push_tx(
+    b: &mut FunctionBuilder,
+    ptr: Type,
+    cldctx: Value,
+    rt: RtSignalKey,
+    once: Option<Variable>,
+) {
+    let done_bb = once.map(|flag| {
+        let push_bb = b.create_block();
+        let done_bb = b.create_block();
+        let pushed = b.use_var(flag);
+        b.ins().brif(pushed, done_bb, &[], push_bb, &[]);
+        b.switch_to_block(push_bb);
+        done_bb
+    });
+
+    // The JIT writes the in-memory representation of the key, which is not `rt.as_u64()`.
+    // SAFETY: `RtSignalKey` is a `repr(transparent)` wrapper around a `usize`-sized integer.
+    let raw = unsafe { std::mem::transmute::<RtSignalKey, usize>(rt) };
+
+    let len = b.ins().load(I64, mem(), cldctx, TXS_LEN);
+    let data = b.ins().load(ptr, mem(), cldctx, TXS_PTR);
+    let off = b.ins().imul_imm_u(len, layout::TX_SIZE as i64);
+    let slot = b.ins().iadd(data, off);
+    let key = b.ins().iconst(I64, raw as i64);
+    b.ins().store(mem(), key, slot, 0);
+    let new_len = b.ins().iadd_imm_u(len, 1);
+    b.ins().store(mem(), new_len, cldctx, TXS_LEN);
+
+    if let (Some(flag), Some(done_bb)) = (once, done_bb) {
+        let one = b.ins().iconst(types::I8, 1);
+        b.def_var(flag, one);
+        b.ins().jump(done_bb, &[]);
+        b.switch_to_block(done_bb);
     }
 }
 
