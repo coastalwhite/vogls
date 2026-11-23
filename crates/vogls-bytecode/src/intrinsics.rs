@@ -8,6 +8,7 @@ use vogls_ir::vcd::VcdVariableKey;
 use vogls_ir::{
     Bits, LogicMode, Mode, RandomKind, SCALAR_VSIZE, SignalSlice, VSIZE_32, VSIZE_64, VectorSize,
 };
+use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeError, RuntimeState};
 use vogls_utils::{NonMaxU16, SecondaryTable};
 use vogls_vcd::VcdScopeItem;
@@ -400,9 +401,7 @@ fn execute_intrinsic(
             }
         }
         O::VcdOpenFile(path) => {
-            let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
-                .downcast_mut::<vogls_vcd::RtVcdOutput>()
-                .unwrap();
+            let vcd = vcd_output(cldctx.plugins);
             if !vcd.children.is_empty() {
                 return Err(RuntimeError::VcdSecondFile);
             }
@@ -411,9 +410,7 @@ fn execute_intrinsic(
         }
         O::VcdAppendModule(v) => {
             let (children, map) = v.as_ref();
-            let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
-                .downcast_mut::<vogls_vcd::RtVcdOutput>()
-                .unwrap();
+            let vcd = vcd_output(cldctx.plugins);
 
             if vcd.start_ts != state.time {
                 return Err(RuntimeError::VcdDumpVarsOverTime);
@@ -426,15 +423,11 @@ fn execute_intrinsic(
             vcd.map = map.clone();
         }
         O::VcdPause => {
-            let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
-                .downcast_mut::<vogls_vcd::RtVcdOutput>()
-                .unwrap();
+            let vcd = vcd_output(cldctx.plugins);
             vcd.paused = true;
         }
         O::VcdResume => {
-            let vcd = (cldctx.plugins[0].as_mut() as &mut dyn std::any::Any)
-                .downcast_mut::<vogls_vcd::RtVcdOutput>()
-                .unwrap();
+            let vcd = vcd_output(cldctx.plugins);
             vcd.paused = false;
         }
         O::ReadMem(readmem) => {
@@ -493,4 +486,13 @@ impl BytecodeEncoder {
             );
         }
     }
+}
+
+/// The VCD output amongst the runtime plugins. It is always present when the design uses the
+/// `$dump*` system tasks.
+fn vcd_output(plugins: &mut [RuntimePluginState]) -> &mut vogls_vcd::RtVcdOutput {
+    plugins
+        .iter_mut()
+        .find_map(|p| (p.as_mut() as &mut dyn std::any::Any).downcast_mut())
+        .expect("VCD system task without a VCD plugin")
 }

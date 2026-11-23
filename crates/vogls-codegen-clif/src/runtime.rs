@@ -9,9 +9,10 @@ use vogls_codegen::HeapRef;
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::time::{TimeFormat, TimeResolution};
 use vogls_ir::{Bits, GlobalContext, Mode, ReadMem, VectorSize};
-use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
+use vogls_runtime::plugins::RuntimePluginState;
 use vogls_runtime::{RtSignalKey, RuntimeError, RuntimeState};
-use vogls_utils::{SyncWrapper, TableKey};
+use vogls_utils::retain::retain_vec_end;
+use vogls_utils::{ScratchSet, SyncWrapper};
 use vogls_world::World;
 
 type Time = u64;
@@ -43,8 +44,8 @@ pub mod layout {
 
     pub const CTX_FN_TABLE: usize = offset_of!(ColdContextT, fn_table);
     pub const CTX_FMT_STRS: usize = offset_of!(ColdContextT, fmt_strs);
-    pub const CTX_PLUGINS: usize = offset_of!(ColdContextT, plugins);
-    pub const CTX_PLUGIN_POKE: usize = offset_of!(ColdContextT, plugin_poke_signal);
+    pub const CTX_TXS: usize = offset_of!(ColdContextT, txs);
+    pub const CTX_PENDING_TXS: usize = offset_of!(ColdContextT, pending_txs);
     pub const CTX_HEAP_LEN: usize = offset_of!(ColdContextT, heap_len);
     pub const CTX_READMEMS: usize = offset_of!(ColdContextT, readmems);
     pub const CTX_READMEM: usize = offset_of!(ColdContextT, readmem);
@@ -73,6 +74,10 @@ pub mod layout {
     pub const FN_WIDE_BINOP: usize = offset_of!(FnTable, wide_binop);
     pub const FN_WIDE_DRIVE: usize = offset_of!(FnTable, wide_drive);
     pub const FN_WIDE_SLICE: usize = offset_of!(FnTable, wide_slice);
+    pub const FN_TXS_RESERVE: usize = offset_of!(FnTable, txs_reserve);
+
+    /// Size of one entry in the transactions vector: the raw `RtSignalKey` representation.
+    pub const TX_SIZE: usize = size_of::<vogls_runtime::RtSignalKey>();
 
     /// Size of a `readmems` entry: `(HeapRef, ReadMem)`.
     pub const READMEM_ENTRY_SIZE: usize = size_of::<(super::HeapRef, vogls_ir::ReadMem)>();
@@ -150,6 +155,9 @@ pub struct FnTable {
     wide_slice: extern "C" fn(*mut u64, *const u64, u32, u32, u32, u32, u32),
 
     pub set_time_format: extern "C" fn(cldctx: NonNull<ColdContextT>, idx: i64),
+
+    /// Deduplicate the transactions vector and make room for at least `additional` more pushes.
+    txs_reserve: extern "C" fn(cldctx: NonNull<ColdContextT>, additional: u64),
 }
 
 /// Op codes for the [`real_op`] shim, shared with the lowering.
@@ -476,6 +484,23 @@ extern "C" fn set_time_format(mut cldctx: NonNull<ColdContextT>, idx: i64) {
     cldctx.time_format = fmt;
 }
 
+/// Cold path of the transaction pushes: called when the JIT-ed code cannot prove that `txs` has
+/// room for the pushes it is about to do unchecked.
+extern "C" fn txs_reserve(mut cldctx: NonNull<ColdContextT>, additional: u64) {
+    let cldctx = unsafe { cldctx.as_mut() };
+    let mut txs: Vec<RtSignalKey> = std::mem::take(&mut cldctx.txs).into();
+
+    // All the items in `txs[..dedup.len()]` are known to be unique, so only the tail needs to be
+    // deduplicated.
+    let dedup = &mut cldctx.txs_dedup;
+    retain_vec_end(&mut txs, dedup.len(), |tx| dedup.insert(tx));
+
+    // Keep at least as many free slots as there are unique transactions. Otherwise, a timestep
+    // that touches about `capacity` unique signals would come back here on nearly every TR.
+    txs.reserve((additional as usize).max(txs.len()));
+    cldctx.txs = txs.into();
+}
+
 impl FnTable {
     fn new() -> Self {
         Self {
@@ -492,6 +517,7 @@ impl FnTable {
             wide_drive,
             wide_slice,
             set_time_format,
+            txs_reserve,
         }
     }
 }
@@ -505,8 +531,15 @@ pub struct ColdContextT<'a> {
 
     fmt_strs: *const DynFormatString,
 
-    plugins: *mut Box<dyn RuntimePlugin>,
-    plugin_poke_signal: extern "C" fn(NonNull<RuntimePluginState>, usize),
+    /// Signals driven with a changed value since the last plugin `timestep`, possibly with
+    /// duplicates. The JIT-ed code pushes onto this without capacity checks, after reserving room
+    /// through [`FnTable::txs_reserve`] (see `TrBuilder`).
+    txs: FfiVec<RtSignalKey>,
+    /// Number of pushes to reserve room for when a TR tail-calls into
+    /// `reserve_txs_then_reenter`. The TR to re-enter goes into `pending_event`.
+    pending_txs: u64,
+    /// Exactly the elements of `txs[..txs_dedup.len()]`, which are unique.
+    txs_dedup: ScratchSet<RtSignalKey>,
 
     heap_len: usize,
     readmems: *const (HeapRef, ReadMem),
@@ -804,8 +837,10 @@ impl ClifDesign {
         let mut cldctx = ColdContextT {
             fn_table: FnTable::new(),
             fmt_strs: self.dyn_fmt_strs.as_ptr(),
-            plugins: state.plugins.as_mut_ptr().cast(),
-            plugin_poke_signal,
+            // A fresh dedup set is consistent with any `txs`: it only claims an empty prefix.
+            txs: std::mem::take(&mut state.runtime.txs).into(),
+            pending_txs: 0,
+            txs_dedup: ScratchSet::default(),
             time_format: state.runtime.time_format.clone(),
             time_resolution: self.time_resolution,
             heap_len: state.runtime.heap.0.len(),
@@ -850,8 +885,19 @@ impl ClifDesign {
                     }
                 }
 
-                for plugin in state.plugins.iter_mut() {
-                    plugin.timestep(&mut state.runtime);
+                if !state.plugins.is_empty() {
+                    let mut txs: Vec<RtSignalKey> = std::mem::take(&mut cldctx.txs).into();
+                    let dedup = &mut cldctx.txs_dedup;
+                    retain_vec_end(&mut txs, dedup.len(), |tx| dedup.insert(tx));
+
+                    state.runtime.txs = txs;
+                    for plugin in state.plugins.iter_mut() {
+                        plugin.timestep(&mut state.runtime);
+                    }
+                    let mut txs = std::mem::take(&mut state.runtime.txs);
+                    txs.clear();
+                    dedup.clear();
+                    cldctx.txs = txs.into();
                 }
 
                 if schedule.future.is_empty() {
@@ -900,6 +946,7 @@ impl ClifDesign {
 
         state.runtime.time_format = cldctx.time_format;
         state.runtime.instruction_count = cldctx.icount;
+        state.runtime.txs = cldctx.txs.into();
         let error = cldctx.error;
         for plugin in state.plugins.iter_mut() {
             plugin.finish(&mut state.runtime);
@@ -926,10 +973,6 @@ impl ClifDesign {
             }
         }
     }
-}
-
-extern "C" fn plugin_poke_signal(mut plugin: NonNull<RuntimePluginState>, signal: usize) {
-    unsafe { plugin.as_mut() }.poke_signal(RtSignalKey::from_usize(signal).unwrap());
 }
 
 extern "C" fn read_mem(

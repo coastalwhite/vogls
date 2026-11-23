@@ -528,7 +528,6 @@ pub fn lower_system_task_enable<'a>(
 
         "dumpfile" => {
             assert!(expressions.len() <= 1);
-            mctx.has_vcd = true;
             let path = match expressions
                 .first()
                 .as_deref()
@@ -548,7 +547,6 @@ pub fn lower_system_task_enable<'a>(
                     "not yet supported to select subset of hierarchy".to_string(),
                 ));
             }
-            mctx.has_vcd = true;
             builder.intrinsic(
                 mctx.gl(),
                 IntrinsicOp::VcdAppendModule(ctx.vcd_scope(scope, &ctx.arenas.ident_table)),

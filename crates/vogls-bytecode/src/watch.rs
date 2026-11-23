@@ -4,6 +4,7 @@ use std::{cmp, fmt};
 use vogls_codegen::SixBitSize;
 use vogls_ir::{LogicMode, SCALAR_VSIZE, SignalSlice, VSIZE_32, VectorSize};
 use vogls_runtime::{RtSignalKey, RuntimeState};
+use vogls_utils::retain::retain_vec_end;
 use vogls_utils::{NonMaxU8, TableKey};
 
 use crate::reg::{Reg, RegInfo, RegStorage, Regs};
@@ -80,8 +81,13 @@ pub struct SetLastUpdateTime {
     rs: Reg,
 }
 
-pub struct PluginPoke {
-    rs: Reg,
+pub struct PushTransaction {
+    rcond: Reg,
+    imm20: u32,
+}
+pub struct PushTransactionSlot {
+    rcond: Reg,
+    imm20: u32,
 }
 
 impl BytecodeInstruction for Wake {
@@ -463,36 +469,102 @@ impl BytecodeInstruction for SetLastUpdateTime {
     }
 }
 
-impl BytecodeInstruction for PluginPoke {
-    #[inline(always)]
-    fn num_additional_slots(&self) -> u8 {
-        2 // Index
-    }
-
+impl BytecodeInstruction for PushTransaction {
     #[inline(always)]
     fn extract(c: Bytecode) -> Self {
-        debug_assert_eq!(c.opcode(), BytecodeOpcode::PluginPoke as u8);
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::PushTransaction as u8);
         let v = c.0;
         Self {
-            rs: Reg::new_masked(v >> 8),
+            rcond: Reg::new_masked(v >> 8),
+            imm20: v >> 12,
         }
     }
 
     #[inline(always)]
     fn encode(&self) -> Bytecode {
-        Bytecode((BytecodeOpcode::PluginPoke as u32) | ((self.rs as u32) << 8))
+        Bytecode(
+            (BytecodeOpcode::PushTransaction as u32)
+                | ((self.rcond as u32) << 8)
+                | (self.imm20 << 12),
+        )
     }
 
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self { rs } = self;
-        write_padded_mnemonic(f, "plugin_poke")?;
-        write!(f, "{rs}")
+        let Self { rcond, imm20 } = self;
+        write_padded_mnemonic(f, "push_transaction")?;
+        write!(f, "{rcond}, {imm20}")
     }
 
     fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
         operands.push(RegInfo::new(
-            "rs",
-            self.rs,
+            "rcond",
+            self.rcond,
+            LogicMode::TwoValue,
+            None,
+            RegStorage::Register,
+        ));
+    }
+
+    fn dest_operands(&self, _code: &[Bytecode], _pc: u64, _operands: &mut Vec<RegInfo>) {}
+
+    fn execute(
+        self,
+        _code: &[Bytecode],
+        regs: &mut Regs,
+        _pc: &mut u64,
+        state: &mut RuntimeState,
+        _schedule: &mut Schedule,
+        _listeners: &mut BytecodeListeners,
+        cldctx: &mut ColdContext,
+    ) {
+        let Self { rcond, imm20 } = self;
+
+        let is_update = regs[rcond];
+        let is_update = is_update != 0;
+        if !is_update {
+            return;
+        }
+
+        let rt = u64::from(imm20);
+        push_transaction(state, cldctx, rt);
+    }
+}
+
+impl BytecodeInstruction for PushTransactionSlot {
+    #[inline(always)]
+    fn num_additional_slots(&self) -> u8 {
+        1
+    }
+
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        debug_assert_eq!(c.opcode(), BytecodeOpcode::PushTransactionSlot as u8);
+        let v = c.0;
+        Self {
+            rcond: Reg::new_masked(v >> 8),
+            imm20: v >> 12,
+        }
+    }
+
+    #[inline(always)]
+    fn encode(&self) -> Bytecode {
+        Bytecode(
+            (BytecodeOpcode::PushTransactionSlot as u32)
+                | ((self.rcond as u32) << 8)
+                | (self.imm20 << 12),
+        )
+    }
+
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self { rcond, imm20 } = self;
+        write_padded_mnemonic(f, "push_transaction_slot")?;
+        write!(f, "{rcond}, {imm20}")
+    }
+
+    fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+        operands.push(RegInfo::new(
+            "rcond",
+            self.rcond,
             LogicMode::TwoValue,
             None,
             RegStorage::Register,
@@ -506,26 +578,45 @@ impl BytecodeInstruction for PluginPoke {
         code: &[Bytecode],
         regs: &mut Regs,
         pc: &mut u64,
-        _state: &mut RuntimeState,
+        state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
         cldctx: &mut ColdContext,
     ) {
-        let Self { rs } = self;
+        let Self { rcond, imm20 } = self;
 
         let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
-        let is_update = regs[rs];
+        let is_update = regs[rcond];
         let is_update = is_update != 0;
-        if is_update {
-            let rt_index = decode_bytecode_u64(&additional_slots[..]);
-            let rt_index = RtSignalKey::from_usize(rt_index as usize).unwrap();
-            for plugin in cldctx.plugins.iter_mut() {
-                plugin.poke_signal(rt_index);
-            }
+        if !is_update {
+            return;
         }
+
+        let rt = u64::from(imm20) | (u64::from(additional_slots[0].0) << 20);
+        push_transaction(state, cldctx, rt);
     }
+}
+
+#[inline(always)]
+fn push_transaction(state: &mut RuntimeState, cldctx: &mut ColdContext<'_>, rt: u64) {
+    let rt = RtSignalKey::from_usize(rt as usize).unwrap();
+    let txs = &mut state.txs;
+
+    // We don't have to grow the transactions vector, just keep pushing.
+    if txs.len() >= txs.capacity() {
+        std::hint::cold_path();
+        let scratch = &mut cldctx.txs_dedup_scratch;
+
+        // All the items in `txs[..scratch.len()]` are known to be unique, so we should skip those.
+        retain_vec_end(txs, scratch.len(), |rt| scratch.insert(rt));
+
+        // @NOTE: We explicitly push unconditionally here, as opposed to conditionally on
+        // scratch.insert(tx), because it makes sure the cold path is actually cold.
+    }
+
+    txs.push(rt);
 }
 
 impl BytecodeInstruction for ShiftReduceOr {
@@ -744,9 +835,21 @@ impl BytecodeEncoder {
         encode_bytecode_u64(self, index);
     }
 
-    pub fn plugin_poke(&mut self, rs: Reg, signal: RtSignalKey) {
-        self.data.push(PluginPoke { rs }.encode());
-        encode_bytecode_u64(self, signal.as_u64());
+    pub fn push_transaction(&mut self, rcond: Reg, signal: RtSignalKey) {
+        let signal = signal.as_u64();
+
+        // We don't support more than 2 ** 48 signals.
+        assert!(signal <= (1u64 << 52));
+
+        let imm20 = (signal & 0xF_FFFF) as u32;
+        if signal >= (1u64 << 20) {
+            self.data
+                .push(PushTransactionSlot { rcond, imm20 }.encode());
+            self.data
+                .push(Bytecode(((signal >> 20) & 0xFFFF_FFFF) as u32));
+        } else {
+            self.data.push(PushTransaction { rcond, imm20 }.encode());
+        }
     }
 
     pub fn heap_shift_reduce_or(&mut self, rd: Reg, rs: Reg, size: VectorSize, offset: u32) {

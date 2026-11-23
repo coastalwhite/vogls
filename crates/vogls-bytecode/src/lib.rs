@@ -37,7 +37,8 @@ use vogls_ir::time::TimeResolution;
 use vogls_ir::{Bits, LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
 use vogls_runtime::{RtSignalKey, RuntimeError, RuntimeState};
-use vogls_utils::{IndexSet, NonMaxU32};
+use vogls_utils::retain::retain_vec_end;
+use vogls_utils::{IndexSet, NonMaxU32, ScratchSet};
 
 pub use control_flow::*;
 pub use extend::*;
@@ -113,6 +114,8 @@ pub struct ColdContext<'a> {
     plugins: &'a mut [RuntimePluginState],
     heap_scratch: Vec<u64>,
 
+    txs_dedup_scratch: ScratchSet<RtSignalKey>,
+
     /// The error that ended the simulation.
     error: Option<RuntimeError>,
     time_resolution: TimeResolution,
@@ -134,6 +137,7 @@ impl<'a> ColdContext<'a> {
             watchers,
             heap_scratch: Vec::new(),
             plugins,
+            txs_dedup_scratch: ScratchSet::default(),
             error: None,
             time_resolution,
         }
@@ -502,7 +506,8 @@ opcodes![
     ShiftReduceOrOutlined,
     Wake,
     SetLastUpdateTime,
-    PluginPoke,
+    PushTransaction,
+    PushTransactionSlot,
 ];
 
 #[derive(Clone)]
@@ -772,7 +777,7 @@ impl Schedule {
     pub fn pop(
         &mut self,
         state: &mut RuntimeState,
-        plugins: &mut [RuntimePluginState],
+        cldctx: &mut ColdContext,
     ) -> Option<InstructionPtr> {
         if let Some(pc) = self.active.pop() {
             return Some(pc);
@@ -786,8 +791,14 @@ impl Schedule {
                 }
             }
 
-            for plugin in plugins.iter_mut() {
-                plugin.timestep(state);
+            if !cldctx.plugins.is_empty() {
+                let scratch = &mut cldctx.txs_dedup_scratch;
+                retain_vec_end(&mut state.txs, scratch.len(), |tx| scratch.insert(tx));
+                for plugin in cldctx.plugins.iter_mut() {
+                    plugin.timestep(state);
+                }
+                state.txs.clear();
+                scratch.clear();
             }
 
             // Stop if there are no more events.
@@ -820,7 +831,7 @@ impl Schedule {
 
         let pc = self.active.pop();
         if pc.is_none() {
-            for plugin in plugins.iter_mut() {
+            for plugin in cldctx.plugins.iter_mut() {
                 plugin.finish(state);
             }
         }
@@ -1142,14 +1153,6 @@ impl Design {
         world: &mut dyn World,
     ) -> Result<(), RuntimeError> {
         let code = &self.bytecode;
-        let Some(entry) = state
-            .schedule
-            .pop(&mut state.runtime, state.plugins.as_mut())
-        else {
-            return Ok(());
-        };
-
-        let mut pc = entry.0;
         let mut cldctx = ColdContext::new(
             &self.intrinsics,
             &self.watchers,
@@ -1157,6 +1160,11 @@ impl Design {
             world,
             self.time_resolution,
         );
+        let Some(entry) = state.schedule.pop(&mut state.runtime, &mut cldctx) else {
+            return Ok(());
+        };
+
+        let mut pc = entry.0;
         let mut regs = Regs::new(self.stack_offset);
 
         tracer.start(

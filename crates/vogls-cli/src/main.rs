@@ -262,6 +262,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprint!("{}", elaborate.report_warnings());
         }
 
+        if let Some(vcd) = &vcd {
+            elaborate.trace_vcd(vcd.clone());
+        }
+
         if let Some(drive_graph_rounds) = drive_graph_rounds {
             elaborate.drive_graph_rounds = drive_graph_rounds;
         }
@@ -353,9 +357,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    if let Some(vcd) = &vcd {
-        lowered.trace_vcd(vcd.clone());
-    }
     lowered.itrace = itrace;
     lowered.emit_vm = emit_vm;
     lowered.stats = stats;

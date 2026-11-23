@@ -122,7 +122,7 @@ struct Sigs {
     event: Signature,
     entry: Signature,
     grow: Signature,
-    plugin_poke: Signature,
+    txs_reserve: Signature,
     fmt: Signature,
 }
 
@@ -142,7 +142,7 @@ impl Sigs {
             event,
             entry: sysv(&[ptr, ptr, I64, ptr, ptr, ptr], Some(types::I32)),
             grow: sysv(&[ptr], None),
-            plugin_poke: sysv(&[ptr, I64], None),
+            txs_reserve: sysv(&[ptr, I64], None),
             fmt: sysv(&[ptr, I64, ptr], None),
         }
     }
@@ -325,6 +325,9 @@ struct Compiler<'a> {
     // Making this a tailcall-able function ensures that no stackframe is required in the hotpath.
     wait_region_grow: Option<FuncId>,
     wait_time_grow: Option<FuncId>,
+    /// Tailcall-able function that reserves `pending_txs` free slots in the transactions vector
+    /// and then re-enters the TR in `pending_event` (see [`TrBuilder`]'s preamble).
+    txs_reserve_reenter: Option<FuncId>,
 
     /// Listeners per signal (by `RtSignalKey::as_usize`), collected while
     /// lowering `Watch` terminators.
@@ -391,6 +394,7 @@ impl<'a> Compiler<'a> {
             tr_funcs: VgHashMap::default(),
             wait_region_grow: None,
             wait_time_grow: None,
+            txs_reserve_reenter: None,
             listeners: (0..num_signals).map(|_| Vec::new()).collect(),
             num_listening: 0,
             watch_map,
@@ -1130,10 +1134,6 @@ impl<'a> Compiler<'a> {
     }
 }
 
-/// `size_of::<RuntimePluginState>()` == `size_of::<Box<dyn RuntimePlugin>>()`
-/// (a fat pointer). Used for plugin-array indexing in `drive_signal`.
-const PLUGIN_STATE_SIZE: usize = std::mem::size_of::<vogls_runtime::plugins::RuntimePluginState>();
-
 // ---------------------------------------------------------------------------
 // Value helpers
 // ---------------------------------------------------------------------------
@@ -1508,6 +1508,55 @@ pub fn compile<'a>(
             writeln!(
                 writer,
                 "=== grow_and_push_future_then_next_event ===\n{}",
+                ctx.func.display()
+            )
+            .unwrap();
+        }
+        c.module.define_function(func_id, &mut ctx).unwrap();
+        c.module.clear_context(&mut ctx);
+    }
+    // A TR without room for its transaction pushes tail-calls here. Nothing in the TR has run
+    // yet, so after reserving it can simply be entered again from the top.
+    if let Some(func_id) = c.txs_reserve_reenter {
+        let mut ctx = c.module.make_context();
+        ctx.func.signature = c.sigs.event.clone();
+        ctx.func.name = UserFuncName::user(0, func_id.as_u32());
+        {
+            let mut b = FunctionBuilder::new(&mut ctx.func, &mut fb);
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            let params = Params::from_block_params(&mut b, entry);
+
+            let additional =
+                b.ins()
+                    .load(I64, mem(), params.cldctx, layout::CTX_PENDING_TXS as i32);
+            let reserve = b.ins().load(
+                c.ptr,
+                mem(),
+                params.cldctx,
+                (layout::CTX_FN_TABLE + layout::FN_TXS_RESERVE) as i32,
+            );
+            let sig = b.import_signature(c.sigs.txs_reserve.clone());
+            b.ins()
+                .call_indirect(sig, reserve, &[params.cldctx, additional]);
+
+            let tr = b.ins().load(
+                c.ptr,
+                mem(),
+                params.cldctx,
+                layout::CTX_PENDING_EVENT as i32,
+            );
+            let sig = b.import_signature(c.sigs.event.clone());
+            b.ins().return_call_indirect(sig, tr, params.as_slice());
+            b.seal_all_blocks();
+            b.finalize(c.fe);
+        }
+        if let Some(writer) = c.emit_clif.as_mut() {
+            let mut writer = writer.lock().unwrap();
+            writeln!(
+                writer,
+                "=== reserve_txs_then_reenter ===\n{}",
                 ctx.func.display()
             )
             .unwrap();

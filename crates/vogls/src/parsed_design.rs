@@ -190,7 +190,7 @@ impl<'a> ParsedDesign<'a> {
         };
         let mut gl = GlobalContext::default();
         let mut diagnostics = Diagnostics::default();
-        let Ok(()) = vogls_verilog::elaborate::next::elaborate(
+        let Ok(summary) = vogls_verilog::elaborate::next::elaborate(
             &mut gl,
             &mut ctx,
             top_level_module,
@@ -239,6 +239,8 @@ impl<'a> ParsedDesign<'a> {
             unoptimized_fgs: None,
             optimized_fgs: None,
             time_resolution: self.time_resolution,
+            vcd: None,
+            has_vcd: summary.has_vcd,
         })
     }
 

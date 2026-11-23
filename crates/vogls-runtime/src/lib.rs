@@ -76,6 +76,7 @@ pub struct RuntimeState {
     pub event_count: u64,
     pub instruction_count: u64,
     pub time_format: TimeFormat,
+    pub txs: Vec<RtSignalKey>,
 }
 
 impl RuntimeState {
@@ -91,6 +92,7 @@ impl RuntimeState {
             event_count: 0,
             instruction_count: 0,
             time_format,
+            txs: Vec::new(),
         }
     }
 
