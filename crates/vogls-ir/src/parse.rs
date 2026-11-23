@@ -695,6 +695,9 @@ fn parse_instr<'a>(
         "and" => parse_binary(c, symbols, gl, dst, B::And)?,
         "or" => parse_binary(c, symbols, gl, dst, B::Or)?,
         "xor" => parse_binary(c, symbols, gl, dst, B::Xor)?,
+        "andnot" => parse_binary(c, symbols, gl, dst, B::AndNot)?,
+        "ornot" => parse_binary(c, symbols, gl, dst, B::OrNot)?,
+        "xnor" => parse_binary(c, symbols, gl, dst, B::Xnor)?,
         "add" => parse_binary(c, symbols, gl, dst, B::Add)?,
         "sub" => parse_binary(c, symbols, gl, dst, B::Sub)?,
         "mul" => parse_binary(c, symbols, gl, dst, B::Multiply)?,
@@ -741,6 +744,7 @@ fn parse_instr<'a>(
         "mini" => parse_binary_imm(c, symbols, gl, dst, BI::Min)?,
         "maxi" => parse_binary_imm(c, symbols, gl, dst, BI::Max)?,
         "ceqi" => parse_binary_imm(c, symbols, gl, dst, BI::CaseEquality)?,
+        "cnei" => parse_binary_imm(c, symbols, gl, dst, BI::CaseInequality)?,
 
         "slice" => {
             c.trim_cursor();
