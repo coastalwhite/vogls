@@ -1405,6 +1405,15 @@ fn write_operands(
     writeln!(f)
 }
 
+#[inline(always)]
+fn safe_additional_slots(pc: u64, code: &[Bytecode]) -> &[Bytecode; 16] {
+    // @NOTE: We ensured the code buffer is padded with at least 16 elements.
+    code
+        .get(pc as usize..)
+        .and_then(<[_]>::first_chunk)
+        .expect("Should be padded")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -9,8 +9,8 @@ use vogls_runtime::RuntimeState;
 use crate::reg::{Reg, RegInfo, RegStorage, Regs};
 use crate::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    InlineNBitSize, Schedule, decode_bytecode_u64, encode_bytecode_u64, wake_at_index,
-    write_padded_mnemonic,
+    InlineNBitSize, Schedule, decode_bytecode_u64, encode_bytecode_u64, safe_additional_slots,
+    wake_at_index, write_padded_mnemonic,
 };
 
 pub struct TvPokePosedge {
@@ -199,11 +199,7 @@ fn execute_edge1<const IS_FV: bool, const IS_POSEDGE: bool>(
     listeners: &mut BytecodeListeners,
     cldctx: &mut ColdContext<'_>,
 ) {
-    // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-    let additional_slots: &[Bytecode; 16] = code
-        .get(*pc as usize..)
-        .and_then(<[_]>::first_chunk)
-        .expect("Should be padded");
+    let additional_slots = safe_additional_slots(*pc, code);
     *pc += 5;
 
     let bit_offset = (imm14 as u64) | ((additional_slots[0].0 as u64) << 14);
@@ -342,11 +338,8 @@ impl BytecodeInstruction for PokeEdgeRelative {
             target_size,
             source_size,
         } = self;
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
+
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let offset = additional_slots[2].0;

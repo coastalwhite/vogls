@@ -9,6 +9,7 @@ use vogls_runtime::RuntimeState;
 
 use crate::InlineNBitSize;
 use crate::reg::{Reg, RegInfo, Regs};
+use crate::safe_additional_slots;
 use crate::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
     InlineAddrOffset, Schedule, write_padded_mnemonic,
@@ -601,12 +602,7 @@ impl BytecodeInstruction for FvSet1Spread {
     ) {
         let Self(Set1 { rd, rs, imm16 }) = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
-
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let base = additional_slots[0].0 as u64;
@@ -681,12 +677,7 @@ impl BytecodeInstruction for TvSet1Relative {
             offset,
         }) = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
-
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let base = decode_bytecode_u64(&additional_slots[0..]);
@@ -767,12 +758,7 @@ impl BytecodeInstruction for FvSet1Relative {
             offset,
         }) = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
-
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let base = decode_bytecode_u64(&additional_slots[..]);
@@ -815,12 +801,7 @@ fn execute_set1<const FOUR_VALUE: bool>(
 ) {
     let Set1 { rd, rs, imm16 } = args;
 
-    // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-    let additional_slots: &[Bytecode; 16] = code
-        .get(*pc as usize..)
-        .and_then(<[_]>::first_chunk)
-        .expect("Should be padded");
-
+    let additional_slots = safe_additional_slots(*pc, code);
     *pc += 1; // Address.
 
     let heap_offset = additional_slots[0].0;
@@ -894,12 +875,7 @@ impl BytecodeInstruction for TvSetAligned {
             imm10,
         }) = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
-
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let base = additional_slots[0].0 as u64;
@@ -971,12 +947,7 @@ impl BytecodeInstruction for FvSetAligned {
             imm10,
         }) = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
-
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let base = additional_slots[0].0 as u64;
@@ -1053,12 +1024,7 @@ impl BytecodeInstruction for TvSetUnaligned {
             imm10,
         }) = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
-
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let base = decode_bytecode_u64(&additional_slots[..]);
@@ -1128,12 +1094,7 @@ impl BytecodeInstruction for FvSetUnaligned {
             imm10,
         }) = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
-
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let base = decode_bytecode_u64(&additional_slots[..]);
@@ -1204,11 +1165,7 @@ impl BytecodeInstruction for TvSetRelative {
     ) {
         let Self(SetRegRelative { rd, rs, roff, size }) = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let base = decode_bytecode_u64(&additional_slots[..]);
@@ -1294,12 +1251,7 @@ impl BytecodeInstruction for FvSetRelative {
     ) {
         let Self(SetRegRelative { rd, rs, roff, size }) = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
-
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let base = decode_bytecode_u64(&additional_slots[..]);
@@ -1499,12 +1451,7 @@ macro_rules! impl_set_heap {
             ) {
                 let Self(SetHeap { rd, rs, src_size }) = self;
 
-                // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-                let additional_slots: &[Bytecode; 16] = code
-                    .get(*pc as usize..)
-                    .and_then(<[_]>::first_chunk)
-                    .expect("Should be padded");
-
+                let additional_slots = safe_additional_slots(*pc, code);
                 *pc += self.num_additional_slots() as u64;
 
                 let base = decode_bytecode_u64(&additional_slots[..]);
@@ -1604,12 +1551,7 @@ macro_rules! impl_set_heap_relative {
                     offset,
                 }) = self;
 
-                // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-                let additional_slots: &[Bytecode; 16] = code
-                    .get(*pc as usize..)
-                    .and_then(<[_]>::first_chunk)
-                    .expect("Should be padded");
-
+                let additional_slots = safe_additional_slots(*pc, code);
                 *pc += self.num_additional_slots() as u64;
 
                 let base = decode_bytecode_u64(&additional_slots[..]);
