@@ -324,10 +324,9 @@ macro_rules! opcodes {
 
 opcodes![
     Interrupt,
-    TvCMov,
-    TvCNMov,
-    FvCMov,
-    FvCNMov,
+    TvSelect,
+    FvSelect,
+    FvSelectMerge,
     TvAnd,
     TvOr,
     TvXor,
