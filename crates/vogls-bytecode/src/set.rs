@@ -8,6 +8,8 @@ use vogls_ir::{LogicMode, SCALAR_VSIZE, VSIZE_32, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 
 use crate::InlineNBitSize;
+use crate::decode_bytecode_u64;
+use crate::encode_bytecode_u64;
 use crate::reg::{Reg, RegInfo, Regs};
 use crate::safe_additional_slots;
 use crate::{
@@ -1587,17 +1589,6 @@ impl_set_heap!(TvSetPartialHeap, "tv.set_partialheap", false, true);
 impl_set_heap!(FvSetPartialHeap, "fv.set_partialheap", true, true);
 impl_set_heap_relative!(TvSetHeapRelative, "tv.set_heaprel", false);
 impl_set_heap_relative!(FvSetHeapRelative, "fv.set_heaprel", true);
-
-#[inline(always)]
-pub fn encode_bytecode_u64(bce: &mut BytecodeEncoder, v: u64) {
-    bce.data.push(Bytecode((v & 0xFFFF_FFFF) as u32));
-    bce.data.push(Bytecode((v >> 32) as u32));
-}
-
-#[inline(always)]
-pub fn decode_bytecode_u64(slots: &[Bytecode]) -> u64 {
-    u64::from(slots[0].0) | (u64::from(slots[1].0) << 32)
-}
 
 impl BytecodeEncoder {
     fn set1(&mut self, rd: Reg, rs: Reg, offset: u64, f: impl FnOnce(Set1) -> Bytecode) {

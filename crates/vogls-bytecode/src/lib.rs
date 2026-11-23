@@ -431,7 +431,10 @@ opcodes![
     SignExtend,
     StackOffset,
     StackOffsetReg,
-    LoadImm,
+    LoadSlot,
+    LoadSlots,
+    LoadI20,
+    Load2I10,
     Jump,
     RelJump,
     BranchTrue,
@@ -899,63 +902,24 @@ impl BytecodeEncoder {
     pub fn truncate(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
         self.andi(rd, rs, SignedImmediate::MINUS_ONE, size);
     }
-    pub fn load_u64(&mut self, rd: Reg, value: u64) {
-        if value == 0 {
-            self.xor(rd, rd, rd);
-            return;
-        }
-
-        if value.count_ones() == value.trailing_ones() {
-            self.ori(
-                rd,
-                rd,
-                SignedImmediate::MINUS_ONE,
-                SixBitSize::new_masked(value.count_ones() - 1),
-            );
-            return;
-        }
-
-        // @Performance: Do something smart with the sign extend here for negative integers.
-        let mut clear = true;
-        for segment in 0..4 {
-            let s = (value >> (segment * 16)) & 0xFFFF;
-            if s != 0 {
-                self.load_imm16(rd, clear, false, segment, s as u16 as i16);
-                clear = false;
-            }
-        }
-    }
     pub fn load_bits_into_register(&mut self, rd: Reg, mode: LogicMode, value: &Bits) {
         let size = SixBitSize::from_vector_size(value.size()).expect("Does not fit in register");
-        if value.contains_special() {
-            assert_eq!(mode, LogicMode::FourValue);
+
+        if mode.is_two_value() {
+            assert!(!value.contains_special());
         }
 
-        match (value.as_data_ref(), mode) {
-            (BitsDataRef::InlineTv(v), LogicMode::TwoValue) => self.load_u64(rd, v),
-            (BitsDataRef::InlineTv(v), LogicMode::FourValue) => {
-                let (rdspc, rdval) = rd.to_spc_and_val();
-                self.load_u64(rdspc, size.mask(u64::MAX));
-                self.load_u64(rdval, v);
-            }
+        let (spc, val) = match value.as_data_ref() {
+            BitsDataRef::InlineTv(val) => (size.mask(u64::MAX), val),
+            BitsDataRef::InlineFv(spc, val) => (spc, val),
+            BitsDataRef::SeparateFv(items) => (items[0], items[1]),
 
-            (BitsDataRef::SeparateTv(_), _) => unreachable!(),
-            (BitsDataRef::InlineFv(spc, val), LogicMode::FourValue) => {
-                let (rdspc, rdval) = rd.to_spc_and_val();
-                self.load_u64(rdspc, spc);
-                self.load_u64(rdval, val);
-            }
-            (BitsDataRef::InlineFv(_, val), LogicMode::TwoValue) => {
-                self.load_u64(rd, val);
-            }
-            (BitsDataRef::SeparateFv(items), LogicMode::FourValue) => {
-                let (rdspc, rdval) = rd.to_spc_and_val();
-                self.load_u64(rdspc, items[0]);
-                self.load_u64(rdval, items[1]);
-            }
-            (BitsDataRef::SeparateFv(items), LogicMode::TwoValue) => {
-                self.load_u64(rd, items[1]);
-            }
+            BitsDataRef::SeparateTv(_) => unreachable!(),
+        };
+
+        match mode {
+            LogicMode::TwoValue => self.load_u64(rd, val),
+            LogicMode::FourValue => self.load_fv(rd, spc, val),
         }
     }
     pub fn mask(&mut self, rd: Reg, rs: Reg, size: SixBitSize) {
@@ -1408,10 +1372,20 @@ fn write_operands(
 #[inline(always)]
 fn safe_additional_slots(pc: u64, code: &[Bytecode]) -> &[Bytecode; 16] {
     // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-    code
-        .get(pc as usize..)
+    code.get(pc as usize..)
         .and_then(<[_]>::first_chunk)
         .expect("Should be padded")
+}
+
+#[inline(always)]
+pub fn encode_bytecode_u64(bce: &mut BytecodeEncoder, v: u64) {
+    bce.data.push(Bytecode((v & 0xFFFF_FFFF) as u32));
+    bce.data.push(Bytecode((v >> 32) as u32));
+}
+
+#[inline(always)]
+pub fn decode_bytecode_u64(slots: &[Bytecode]) -> u64 {
+    u64::from(slots[0].0) | (u64::from(slots[1].0) << 32)
 }
 
 #[cfg(test)]

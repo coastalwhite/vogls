@@ -143,6 +143,13 @@ impl SixBitSize {
     }
 
     #[inline(always)]
+    pub fn fits_signed(self, v: impl Into<i64>) -> bool {
+        let v = v.into();
+        let shamt = 64 - self as u32;
+        v == (v << shamt) >> shamt
+    }
+
+    #[inline(always)]
     pub fn to_vector_size(self) -> VectorSize {
         VectorSize::new(self as u32).unwrap()
     }
