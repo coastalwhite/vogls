@@ -9,7 +9,8 @@ use vogls_utils::{NonMaxU8, TableKey};
 use crate::reg::{Reg, RegInfo, RegStorage, Regs};
 use crate::{
     Bytecode, BytecodeEncoder, BytecodeInstruction, BytecodeListeners, BytecodeOpcode, ColdContext,
-    InlineNBitSize, Schedule, decode_bytecode_u64, encode_bytecode_u64, write_padded_mnemonic,
+    InlineNBitSize, Schedule, decode_bytecode_u64, encode_bytecode_u64, safe_additional_slots,
+    write_padded_mnemonic,
 };
 
 pub struct BytecodeWatchers {
@@ -140,11 +141,7 @@ impl BytecodeInstruction for Wake {
     ) {
         let Self { rs, offset6, size } = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let is_update = regs[rs];
@@ -277,11 +274,7 @@ impl BytecodeInstruction for HeapShiftReduceOr {
             offset,
         } = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let mut slot_offset = 0;
@@ -379,11 +372,7 @@ impl BytecodeInstruction for HeapShiftReduceOrRel {
     ) {
         let Self { rd, rs, roff, size } = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         // Inclusive range.
@@ -462,11 +451,7 @@ impl BytecodeInstruction for SetLastUpdateTime {
     ) {
         let Self { rs } = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let is_update = regs[rs];
@@ -528,11 +513,7 @@ impl BytecodeInstruction for PluginPoke {
     ) {
         let Self { rs } = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         let is_update = regs[rs];
@@ -725,11 +706,7 @@ impl BytecodeInstruction for ShiftReduceOrOutlined {
     ) {
         let Self { rd, rs, roff } = self;
 
-        // @NOTE: We ensured the code buffer is padded with at least 16 elements.
-        let additional_slots: &[Bytecode; 16] = code
-            .get(*pc as usize..)
-            .and_then(<[_]>::first_chunk)
-            .expect("Should be padded");
+        let additional_slots = safe_additional_slots(*pc, code);
         *pc += self.num_additional_slots() as u64;
 
         // Inclusive range.
