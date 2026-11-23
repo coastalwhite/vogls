@@ -2850,8 +2850,14 @@ fn to_reg(
             backup
         }
         Slot::Constant(bits) => {
-            let bits = bits.into_bits(vars.size(var));
-            bytecode.load_bits_into_register(backup, var.mode(), &bits);
+            let size = SixBitSize::from_vector_size(vars.size(var))
+                .expect("a constant slot fits a register");
+
+            let (spc, val) = bits.into_planes(size);
+            match var.mode() {
+                LogicMode::TwoValue => bytecode.load_u64(backup, val),
+                LogicMode::FourValue => bytecode.load_fv(backup, spc, val),
+            }
             backup
         }
         Slot::Stack(kind, offset) => {

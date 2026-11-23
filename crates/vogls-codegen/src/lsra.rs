@@ -5,15 +5,14 @@ use std::collections::VecDeque;
 
 use hashbrown::hash_map::Entry;
 use slotmap::SlotMap;
-use vogls_bits::Bits;
-use vogls_bits::arithmetic::FvLogicValue;
+use vogls_bits::{Bits, BitsDataRef};
 use vogls_ir::{
     BasicBlock, BasicBlockKey, Instruction, LogicMode, VSIZE_32, VSIZE_64, VariableKey,
     VariableMap, VectorSize,
 };
 use vogls_utils::{Bitset, IndexSet, VgHashMap};
 
-use crate::{HeapAlignment, HeapBuilder};
+use crate::{HeapAlignment, HeapBuilder, SixBitSize};
 
 #[derive(Default)]
 pub struct StackTracker {
@@ -167,25 +166,59 @@ impl Interval {
 
 #[derive(Clone, Copy, Debug)]
 pub enum SimpleBits {
-    TwoValue(u32),
-    Repeated(FvLogicValue),
+    TwoValue(i32),
+    FourValue { spc: i16, val: i16 },
 }
 
 impl SimpleBits {
+    /// The constant `value` if one instruction loads it, which makes it cheaper to load at every
+    /// use than to keep in a register or on the stack.
     fn from_bits(value: &Bits) -> Option<Self> {
-        if value.eq_zero() {
-            Some(Self::TwoValue(0))
-        } else if value.eq_one() {
-            Some(Self::TwoValue(1))
-        } else {
-            None
+        if value.size() > VSIZE_64 {
+            return None;
         }
+
+        match value.as_data_ref() {
+            BitsDataRef::InlineTv(val) => {
+                if SixBitSize::N20.fits_signed(val as i64) {
+                    return Some(Self::TwoValue(val as i64 as i32));
+                }
+            }
+            BitsDataRef::InlineFv(spc, val) => {
+                if SixBitSize::N10.fits_signed(spc as i64)
+                    && SixBitSize::N10.fits_signed(val as i64)
+                {
+                    return Some(Self::FourValue {
+                        spc: spc as i64 as i16,
+                        val: val as i64 as i16,
+                    });
+                }
+            }
+            BitsDataRef::SeparateFv(items) => {
+                let spc = items[0];
+                let val = items[1];
+                if SixBitSize::N10.fits_signed(spc as i64)
+                    && SixBitSize::N10.fits_signed(val as i64)
+                {
+                    return Some(Self::FourValue {
+                        spc: spc as i64 as i16,
+                        val: val as i64 as i16,
+                    });
+                }
+            }
+            BitsDataRef::SeparateTv(_) => {}
+        }
+
+        None
     }
 
-    pub fn into_bits(self, size: VectorSize) -> Bits {
+    /// The SPC and VAL planes of this constant at `size` bits.
+    pub fn into_planes(self, size: SixBitSize) -> (u64, u64) {
         match self {
-            Self::TwoValue(v) => Bits::from_u64(size, v as u64),
-            Self::Repeated(v) => Bits::new_fv_constant(size, v),
+            Self::TwoValue(val) => (size.mask(u64::MAX), size.mask(val as i64 as u64)),
+            Self::FourValue { spc, val } => {
+                (size.mask(spc as i64 as u64), size.mask(val as i64 as u64))
+            }
         }
     }
 }
@@ -230,7 +263,8 @@ pub fn linear_scan_register_allocation(
         live_in.insert(bb, Bitset::zeroed(vars.len()));
 
         for i in bbs[bb].instrs.iter().rev() {
-            // @Performance: Never put constants smaller than 64-bits on the stack.
+            // A constant that one instruction loads is loaded at every use, instead of being kept
+            // in a register or spilled to the stack.
             if let Instruction::Constant(dst, value) = i {
                 if value.size() > VSIZE_64 {
                     let offset =
