@@ -2006,8 +2006,11 @@ impl BinaryImmOp {
                     S::Keep
                 }
             }
-            O::CaseEquality if src.mode().is_two_value() && src.is_scalar() => {
-                if imm.eq_zero() {
+            O::CaseEquality | O::CaseInequality if src.mode().is_two_value() && src.is_scalar() => {
+                let is_equality = self == O::CaseEquality;
+                if imm.contains_special() {
+                    S::Constant(Bits::from(!is_equality))
+                } else if imm.eq_zero() == is_equality {
                     S::Instruction(Instruction::Unary(dst, UnaryOp::Not, src))
                 } else {
                     S::Source
