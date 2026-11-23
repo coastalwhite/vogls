@@ -179,28 +179,28 @@ impl DelayPtr {
                 let tstart = builder.select_bit_constant(gl, tstart, bitidx);
                 let tend = builder.probe(gl, tend);
                 let tend = builder.select_bit_constant(gl, tend, bitidx);
-                let x = builder.constant(gl, Bits::from(FvLogicValue::X));
-                let z = builder.constant(gl, Bits::from(FvLogicValue::Z));
-                let zero = builder.constant(gl, Bits::from(false));
-                let one = builder.constant(gl, Bits::from(true));
+                let x = Bits::from(FvLogicValue::X);
+                let z = Bits::from(FvLogicValue::Z);
+                let zero = Bits::from(false);
+                let one = Bits::from(true);
 
                 // C1
-                let start_is_one = builder.case_equals(gl, tstart, one);
-                let end_is_zero = builder.case_equals(gl, tend, zero);
+                let start_is_one = builder.case_equals_constant(gl, tstart, one.clone());
+                let end_is_zero = builder.case_equals_constant(gl, tend, zero.clone());
                 let is_c1 = builder.or(gl, start_is_one, end_is_zero);
                 let c1_delay = builder.constant_u64(gl, tfall);
                 out_delay = builder.select(gl, is_c1, c1_delay, out_delay);
 
                 // C2
-                let start_is_x = builder.case_equals(gl, tstart, x);
-                let end_is_z = builder.case_equals(gl, tend, z);
+                let start_is_x = builder.case_equals_constant(gl, tstart, x.clone());
+                let end_is_z = builder.case_equals_constant(gl, tend, z.clone());
                 let is_c2 = builder.and(gl, start_is_x, end_is_z);
                 let c2_delay = builder.constant_u64(gl, u64::max(trise, tfall));
                 out_delay = builder.select(gl, is_c2, c2_delay, out_delay);
 
                 // C3
-                let start_is_z = builder.case_equals(gl, tstart, z);
-                let end_is_x = builder.case_equals(gl, tend, x);
+                let start_is_z = builder.case_equals_constant(gl, tstart, z.clone());
+                let end_is_x = builder.case_equals_constant(gl, tend, x.clone());
                 let is_c3 = builder.and(gl, start_is_z, end_is_x);
                 let c3_delay = builder.constant_u64(gl, u64::min(trise, tfall));
                 out_delay = builder.select(gl, is_c3, c3_delay, out_delay);
@@ -243,15 +243,15 @@ impl DelayPtr {
                 let tstart = builder.select_bit_constant(gl, tstart, bitidx);
                 let tend = builder.probe(gl, tend);
                 let tend = builder.select_bit_constant(gl, tend, bitidx);
-                let zero = builder.constant(gl, Bits::from(false));
-                let one = builder.constant(gl, Bits::from(true));
-                let x = builder.constant(gl, Bits::from(FvLogicValue::X));
-                let z = builder.constant(gl, Bits::from(FvLogicValue::Z));
+                let zero = Bits::from(false);
+                let one = Bits::from(true);
+                let x = Bits::from(FvLogicValue::X);
+                let z = Bits::from(FvLogicValue::Z);
 
                 // C1
                 if trise != tfall {
-                    let start_is_one = builder.case_equals(gl, tstart, one);
-                    let end_is_zero = builder.case_equals(gl, tend, zero);
+                    let start_is_one = builder.case_equals_constant(gl, tstart, one.clone());
+                    let end_is_zero = builder.case_equals_constant(gl, tend, zero.clone());
                     let is_c1 = builder.or(gl, start_is_one, end_is_zero);
                     let c1_delay = builder.constant_u64(gl, tfall);
                     out_delay = builder.select(gl, is_c1, c1_delay, out_delay);
@@ -259,15 +259,15 @@ impl DelayPtr {
 
                 // C2
                 if trise != tz {
-                    let is_c2 = builder.case_equals(gl, tend, z);
+                    let is_c2 = builder.case_equals_constant(gl, tend, z.clone());
                     let c2_delay = builder.constant_u64(gl, tz);
                     out_delay = builder.select(gl, is_c2, c2_delay, out_delay);
                 }
 
                 // C3
                 if trise != tz {
-                    let start_is_zero = builder.case_equals(gl, tstart, zero);
-                    let end_is_x = builder.case_equals(gl, tend, x);
+                    let start_is_zero = builder.case_equals_constant(gl, tstart, zero.clone());
+                    let end_is_x = builder.case_equals_constant(gl, tend, x.clone());
                     let is_c3 = builder.and(gl, start_is_zero, end_is_x);
                     let c3_delay = builder.constant_u64(gl, u64::min(tz, trise));
                     out_delay = builder.select(gl, is_c3, c3_delay, out_delay);
@@ -275,8 +275,8 @@ impl DelayPtr {
 
                 // C4
                 if tfall != tz {
-                    let start_is_one = builder.case_equals(gl, tstart, one);
-                    let end_is_x = builder.case_equals(gl, tend, x);
+                    let start_is_one = builder.case_equals_constant(gl, tstart, one.clone());
+                    let end_is_x = builder.case_equals_constant(gl, tend, x.clone());
                     let is_c4 = builder.and(gl, start_is_one, end_is_x);
                     let c4_delay = builder.constant_u64(gl, u64::min(tz, tfall));
                     out_delay = builder.select(gl, is_c4, c4_delay, out_delay);
@@ -284,8 +284,8 @@ impl DelayPtr {
 
                 // C5
                 if trise != tfall {
-                    let start_is_z = builder.case_equals(gl, tstart, z);
-                    let end_is_x = builder.case_equals(gl, tend, x);
+                    let start_is_z = builder.case_equals_constant(gl, tstart, z.clone());
+                    let end_is_x = builder.case_equals_constant(gl, tend, x.clone());
 
                     let is_c5 = builder.and(gl, start_is_z, end_is_x);
                     let c5_delay = builder.constant_u64(gl, u64::min(trise, tfall));
@@ -329,15 +329,15 @@ impl DelayPtr {
         let tstart = builder.select_bit_constant(gl, tstart, bitidx);
         let tend = builder.probe(gl, tend);
         let tend = builder.select_bit_constant(gl, tend, bitidx);
-        let zero = builder.constant(gl, Bits::from(false));
-        let one = builder.constant(gl, Bits::from(true));
-        let x = builder.constant(gl, Bits::from(FvLogicValue::X));
-        let z = builder.constant(gl, Bits::from(FvLogicValue::Z));
+        let zero = Bits::from(false);
+        let one = Bits::from(true);
+        let x = Bits::from(FvLogicValue::X);
+        let z = Bits::from(FvLogicValue::Z);
         macro_rules! transition {
             ($t:expr, $l:expr, $r:expr) => {
                 if t01 != $t {
-                    let is_start = builder.case_equals(gl, tstart, $l);
-                    let is_end = builder.case_equals(gl, tend, $r);
+                    let is_start = builder.case_equals_constant(gl, tstart, $l.clone());
+                    let is_end = builder.case_equals_constant(gl, tend, $r.clone());
                     let is_transition = builder.and(gl, is_start, is_end);
                     let transition_time = builder.constant_u64(gl, $t);
                     out_delay = builder.select(gl, is_transition, transition_time, out_delay);
