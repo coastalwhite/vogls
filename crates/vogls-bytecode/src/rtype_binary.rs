@@ -1,9 +1,9 @@
 use std::fmt;
 
 use vogls_bits::arithmetic::{
-    fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem, fv_bitwise_ornot_elem,
-    fv_bitwise_xnor_elem, fv_bitwise_xor_elem, fv_resolve_wand_elem, fv_resolve_wire_elem,
-    fv_resolve_wor_elem, tv_resolve_wire_elem,
+    FvLogicValue, fv_bitwise_and_elem, fv_bitwise_andnot_elem, fv_bitwise_or_elem,
+    fv_bitwise_ornot_elem, fv_bitwise_xnor_elem, fv_bitwise_xor_elem, fv_resolve_wand_elem,
+    fv_resolve_wire_elem, fv_resolve_wor_elem, tv_resolve_wire_elem,
 };
 use vogls_bits::copyxz::{copy_x, copy_z};
 use vogls_bits::edge::fv_negedge_u64;
@@ -40,6 +40,12 @@ pub struct FvShiftRType {
     pub size: SixBitSize,
     pub offset_mode: LogicMode,
 }
+pub struct SelectRType {
+    pub rd: Reg,
+    pub rcond: Reg,
+    pub rtruthy: Reg,
+    pub rfalsy: Reg,
+}
 
 pub struct TvAnd(pub BitwiseRType);
 pub struct TvOr(pub BitwiseRType);
@@ -65,10 +71,9 @@ pub struct TvSll(pub SbsBitwiseRType);
 pub struct TvSlr(pub SbsBitwiseRType);
 pub struct TvSar(pub SbsBitwiseRType);
 pub struct TvLeftShiftOr(pub SbsBitwiseRType);
-pub struct TvCMov(pub BitwiseRType);
-pub struct TvCNMov(pub BitwiseRType);
-pub struct FvCMov(pub BitwiseRType);
-pub struct FvCNMov(pub BitwiseRType);
+pub struct TvSelect(pub SelectRType);
+pub struct FvSelect(pub SelectRType);
+pub struct FvSelectMerge(pub SelectRType);
 pub struct FvMerge(pub BitwiseRType);
 
 pub struct FvAnd(pub BitwiseRType);
@@ -193,6 +198,37 @@ impl FvShiftRType {
         write!(f, "{rd}, {rs1}, {rs2}, |{size}|")
     }
 }
+impl SelectRType {
+    #[inline(always)]
+    fn extract(c: Bytecode) -> Self {
+        let v = c.0;
+        Self {
+            rd: Reg::new_masked(v >> 8),
+            rcond: Reg::new_masked(v >> 12),
+            rtruthy: Reg::new_masked(v >> 16),
+            rfalsy: Reg::new_masked(v >> 20),
+        }
+    }
+    #[inline(always)]
+    fn encode(&self, opcode: BytecodeOpcode) -> Bytecode {
+        Bytecode(
+            opcode as u32
+                | ((self.rd as u32) << 8)
+                | ((self.rcond as u32) << 12)
+                | ((self.rtruthy as u32) << 16)
+                | ((self.rfalsy as u32) << 20),
+        )
+    }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            rd,
+            rcond,
+            rtruthy,
+            rfalsy,
+        } = self;
+        write!(f, "{rd}, {rcond}, {rtruthy}, {rfalsy}")
+    }
+}
 
 macro_rules! impl_bitwise {
     ($variant:ident, $mnemonic:literal, $rd_mode:ident, $rs1_mode:ident, $rs2_mode:ident) => {
@@ -309,9 +345,35 @@ macro_rules! impl_fv_shift {
         }
     };
 }
+macro_rules! impl_select {
+    ($variant:ident, $mnemonic:literal, $cond_mode:ident, $mode:ident) => {
+        #[inline(always)]
+        fn extract(v: Bytecode) -> Self {
+            debug_assert_eq!(v.opcode(), BytecodeOpcode::$variant as u8);
+            Self(SelectRType::extract(v))
+        }
+        fn encode(&self) -> Bytecode {
+            self.0.encode(BytecodeOpcode::$variant)
+        }
+        fn source_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.extend([
+                RegInfo::register("rcond", self.0.rcond, LogicMode::$cond_mode, None),
+                RegInfo::register("rtruthy", self.0.rtruthy, LogicMode::$mode, None),
+                RegInfo::register("rfalsy", self.0.rfalsy, LogicMode::$mode, None),
+            ]);
+        }
+        fn dest_operands(&self, _code: &[Bytecode], _pc: u64, operands: &mut Vec<RegInfo>) {
+            operands.push(RegInfo::register("rd", self.0.rd, LogicMode::$mode, None));
+        }
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write_padded_mnemonic(f, $mnemonic)?;
+            self.0.fmt(f)
+        }
+    };
+}
 
-impl BytecodeInstruction for TvCMov {
-    impl_bitwise!(TvCMov, "tv.cmov", TwoValue, TwoValue, TwoValue);
+impl BytecodeInstruction for TvSelect {
+    impl_select!(TvSelect, "tv.select", TwoValue, TwoValue);
 
     #[inline(always)]
     fn execute(
@@ -324,14 +386,21 @@ impl BytecodeInstruction for TvCMov {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let BitwiseRType { rd, rs1, rs2 } = self.0;
-        if regs[rs1] != 0 {
-            regs[rd] = regs[rs2];
+        let SelectRType {
+            rd,
+            rcond,
+            rtruthy,
+            rfalsy,
+        } = self.0;
+        if regs[rcond] != 0 {
+            regs[rd] = regs[rtruthy];
+        } else {
+            regs[rd] = regs[rfalsy];
         }
     }
 }
-impl BytecodeInstruction for TvCNMov {
-    impl_bitwise!(TvCNMov, "tv.cnmov", TwoValue, TwoValue, TwoValue);
+impl BytecodeInstruction for FvSelect {
+    impl_select!(FvSelect, "fv.select", TwoValue, FourValue);
 
     #[inline(always)]
     fn execute(
@@ -344,14 +413,26 @@ impl BytecodeInstruction for TvCNMov {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let BitwiseRType { rd, rs1, rs2 } = self.0;
-        if regs[rs1] == 0 {
-            regs[rd] = regs[rs2];
+        let SelectRType {
+            rd,
+            rcond,
+            rtruthy,
+            rfalsy,
+        } = self.0;
+        let (rdspc, rdval) = rd.to_spc_and_val();
+        let (rtruthyspc, rtruthyval) = rtruthy.to_spc_and_val();
+        let (rfalsyspc, rfalsyval) = rfalsy.to_spc_and_val();
+
+        let cond = regs[rcond] != 0;
+        (regs[rdspc], regs[rdval]) = if cond {
+            (regs[rtruthyspc], regs[rtruthyval])
+        } else {
+            (regs[rfalsyspc], regs[rfalsyval])
         }
     }
 }
-impl BytecodeInstruction for FvCMov {
-    impl_bitwise!(FvCMov, "fv.cmov", FourValue, TwoValue, FourValue);
+impl BytecodeInstruction for FvSelectMerge {
+    impl_select!(FvSelectMerge, "fv.select_merge", FourValue, FourValue);
 
     #[inline(always)]
     fn execute(
@@ -364,33 +445,28 @@ impl BytecodeInstruction for FvCMov {
         _listeners: &mut BytecodeListeners,
         _cldctx: &mut ColdContext,
     ) {
-        let BitwiseRType { rd, rs1, rs2 } = self.0;
-        if regs[rs1] != 0 {
-            let (rdspc, rdval) = rd.to_spc_and_val();
-            let (rsspc, rsval) = rs2.to_spc_and_val();
-            (regs[rdspc], regs[rdval]) = (regs[rsspc], regs[rsval]);
-        }
-    }
-}
-impl BytecodeInstruction for FvCNMov {
-    impl_bitwise!(FvCNMov, "fv.cnmov", FourValue, TwoValue, FourValue);
+        let SelectRType {
+            rd,
+            rcond,
+            rtruthy,
+            rfalsy,
+        } = self.0;
+        let (rdspc, rdval) = rd.to_spc_and_val();
+        let (rcondspc, rcondval) = rcond.to_spc_and_val();
+        let (rtruthyspc, rtruthyval) = rtruthy.to_spc_and_val();
+        let (rfalsyspc, rfalsyval) = rfalsy.to_spc_and_val();
 
-    #[inline(always)]
-    fn execute(
-        self,
-        _code: &[Bytecode],
-        regs: &mut Regs,
-        _pc: &mut u64,
-        _state: &mut RuntimeState,
-        _schedule: &mut Schedule,
-        _listeners: &mut BytecodeListeners,
-        _cldctx: &mut ColdContext,
-    ) {
-        let BitwiseRType { rd, rs1, rs2 } = self.0;
-        if regs[rs1] == 0 {
-            let (rdspc, rdval) = rd.to_spc_and_val();
-            let (rsspc, rsval) = rs2.to_spc_and_val();
-            (regs[rdspc], regs[rdval]) = (regs[rsspc], regs[rsval]);
+        let cond = FvLogicValue::from_spc_and_val(regs[rcondspc] != 0, regs[rcondval] != 0);
+
+        (regs[rdspc], regs[rdval]) = match cond {
+            FvLogicValue::L0 => (regs[rfalsyspc], regs[rfalsyval]),
+            FvLogicValue::L1 => (regs[rtruthyspc], regs[rtruthyval]),
+            _ => select_merge(
+                regs[rtruthyspc],
+                regs[rtruthyval],
+                regs[rfalsyspc],
+                regs[rfalsyval],
+            ),
         }
     }
 }
@@ -1836,12 +1912,17 @@ macro_rules! impl_bytecode_fv_shift_methods {
         }
     };
 }
+macro_rules! impl_select_methods {
+    ($(($name:ident, $op:ident))*) => {
+        impl BytecodeEncoder {
+            $(pub fn $name(&mut self, rd: Reg, rcond: Reg, rtruthy: Reg, rfalsy: Reg) {
+                self.data.push($op(SelectRType { rd, rcond, rtruthy, rfalsy }).encode());
+            })*
+        }
+    };
+}
 
 impl_bytecode_methods! {
-    (cmov, TvCMov)
-    (cnmov, TvCNMov)
-    (fv_cmov, FvCMov)
-    (fv_cnmov, FvCNMov)
     (and, TvAnd)
     (or, TvOr)
     (xor, TvXor)
@@ -1906,4 +1987,25 @@ impl_bytecode_fv_shift_methods! {
     (fv_slr, FvSlr)
     (fv_sar, FvSar)
     (fv_slrx, FvSlrx)
+}
+
+impl_select_methods! {
+    (tv_select, TvSelect)
+    (fv_select, FvSelect)
+    (fv_select_merge, FvSelectMerge)
+}
+
+impl BytecodeEncoder {
+    pub fn cmov(&mut self, rd: Reg, rcond: Reg, rs: Reg) {
+        self.tv_select(rd, rcond, rs, rd);
+    }
+    pub fn cnmov(&mut self, rd: Reg, rcond: Reg, rs: Reg) {
+        self.tv_select(rd, rcond, rd, rs);
+    }
+    pub fn fv_cmov(&mut self, rd: Reg, rcond: Reg, rs: Reg) {
+        self.fv_select(rd, rcond, rs, rd);
+    }
+    pub fn fv_cnmov(&mut self, rd: Reg, rcond: Reg, rs: Reg) {
+        self.fv_select(rd, rcond, rd, rs);
+    }
 }

@@ -1949,18 +1949,10 @@ fn lower_instruction(
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T2);
         }
         I::Select(dst, cond, truthy, falsy, kind) => {
-            // Temporary Register Allocation:
-            // T0:    RD  (ADDR / VAL / SPC)
-            // T1:    RD  (VAL)
-            // T2:    COND (VAL / SPC)
-            // T3:    COND (VAL)
-            // T4:    TRUTHY / FALSY (ADDR / VAL / SPC)
-            // T5:    TRUTHY / FALSY (VAL)
-
             let size = gl.vars.size(*dst);
             let dslot = assignment[dst];
             let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T0, true);
-            let mut rcond = to_reg(
+            let rcond = to_reg(
                 bce,
                 *cond,
                 &gl.vars,
@@ -1970,107 +1962,148 @@ fn lower_instruction(
                 false,
             );
 
-            let mut jump_offset = None;
-            match (cond.mode(), kind) {
-                (LogicMode::TwoValue, _) => {
-                    // rd and rcond might alias eachother. If they do, we need to copy over the rcond.
-                    if rcond == rd || (dst.mode().is_four_value() && rcond == rd.to_spc_and_val().1)
-                    {
-                        bce.copy(T2, rcond);
+            if SixBitSize::from_vector_size(size).is_some() {
+                // Temporary Register Allocation:
+                // T0:    RD / FALSY  (VAL / SPC)
+                // T1:    RD / FALSY  (VAL)
+                // T2:    COND        (VAL / SPC)
+                // T3:    COND        (VAL)
+                // T4:    TRUTHY      (VAL / SPC)
+                // T5:    TRUTHY      (VAL)
+                //
+                // A select reads all of its operands before it writes `rd`, so `rd` may alias any
+                // of them, and falsy can share the temporaries of `rd`.
+                let rtruthy = to_reg(
+                    bce,
+                    *truthy,
+                    &gl.vars,
+                    assignment[truthy],
+                    stack_offsets,
+                    T4,
+                    false,
+                );
+                let rfalsy = to_reg(
+                    bce,
+                    *falsy,
+                    &gl.vars,
+                    assignment[falsy],
+                    stack_offsets,
+                    T0,
+                    false,
+                );
+
+                match (cond.mode(), kind, dst.mode()) {
+                    (LogicMode::TwoValue, _, LogicMode::TwoValue) => {
+                        bce.tv_select(rd, rcond, rtruthy, rfalsy);
+                    }
+                    (LogicMode::TwoValue, _, LogicMode::FourValue) => {
+                        bce.fv_select(rd, rcond, rtruthy, rfalsy);
+                    }
+                    (LogicMode::FourValue, SelectMerge::Merge, LogicMode::FourValue) => {
+                        bce.fv_select_merge(rd, rcond, rtruthy, rfalsy);
+                    }
+                    (LogicMode::FourValue, SelectMerge::Merge, LogicMode::TwoValue) => {
+                        unreachable!("A select that merges on x or z has a four-valued result")
+                    }
+                    (LogicMode::FourValue, SelectMerge::FalseOnSpecial, mode) => {
+                        let (rcondspc, rcondval) = rcond.to_spc_and_val();
+                        bce.and(T2, rcondspc, rcondval);
+                        match mode {
+                            LogicMode::TwoValue => bce.tv_select(rd, T2, rtruthy, rfalsy),
+                            LogicMode::FourValue => bce.fv_select(rd, T2, rtruthy, rfalsy),
+                        }
+                    }
+                }
+            } else {
+                // Temporary Register Allocation:
+                // T0:    RD     (ADDR)
+                // T2:    COND   (VAL / SPC)
+                // T3:    COND   (VAL)
+                // T4:    TRUTHY / FALSY (ADDR)
+                let mut rcond = rcond;
+                let mut jump_offset = None;
+                match (cond.mode(), kind) {
+                    (LogicMode::TwoValue, _) => {}
+                    (LogicMode::FourValue, SelectMerge::Merge) => {
+                        bce.contains_special(T4, rcond, SixBitSize::N1);
+
+                        let branch_offset = bce.data.len();
+                        bce.panic();
+
+                        let rfalsy = to_reg(
+                            bce,
+                            *falsy,
+                            &gl.vars,
+                            assignment[falsy],
+                            stack_offsets,
+                            T2,
+                            false,
+                        );
+                        let rtruthy = to_reg(
+                            bce,
+                            *truthy,
+                            &gl.vars,
+                            assignment[truthy],
+                            stack_offsets,
+                            T4,
+                            false,
+                        );
+                        bce.heap_merge(rd, rtruthy, rfalsy, size);
+
+                        jump_offset = Some(bce.data.len());
+                        bce.panic();
+
+                        let offset = bce.data.len() - branch_offset - 1;
+                        let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
+                        bce.data[branch_offset] = BranchFalse {
+                            rcond: T4,
+                            imm: offset,
+                        }
+                        .encode();
+
+                        bce.fv_ceqi(T2, rcond, SignedImmediate::MINUS_ONE, SixBitSize::N1);
+                        rcond = T2;
+                    }
+                    (LogicMode::FourValue, SelectMerge::FalseOnSpecial) => {
+                        let (rcondspc, rcondval) = rcond.to_spc_and_val();
+                        bce.and(T2, rcondspc, rcondval);
                         rcond = T2;
                     }
                 }
-                (LogicMode::FourValue, SelectMerge::Merge) => {
-                    bce.contains_special(T4, rcond, SixBitSize::N1);
 
-                    let branch_offset = bce.data.len();
-                    bce.panic();
+                let rfalsy = to_reg(
+                    bce,
+                    *falsy,
+                    &gl.vars,
+                    assignment[falsy],
+                    stack_offsets,
+                    T4,
+                    false,
+                );
+                match dst.mode() {
+                    LogicMode::TwoValue => bce.heap_tv_cnmov(rd, rcond, rfalsy, size),
+                    LogicMode::FourValue => bce.heap_fv_cnmov(rd, rcond, rfalsy, size),
+                }
 
-                    let rfalsy = to_reg(
-                        bce,
-                        *falsy,
-                        &gl.vars,
-                        assignment[falsy],
-                        stack_offsets,
-                        T2,
-                        false,
-                    );
-                    let rtruthy = to_reg(
-                        bce,
-                        *truthy,
-                        &gl.vars,
-                        assignment[truthy],
-                        stack_offsets,
-                        T4,
-                        false,
-                    );
+                let rtruthy = to_reg(
+                    bce,
+                    *truthy,
+                    &gl.vars,
+                    assignment[truthy],
+                    stack_offsets,
+                    T4,
+                    false,
+                );
+                match dst.mode() {
+                    LogicMode::TwoValue => bce.heap_tv_cmov(rd, rcond, rtruthy, size),
+                    LogicMode::FourValue => bce.heap_fv_cmov(rd, rcond, rtruthy, size),
+                }
 
-                    match SixBitSize::from_vector_size(size) {
-                        None => bce.heap_merge(rd, rtruthy, rfalsy, size),
-                        Some(_) => bce.merge(rd, rtruthy, rfalsy),
-                    }
-
-                    jump_offset = Some(bce.data.len());
-                    bce.panic();
-
-                    let offset = bce.data.len() - branch_offset - 1;
+                if let Some(jump_offset) = jump_offset {
+                    let offset = bce.data.len() - jump_offset - 1;
                     let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
-                    bce.data[branch_offset] = BranchFalse {
-                        rcond: T4,
-                        imm: offset,
-                    }
-                    .encode();
-
-                    bce.fv_ceqi(T2, rcond, SignedImmediate::MINUS_ONE, SixBitSize::N1);
-                    rcond = T2;
+                    bce.data[jump_offset] = Jump(offset).encode();
                 }
-                (LogicMode::FourValue, SelectMerge::FalseOnSpecial) => {
-                    let (rcondspc, rcondval) = rcond.to_spc_and_val();
-                    bce.and(T2, rcondspc, rcondval);
-                    rcond = T2;
-                }
-            }
-
-            let rfalsy = to_reg(
-                bce,
-                *falsy,
-                &gl.vars,
-                assignment[falsy],
-                stack_offsets,
-                T4,
-                false,
-            );
-            match (dst.mode(), SixBitSize::from_vector_size(size)) {
-                (LogicMode::TwoValue, Some(_)) => bce.cnmov(rd, rcond, rfalsy),
-                (LogicMode::FourValue, Some(_)) => {
-                    bce.fv_cnmov(rd, rcond, rfalsy);
-                }
-                (LogicMode::TwoValue, None) => bce.heap_tv_cnmov(rd, rcond, rfalsy, size),
-                (LogicMode::FourValue, None) => bce.heap_fv_cnmov(rd, rcond, rfalsy, size),
-            }
-
-            let rtruthy = to_reg(
-                bce,
-                *truthy,
-                &gl.vars,
-                assignment[truthy],
-                stack_offsets,
-                T4,
-                false,
-            );
-            match (dst.mode(), SixBitSize::from_vector_size(size)) {
-                (LogicMode::TwoValue, Some(_)) => bce.cmov(rd, rcond, rtruthy),
-                (LogicMode::FourValue, Some(_)) => {
-                    bce.fv_cmov(rd, rcond, rtruthy);
-                }
-                (LogicMode::TwoValue, None) => bce.heap_tv_cmov(rd, rcond, rtruthy, size),
-                (LogicMode::FourValue, None) => bce.heap_fv_cmov(rd, rcond, rtruthy, size),
-            }
-
-            if let Some(jump_offset) = jump_offset {
-                let offset = bce.data.len() - jump_offset - 1;
-                let offset = SignedImmediate::new_from_u64(offset as u64).unwrap();
-                bce.data[jump_offset] = Jump(offset).encode();
             }
 
             store_back(bce, &gl.vars, stack_offsets, *dst, dslot, rd, T2);
