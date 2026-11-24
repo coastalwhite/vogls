@@ -6,7 +6,7 @@ use std::sync::Arc;
 use vogls::design::{Arena, Design, Macro};
 use vogls::utils::{IndexMap, VgHashMap, VgHashSet, new_table_key};
 use vogls::{DesignState, LogicMode, OptFlags, Optimizations, SignalHandle, VoglsPlugin};
-use vogls_trace::TracePlugin;
+use vogls_trace::HammingDistancePlugin;
 
 use crate::CspAble;
 use crate::compute::{
@@ -23,6 +23,10 @@ pub struct LazyDesign {
     pub sources: Vec<PathBuf>,
     pub top_level_module: Option<String>,
     pub defines: Vec<String>,
+    /// SDF files to annotate, each with the hierarchical scope it applies to (`None` for the top).
+    pub sdf: Vec<(Option<String>, PathBuf)>,
+    pub mode: LogicMode,
+    pub opt_rounds: u8,
     pub trace: bool,
     pub handles: VgHashSet<SignalRef>,
 }
@@ -49,6 +53,9 @@ impl CspAble for LazyDesign {
             sources: l_sources,
             top_level_module: l_tlm,
             defines: l_defines,
+            sdf: l_sdf,
+            mode: l_mode,
+            opt_rounds: l_opt_rounds,
             trace: _,
             handles: _,
         } = self;
@@ -56,15 +63,26 @@ impl CspAble for LazyDesign {
             sources: r_sources,
             top_level_module: r_tlm,
             defines: r_defines,
+            sdf: r_sdf,
+            mode: r_mode,
+            opt_rounds: r_opt_rounds,
             trace: _,
             handles: _,
         } = other;
-        l_sources == r_sources && l_defines == r_defines && l_tlm == r_tlm
+        l_sources == r_sources
+            && l_defines == r_defines
+            && l_tlm == r_tlm
+            && l_sdf == r_sdf
+            && l_mode == r_mode
+            && l_opt_rounds == r_opt_rounds
     }
     fn csp_hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.sources.hash(state);
         self.defines.hash(state);
         self.top_level_module.hash(state);
+        self.sdf.hash(state);
+        self.mode.hash(state);
+        self.opt_rounds.hash(state);
     }
     fn csp_merge(&mut self, other: Self) {
         self.trace |= other.trace;
@@ -114,6 +132,9 @@ impl ComputeNode for LazyDesign {
     ) -> ComputeResult<Self::Output> {
         let mut builder = vogls::DesignBuilder::new();
         let mut arena = Arena::default();
+        if self.mode == LogicMode::TwoValue {
+            builder.define_macro("__VOGLS__TWO_VALUE_LOGIC", Macro::default());
+        }
         for define in &self.defines {
             builder.define_macro(define, Macro::default());
         }
@@ -127,8 +148,14 @@ impl ComputeNode for LazyDesign {
             ComputeError::Parsing
         })?;
         let mut design = parsed
-            .elaborate(LogicMode::TwoValue, self.top_level_module.as_deref())
+            .elaborate(self.mode, self.top_level_module.as_deref())
             .map_err(|_| ComputeError::Elaboration)?;
+        for (scope, path) in &self.sdf {
+            if let Err(err) = design.annotate_sdf(path, scope.as_deref()) {
+                println!("{err}");
+                return Err(ComputeError::SdfAnnotation);
+            }
+        }
 
         let handles = self
             .handles
@@ -156,11 +183,11 @@ impl ComputeNode for LazyDesign {
 
         let mut plugins = Vec::new();
         if self.trace {
-            plugins.push(Box::new(TracePlugin::default()) as Box<dyn VoglsPlugin>);
+            plugins.push(Box::new(HammingDistancePlugin::new()) as Box<dyn VoglsPlugin>);
         }
         let mut design = design.lower(plugins).map_err(|_| ComputeError::Lowering)?;
         design.optimize(Optimizations {
-            rounds: 2,
+            rounds: self.opt_rounds,
             flags: OptFlags::ALL,
         });
         let (design, initial_state) = design.to_bytecode().map_err(|_| ComputeError::Bytecode)?;

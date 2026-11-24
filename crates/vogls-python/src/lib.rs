@@ -374,19 +374,41 @@ mod vogls {
     #[pymethods]
     impl PyLazyDesign {
         #[new]
-        #[pyo3(signature = (paths, top_level_module = None, defines = Vec::new()))]
+        #[pyo3(signature = (
+            paths,
+            top_level_module = None,
+            defines = Vec::new(),
+            sdf = Vec::new(),
+            mode = "two_value",
+            opt_rounds = 2,
+        ))]
         fn new(
             paths: Vec<PathBuf>,
             top_level_module: Option<String>,
             defines: Vec<String>,
-        ) -> Self {
-            Self(Arc::new(vogls_plan::design::LazyDesign {
+            sdf: Vec<(Option<String>, PathBuf)>,
+            mode: &str,
+            opt_rounds: u8,
+        ) -> PyResult<Self> {
+            let mode = match mode {
+                "two_value" => ::vogls::LogicMode::TwoValue,
+                "four_value" => ::vogls::LogicMode::FourValue,
+                other => {
+                    return Err(PyValueError::new_err(format!(
+                        "unknown mode {other:?}; expected 'two_value' or 'four_value'"
+                    )));
+                }
+            };
+            Ok(Self(Arc::new(vogls_plan::design::LazyDesign {
                 sources: paths,
                 top_level_module,
                 defines,
+                sdf,
+                mode,
+                opt_rounds,
                 trace: true,
                 handles: VgHashSet::default(),
-            }))
+            })))
         }
 
         pub fn run(&self) -> PyRun {

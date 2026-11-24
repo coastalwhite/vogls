@@ -5,7 +5,7 @@ use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use vogls::StdWorld;
 use vogls::design::DesignState;
 use vogls::utils::{IndexMap, VgHashMap};
-use vogls_trace::Trace;
+use vogls_trace::RtHammingDistance;
 
 use crate::TraceRef;
 use crate::array::{Array, DslLazyArray, LazyArrayKey, UIntArray};
@@ -147,7 +147,7 @@ impl LazyStep {
         inputs: &ComputeInputs,
         trace_ref: &mut Option<TraceRef>,
         outputs: &mut Vec<Output>,
-        traces: &mut Vec<Trace>,
+        traces: &mut Vec<RtHammingDistance>,
         rid: usize,
     ) -> ComputeResult<()> {
         match self {
@@ -177,7 +177,9 @@ impl LazyStep {
                 match agg {
                     RunAgg::HammingWeight => todo!(),
                     RunAgg::HammingDistance => {
-                        let (times, distances) = trace.hamming_distance();
+                        let RtHammingDistance {
+                            times, distances, ..
+                        } = trace;
                         outputs.push(Output::Plan(Plan {
                             components: [
                                 (
