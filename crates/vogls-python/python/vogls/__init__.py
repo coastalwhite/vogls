@@ -12,6 +12,7 @@ from typing import (
     Self,
     overload,
     List,
+    Tuple,
     Protocol,
     Callable,
 )
@@ -274,13 +275,31 @@ class LazyDesign:
         *,
         top_level_module: str | None = None,
         defines: list[str] = [],
+        sdf: str | List[str | Tuple[str, str]] = [],
+        mode: Literal["two_value", "four_value"] = "two_value",
+        opt_rounds: int = 2,
     ) -> None:
+        """
+        A design built from Verilog `sources`.
+
+        `sdf` lists SDF files to annotate, in order. Each entry is either a path, which applies to
+        the top-level module, or a `(scope, path)` pair, which applies to the instance at the
+        hierarchical `scope` (e.g. `("tb.dut", "chip.sdf")`).
+
+        `mode` picks two-valued or four-valued logic, and `opt_rounds` the number of optimization
+        rounds over the lowered design.
+        """
         sources_paths: List[str]
         if isinstance(sources, str):
             sources_paths = [sources]
         else:
             sources_paths = sources
-        self._inner = vgr.PyLazyDesign(sources_paths, top_level_module, defines)
+        if isinstance(sdf, str):
+            sdf = [sdf]
+        sdf_pairs = [(None, s) if isinstance(s, str) else (s[0], s[1]) for s in sdf]
+        self._inner = vgr.PyLazyDesign(
+            sources_paths, top_level_module, defines, sdf_pairs, mode, opt_rounds
+        )
 
     def run(self) -> Run:
         return Run._from_py(self._inner.run())
