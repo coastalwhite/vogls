@@ -20,18 +20,7 @@ test-cranelift *FLAGS:
 
 test *FLAGS:
     cargo build --bin vogls-test --profile=fast-dev
-    ./target/fast-dev/vogls-test unit {{FLAGS}}
-
-cargo-test:
-    cargo test --workspace
-
-integration-test-setup:
-    git submodule update --init
-    {{just_executable()}} -f tests/bench/prime/Justfile build
-
-integration-test *FLAGS:
-    cargo build --bin vogls-test --profile=release
-    ./target/release/vogls-test integration {{FLAGS}}
+    ./target/fast-dev/vogls-test {{FLAGS}}
 
 coverage:
     cargo llvm-cov clean --workspace
@@ -49,9 +38,30 @@ build-site-docs:
 
 build-site-python-docs:
     rm -rf site/py-docs
-    pdoc vogls --math -n --output-directory site/py-docs
+    uv run pdoc vogls --math -n --output-directory site/py-docs
 
 build-site-pipeline-explorer:
     rm -rf site/pipeline-explorer
     {{just_executable()}} {{justfile_directory()}}/tools/pipeline-explorer/build-site
     cp -r {{justfile_directory()}}/tools/pipeline-explorer/webapp/dist site/pipeline-explorer
+
+deps: deps-git deps-rs deps-py
+
+deps-git:
+	git --version
+	git submodule update --init
+
+deps-rs:
+	rustup --version
+	rustup target add wasm32-unknown-unknown
+	cargo --version
+	cargo install wasm-bindgen-cli --version 0.2.114
+	cargo install mdbook
+	cargo install cargo-llvm-cov
+
+deps-py:
+	uv --version
+	uv venv --allow-existing
+	uv pip install pdoc
+	uv pip install -e {{justfile_directory()}}/crates/vogls-python
+
