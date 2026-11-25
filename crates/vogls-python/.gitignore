@@ -1,2 +1,4 @@
 vogls/*.so
 vogls/__pycache__
+uv.lock
+
