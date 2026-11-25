@@ -498,15 +498,57 @@ impl ReadMemVariant {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOp {
+    /// Bitwise inversion.
+    ///
+    /// ```text
+    /// ~ | x  z  1  0
+    /// --+-----------
+    ///   | x  x  0  1
+    /// ```
     Not,
+
+    /// OR bits into a single bit.
+    ///
+    /// The value is decided by the following questions, in order:
+    /// 1. If any bit is `1`,        -> result is `1`.
+    /// 2. If any bit is `x` or `z`, -> result is `x`.
+    /// 3. Otherwise,                -> result is `0`.
     ReduceOr,
+
+    /// AND bits into a single bit.
+    ///
+    /// The value is decided by the following questions, in order:
+    /// 1. If any bit is `0`,        -> result is `0`.
+    /// 2. If any bit is `x` or `z`, -> result is `x`.
+    /// 3. Otherwise,                -> result is `0`.
     ReduceAnd,
+
+    /// XOR bits into a single bit.
+    ///
+    /// The value is decided by the following questions, in order:
+    /// 1. If any bit is `x` or `z`,          -> result is `x`.
+    /// 2. If the number of `1` bits is even, -> result is `0`.
+    /// 3. Otherwise,                         -> result is `1`.
     ReduceXor,
+
+    /// Number of consecutive `0` bits starting at the most-significant bit.
+    ///
+    /// Always outputs a 32-bit number.
     LeadingZeros,
 
+    /// Identity, but input variable is two-valued and output variable is four-valued.
     TvToFv,
+
+    /// Turn all four-valued bits into `0`.
+    ///
+    /// ```text
+    ///   | x  z  1  0
+    /// --+-----------
+    ///   | 0  0  0  1
+    /// ```
     FvToTv,
 
+    // Operations on reals (i.e. f64s)
     RealToLogical,
     RealToU64,
     RealToI64,
@@ -680,32 +722,38 @@ pub enum BinaryOp {
     /// Resolution of two equal-strength drivers of a `wire`.
     /// Per IEEE Std 1364-2005 table 7-2,
     ///
+    /// ```text
     ///   | x  z  1  0
     /// --+-----------
     /// x | x  x  x  x
     /// z | x  z  1  0
     /// 1 | x  1  1  x
     /// 0 | x  0  x  0
+    /// ```
     ResolveWire,
     /// Resolution of two equal-strength drivers of a `wand`.
     /// Per IEEE Std 1364-2005 table 4-3,
     ///
+    /// ```text
     ///   | x  z  1  0
     /// --+-----------
     /// x | x  x  x  0
     /// z | x  z  1  0
     /// 1 | x  1  1  0
     /// 0 | 0  0  0  0
+    /// ````
     ResolveWand,
     /// Resolution of two equal-strength drivers of a `wor`.
     /// Per IEEE Std 1364-2005 table 4-4,
     ///
+    /// ```text
     ///   | x  z  1  0
     /// --+-----------
     /// x | x  x  1  x
     /// z | x  z  1  0
     /// 1 | 1  1  1  1
     /// 0 | x  0  1  0
+    /// ```
     ResolveWor,
 
     /// Minimum of lhs and rhs
@@ -725,20 +773,18 @@ pub enum BinaryOp {
     /// XNOR(a, b) = XOR(a, NOT(b)) = NOT(XOR(a, b))
     Xnor,
 
+    // Operations on reals (i.e. f64s)
     RealAdd,
     RealSub,
     RealMul,
     RealDiv,
     RealPow,
-
     RealEq,
     RealNe,
-
     RealLt,
     RealLeq,
     RealGt,
     RealGeq,
-
     RealATan2,
     RealHypot,
 }
@@ -795,11 +841,33 @@ pub enum BinaryImmOp {
     /// { Imm, Operand }
     ConcatLeft,
 
+    /// The unsigned minimum.
     Min,
+    /// The unsigned maximum.
     Max,
 
+    /// Exact equality per bit.
+    ///
+    /// Output is always two-valued.
+    ///
+    /// ```text
+    ///   | x  z  1  0
+    /// --+-----------
+    /// x | 1  0  0  0
+    /// z | 0  1  0  0
+    /// 1 | 0  0  1  0
+    /// 0 | 0  0  0  1
+    /// ```
     BitwiseCaseEquality,
+
+    /// Exact reduced equality.
+    ///
+    /// Output is always two-valued.
     CaseEquality,
+
+    /// Exact reduced inequality.
+    ///
+    /// Output is always two-valued.
     CaseInequality,
 }
 
@@ -815,6 +883,7 @@ pub enum ShiftImmOp {
 
 #[derive(Debug, Clone)]
 pub enum Instruction {
+    /// Load an immediate into a variable.
     Constant(VariableKey, Bits),
 
     Unary(VariableKey, UnaryOp, VariableKey),
@@ -865,7 +934,6 @@ pub enum Instruction {
     /// A drive can be a "partial" drive, meaning that the source value is offset by a certain
     /// amount of bits, and no bits beyond a certain point will be affected.
     Drive(VariableKey, SignalKey, VariableKey, u32),
-
     DriveSlice(VariableKey, SignalKey, VariableKey, VariableKey),
 
     Phi(VariableKey, Box<[(BasicBlockKey, VariableKey)]>),
