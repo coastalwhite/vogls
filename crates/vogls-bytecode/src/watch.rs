@@ -4,7 +4,6 @@ use std::{cmp, fmt};
 use vogls_codegen::SixBitSize;
 use vogls_ir::{LogicMode, SCALAR_VSIZE, SignalSlice, VSIZE_32, VectorSize};
 use vogls_runtime::{RtSignalKey, RuntimeState};
-use vogls_utils::retain::retain_vec_end;
 use vogls_utils::{NonMaxU8, TableKey};
 
 use crate::reg::{Reg, RegInfo, RegStorage, Regs};
@@ -512,7 +511,7 @@ impl BytecodeInstruction for PushTransaction {
         _code: &[Bytecode],
         regs: &mut Regs,
         _pc: &mut u64,
-        state: &mut RuntimeState,
+        _state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
         cldctx: &mut ColdContext,
@@ -526,7 +525,8 @@ impl BytecodeInstruction for PushTransaction {
         }
 
         let rt = u64::from(imm20);
-        push_transaction(state, cldctx, rt);
+        let rt = RtSignalKey::from_usize(rt as usize).unwrap();
+        cldctx.txs.push(rt);
     }
 }
 
@@ -578,7 +578,7 @@ impl BytecodeInstruction for PushTransactionSlot {
         code: &[Bytecode],
         regs: &mut Regs,
         pc: &mut u64,
-        state: &mut RuntimeState,
+        _state: &mut RuntimeState,
         _schedule: &mut Schedule,
         _listeners: &mut BytecodeListeners,
         cldctx: &mut ColdContext,
@@ -595,28 +595,9 @@ impl BytecodeInstruction for PushTransactionSlot {
         }
 
         let rt = u64::from(imm20) | (u64::from(additional_slots[0].0) << 20);
-        push_transaction(state, cldctx, rt);
+        let rt = RtSignalKey::from_usize(rt as usize).unwrap();
+        cldctx.txs.push(rt);
     }
-}
-
-#[inline(always)]
-fn push_transaction(state: &mut RuntimeState, cldctx: &mut ColdContext<'_>, rt: u64) {
-    let rt = RtSignalKey::from_usize(rt as usize).unwrap();
-    let txs = &mut state.txs;
-
-    // We don't have to grow the transactions vector, just keep pushing.
-    if txs.len() >= txs.capacity() {
-        std::hint::cold_path();
-        let scratch = &mut cldctx.txs_dedup_scratch;
-
-        // All the items in `txs[..scratch.len()]` are known to be unique, so we should skip those.
-        retain_vec_end(txs, scratch.len(), |rt| scratch.insert(rt));
-
-        // @NOTE: We explicitly push unconditionally here, as opposed to conditionally on
-        // scratch.insert(tx), because it makes sure the cold path is actually cold.
-    }
-
-    txs.push(rt);
 }
 
 impl BytecodeInstruction for ShiftReduceOr {

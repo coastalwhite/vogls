@@ -10,9 +10,9 @@ use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::time::{TimeFormat, TimeResolution};
 use vogls_ir::{Bits, GlobalContext, Mode, ReadMem, VectorSize};
 use vogls_runtime::plugins::RuntimePluginState;
+use vogls_runtime::transactions::Transactions;
 use vogls_runtime::{RtSignalKey, RuntimeError, RuntimeState};
-use vogls_utils::retain::retain_vec_end;
-use vogls_utils::{ScratchSet, SyncWrapper};
+use vogls_utils::SyncWrapper;
 use vogls_world::World;
 
 type Time = u64;
@@ -45,7 +45,7 @@ pub mod layout {
     pub const CTX_FN_TABLE: usize = offset_of!(ColdContextT, fn_table);
     pub const CTX_FMT_STRS: usize = offset_of!(ColdContextT, fmt_strs);
     pub const CTX_TXS: usize = offset_of!(ColdContextT, txs);
-    pub const CTX_PENDING_TXS: usize = offset_of!(ColdContextT, pending_txs);
+    pub const CTX_PENDING_TXS: usize = offset_of!(ColdContextT, txs_pending);
     pub const CTX_HEAP_LEN: usize = offset_of!(ColdContextT, heap_len);
     pub const CTX_READMEMS: usize = offset_of!(ColdContextT, readmems);
     pub const CTX_READMEM: usize = offset_of!(ColdContextT, readmem);
@@ -488,17 +488,16 @@ extern "C" fn set_time_format(mut cldctx: NonNull<ColdContextT>, idx: i64) {
 /// room for the pushes it is about to do unchecked.
 extern "C" fn txs_reserve(mut cldctx: NonNull<ColdContextT>, additional: u64) {
     let cldctx = unsafe { cldctx.as_mut() };
-    let mut txs: Vec<RtSignalKey> = std::mem::take(&mut cldctx.txs).into();
+    let mut txs = Transactions::from_inner(
+        std::mem::take(&mut cldctx.txs).into(),
+        cldctx.txs_checkpoint,
+    );
+    txs.flush();
+    txs.reserve(additional as usize);
 
-    // All the items in `txs[..dedup.len()]` are known to be unique, so only the tail needs to be
-    // deduplicated.
-    let dedup = &mut cldctx.txs_dedup;
-    retain_vec_end(&mut txs, dedup.len(), |tx| dedup.insert(tx));
-
-    // Keep at least as many free slots as there are unique transactions. Otherwise, a timestep
-    // that touches about `capacity` unique signals would come back here on nearly every TR.
-    txs.reserve((additional as usize).max(txs.len()));
+    let (txs, txs_checkpoint) = txs.into_inner();
     cldctx.txs = txs.into();
+    cldctx.txs_checkpoint = txs_checkpoint;
 }
 
 impl FnTable {
@@ -531,15 +530,11 @@ pub struct ColdContextT<'a> {
 
     fmt_strs: *const DynFormatString,
 
-    /// Signals driven with a changed value since the last plugin `timestep`, possibly with
-    /// duplicates. The JIT-ed code pushes onto this without capacity checks, after reserving room
-    /// through [`FnTable::txs_reserve`] (see `TrBuilder`).
     txs: FfiVec<RtSignalKey>,
-    /// Number of pushes to reserve room for when a TR tail-calls into
-    /// `reserve_txs_then_reenter`. The TR to re-enter goes into `pending_event`.
-    pending_txs: u64,
-    /// Exactly the elements of `txs[..txs_dedup.len()]`, which are unique.
-    txs_dedup: ScratchSet<RtSignalKey>,
+    /// The committed transactions.
+    txs_checkpoint: usize,
+    /// Number of pushes to reserve room.
+    txs_pending: u64,
 
     heap_len: usize,
     readmems: *const (HeapRef, ReadMem),
@@ -654,6 +649,7 @@ impl Schedule {
 pub struct ClifDesignState {
     schedule: Schedule,
     listening: Vec<u64>,
+    pub txs: Transactions,
     pub runtime: RuntimeState,
     pub plugins: Vec<RuntimePluginState>,
 }
@@ -663,6 +659,7 @@ impl Clone for ClifDesignState {
         Self {
             schedule: self.schedule.clone(),
             listening: self.listening.clone(),
+            txs: self.txs.clone(),
             runtime: self.runtime.clone(),
             plugins: self.plugins.iter().map(|p| p.as_ref().clone()).collect(),
         }
@@ -806,6 +803,7 @@ impl ClifDesign {
         ClifDesignState {
             schedule,
             listening,
+            txs: Transactions::new(),
             runtime,
             plugins: Vec::new(),
         }
@@ -834,13 +832,14 @@ impl ClifDesign {
                 .as_mut_ptr()
                 .add(self.heap_wide_ptr as usize)
         };
+        let (txs, txs_checkpoint) = std::mem::take(&mut state.txs).into_inner();
+        let txs = txs.into();
         let mut cldctx = ColdContextT {
             fn_table: FnTable::new(),
             fmt_strs: self.dyn_fmt_strs.as_ptr(),
-            // A fresh dedup set is consistent with any `txs`: it only claims an empty prefix.
-            txs: std::mem::take(&mut state.runtime.txs).into(),
-            pending_txs: 0,
-            txs_dedup: ScratchSet::default(),
+            txs,
+            txs_checkpoint,
+            txs_pending: 0,
             time_format: state.runtime.time_format.clone(),
             time_resolution: self.time_resolution,
             heap_len: state.runtime.heap.0.len(),
@@ -886,18 +885,18 @@ impl ClifDesign {
                 }
 
                 if !state.plugins.is_empty() {
-                    let mut txs: Vec<RtSignalKey> = std::mem::take(&mut cldctx.txs).into();
-                    let dedup = &mut cldctx.txs_dedup;
-                    retain_vec_end(&mut txs, dedup.len(), |tx| dedup.insert(tx));
-
-                    state.runtime.txs = txs;
+                    let mut txs = Transactions::from_inner(
+                        std::mem::take(&mut cldctx.txs).into(),
+                        cldctx.txs_checkpoint,
+                    );
+                    let txss = txs.flush_as_slice();
                     for plugin in state.plugins.iter_mut() {
-                        plugin.timestep(&mut state.runtime);
+                        plugin.timestep(&mut state.runtime, txss);
                     }
-                    let mut txs = std::mem::take(&mut state.runtime.txs);
                     txs.clear();
-                    dedup.clear();
+                    let (txs, txs_checkpoint) = txs.into_inner();
                     cldctx.txs = txs.into();
+                    cldctx.txs_checkpoint = txs_checkpoint;
                 }
 
                 if schedule.future.is_empty() {
@@ -946,11 +945,13 @@ impl ClifDesign {
 
         state.runtime.time_format = cldctx.time_format;
         state.runtime.instruction_count = cldctx.icount;
-        state.runtime.txs = cldctx.txs.into();
+        state.txs = Transactions::from_inner(cldctx.txs.into(), cldctx.txs_checkpoint);
         let error = cldctx.error;
+        let txs = state.txs.flush_as_slice();
         for plugin in state.plugins.iter_mut() {
-            plugin.finish(&mut state.runtime);
+            plugin.finish(&mut state.runtime, txs);
         }
+        state.txs.clear();
         if return_value.should_exit() {
             if return_value.is_ok() {
                 writeln!(world.stdout(), "[FINISH]")?;
@@ -972,6 +973,7 @@ impl ClifDesign {
                 state.schedule.active_region.push(target.clone());
             }
         }
+        state.txs.push(signal);
     }
 }
 

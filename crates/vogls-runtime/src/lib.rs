@@ -8,6 +8,7 @@ use vogls_world::WorldError;
 pub mod plugins;
 pub mod random;
 pub mod readmem;
+pub mod transactions;
 
 new_table_key! { pub struct RtSignalKey; }
 
@@ -76,7 +77,6 @@ pub struct RuntimeState {
     pub event_count: u64,
     pub instruction_count: u64,
     pub time_format: TimeFormat,
-    pub txs: Vec<RtSignalKey>,
 }
 
 impl RuntimeState {
@@ -92,7 +92,6 @@ impl RuntimeState {
             event_count: 0,
             instruction_count: 0,
             time_format,
-            txs: Vec::new(),
         }
     }
 

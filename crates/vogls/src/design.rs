@@ -194,10 +194,6 @@ impl Design {
             };
             state.runtime_mut().heap.store_bits(heap_ref, mode, &value);
 
-            if !state.plugins().is_empty() {
-                state.runtime_mut().txs.push(signal.key);
-            }
-
             match (&self.backend, state) {
                 (DesignBackend::Bytecode { design }, DesignState::Bytecode(state)) => {
                     design.poke_signal(state, signal.key)
