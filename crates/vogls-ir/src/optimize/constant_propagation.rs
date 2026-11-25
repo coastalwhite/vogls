@@ -662,21 +662,33 @@ fn constant_propagate_instruction(
                 Some(b) => match b.extract_exact_u32() {
                     None => assign_constant!(dst, Bits::new_unknown(vars.size(dst))),
                     Some(offset) => {
+                        let SignalBounds::Constant(bounds) = bounds else {
+                            return PropagateResult { replace: false };
+                        };
+
                         let dst_size = vars.size(dst);
                         let signal = &signals[signal_key];
 
-                        // Don't make it into a constant slice if that slice would overflow the
-                        // signal or its bounds.
-                        let fits = SignalSlice::from_width(offset, dst_size).is_some_and(|slice| {
-                            let bounds = match bounds {
-                                SignalBounds::Constant(bounds) => bounds,
-                                SignalBounds::Variable { .. } => return false,
+                        // Identify what part of the probe is in-bounds.
+                        let written = SignalSlice::from_width(offset, dst_size)
+                            .and_then(|write| write.overlapping_slice(bounds))
+                            .and_then(|write| {
+                                write.overlapping_slice(SignalSlice::with_end(signal.size))
+                            });
+
+                        let Some(written) = written else {
+                            // The probe is entirely out-of-bounds, so nothing is read.
+                            let bits = match dst.mode() {
+                                LogicMode::TwoValue => Bits::new_zeroed(dst_size),
+                                LogicMode::FourValue => Bits::new_unknown(dst_size),
                             };
-                            slice.msb() < signal.size.get()
-                                && bounds.lsb() <= slice.lsb()
-                                && slice.msb() <= bounds.msb()
-                        });
-                        if fits {
+                            additional.push(I::Constant(dst, bits));
+                            return PropagateResult { replace: true };
+                        };
+
+                        if written.width() == dst_size {
+                            // Entire probe is in-bounds.
+                            //
                             // @NOTE: A probe has the mode of its signal, while a slice is always
                             // four-valued.
                             if dst.mode() == signal.mode {
@@ -688,6 +700,8 @@ fn constant_propagate_instruction(
                             }
                             return PropagateResult { replace: true };
                         }
+
+                        // Only a part of the probe is in-bounds. Just leave it.
                     }
                 },
             }
@@ -729,19 +743,33 @@ fn constant_propagate_instruction(
                 Some(b) => match b.extract_exact_u32() {
                     None => {}
                     Some(offset) => {
-                        let dst_size = signals[signal].size;
+                        let SignalBounds::Constant(bounds) = bounds else {
+                            return PropagateResult { replace: false };
+                        };
+
+                        let signal_size = signals[signal].size;
                         let src_size = vars.size(src);
 
-                        // Don't make it into a constant slice if that slice would overflow the
-                        // signal.
-                        if src_size
-                            .get()
-                            .checked_add(offset)
-                            .is_some_and(|v| v <= dst_size.get())
-                        {
+                        // Identify what part of the drive is in-bounds.
+                        let written = SignalSlice::from_width(offset, src_size)
+                            .and_then(|write| write.overlapping_slice(bounds))
+                            .and_then(|write| {
+                                write.overlapping_slice(SignalSlice::with_end(signal_size))
+                            });
+
+                        let Some(written) = written else {
+                            // The write is entirely out-of-bounds, so nothing is driven.
+                            additional.push(I::Constant(dst, Bits::new_zeroed(src_size)));
+                            return PropagateResult { replace: true };
+                        };
+
+                        if written.width() == src_size {
+                            // Entire drive is in-bounds.
                             additional.push(I::Drive(dst, signal, src, offset));
                             return PropagateResult { replace: true };
                         }
+
+                        // Only a part of the drive is in-bounds. Just leave it.
                     }
                 },
             }
