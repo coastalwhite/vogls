@@ -9,3 +9,6 @@ path = "src/main.rs"
 
 [dependencies]
 trva.workspace = true
+
+[lints]
+workspace = true

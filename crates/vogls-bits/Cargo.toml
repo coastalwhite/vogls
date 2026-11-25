@@ -13,3 +13,6 @@ rand = { workspace = true, optional = true }
 
 [features]
 random = ["rand"]
+
+[lints]
+workspace = true

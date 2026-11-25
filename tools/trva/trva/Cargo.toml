@@ -9,3 +9,6 @@ hashbrown = { version = "0.17.1", default-features = false }
 
 [features]
 default = ["foldhash"]
+
+[lints]
+workspace = true

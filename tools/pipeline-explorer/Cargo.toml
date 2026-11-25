@@ -15,3 +15,6 @@ minelf = { workspace = true }
 vogls = { workspace = true }
 trva = { workspace = true }
 wasm-bindgen = "=0.2.114"
+
+[lints]
+workspace = true

@@ -1884,7 +1884,6 @@ impl BytecodeEncoder {
         self.data.push(Bytecode(*range.end()));
     }
 
-    #[allow(clippy::too_many_arguments)]
     /// Encode a four-value register-relative set.
     ///
     #[allow(clippy::too_many_arguments)]
