@@ -51,7 +51,7 @@ impl BytecodeInstruction for LoadSlot {
         let v = c.0;
         Self {
             rd: Reg::new_masked(v >> 8),
-            imm20: (v >> 12) as u32,
+            imm20: v >> 12,
         }
     }
     #[inline(always)]

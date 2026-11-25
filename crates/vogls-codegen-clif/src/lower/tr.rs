@@ -133,7 +133,7 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
         let mut txs_cyclic = VgHashSet::default();
         let mut txs_once = VgHashMap::default();
         if compiler.num_plugins > 0 {
-            let cyclic_bbs = cyclic_blocks(&compiler.gl, &order);
+            let cyclic_bbs = cyclic_blocks(compiler.gl, &order);
             let mut plan = TxPlan {
                 reserved: 0,
                 cyclic: VgHashSet::default(),
