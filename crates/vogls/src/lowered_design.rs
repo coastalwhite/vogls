@@ -19,6 +19,7 @@ use vogls_ir::{
     GlobalContext, LogicMode, SCALAR_VSIZE, Signal, SignalFlags, SignalKey, SignalSlice,
 };
 use vogls_runtime::plugins::RuntimePlugin;
+use vogls_runtime::transactions::Transactions;
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_utils::{TableKey as _, VgHashMap};
 use vogls_verilog::lower::{Diagnostics, WarningsReport};
@@ -269,6 +270,7 @@ impl LoweredDesign {
         let state = vogls_bytecode::State {
             runtime,
             plugins,
+            txs: Transactions::new(),
             schedule,
             listeners,
         };

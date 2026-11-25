@@ -202,9 +202,6 @@ fn execute_intrinsic(
         O::Time => regs[rd] = state.time,
         O::Finish => {
             *pc = u64::MAX;
-            for plugin in cldctx.plugins.iter_mut() {
-                plugin.finish(state);
-            }
             cldctx.world.stdout().write_all(b"[FINISH]\n")?;
         }
         O::Random(kind) => {

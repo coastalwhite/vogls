@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
 use vogls::{ElaboratedDesign, FinalizeContext, SignalHandle};
-use vogls_codegen::{Heap, HeapRef};
+use vogls_codegen::{Heap, HeapRef, SixBitSize};
 use vogls_ir::{Bits, LogicMode};
 use vogls_runtime::RtSignalKey;
 
@@ -25,63 +25,6 @@ impl ShadowHeap {
         Self { heap, dirty }
     }
 
-    /// The number of bits of the signal at `at` that differ between the shadow and `heap`.
-    ///
-    /// For a four-valued signal, a bit differs if either its special or its value bit does.
-    pub fn distance(&self, heap: &Heap, at: HeapRef, mode: LogicMode) -> u64 {
-        let size = at.size.get() as usize;
-        let ones = match mode {
-            LogicMode::TwoValue if size <= 64 => {
-                let diff = self.heap.get_tv_u64(at) ^ heap.get_tv_u64(at);
-                (diff & low_mask(size)).count_ones()
-            }
-            LogicMode::FourValue if size <= 64 => {
-                let (old_spc, old_val) = self.heap.get_fv_u64(at);
-                let (new_spc, new_val) = heap.get_fv_u64(at);
-                (((old_spc ^ new_spc) | (old_val ^ new_val)) & low_mask(size)).count_ones()
-            }
-            // Wide signals are word aligned: `n` value words, or `n` special words followed by
-            // `n` value words.
-            LogicMode::TwoValue => {
-                let n = size.div_ceil(64);
-                let old = self.heap.get_u64_slice(at.offset, n);
-                let new = heap.get_u64_slice(at.offset, n);
-                (0..n)
-                    .map(|i| ((old[i] ^ new[i]) & word_mask(size, i)).count_ones())
-                    .sum()
-            }
-            LogicMode::FourValue => {
-                let n = size.div_ceil(64);
-                let old = self.heap.get_u64_slice(at.offset, 2 * n);
-                let new = heap.get_u64_slice(at.offset, 2 * n);
-                (0..n)
-                    .map(|i| {
-                        let diff = (old[i] ^ new[i]) | (old[n + i] ^ new[n + i]);
-                        (diff & word_mask(size, i)).count_ones()
-                    })
-                    .sum()
-            }
-        };
-        u64::from(ones)
-    }
-
-    /// Mark the words that store the signal at `at` to be copied on the next
-    /// [`ShadowHeap::update`].
-    pub fn mark_dirty(&mut self, at: HeapRef, mode: LogicMode) {
-        let size = at.size.get() as usize;
-        let num_bits = match mode {
-            LogicMode::TwoValue if size <= 64 => size,
-            LogicMode::TwoValue => size.next_multiple_of(64),
-            LogicMode::FourValue if at.size < Heap::FV_U64_MIN_SIZE => 2 * size,
-            LogicMode::FourValue => 2 * size.next_multiple_of(64),
-        };
-        let start = at.offset.bit_offset / 64;
-        let end = (at.offset.bit_offset + num_bits).div_ceil(64);
-        for word in start..end {
-            self.dirty[word / 64] |= 1 << (word % 64);
-        }
-    }
-
     /// Copy the dirty words over from `heap` and clear them.
     pub fn update(&mut self, heap: &Heap) {
         let (old, new) = (&mut self.heap.0, &heap.0);
@@ -96,16 +39,6 @@ impl ShadowHeap {
             }
         }
     }
-}
-
-/// A mask of the lowest `n` bits of a word, for `n <= 64`.
-fn low_mask(n: usize) -> u64 {
-    u64::MAX.unbounded_shr(64 - n as u32)
-}
-
-/// The mask of the bits of word `i` that belong to a wide signal of `size` bits.
-fn word_mask(size: usize, i: usize) -> u64 {
-    low_mask((size - 64 * i).min(64))
 }
 
 /// Computes the Hamming distance over all the signals in the design, per timestep.
@@ -179,9 +112,7 @@ pub struct RtHammingDistance {
 }
 
 impl RtHammingDistance {
-    /// Record the distance of the timestep at `time`, given the (deduplicated) signals that
-    /// changed during it.
-    fn record(&mut self, time: u64, heap: &Heap, txs: impl IntoIterator<Item = RtSignalKey>) {
+    fn record(&mut self, time: u64, heap: &Heap, txs: &[RtSignalKey]) {
         if self.shadow.is_none() {
             self.shadow = Some(ShadowHeap::new(heap.clone()));
             self.times.push(time);
@@ -190,19 +121,74 @@ impl RtHammingDistance {
         }
         let shadow = self.shadow.as_mut().unwrap();
 
-        let mut distance = 0;
+        let mut distance = 0u64;
+
+        assert_eq!(shadow.heap.0.len(), heap.0.len());
+        let heap_sha = shadow.heap.0.as_ref();
+        let heap_cur = heap.0.as_ref();
         for tx in txs {
             let signal = tx.as_usize();
             if !self.tracked[signal] {
                 continue;
             }
             let (at, mode) = (self.signal_to_heap[signal], self.signal_mode[signal]);
-            distance += shadow.distance(heap, at, mode);
-            shadow.mark_dirty(at, mode);
+
+            let bit_offset = at.offset.bit_offset as u64;
+
+            let woff = (bit_offset / 64) as usize;
+
+            let mut bit_size = at.size.get();
+            if mode.is_four_value() {
+                bit_size *= 2;
+            }
+
+            let min_u64_size = match mode {
+                LogicMode::TwoValue => Heap::TV_U64_MIN_SIZE,
+                LogicMode::FourValue => Heap::FV_U64_MIN_SIZE,
+            };
+
+            if at.size < min_u64_size {
+                let boff = bit_offset % 64;
+                let whole_size = SixBitSize::new(bit_size as u8).unwrap();
+                let whole_mask = whole_size.mask(u64::MAX);
+                let wsha = whole_mask & (heap_sha[woff] >> boff);
+                let wcur = whole_mask & (heap_cur[woff] >> boff);
+
+                let delta_mask = match mode {
+                    LogicMode::TwoValue => wcur ^ wsha,
+                    LogicMode::FourValue => {
+                        let plane_size = SixBitSize::from_vector_size(at.size).unwrap();
+                        let plane_mask = plane_size.mask(u64::MAX);
+
+                        let spc = (wcur & plane_mask) ^ (wsha & plane_mask);
+                        let val = (wcur >> plane_size as u32) ^ (wsha >> plane_size as u32);
+                        spc | val
+                    }
+                };
+                distance += delta_mask.count_ones() as u64;
+            } else if mode.is_two_value() {
+                let nwords = at.size.get().div_ceil(64) as usize;
+                distance += (woff..woff + nwords)
+                    .map(|i| (heap_sha[i] ^ heap_cur[i]).count_ones() as u64)
+                    .sum::<u64>();
+            } else {
+                let nwords = at.size.get().div_ceil(64) as usize;
+                distance += (woff..woff + nwords)
+                    .map(|i| {
+                        let spc = heap_sha[i] ^ heap_cur[i];
+                        let val = heap_sha[nwords + i] ^ heap_cur[nwords + i];
+                        (spc | val).count_ones() as u64
+                    })
+                    .sum::<u64>();
+            }
+
+            let start = at.offset.bit_offset / 64;
+            let end = (at.offset.bit_offset + bit_size as usize).div_ceil(64);
+            for word in start..end {
+                shadow.dirty[word / 64] |= 1 << (word % 64);
+            }
         }
 
-        // Only copy once all distances are taken. Signals share heap words, so copying the
-        // words of one signal early would also hide the change of another signal in them.
         shadow.update(heap);
 
         self.times.push(time);
@@ -215,20 +201,16 @@ impl vogls::runtime::plugins::RuntimePlugin for RtHammingDistance {
         Box::new(Clone::clone(self))
     }
 
-    fn timestep(&mut self, state: &mut vogls::runtime::RuntimeState) {
-        // The runtime deduplicates `txs` before handing it to `timestep`.
-        self.record(state.time, &state.heap, state.txs.iter().copied());
+    fn timestep(&mut self, state: &mut vogls::runtime::RuntimeState, txs: &[RtSignalKey]) {
+        self.record(state.time, &state.heap, txs);
     }
 
-    fn finish(&mut self, state: &mut vogls::runtime::RuntimeState) {
-        // A `$finish` ends the simulation without a `timestep` for the timestep it is in, so its
-        // transactions are still pending and not deduplicated yet.
-        if !state.txs.is_empty() {
-            let mut txs = state.txs.clone();
-            txs.sort_unstable();
-            txs.dedup();
-            self.record(state.time, &state.heap, txs);
+    fn finish(&mut self, state: &mut vogls::runtime::RuntimeState, txs: &[RtSignalKey]) {
+        if txs.is_empty() {
+            return;
         }
+
+        self.record(state.time, &state.heap, txs);
     }
 }
 
@@ -296,11 +278,11 @@ impl vogls::VoglsPlugin for TracePlugin {
 }
 
 fn commit_transactions(
-    state: &vogls::runtime::RuntimeState,
+    txs: &[RtSignalKey],
     tracked: &mut VgHashMap<RtSignalKey, Option<NonMaxUsize>>,
     updated_this_time_step: &mut Vec<RtSignalKey>,
 ) {
-    for &tx in &state.txs {
+    for &tx in txs {
         if let Some(idx) = tracked.get_mut(&tx) {
             idx.get_or_insert_with(|| {
                 let idx = NonMaxUsize::new(updated_this_time_step.len()).unwrap();
@@ -316,8 +298,8 @@ impl vogls::runtime::plugins::RuntimePlugin for TracePlugin {
         Box::new(Clone::clone(self))
     }
 
-    fn timestep(&mut self, state: &mut vogls::runtime::RuntimeState) {
-        commit_transactions(state, &mut self.tracked, &mut self.updated_this_time_step);
+    fn timestep(&mut self, state: &mut vogls::runtime::RuntimeState, txs: &[RtSignalKey]) {
+        commit_transactions(txs, &mut self.tracked, &mut self.updated_this_time_step);
 
         self.time_offsets.push((state.time, self.trace.len()));
         self.trace
@@ -333,8 +315,8 @@ impl vogls::runtime::plugins::RuntimePlugin for TracePlugin {
         self.updated_this_time_step.clear();
     }
 
-    fn finish(&mut self, state: &mut vogls::runtime::RuntimeState) {
-        commit_transactions(state, &mut self.tracked, &mut self.updated_this_time_step);
+    fn finish(&mut self, state: &mut vogls::runtime::RuntimeState, txs: &[RtSignalKey]) {
+        commit_transactions(txs, &mut self.tracked, &mut self.updated_this_time_step);
 
         if !self.updated_this_time_step.is_empty() {
             self.time_offsets.push((state.time, self.trace.len()));
@@ -377,15 +359,15 @@ impl vogls::runtime::plugins::RuntimePlugin for UpdateTrackerPlugin {
         Box::new(Clone::clone(self))
     }
 
-    fn timestep(&mut self, state: &mut vogls::runtime::RuntimeState) {
-        commit_transactions(state, &mut self.tracked, &mut self.updated_this_time_step);
+    fn timestep(&mut self, _state: &mut vogls::runtime::RuntimeState, txs: &[RtSignalKey]) {
+        commit_transactions(txs, &mut self.tracked, &mut self.updated_this_time_step);
 
         self.tracked.iter_mut().for_each(|t| *t.1 = None);
         self.updated_this_time_step.clear();
     }
 
-    fn finish(&mut self, state: &mut vogls::runtime::RuntimeState) {
-        commit_transactions(state, &mut self.tracked, &mut self.updated_this_time_step);
+    fn finish(&mut self, _state: &mut vogls::runtime::RuntimeState, txs: &[RtSignalKey]) {
+        commit_transactions(txs, &mut self.tracked, &mut self.updated_this_time_step);
     }
 }
 

@@ -383,11 +383,11 @@ impl<'a> fmt::Display for VcdValueDisplay<'a> {
 }
 
 fn commit_transactions(
-    state: &vogls_runtime::RuntimeState,
+    txs: &[RtSignalKey],
     tracked: &mut SecondaryTable<RtSignalKey, Option<NonMaxUsize>>,
     updated_this_time_step: &mut Vec<RtSignalKey>,
 ) {
-    for &tx in &state.txs {
+    for &tx in txs {
         if let Some(idx) = tracked.get_mut(tx) {
             idx.get_or_insert_with(|| {
                 let idx = NonMaxUsize::new(updated_this_time_step.len()).unwrap();
@@ -403,9 +403,9 @@ impl RuntimePlugin for RtVcdOutput {
         todo!()
     }
 
-    fn timestep(&mut self, state: &mut vogls_runtime::RuntimeState) {
+    fn timestep(&mut self, state: &mut vogls_runtime::RuntimeState, txs: &[RtSignalKey]) {
         if !self.paused {
-            commit_transactions(state, &mut self.tracked, &mut self.updated_this_time_step);
+            commit_transactions(txs, &mut self.tracked, &mut self.updated_this_time_step);
         }
 
         dump_time_step(
@@ -426,9 +426,9 @@ impl RuntimePlugin for RtVcdOutput {
         .unwrap();
     }
 
-    fn finish(&mut self, state: &mut vogls_runtime::RuntimeState) {
+    fn finish(&mut self, state: &mut vogls_runtime::RuntimeState, txs: &[RtSignalKey]) {
         if !self.paused {
-            commit_transactions(state, &mut self.tracked, &mut self.updated_this_time_step);
+            commit_transactions(txs, &mut self.tracked, &mut self.updated_this_time_step);
         }
 
         dump_time_step(

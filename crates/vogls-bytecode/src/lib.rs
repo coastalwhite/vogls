@@ -36,9 +36,9 @@ use vogls_codegen::{Heap, HeapOffset, HeapRef, SixBitSize};
 use vogls_ir::time::TimeResolution;
 use vogls_ir::{Bits, LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};
+use vogls_runtime::transactions::Transactions;
 use vogls_runtime::{RtSignalKey, RuntimeError, RuntimeState};
-use vogls_utils::retain::retain_vec_end;
-use vogls_utils::{IndexSet, NonMaxU32, ScratchSet};
+use vogls_utils::{IndexSet, NonMaxU32};
 
 pub use control_flow::*;
 pub use extend::*;
@@ -79,6 +79,7 @@ pub struct Design {
 pub struct State {
     pub runtime: RuntimeState,
     pub plugins: Vec<RuntimePluginState>,
+    pub txs: Transactions,
     pub schedule: Schedule,
     pub listeners: BytecodeListeners,
 }
@@ -92,6 +93,7 @@ impl Clone for State {
                 .iter()
                 .map(|p| RuntimePlugin::clone(p.as_ref()))
                 .collect(),
+            txs: self.txs.clone(),
             schedule: self.schedule.clone(),
             listeners: self.listeners.clone(),
         }
@@ -114,7 +116,7 @@ pub struct ColdContext<'a> {
     plugins: &'a mut [RuntimePluginState],
     heap_scratch: Vec<u64>,
 
-    txs_dedup_scratch: ScratchSet<RtSignalKey>,
+    txs: &'a mut Transactions,
 
     /// The error that ended the simulation.
     error: Option<RuntimeError>,
@@ -127,6 +129,7 @@ impl<'a> ColdContext<'a> {
         watchers: &'a BytecodeWatchers,
         plugins: &'a mut [RuntimePluginState],
         world: &'a mut dyn World,
+        txs: &'a mut Transactions,
         time_resolution: TimeResolution,
     ) -> Self {
         Self {
@@ -137,7 +140,7 @@ impl<'a> ColdContext<'a> {
             watchers,
             heap_scratch: Vec::new(),
             plugins,
-            txs_dedup_scratch: ScratchSet::default(),
+            txs,
             error: None,
             time_resolution,
         }
@@ -792,13 +795,11 @@ impl Schedule {
             }
 
             if !cldctx.plugins.is_empty() {
-                let scratch = &mut cldctx.txs_dedup_scratch;
-                retain_vec_end(&mut state.txs, scratch.len(), |tx| scratch.insert(tx));
+                let txs = cldctx.txs.flush_as_slice();
                 for plugin in cldctx.plugins.iter_mut() {
-                    plugin.timestep(state);
+                    plugin.timestep(state, txs);
                 }
-                state.txs.clear();
-                scratch.clear();
+                cldctx.txs.clear();
             }
 
             // Stop if there are no more events.
@@ -829,13 +830,7 @@ impl Schedule {
             self.next_time = next_time;
         };
 
-        let pc = self.active.pop();
-        if pc.is_none() {
-            for plugin in cldctx.plugins.iter_mut() {
-                plugin.finish(state);
-            }
-        }
-        pc
+        self.active.pop()
     }
 
     pub fn set_max_time(&mut self, time: u64) {
@@ -1158,6 +1153,7 @@ impl Design {
             &self.watchers,
             &mut state.plugins,
             world,
+            &mut state.txs,
             self.time_resolution,
         );
         let Some(entry) = state.schedule.pop(&mut state.runtime, &mut cldctx) else {
@@ -1218,6 +1214,14 @@ impl Design {
             &state.listeners,
         );
 
+        if !cldctx.plugins.is_empty() {
+            let txs = cldctx.txs.flush_as_slice();
+            for plugin in cldctx.plugins.iter_mut() {
+                plugin.finish(&mut state.runtime, txs);
+            }
+            cldctx.txs.clear();
+        }
+
         match cldctx.error {
             None => Ok(()),
             Some(err) => Err(err),
@@ -1251,6 +1255,7 @@ impl Design {
                 &self.watchers,
                 state.plugins.as_mut(),
                 world,
+                &mut state.txs,
                 self.time_resolution,
             );
             let mut regs = Regs::new(self.stack_offset);
@@ -1270,6 +1275,14 @@ impl Design {
                 &mut cldctx,
             );
 
+            if !cldctx.plugins.is_empty() {
+                let txs = cldctx.txs.flush_as_slice();
+                for plugin in cldctx.plugins.iter_mut() {
+                    plugin.finish(&mut state.runtime, txs);
+                }
+                cldctx.txs.clear();
+            }
+
             match cldctx.error {
                 None => Ok(()),
                 Some(err) => Err(err),
@@ -1281,6 +1294,7 @@ impl Design {
         for index in self.watchers.get(key.as_usize()) {
             wake_at_index(*index, &mut state.schedule, &mut state.listeners);
         }
+        state.txs.push(key);
     }
 }
 
