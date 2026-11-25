@@ -41,7 +41,7 @@ There are a particularly interesting flags that you might want to use:
 |------|-------------|--------|
 | `-C` | Compile to native code instead of interpreting | Faster runtime, longer preparation time |
 | `-F` | Use four-value logic for the wires and registers instead of two-value logic. | Slower runtime, but necessary for certain designs. |
-| `--opt-rounds=1` | Optimize the intermediate representation | Faster runtime, slightly slower runtime |
+| `--opt-rounds=1` | Optimize the intermediate representation | Faster runtime, slightly slower compilation |
 
 ## Build
 
