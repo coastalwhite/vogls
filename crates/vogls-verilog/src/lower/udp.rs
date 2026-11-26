@@ -328,6 +328,9 @@ fn lower_sequential_udp<'a>(
     for input in inputs.iter() {
         let (input, input_ty) = lower_expr(ctx, mctx, scope, &mut builder, input, None)?;
         let input = truncate_or_extend(mctx.gl(), &mut builder, input, input_ty, SCALAR_VSIZE);
+        // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2005) p. 105
+        // > The z values passed to UDP inputs shall be treated the same as x values.
+        let input = builder.z_to_x(mctx.gl(), input);
         input_vars.push(input);
     }
 
@@ -380,14 +383,25 @@ fn lower_sequential_udp<'a>(
             }
             if let Some((edge_indicator, after_level_list)) = edge_list {
                 let prb_before = builder.probe(mctx.gl(), before_inputs[level_list.len()].unwrap());
+                // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2005) p. 105
+                // > The z values passed to UDP inputs shall be treated the same as x values.
+                let prb_before = builder.z_to_x(mctx.gl(), prb_before);
                 let prb_after = input_vars[level_list.len()];
                 match &**edge_indicator {
                     UdpEdgeIndicator::Levels(before, after) => {
-                        let is_before =
-                            lower_level(mctx.gl(), &mut builder, prb_before, before.item);
-                        acc = builder.and(mctx.gl(), acc, is_before);
-                        let is_after = lower_level(mctx.gl(), &mut builder, prb_after, after.item);
-                        acc = builder.and(mctx.gl(), acc, is_after);
+                        use UdpLevelSymbol as S;
+                        let changed = builder.not_case_equals(mctx.gl(), prb_before, prb_after);
+                        acc = builder.and(mctx.gl(), acc, changed);
+                        if !matches!(before.item, S::QuestionMark) {
+                            let is_before =
+                                lower_level(mctx.gl(), &mut builder, prb_before, before.item);
+                            acc = builder.and(mctx.gl(), acc, is_before);
+                        }
+                        if !matches!(after.item, S::QuestionMark) {
+                            let is_after =
+                                lower_level(mctx.gl(), &mut builder, prb_after, after.item);
+                            acc = builder.and(mctx.gl(), acc, is_after);
+                        }
                     }
                     UdpEdgeIndicator::Edge(edge) => {
                         let condition = match edge.item {
