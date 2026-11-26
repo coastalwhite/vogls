@@ -39,10 +39,13 @@ pub mod select;
 pub mod select_merge;
 pub mod set_subslice;
 pub mod shift;
+pub mod six_bit_size;
 pub mod slice;
 pub mod store;
 pub mod truncate;
 pub mod util;
+
+pub use six_bit_size::SixBitSize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]

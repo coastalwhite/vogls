@@ -5,14 +5,14 @@ use std::collections::VecDeque;
 
 use hashbrown::hash_map::Entry;
 use slotmap::SlotMap;
-use vogls_bits::{Bits, BitsDataRef};
+use vogls_bits::{Bits, BitsDataRef, SixBitSize};
 use vogls_ir::{
     BasicBlock, BasicBlockKey, Instruction, LogicMode, VSIZE_32, VSIZE_64, VariableKey,
     VariableMap, VectorSize,
 };
 use vogls_utils::{Bitset, IndexSet, VgHashMap};
 
-use crate::{HeapAlignment, HeapBuilder, SixBitSize};
+use crate::{HeapAlignment, HeapBuilder};
 
 #[derive(Default)]
 pub struct StackTracker {

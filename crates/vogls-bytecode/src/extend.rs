@@ -1,8 +1,8 @@
 use std::fmt;
 
+use vogls_bits::SixBitSize;
 use vogls_bits::extend::{fv_l_sign_extend, fv_l_zero_extend, tv_l_sign_extend, tv_l_zero_extend};
 use vogls_bits::truncate::{fv_cell_truncate, tv_cell_truncate};
-use vogls_codegen::SixBitSize;
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 

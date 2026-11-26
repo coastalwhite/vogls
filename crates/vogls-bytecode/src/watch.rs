@@ -1,7 +1,7 @@
 use std::ops::RangeInclusive;
 use std::{cmp, fmt};
 
-use vogls_codegen::SixBitSize;
+use vogls_bits::SixBitSize;
 use vogls_ir::{LogicMode, SCALAR_VSIZE, SignalSlice, VSIZE_32, VectorSize};
 use vogls_runtime::{RtSignalKey, RuntimeState};
 use vogls_utils::{NonMaxU8, TableKey};
