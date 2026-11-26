@@ -4,7 +4,7 @@ use vogls_bits::Bits;
 
 use crate::{
     BasicBlock, BasicBlockKey, BasicBlockTerminator, GlobalContext, Instruction, SelectMerge,
-    SignalKey, VariableKey,
+    SignalBounds, SignalKey, SignalSlice, VariableKey,
 };
 
 pub fn evaluate(
@@ -93,60 +93,76 @@ fn evaluate_impl(
                 _ = variables.insert(*dst, bits);
             }
             I::ProbeSlice(dst, src_signal, offset, bounds) => {
-                let bits = &signals[src_signal];
-                let offset = &variables[offset];
-
                 let dst_size = gl.vars.size(*dst);
-                let bits = match offset.extract_exact_u32() {
-                    None => Bits::new_unknown(dst_size),
-                    Some(offset) => bits.slicex(offset, dst_size),
+                let bits = &signals[src_signal];
+                let signal_slice = SignalSlice::with_end(bits.size());
+
+                let Some((target_slice, in_bounds)) = variables[offset]
+                    .extract_exact_u32()
+                    .and_then(|offset| SignalSlice::from_width(offset, dst_size))
+                    .and_then(|tgt_slice| Some((tgt_slice, resolve_bounds(*bounds, variables)?)))
+                    .and_then(|(tgt_slice, bounds_slice)| {
+                        Some((
+                            tgt_slice,
+                            tgt_slice
+                                .overlapping_slice(bounds_slice)?
+                                .overlapping_slice(signal_slice)?,
+                        ))
+                    })
+                else {
+                    _ = variables.insert(*dst, Bits::new_unknown(dst_size));
+                    continue;
                 };
-                _ = variables.insert(*dst, bits);
+
+                let mut value = bits.slicex(in_bounds.lsb(), in_bounds.width());
+                if target_slice != in_bounds {
+                    // Bits outside of the bounds read as `x`.
+                    value = Bits::new_unknown(dst_size)
+                        .set_slice(in_bounds.lsb() - target_slice.lsb(), &value);
+                }
+                _ = variables.insert(*dst, value);
             }
             I::Drive(dst, dst_signal, src, offset) => {
                 // @Performance. Use the kernels directly to calculate the mask and the result at
                 // the same time.
-                let old_value = signals.entry(*dst_signal).or_insert_with(|| {
-                    let signal = &gl.signals[*dst_signal];
-                    match &signal.initialize {
-                        Some(v) => v.clone(),
-                        None if signal.mode.is_two_value() => Bits::new_zeroed(signal.size),
-                        None => Bits::new_unknown(signal.size),
-                    }
-                });
+                let old_value = initialized_signal(gl, signals, *dst_signal);
                 let src_size = gl.vars.size(*src);
                 let src = variables[src].clone();
                 let old_value_slice = old_value.slicez(*offset, src_size);
-                let update_mask = Bits::bitwise_case_equality(&old_value_slice, &src);
+                let update_mask = Bits::bitwise_case_equality(&old_value_slice, &src).bitwise_not();
                 let new_value = old_value.set_slice(*offset, &src);
                 variables.insert(*dst, update_mask);
                 signals.insert(*dst_signal, new_value);
             }
-            I::DriveSlice(dst, dst_signal, src, offset, _bounds) => {
+            I::DriveSlice(dst, dst_signal, src, offset, bounds) => {
                 let src_size = gl.vars.size(*src);
-                let src = variables[src].clone();
-                let offset = variables[offset].clone();
-
-                if offset.contains_special() {
+                let signal_slice = SignalSlice::with_end(signals[dst_signal].size());
+                let Some((target_slice, in_bounds)) = variables[offset]
+                    .extract_exact_u32()
+                    .and_then(|offset| SignalSlice::from_width(offset, src_size))
+                    .and_then(|tgt_slice| Some((tgt_slice, resolve_bounds(*bounds, variables)?)))
+                    .and_then(|(tgt_slice, bounds_slice)| {
+                        Some((
+                            tgt_slice,
+                            tgt_slice
+                                .overlapping_slice(bounds_slice)?
+                                .overlapping_slice(signal_slice)?,
+                        ))
+                    })
+                else {
                     _ = variables.insert(*dst, Bits::new_zeroed(src_size));
                     continue;
-                }
+                };
 
                 // @Performance. Use the kernels directly to calculate the mask and the result at
                 // the same time.
-                let offset = offset.extract_exact_u32().unwrap();
-                let old_value = signals.entry(*dst_signal).or_insert_with(|| {
-                    let signal = &gl.signals[*dst_signal];
-                    match &signal.initialize {
-                        Some(v) => v.clone(),
-                        None if signal.mode.is_two_value() => Bits::new_zeroed(signal.size),
-                        None => Bits::new_unknown(signal.size),
-                    }
-                });
-
-                let old_value_slice = old_value.slicex(offset, src_size);
-                let update_mask = Bits::bitwise_case_equality(&old_value_slice, &src);
-                let new_value = old_value.set_slice(offset, &src);
+                let rel_offset = in_bounds.lsb() - target_slice.lsb();
+                let src = variables[src].slicex(rel_offset, in_bounds.width());
+                let old_value = initialized_signal(gl, signals, *dst_signal);
+                let old_value_slice = old_value.slicex(in_bounds.lsb(), in_bounds.width());
+                let part_mask = Bits::bitwise_case_equality(&old_value_slice, &src).bitwise_not();
+                let update_mask = Bits::new_zeroed(src_size).set_slice(rel_offset, &part_mask);
+                let new_value = old_value.set_slice(in_bounds.lsb(), &src);
                 variables.insert(*dst, update_mask);
                 signals.insert(*dst_signal, new_value);
             }
@@ -178,4 +194,37 @@ fn evaluate_impl(
         BasicBlockTerminator::Halt => return,
     };
     evaluate_impl(gl, next_bb, signals, variables, Some(bb))
+}
+
+/// The current value of `signal`, which is its initial value if it was not yet driven.
+fn initialized_signal<'a>(
+    gl: &GlobalContext,
+    signals: &'a mut HashMap<SignalKey, Bits>,
+    signal: SignalKey,
+) -> &'a Bits {
+    signals.entry(signal).or_insert_with(|| {
+        let signal = &gl.signals[signal];
+        match &signal.initialize {
+            Some(v) => v.clone(),
+            None if signal.mode.is_two_value() => Bits::new_zeroed(signal.size),
+            None => Bits::new_unknown(signal.size),
+        }
+    })
+}
+
+/// Resolves `bounds` to the bits of a signal of `signal_size` bits they allow to be accessed.
+///
+/// Returns `None` if the bounds offset contains `x` or `z`, and `Some(None)` if the bounds lie
+/// entirely outside of the signal.
+fn resolve_bounds(
+    bounds: SignalBounds,
+    variables: &HashMap<VariableKey, Bits>,
+) -> Option<SignalSlice> {
+    match bounds {
+        SignalBounds::Constant(bounds) => Some(bounds),
+        SignalBounds::Variable { offset, bit_length } => {
+            let offset = variables[&offset].extract_exact_u32()?;
+            SignalSlice::from_width(offset, bit_length)
+        }
+    }
 }
