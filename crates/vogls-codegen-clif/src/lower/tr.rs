@@ -3765,10 +3765,8 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                             };
                             let src_is_fv = mode == LogicMode::FourValue;
                             // The shim takes inclusive bounds.
-                            let wide_bounds = match slice_bounds {
-                                Some((lower, end)) => Some((lower, b.ins().iadd_imm_s(end, -1))),
-                                None => None,
-                            };
+                            let wide_bounds = slice_bounds
+                                .map(|(lower, end)| (lower, b.ins().iadd_imm_s(end, -1)));
                             self.compiler.emit_wide_slice(
                                 b,
                                 params,
