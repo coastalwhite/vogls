@@ -1,8 +1,8 @@
 use std::fmt;
 
+use vogls_bits::SixBitSize;
 use vogls_bits::arithmetic::fv_bitwise_inv_elem;
 use vogls_bits::reduce::{fv_reduce_and_elem, fv_reduce_or_elem, fv_reduce_xor_elem};
-use vogls_codegen::SixBitSize;
 use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
 

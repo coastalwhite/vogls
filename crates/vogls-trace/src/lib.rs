@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use hashbrown::hash_map::Entry;
 use vogls::{ElaboratedDesign, FinalizeContext, SignalHandle};
-use vogls_codegen::{Heap, HeapRef, SixBitSize};
+use vogls_bits::SixBitSize;
+use vogls_codegen::{Heap, HeapRef};
 use vogls_ir::{Bits, LogicMode};
 use vogls_runtime::RtSignalKey;
 

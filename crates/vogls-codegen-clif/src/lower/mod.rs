@@ -32,7 +32,8 @@ use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
 
-use vogls_codegen::{HeapBuilder, HeapRef, SixBitSize};
+use vogls_bits::SixBitSize;
+use vogls_codegen::{HeapBuilder, HeapRef};
 use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::time::{TimeFormat, TimeResolution};
 use vogls_ir::watchers::WatchMap;

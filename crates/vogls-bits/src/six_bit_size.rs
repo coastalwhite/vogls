@@ -1,6 +1,6 @@
 use std::fmt;
 
-use vogls_ir::VectorSize;
+use crate::VectorSize;
 
 /// A size between 1 - 64 which can be represented by six bits.
 ///
@@ -137,7 +137,7 @@ impl SixBitSize {
 
     /// Mask a value to only keep the lower N bits.
     #[inline(always)]
-    pub fn mask(self, v: u64) -> u64 {
+    pub const fn mask(self, v: u64) -> u64 {
         // @NOTE: This unbounded_shr generates better code than a normal shift for some reason.
         v & u64::MAX.unbounded_shr(64 - self as u32)
     }

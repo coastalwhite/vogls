@@ -1,10 +1,10 @@
 use std::fmt;
 
+use vogls_bits::SixBitSize;
 use vogls_bits::arithmetic::{fv_bitwise_and_elem, fv_bitwise_or_elem, fv_bitwise_xor_elem};
 use vogls_bits::shift::{
     fv_logical_shift_left, fv_logical_shift_right, fv_shift_arith_right, tv_shift_arith_right,
 };
-use vogls_codegen::SixBitSize;
 use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
 

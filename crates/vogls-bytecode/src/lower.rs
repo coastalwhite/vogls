@@ -1,6 +1,7 @@
+use vogls_bits::SixBitSize;
 use vogls_bits::arithmetic::FvLogicValue;
 use vogls_codegen::lsra::{Slot, StackOffsets, StackTracker};
-use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef, SixBitSize, insert_bb_phis};
+use vogls_codegen::{HeapAlignment, HeapBuilder, HeapRef, insert_bb_phis};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,

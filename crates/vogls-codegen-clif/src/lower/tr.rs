@@ -11,8 +11,9 @@ use cranelift_codegen::ir::{
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_module::{FuncId, Module};
+use vogls_bits::SixBitSize;
 use vogls_bits::arithmetic::FvLogicValue;
-use vogls_codegen::{HeapAlignment, SixBitSize};
+use vogls_codegen::HeapAlignment;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, GlobalContext, Instruction,
     IntrinsicOp, LogicMode, ResizeOp, SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalBounds,

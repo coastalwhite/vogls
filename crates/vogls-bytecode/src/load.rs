@@ -1,8 +1,9 @@
 use std::fmt;
 use std::num::NonZeroU16;
 
+use vogls_bits::SixBitSize;
 use vogls_bits::slice::tv_ll_slice;
-use vogls_codegen::{HeapAlignment, HeapOffset, SixBitSize};
+use vogls_codegen::{HeapAlignment, HeapOffset};
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 

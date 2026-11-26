@@ -31,8 +31,8 @@ mod temporal;
 mod watch;
 
 use reg::{Reg, Regs};
-use vogls_bits::BitsDataRef;
-use vogls_codegen::{Heap, HeapOffset, HeapRef, SixBitSize};
+use vogls_bits::{BitsDataRef, SixBitSize};
+use vogls_codegen::{Heap, HeapOffset, HeapRef};
 use vogls_ir::time::TimeResolution;
 use vogls_ir::{Bits, LogicMode, VSIZE_64, VectorSize};
 use vogls_runtime::plugins::{RuntimePlugin, RuntimePluginState};

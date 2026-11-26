@@ -1,7 +1,8 @@
 use std::fmt;
 use std::ops::RangeInclusive;
 
-use vogls_codegen::{HeapAlignment, SixBitSize};
+use vogls_bits::SixBitSize;
+use vogls_codegen::HeapAlignment;
 use vogls_ir::{LogicMode, VectorSize};
 use vogls_runtime::RuntimeState;
 

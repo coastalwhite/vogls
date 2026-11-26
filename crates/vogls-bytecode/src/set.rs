@@ -2,8 +2,9 @@ use std::cmp;
 use std::fmt;
 use std::ops::RangeInclusive;
 
+use vogls_bits::SixBitSize;
 use vogls_bits::set_subslice::set_with_mask;
-use vogls_codegen::{HeapAlignment, HeapOffset, SixBitSize};
+use vogls_codegen::{HeapAlignment, HeapOffset};
 use vogls_ir::{LogicMode, SCALAR_VSIZE, VSIZE_32, VSIZE_64, VectorSize};
 use vogls_runtime::RuntimeState;
 

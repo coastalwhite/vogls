@@ -1,6 +1,6 @@
 use std::fmt;
 
-use vogls_codegen::SixBitSize;
+use vogls_bits::SixBitSize;
 use vogls_ir::LogicMode;
 use vogls_runtime::RuntimeState;
 
