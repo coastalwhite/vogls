@@ -3,7 +3,8 @@
 use hashbrown::hash_map::Entry;
 use vogls_ir::vcd::VcdValue;
 use vogls_ir::{
-    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, IntrinsicOp, WatchCondition,
+    BasicBlockBuilder, BasicBlockTerminator, Bits, GlobalContext, IntrinsicOp, SignalBounds,
+    SignalSlice, WatchCondition,
 };
 
 use vogls_ir::SignalKey;
@@ -78,8 +79,8 @@ pub(super) fn apply_fuse_maps(
                                         *offset,
                                         Bits::new_u32(slice.lsb()),
                                     );
-                                    // @TODO: Fix bounds
-                                    builder.probe_slice(gl, *to, offset, slice.width(), *bounds);
+                                    let bounds = fused_bounds(&mut builder, gl, *bounds, *slice);
+                                    builder.probe_slice(gl, *to, offset, slice.width(), bounds);
                                     if let Some(d) = builder
                                         .instrs
                                         .last_mut()
@@ -121,9 +122,9 @@ pub(super) fn apply_fuse_maps(
                     if let Some((to, slice)) = drive_map(signal) {
                         let offset =
                             builder.plus_constant(gl, *partial, Bits::new_u32(slice.lsb()));
-                        // @TODO: Fix bounds
+                        let bounds = fused_bounds(&mut builder, gl, *bounds, *slice);
                         builder
-                            .push_raw_instruction(I::DriveSlice(*dst, *to, *src, offset, *bounds));
+                            .push_raw_instruction(I::DriveSlice(*dst, *to, *src, offset, bounds));
                         continue;
                     }
                 }
@@ -254,5 +255,27 @@ pub(super) fn apply_fuse_maps(
         });
         WatchCondition::canonicalize(&mut standing_vec);
         *standing = standing_vec.into_boxed_slice();
+    }
+}
+
+/// Moves the `bounds` of an access to a fused signal into the coordinates of the `slice` it is
+/// fused into.
+fn fused_bounds(
+    builder: &mut BasicBlockBuilder,
+    gl: &mut GlobalContext,
+    bounds: SignalBounds,
+    slice: SignalSlice,
+) -> SignalBounds {
+    match bounds {
+        SignalBounds::Constant(bounds) => SignalBounds::Constant(
+            bounds
+                .shift(slice.lsb())
+                .expect("bounds lie within the fused slice"),
+        ),
+        SignalBounds::Variable { .. } if slice.lsb() == 0 => bounds,
+        SignalBounds::Variable { offset, bit_length } => SignalBounds::Variable {
+            offset: builder.plus_constant(gl, offset, Bits::new_u32(slice.lsb())),
+            bit_length,
+        },
     }
 }

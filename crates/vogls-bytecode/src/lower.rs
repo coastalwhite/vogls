@@ -6,7 +6,7 @@ use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
     GlobalContext, Instruction, IntrinsicOp, LabelDisplay, LogicMode, ProcessKey, ResizeOp,
     SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalBounds, SignalFlags, SignalKey, SignalSlice,
-    UnaryOp, VSIZE_64, VariableKey, VariableMap, VectorSize, WatchEdge,
+    UnaryOp, VSIZE_64, VariableKey, VariableMap, WatchEdge,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
@@ -2274,16 +2274,16 @@ fn lower_instruction(
             assert!(dst_size <= signal_size);
 
             let mut branch_offset: Option<(Reg, usize)> = None;
-            let mut relem_offset = match bounds {
+            let mut rbounds_offset = match bounds {
                 SignalBounds::Constant(_) => T4,
                 SignalBounds::Variable {
-                    elem_offset,
-                    stride: _,
+                    offset: bounds_offset,
+                    bit_length: _,
                 } => to_reg(
                     bce,
-                    *elem_offset,
+                    *bounds_offset,
                     &gl.vars,
-                    assignment[elem_offset],
+                    assignment[bounds_offset],
                     stack_offsets,
                     T4,
                     false,
@@ -2302,21 +2302,24 @@ fn lower_instruction(
                 roffset = roffsetval;
             }
 
-            if let SignalBounds::Variable { elem_offset, .. } = bounds
-                && elem_offset.mode().is_four_value()
+            if let SignalBounds::Variable {
+                offset: bounds_offset,
+                ..
+            } = bounds
+                && bounds_offset.mode().is_four_value()
             {
-                let elem_offset_size =
-                    SixBitSize::from_vector_size(gl.vars.size(*elem_offset)).unwrap();
-                let (relem_offsetspc, relem_offsetval) = relem_offset.to_spc_and_val();
+                let bounds_offset_size =
+                    SixBitSize::from_vector_size(gl.vars.size(*bounds_offset)).unwrap();
+                let (rbounds_offsetspc, rbounds_offsetval) = rbounds_offset.to_spc_and_val();
 
                 // TempReg: Destructs ELEM_OFFSET (SPC). No longer assessible.
-                bce.contains_special(T4, relem_offsetspc, elem_offset_size);
+                bce.contains_special(T4, rbounds_offsetspc, bounds_offset_size);
 
                 if let Some((rcond, _)) = branch_offset {
                     bce.or(T4, T4, rcond);
                 }
                 branch_offset = Some((T4, bce.data.len()));
-                relem_offset = relem_offsetval;
+                rbounds_offset = rbounds_offsetval;
             }
 
             if branch_offset.is_some() {
@@ -2324,17 +2327,10 @@ fn lower_instruction(
             }
 
             const LOWER_BOUND_SCRATCH: Reg = T5;
-            // @NOTE: The element offset may live in T4, so compute the lower bound before the
-            // signal address is loaded into it.
-            // TempReg: T1 is only written by the slice itself, so it is free as a scratch here.
-            if let SignalBounds::Variable { stride, .. } = bounds {
-                load_lower_bound_from_elem_offset(
-                    bce,
-                    LOWER_BOUND_SCRATCH,
-                    relem_offset,
-                    *stride,
-                    T1,
-                );
+            // @NOTE: The bounds offset may live in T4, so load the lower bound before the signal
+            // address is loaded into it.
+            if let SignalBounds::Variable { .. } = bounds {
+                load_lower_bound(bce, LOWER_BOUND_SCRATCH, rbounds_offset);
             }
 
             let rsignal = T4;
@@ -2362,8 +2358,8 @@ fn lower_instruction(
                     mode,
                     None,
                     SignalBounds::Variable {
-                        elem_offset: _,
-                        stride,
+                        offset: _,
+                        bit_length,
                     },
                 ) => {
                     bce.heap_slice_varbounds(
@@ -2374,7 +2370,7 @@ fn lower_instruction(
                         dst_size,
                         signal_size,
                         mode.is_four_value(),
-                        *stride,
+                        *bit_length,
                     );
                 }
                 (M::TwoValue, Some(size), SignalBounds::Constant(bounds)) => {
@@ -2401,8 +2397,8 @@ fn lower_instruction(
                     M::TwoValue,
                     Some(size),
                     SignalBounds::Variable {
-                        elem_offset: _,
-                        stride,
+                        offset: _,
+                        bit_length,
                     },
                 ) => {
                     bce.tv_heap_slicex_varbounds(
@@ -2412,15 +2408,15 @@ fn lower_instruction(
                         LOWER_BOUND_SCRATCH,
                         size,
                         signal_size,
-                        *stride,
+                        *bit_length,
                     );
                 }
                 (
                     M::FourValue,
                     Some(size),
                     SignalBounds::Variable {
-                        elem_offset: _,
-                        stride,
+                        offset: _,
+                        bit_length,
                     },
                 ) => {
                     bce.fv_heap_slicex_varbounds(
@@ -2430,7 +2426,7 @@ fn lower_instruction(
                         LOWER_BOUND_SCRATCH,
                         size,
                         signal_size,
-                        *stride,
+                        *bit_length,
                     );
                 }
             }
@@ -2783,16 +2779,16 @@ fn lower_instruction(
                 false,
             );
 
-            let mut relem_offset = match bounds {
+            let mut rbounds_offset = match bounds {
                 SignalBounds::Constant(_) => T4,
                 SignalBounds::Variable {
-                    elem_offset,
-                    stride: _,
+                    offset: bounds_offset,
+                    bit_length: _,
                 } => to_reg(
                     bce,
-                    *elem_offset,
+                    *bounds_offset,
                     &gl.vars,
-                    assignment[elem_offset],
+                    assignment[bounds_offset],
                     stack_offsets,
                     T4,
                     false,
@@ -2811,15 +2807,18 @@ fn lower_instruction(
                 rpartial = rpartialval;
             }
 
-            if let SignalBounds::Variable { elem_offset, .. } = bounds
-                && elem_offset.mode().is_four_value()
+            if let SignalBounds::Variable {
+                offset: bounds_offset,
+                ..
+            } = bounds
+                && bounds_offset.mode().is_four_value()
             {
-                let elem_offset_size =
-                    SixBitSize::from_vector_size(gl.vars.size(*elem_offset)).unwrap();
-                let (relem_offsetspc, relem_offsetval) = relem_offset.to_spc_and_val();
+                let bounds_offset_size =
+                    SixBitSize::from_vector_size(gl.vars.size(*bounds_offset)).unwrap();
+                let (rbounds_offsetspc, rbounds_offsetval) = rbounds_offset.to_spc_and_val();
 
                 // TempReg: Destructs ELEM_OFFSET (SPC). No longer assessible.
-                bce.contains_special(T4, relem_offsetspc, elem_offset_size);
+                bce.contains_special(T4, rbounds_offsetspc, bounds_offset_size);
 
                 if let Some((rcond, _)) = branch_offset {
                     bce.or(T4, T4, rcond);
@@ -2827,19 +2826,19 @@ fn lower_instruction(
                 branch_offset = Some((T4, bce.data.len()));
 
                 // Make space for the RD.
-                relem_offset = if relem_offsetval == T5 {
+                rbounds_offset = if rbounds_offsetval == T5 {
                     match partial.mode() {
                         M::TwoValue => {
-                            bce.copy(T3, relem_offsetval);
+                            bce.copy(T3, rbounds_offsetval);
                             T3
                         }
                         M::FourValue => {
-                            bce.copy(T2, relem_offsetval);
+                            bce.copy(T2, rbounds_offsetval);
                             T2
                         }
                     }
                 } else {
-                    relem_offsetval
+                    rbounds_offsetval
                 };
             }
 
@@ -2851,27 +2850,13 @@ fn lower_instruction(
             }
 
             const LOWER_BOUND_SCRATCH: Reg = T4;
-            if let SignalBounds::Variable { stride, .. } = bounds {
-                // @NOTE: The element offset only aliases T4 when it is two-valued, in which case
-                // it was not copied into T2 or T3. A four-valued PARTIAL lives in T3 and its
-                // branch condition in T2 is consumed by now, otherwise T3 is unused.
-                let scratch = if partial.mode().is_four_value() {
-                    T2
-                } else {
-                    T3
-                };
-                load_lower_bound_from_elem_offset(
-                    bce,
-                    LOWER_BOUND_SCRATCH,
-                    relem_offset,
-                    *stride,
-                    scratch,
-                );
+            if let SignalBounds::Variable { .. } = bounds {
+                load_lower_bound(bce, LOWER_BOUND_SCRATCH, rbounds_offset);
             }
 
             // The `rd` may clobber the `rpartial`, but we still need the `rpartial` if we have
             // watchers. The wake checks also use `T2` as scratch, which is the backup register
-            // of `rpartial`. `T3` is free here: `relem_offset` has been consumed above.
+            // of `rpartial`. `T3` is free here: `rbounds_offset` has been consumed above.
             if watchers.is_some() && (rd == rpartial || rpartial == T2) {
                 bce.copy(T3, rpartial);
                 rpartial = T3;
@@ -2948,9 +2933,9 @@ fn lower_instruction(
                             bounds.width()
                         }
                         SignalBounds::Variable {
-                            elem_offset: _,
-                            stride,
-                        } => *stride,
+                            offset: _,
+                            bit_length,
+                        } => *bit_length,
                     };
                     bce.tv_set_heaprel(
                         Some(rd),
@@ -2971,9 +2956,9 @@ fn lower_instruction(
                             bounds.width()
                         }
                         SignalBounds::Variable {
-                            elem_offset: _,
-                            stride,
-                        } => *stride,
+                            offset: _,
+                            bit_length,
+                        } => *bit_length,
                     };
                     bce.fv_set_heaprel(
                         Some(rd),
@@ -3012,8 +2997,8 @@ fn lower_instruction(
                     M::TwoValue,
                     Some(size),
                     SignalBounds::Variable {
-                        elem_offset: _,
-                        stride,
+                        offset: _,
+                        bit_length,
                     },
                 ) => {
                     bce.tv_setrel_varbounds(
@@ -3022,7 +3007,7 @@ fn lower_instruction(
                         rpartial,
                         signal_addr,
                         LOWER_BOUND_SCRATCH,
-                        *stride,
+                        *bit_length,
                         size,
                     );
                 }
@@ -3030,8 +3015,8 @@ fn lower_instruction(
                     M::FourValue,
                     Some(size),
                     SignalBounds::Variable {
-                        elem_offset: _,
-                        stride,
+                        offset: _,
+                        bit_length,
                     },
                 ) => {
                     bce.fv_setrel_varbounds(
@@ -3040,7 +3025,7 @@ fn lower_instruction(
                         rpartial,
                         base_addr,
                         LOWER_BOUND_SCRATCH,
-                        *stride,
+                        *bit_length,
                         size,
                         signal_size,
                     );
@@ -3300,28 +3285,9 @@ fn convert_intrinsic(
     }
 }
 
-/// Load `elem_offset * stride` into `rd`.
-///
-/// `scratch` is only clobbered when `rd` is `elem_offset` and the stride fits neither an
-/// immediate nor a shift.
-fn load_lower_bound_from_elem_offset(
-    bce: &mut BytecodeEncoder,
-    rd: Reg,
-    elem_offset: Reg,
-    stride: VectorSize,
-    scratch: Reg,
-) {
-    let stride = stride.get();
-    if let Some(imm) = SignedImmediate::new(i64::from(stride)) {
-        bce.muli(rd, elem_offset, imm, SixBitSize::N32);
-    } else if stride.is_power_of_two() {
-        let shift = SignedImmediate::new(i64::from(stride.trailing_zeros())).unwrap();
-        bce.slli(rd, elem_offset, shift, SixBitSize::N32);
-    } else {
-        // @NOTE: Loading the stride into `rd` would overwrite the element offset if they alias.
-        let rstride = if rd == elem_offset { scratch } else { rd };
-        debug_assert_ne!(rstride, elem_offset);
-        bce.load_u64(rstride, u64::from(stride));
-        bce.mul(rd, elem_offset, rstride, SixBitSize::N32);
+/// Load the lower bound `offset` into `rd`.
+fn load_lower_bound(bce: &mut BytecodeEncoder, rd: Reg, offset: Reg) {
+    if rd != offset {
+        bce.copy(rd, offset);
     }
 }

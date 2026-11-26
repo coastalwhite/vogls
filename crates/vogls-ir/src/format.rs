@@ -655,11 +655,8 @@ fn fmt_signal_bounds(
         SignalBounds::Constant(slice) => {
             write!(f, "[{}..{}]", slice.lsb(), slice.msb())
         }
-        SignalBounds::Variable {
-            elem_offset,
-            stride,
-        } => {
-            write!(f, "[{}, {stride}]", elem_offset.display(ctx))
+        SignalBounds::Variable { offset, bit_length } => {
+            write!(f, "[{} +: {bit_length}]", offset.display(ctx))
         }
     }
 }

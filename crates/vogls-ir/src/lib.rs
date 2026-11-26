@@ -886,12 +886,12 @@ pub enum SignalBounds {
     /// Probe or drive is a constant lower and upper bound.
     Constant(SignalSlice),
 
-    /// Probe or drive is bounded by a variable lower and upper bound.
+    /// Probe or drive is bounded by a variable lower bound and a constant width.
     ///
-    /// `bounds = elem_offset * stride .. elem_offset * (stride + 1)`
+    /// `bounds = offset .. offset + bit_length`
     Variable {
-        elem_offset: VariableKey,
-        stride: VectorSize,
+        offset: VariableKey,
+        bit_length: VectorSize,
     },
 }
 impl SignalBounds {
@@ -899,23 +899,20 @@ impl SignalBounds {
     fn map_var(self, mut f: impl FnMut(VariableKey) -> VariableKey) -> Self {
         match self {
             Self::Constant(s) => Self::Constant(s),
-            Self::Variable {
-                elem_offset,
-                stride,
-            } => Self::Variable {
-                elem_offset: f(elem_offset),
-                stride,
+            Self::Variable { offset, bit_length } => Self::Variable {
+                offset: f(offset),
+                bit_length,
             },
         }
     }
 
     fn foreach_var(self, mut f: impl FnMut(VariableKey)) {
         if let Self::Variable {
-            elem_offset,
-            stride: _,
+            offset,
+            bit_length: _,
         } = self
         {
-            f(elem_offset);
+            f(offset);
         }
     }
 }
