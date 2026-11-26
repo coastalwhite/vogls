@@ -627,15 +627,14 @@ fn constant_propagate_instruction(
             let signal_key = signal;
 
             if let SignalBounds::Variable {
-                elem_offset,
-                stride,
+                offset: bounds_offset,
+                bit_length,
             } = bounds
-                && let Some(Some(elem_offset_bits)) = scratch_map.get(&elem_offset)
+                && let Some(Some(bounds_offset_bits)) = scratch_map.get(&bounds_offset)
             {
-                let Some(bounds) = elem_offset_bits
+                let Some(bounds) = bounds_offset_bits
                     .extract_exact_u32()
-                    .and_then(|elem_offset| elem_offset.checked_mul(stride.get()))
-                    .and_then(|lsb| SignalSlice::from_width(lsb, stride))
+                    .and_then(|lsb| SignalSlice::from_width(lsb, bit_length))
                     .filter(|bounds| bounds.overlaps(SignalSlice::with_end(signals[signal].size)))
                 else {
                     let dst_size = vars.size(dst);
@@ -712,15 +711,14 @@ fn constant_propagate_instruction(
             let (dst, signal, src, bounds) = (*dst, *signal, *src, *bounds);
 
             if let SignalBounds::Variable {
-                elem_offset,
-                stride,
+                offset: bounds_offset,
+                bit_length,
             } = bounds
-                && let Some(Some(elem_offset_bits)) = scratch_map.get(&elem_offset)
+                && let Some(Some(bounds_offset_bits)) = scratch_map.get(&bounds_offset)
             {
-                let Some(bounds) = elem_offset_bits
+                let Some(bounds) = bounds_offset_bits
                     .extract_exact_u32()
-                    .and_then(|elem_offset| elem_offset.checked_mul(stride.get()))
-                    .and_then(|lsb| SignalSlice::from_width(lsb, stride))
+                    .and_then(|lsb| SignalSlice::from_width(lsb, bit_length))
                     .filter(|bounds| bounds.overlaps(SignalSlice::with_end(signals[signal].size)))
                 else {
                     additional.push(I::Constant(dst, Bits::new_zeroed(vars.size(dst))));

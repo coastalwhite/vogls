@@ -41,8 +41,8 @@ pub struct Address<C: AddressingContext> {
 pub enum AddressBounds<V> {
     /// The address is bounded by the whole net.
     Net,
-    /// The address is bounded by the array element `index`, which is `width` bits wide.
-    Element { index: V, width: VectorSize },
+    /// The address is bounded by the array element starting at bit `offset..offset + width`.
+    Element { offset: V, width: VectorSize },
 }
 
 /// An [`Address`] into a signal, detached from the context which lowered it.
@@ -86,9 +86,9 @@ impl SignalAddress {
         };
         let bounds = match self.bounds {
             AddressBounds::Net => SignalBounds::Constant(SignalSlice::with_end(signal_size)),
-            AddressBounds::Element { index, width } => SignalBounds::Variable {
-                elem_offset: index,
-                stride: width,
+            AddressBounds::Element { offset, width } => SignalBounds::Variable {
+                offset,
+                bit_length: width,
             },
         };
         Some((offset, bounds))
@@ -191,11 +191,11 @@ pub fn lower_addressing<C: AddressingContext>(
     let (array, bounds) = match element {
         None => (None, AddressBounds::Net),
         Some((index, overflow)) => {
-            let offset = mul_unless_one(ctx, index.clone(), elem_width)?;
+            let offset = mul_unless_one(ctx, index, elem_width)?;
             (
-                Some((offset, overflow)),
+                Some((offset.clone(), overflow)),
                 AddressBounds::Element {
-                    index,
+                    offset,
                     width: elem_width,
                 },
             )

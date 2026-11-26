@@ -3694,7 +3694,10 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
 
                         let elem = match bounds {
                             SignalBounds::Constant(_) => None,
-                            SignalBounds::Variable { elem_offset, .. } => {
+                            SignalBounds::Variable {
+                                offset: elem_offset,
+                                ..
+                            } => {
                                 let elem = get(b, *elem_offset);
                                 let known = if elem_offset.mode().is_four_value() {
                                     let es = spc_get(b, *elem_offset);
@@ -4548,7 +4551,10 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         // The bits that may be written, as `lower..end`.
                         let elem = match bounds {
                             SignalBounds::Constant(_) => None,
-                            SignalBounds::Variable { elem_offset, .. } => {
+                            SignalBounds::Variable {
+                                offset: elem_offset,
+                                ..
+                            } => {
                                 let elem = get(b, *elem_offset);
                                 let known = if elem_offset.mode().is_four_value() {
                                     let es = spc_get(b, *elem_offset);
@@ -5888,11 +5894,10 @@ fn clif_slice_bounds(
                 b.ins().iconst(I64, end as i64),
             ))
         }
-        SignalBounds::Variable { stride, .. } => {
-            let (elem, elem_known) = elem.expect("variable bounds need an element offset");
-            // A 32-bit element offset times a 32-bit stride cannot overflow 64 bits.
-            let lower = b.ins().imul_imm_u(elem, i64::from(stride.get()));
-            let end = b.ins().iadd_imm_s(lower, i64::from(stride.get()));
+        SignalBounds::Variable { bit_length, .. } => {
+            let (lower, elem_known) = elem.expect("variable bounds need an offset");
+            // A 32-bit offset plus a 32-bit length cannot overflow 64 bits.
+            let end = b.ins().iadd_imm_s(lower, i64::from(bit_length.get()));
             let size = b.ins().iconst(I64, size as i64);
             let mut lower = b.ins().umin(lower, size);
             let mut end = b.ins().umin(end, size);
