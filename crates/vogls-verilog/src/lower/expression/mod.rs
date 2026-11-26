@@ -930,7 +930,6 @@ pub fn lower_expr<'a>(
                 let output_width = part_select.output_width;
                 let is_unsigned = part_select.is_unsigned;
 
-                // @TODO: We should use the overflow value here.
                 let var = match (net, value) {
                     (Some(net), _) => {
                         let signal_size = mctx.gl.signals[net.probe_signal()].size;

@@ -4582,6 +4582,15 @@ impl<'a, 'b> TrBuilder<'a, 'b> {
                         let is_empty = b.ins().icmp(IntCC::SignedGreaterThanOrEqual, lower, end);
                         let is_fully_oob = b.ins().bor(below_lower_bound, above_upper_bound);
                         let is_fully_oob = b.ins().bor(is_fully_oob, is_empty);
+
+                        let is_fully_oob = if offset_key.mode().is_four_value() {
+                            let os = spc_get(b, offset_key);
+                            let mask = mask_of(gl.vars.size(offset_key).get());
+                            let special = b.ins().icmp_imm_u(IntCC::NotEqual, os, mask);
+                            b.ins().bor(is_fully_oob, special)
+                        } else {
+                            is_fully_oob
+                        };
                         b.ins()
                             .brif(is_fully_oob, full_oob, &[], post_oob_check, &[]);
 

@@ -37,6 +37,15 @@ module tb;
 		$vogls_assert_eq(wmem[1], {32'hffff_ffff, {3{32'h1111_1111}}});
 		$vogls_assert_eq(wmem[2], {4{32'h2222_2222}});
 
+		// An out-of-range index whose element offset wraps around 32 bits to element 0 reads as X
+		// and writes nothing, just like any other out-of-range index.
+		$vogls_assert_eq(mem[$vogls_blackbox(32'h1000_0000)] === 16'bx, 1'b1);
+		mem[$vogls_blackbox(32'h1000_0000)] = 16'hdead;
+		$vogls_assert_eq(mem[0], 16'h1111);
+		$vogls_assert_eq(mem[$vogls_blackbox(4)] === 16'bx, 1'b1);
+		mem[$vogls_blackbox(4)] = 16'hdead;
+		$vogls_assert_eq(mem[3], 16'h4444);
+
 		// A dynamic bit write wakes an edge watcher on the written bit, and an out-of-range one
 		// writes nothing.
 		r[$vogls_blackbox(1)] = 1'b1;
