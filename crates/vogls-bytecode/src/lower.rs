@@ -2273,7 +2273,7 @@ fn lower_instruction(
             let signal_size = gl.signals[*signal].size;
             assert!(dst_size <= signal_size);
 
-            let mut branch_offset: Option<(Reg, usize)> = None;
+            let mut branch_offset: Option<Reg> = None;
             let mut rbounds_offset = match bounds {
                 SignalBounds::Constant(_) => T4,
                 SignalBounds::Variable {
@@ -2298,7 +2298,7 @@ fn lower_instruction(
                 // TempReg: Destructs OFFSET (SPC). No longer assessible.
                 bce.contains_special(T2, roffsetspc, offset_size);
 
-                branch_offset = Some((T2, bce.data.len()));
+                branch_offset = Some(T2);
                 roffset = roffsetval;
             }
 
@@ -2315,16 +2315,18 @@ fn lower_instruction(
                 // TempReg: Destructs ELEM_OFFSET (SPC). No longer assessible.
                 bce.contains_special(T4, rbounds_offsetspc, bounds_offset_size);
 
-                if let Some((rcond, _)) = branch_offset {
+                if let Some(rcond) = branch_offset {
                     bce.or(T4, T4, rcond);
                 }
-                branch_offset = Some((T4, bce.data.len()));
+                branch_offset = Some(T4);
                 rbounds_offset = rbounds_offsetval;
             }
 
-            if branch_offset.is_some() {
+            let branch_offset = branch_offset.map(|rcond| {
+                let offset = bce.data.len();
                 bce.panic();
-            }
+                (rcond, offset)
+            });
 
             const LOWER_BOUND_SCRATCH: Reg = T5;
             // @NOTE: The bounds offset may live in T4, so load the lower bound before the signal
@@ -2845,9 +2847,13 @@ fn lower_instruction(
             let dslot = assignment[dst];
             let rd = to_reg(bce, *dst, &gl.vars, dslot, stack_offsets, T5, true);
 
-            if branch_offset.is_some() {
+            // @NOTE: The placeholder for the branch is only emitted here, after the RD and the
+            // bounds have been loaded, so this is where the branch is patched in.
+            let branch_offset = branch_offset.map(|(rcond, _)| {
+                let offset = bce.data.len();
                 bce.panic();
-            }
+                (rcond, offset)
+            });
 
             const LOWER_BOUND_SCRATCH: Reg = T4;
             if let SignalBounds::Variable { .. } = bounds {

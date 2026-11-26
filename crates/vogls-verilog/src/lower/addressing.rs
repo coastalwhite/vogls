@@ -49,20 +49,17 @@ pub enum AddressBounds<V> {
 pub struct SignalAddress {
     pub elem_offset: Option<VariableKey>,
     pub output_width: VectorSize,
-    pub array_offset: Option<VariableKey>,
+    pub array: Option<(VariableKey, VariableKey)>,
     pub bounds: AddressBounds<VariableKey>,
     pub is_unsigned: bool,
 }
 
-impl<C: AddressingContext<Var = VariableKey>> Address<C> {
+impl<C: AddressingContext<Var = VariableKey, Bool = VariableKey>> Address<C> {
     pub fn into_signal(self) -> SignalAddress {
-        // @TODO: Use array overflow.
         SignalAddress {
             elem_offset: self.elem_offset,
             output_width: self.output_width,
-            array_offset: self
-                .array
-                .map(|(array_offset, _array_overflow)| array_offset),
+            array: self.array,
             bounds: self.bounds,
             is_unsigned: self.is_unsigned,
         }
@@ -78,12 +75,22 @@ impl SignalAddress {
         builder: &mut BasicBlockBuilder,
         signal_size: VectorSize,
     ) -> Option<(VariableKey, SignalBounds)> {
-        let offset = match (self.elem_offset, self.array_offset) {
+        let array_offset = self.array.map(|(array_offset, _)| array_offset);
+        let mut offset = match (self.elem_offset, array_offset) {
             (Some(elem_offset), Some(array_offset)) => builder.plus(gl, elem_offset, array_offset),
             (Some(elem_offset), None) => elem_offset,
             (None, Some(array_offset)) => array_offset,
             (None, None) => return None,
         };
+
+        // @NOTE: The offset of an element past the end of an array can wrap around to an element
+        // within it, which the bounds cannot catch as they wrap along with it. An out-of-range
+        // index thus makes the offset `x`, which reads as `x` and does not write anything.
+        if let Some((_, array_overflow)) = self.array {
+            let unknown = builder.constant(gl, Bits::new_unknown(gl.vars.size(offset)));
+            offset = builder.select(gl, array_overflow, unknown, offset);
+        }
+
         let bounds = match self.bounds {
             AddressBounds::Net => SignalBounds::Constant(SignalSlice::with_end(signal_size)),
             AddressBounds::Element { offset, width } => SignalBounds::Variable {
