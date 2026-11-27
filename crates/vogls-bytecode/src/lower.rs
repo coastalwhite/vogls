@@ -5,8 +5,8 @@ use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
     BasicBlockKey, BasicBlockTerminator, BinaryImmOp, BinaryOp, ContextFormat, DisplayContext,
     GlobalContext, Instruction, IntrinsicOp, LabelDisplay, LogicMode, ProcessKey, ResizeOp,
-    SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalBounds, SignalFlags, SignalKey, SignalSlice,
-    UnaryOp, VSIZE_64, VariableKey, VariableMap, WatchEdge,
+    SCALAR_VSIZE, SelectMerge, ShiftImmOp, SignalBounds, SignalKey, SignalSlice, UnaryOp, VSIZE_64,
+    VariableKey, VariableMap, WatchEdge,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::{VgHashMap, VgHashSet};
@@ -89,11 +89,7 @@ pub fn lower_process_to_bytecode(
     match &process.standing {
         // A standing process without conditions can never be woken up.
         Some(conditions) if conditions.is_empty() => {}
-        Some(conditions)
-            if conditions
-                .iter()
-                .all(|c| !gl.signals[c.signal].flags.contains(SignalFlags::POKE_T0)) =>
-        {
+        Some(conditions) if conditions.iter().all(|c| !c.is_poked_t0(gl)) => {
             let entry = process.regions[0];
             let index = watch_map
                 .find_watch_index(entry, conditions.as_ref())

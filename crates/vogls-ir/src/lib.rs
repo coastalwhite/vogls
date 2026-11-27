@@ -104,6 +104,11 @@ impl WatchCondition {
         }
     }
 
+    pub fn is_poked_t0(self, gl: &GlobalContext) -> bool {
+        matches!(self.edge, WatchEdge::Any { .. })
+            && gl.signals[self.signal].flags.contains(SignalFlags::POKE_T0)
+    }
+
     pub fn slice(self) -> SignalSlice {
         SignalSlice::from_width(self.offset, self.bit_length()).expect("Invalid slice")
     }
@@ -349,7 +354,8 @@ impl SignalFlags {
     pub const EXT_PROBE: Self = Self(0b0010u8);
 
     /// Poke standing watchers at the start of the simulation, and count the start of the
-    /// simulation as the last update of the signal.
+    /// simulation as the last update of the signal. Only watchers of any change are poked (see
+    /// [`WatchCondition::is_poked_t0`]).
     pub const POKE_T0: Self = Self(0b0100u8);
 
     pub fn contains(self, rhs: Self) -> bool {
@@ -2435,7 +2441,7 @@ pub struct Process {
     /// regions and watches. See [`watchers::WatchMap::find_watch_index`].
     ///
     /// The process is only armed if none of the conditions is poked at `t=0`. Otherwise, it is
-    /// scheduled at `t=0` like any other process. See [`Signal::triggers_t0_poke`].
+    /// scheduled at `t=0` like any other process. See [`WatchCondition::is_poked_t0`].
     ///
     /// The conditions are canonical. See [`WatchCondition::canonicalize`].
     pub standing: Option<Box<[WatchCondition]>>,

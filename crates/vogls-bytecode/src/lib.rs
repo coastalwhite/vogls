@@ -1246,14 +1246,6 @@ impl Design {
         #[cfg(nightly)]
         {
             let code = &self.bytecode;
-            let Some(entry) = state
-                .schedule
-                .pop(&mut state.runtime, state.plugins.as_mut())
-            else {
-                return Ok(());
-            };
-
-            let pc = entry.0;
             let mut cldctx = ColdContext::new(
                 &self.intrinsics,
                 &self.watchers,
@@ -1262,6 +1254,11 @@ impl Design {
                 &mut state.txs,
                 self.time_resolution,
             );
+            let Some(entry) = state.schedule.pop(&mut state.runtime, &mut cldctx) else {
+                return Ok(());
+            };
+
+            let pc = entry.0;
             let mut regs = Regs::new(self.stack_offset);
             let Some(c) = code.get(pc as usize) else {
                 return Ok(());

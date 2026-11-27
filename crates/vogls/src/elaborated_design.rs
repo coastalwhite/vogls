@@ -268,6 +268,7 @@ impl<'a> ElaboratedDesign<'a> {
             fuse_srcs_scratch: Vec::new(),
             monitor: None,
             driver_resolution: std::mem::take(&mut self.driver_resolution),
+            udp_plans: Default::default(),
         };
 
         let result = f(&mut ctx, &mut mctx, &self.module_lut);
@@ -458,6 +459,7 @@ impl<'a> ElaboratedDesign<'a> {
             fuse_srcs_scratch: Vec::new(),
             monitor: None,
             driver_resolution,
+            udp_plans: Default::default(),
         };
 
         let mut error = false;

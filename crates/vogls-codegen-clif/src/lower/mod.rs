@@ -37,8 +37,8 @@ use vogls_ir::dyn_format_string::DynFormatString;
 use vogls_ir::time::{TimeFormat, TimeResolution};
 use vogls_ir::watchers::WatchMap;
 use vogls_ir::{
-    BasicBlockKey, GlobalContext, LogicMode, ShiftImmOp, SignalFlags, SignalKey, TemporalRegionKey,
-    VariableKey, VectorSize,
+    BasicBlockKey, GlobalContext, LogicMode, ShiftImmOp, SignalKey, TemporalRegionKey, VariableKey,
+    VectorSize,
 };
 use vogls_runtime::RtSignalKey;
 use vogls_utils::VgHashMap;
@@ -1391,9 +1391,7 @@ pub fn compile<'a>(
     // A standing process is armed at its standing watch instead of being run at t=0.
     for (pi, (_k, process)) in gl.processes.iter().enumerate() {
         if let Some(conditions) = &process.standing
-            && conditions
-                .iter()
-                .all(|c| !gl.signals[c.signal].flags.contains(SignalFlags::POKE_T0))
+            && conditions.iter().all(|c| !c.is_poked_t0(gl))
         {
             c.standing_procs.insert(pi);
 
