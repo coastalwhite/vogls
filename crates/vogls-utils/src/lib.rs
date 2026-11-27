@@ -12,6 +12,7 @@ mod seenset;
 mod sync_wrapper;
 mod table;
 mod timer_stack;
+mod word_bitset;
 
 pub use bitset::Bitset;
 pub use index_map::{Entry, IndexMap, IndexSet};
@@ -23,6 +24,7 @@ pub use seenset::SeenSet;
 pub use sync_wrapper::SyncWrapper;
 pub use table::{SecondaryTable, Table, TableKey, TableMap, TableMapEntry};
 pub use timer_stack::TimerStack;
+pub use word_bitset::{BitsetU8, BitsetU16, BitsetU32, BitsetU64};
 
 /// Remainder that results the divisor if the remainder is zero.
 ///

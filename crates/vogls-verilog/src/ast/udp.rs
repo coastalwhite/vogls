@@ -130,7 +130,6 @@ pub struct UdpSequentialEntry<'a> {
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // level_symbol ::= 0 | 1 | x | X | ? | b | B
 #[derive(Clone, Copy)]
-#[repr(u64)]
 pub enum UdpLevelSymbol {
     L0,
     L1,
@@ -142,7 +141,6 @@ pub enum UdpLevelSymbol {
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // output_symbol ::= 0 | 1 | x | X
 #[derive(Clone, Copy)]
-#[repr(u64)]
 pub enum UdpOutputSymbol {
     L0,
     L1,
@@ -152,7 +150,6 @@ pub enum UdpOutputSymbol {
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // edge_symbol ::= r | R | f | F | p | P | n | N | *
 #[derive(Clone, Copy)]
-#[repr(u64)]
 pub enum UdpEdgeSymbol {
     R,
     F,
@@ -164,7 +161,6 @@ pub enum UdpEdgeSymbol {
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // next_state ::= output_symbol | -
 #[derive(Clone, Copy)]
-#[repr(u64)]
 pub enum UdpNextState {
     Output(UdpOutputSymbol),
     Dash,
@@ -173,7 +169,6 @@ pub enum UdpNextState {
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // edge_indicator ::= ( level_symbol level_symbol ) | edge_symbol
 #[derive(Clone, Copy)]
-#[repr(u64)]
 pub enum UdpEdgeIndicator {
     Levels(AstItem<UdpLevelSymbol>, AstItem<UdpLevelSymbol>),
     Edge(AstItem<UdpEdgeSymbol>),
@@ -182,7 +177,6 @@ pub enum UdpEdgeIndicator {
 // IEEE Std 1364-2005 (Revision of IEEE Std 1364-2001) p. 497
 // init_val ::= 1'b0 | 1'b1 | 1'bx | 1'bX | 1'B0 | 1'B1 | 1'Bx | 1'BX | 1 | 0
 #[derive(Clone, Copy)]
-#[repr(u64)]
 pub enum UdpInitVal {
     L0,
     L1,

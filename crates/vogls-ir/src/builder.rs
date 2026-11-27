@@ -1,3 +1,4 @@
+use vogls_bits::arithmetic::FvLogicValue;
 use vogls_utils::VgHashSet;
 
 use crate::form::{check_ir_form, check_process_form};
@@ -115,6 +116,16 @@ impl ProcessBuilder {
 
     pub fn entry(&self) -> TemporalRegionKey {
         self.trs[0]
+    }
+
+    /// Make `tr`, a region of this process, the one it starts in.
+    pub fn set_entry(&mut self, tr: TemporalRegionKey) {
+        let i = self
+            .trs
+            .iter()
+            .position(|&t| t == tr)
+            .expect("a region of this process");
+        self.trs[..=i].rotate_right(1);
     }
 
     pub fn abort(self, gl: &mut GlobalContext) {
@@ -348,6 +359,19 @@ impl BasicBlockBuilder {
         let variable = gl.vars.insert(LogicMode::TwoValue, VSIZE_64);
         self.instrs
             .push(Instruction::Constant(variable, Bits::new_u64(value)));
+        variable
+    }
+    pub fn constant_scalar(&mut self, gl: &mut GlobalContext, value: FvLogicValue) -> VariableKey {
+        let variable = gl.vars.insert(
+            if value.is_special() {
+                LogicMode::FourValue
+            } else {
+                LogicMode::TwoValue
+            },
+            SCALAR_VSIZE,
+        );
+        self.instrs
+            .push(Instruction::Constant(variable, Bits::from(value)));
         variable
     }
 

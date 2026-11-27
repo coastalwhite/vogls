@@ -2577,6 +2577,7 @@ pub fn finalize_symbol<'a>(
                 fuse_dsts_scratch: Vec::new(),
                 monitor: None,
                 driver_resolution: DriverResolution::default(),
+                udp_plans: Default::default(),
             };
             // Lowered for constant expressions and continuous assignments only, this is thrown out
             // once the drivers are resolved (see `function::discard_all`).

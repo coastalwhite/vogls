@@ -46,6 +46,9 @@ pub struct MutLowerContext<'a> {
     pub monitor: Option<MonitorSignals>,
 
     pub driver_resolution: DriverResolution<'a>,
+
+    /// The plans of the sequential UDP instances, shared between instances (see [`udp::plan`]).
+    pub udp_plans: udp::plan::UdpPlanCache,
 }
 
 pub struct MonitorSignals {
